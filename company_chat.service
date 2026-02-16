@@ -1,0 +1,16 @@
+[Unit]
+Description=Gunicorn for company_chat
+After=network.target
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=/www/yue/company_chat
+ExecStart=/root/anaconda3/envs/companychat/bin/daphne -b 0.0.0.0 -p 10900 company_chat.asgi:application
+
+Restart=on-failure
+RestartSec=10
+
+# 日志重定向（备用）
+StandardOutput=append:/var/log/daphne/out-company_chat.log
+StandardError=append:/var/log/daphne/err-company_chat.log

@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理员控制台 - 大岳企业聊天室</title>
+    <link rel="stylesheet" href="/static/css/chat.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
+
+</head>
+<body>
+<div class="admin-container">
+    <!-- 侧边栏伸缩按钮（移动端） -->
+    <button id="sidebarToggleBtn" class="sidebar-toggle-btn">
+        <i class="fas fa-bars"></i>
+    </button>
+
+    <!-- 侧边栏 -->
+    <aside class="admin-sidebar" id="adminSidebar">
+        <div class="sidebar-header" style="">
+            <h2>管理控制台</h2>
+            <button class="sidebar-close-btn" id="sidebarCloseBtn">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+
+        <nav class="admin-nav">
+            <a href="#" class="nav-item active" data-tab="users">
+                <i class="fas fa-users"></i> 用户管理
+            </a>
+            <a href="#" class="nav-item" data-tab="rooms">
+                <i class="fas fa-comments"></i> 聊天室管理
+            </a>
+            <a href="#" class="nav-item" data-tab="stats">
+                <i class="fas fa-chart-bar"></i> 数据统计
+            </a>
+            <a href="#" class="nav-item" data-tab="settings">
+                <i class="fas fa-cog"></i> 系统设置
+            </a>
+        </nav>
+
+<!--        <div class="admin-sidebar-footer">-->
+<!--            <button class="btn btn-secondary btn-block" onclick="logout()">-->
+<!--                <i class="fas fa-sign-out-alt"></i> 退出登录-->
+<!--            </button>-->
+<!--        </div>-->
+
+        <!-- 侧边栏底部 -->
+        <div class="sidebar-footer">
+<!--            <div class="user-info">-->
+<!--                <img src="/static/images/default-avatar.png" id="adminAvatar" alt="头像">-->
+<!--                <span id="adminUsername"></span>-->
+<!--            </div>-->
+
+            <!-- 跳转到聊天室按钮 -->
+            <button id="gotoChatBtn" class="btn-goto-chat">
+                <i class="fas fa-comments"></i>
+                <span>返回聊天室</span>
+            </button>
+
+            <!-- 退出登录按钮 -->
+            <button onclick="logout()" class="btn-logout">
+                <i class="fas fa-sign-out-alt"></i>
+                <span>退出登录</span>
+            </button>
+        </div>
+
+    </aside>
+
+    <!-- 主内容区 -->
+    <main class="admin-main">
+        <header class="admin-header">
+            <div class="admin-header-left">
+                <h1 id="pageTitle">用户管理</h1>
+            </div>
+            <div class="admin-header-right">
+                <span id="adminUsername"></span>
+                <img id="adminAvatar" src="/static/images/default-avatar.png" alt="头像">
+            </div>
+        </header>
+
+        <div class="admin-content">
+            <!-- 用户管理 -->
+            <div id="usersTab" class="admin-tab active">
+                <div class="admin-toolbar">
+                    <!--                    <div class="search-box">-->
+                    <!--                        <i class="fas fa-search"></i>-->
+                    <!--                        <input type="text" id="userSearch" placeholder="搜索用户...">-->
+                    <!--                    </div>-->
+                    <button class="btn btn-primary" onclick="adminConsole.openCreateUserModal()">
+                        <i class="fas fa-plus"></i> 添加用户
+                    </button>
+                    <button class="btn btn-secondary" onclick="adminConsole.refreshUsers()" title="刷新">
+                        <i class="fas fa-sync"></i> 刷新
+                    </button>
+
+                    <input type="text" class="search-input" placeholder="搜索用户..."
+                           oninput="adminConsole.searchUsers(this.value)">
+                </div>
+
+                <div class="admin-table-container">
+
+                    <div class="scroll-indicator" id="scrollIndicator">左右滑动</div>
+                    <table class="admin-table">
+                        <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>头像</th>
+                            <th>用户名</th>
+                            <th>真实姓名</th>
+                            <th>部门</th>
+                            <th>职位</th>
+                            <th>用户类型</th>
+                            <th>状态</th>
+                            <th>操作</th>
+                        </tr>
+                        </thead>
+                        <tbody id="usersTableBody">
+                        <!-- 动态生成 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 其他标签页 -->
+            <div id="roomsTab" class="admin-tab">
+                <h3>聊天室管理功能开发中...</h3>
+            </div>
+            <div id="statsTab" class="admin-tab">
+                <h3>数据统计功能开发中...</h3>
+            </div>
+            <div id="settingsTab" class="admin-tab">
+                <h3>系统设置功能开发中...</h3>
+            </div>
+        </div>
+    </main>
+</div>
+
+<!-- 创建用户模态框 -->
+<div id="createUserModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>添加新用户</h3>
+            <button class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="createUserForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>用户名 <span class="required">*</span></label>
+                        <input type="text" id="newUsername" required>
+                    </div>
+                    <div class="form-group">
+                        <label>密码 <span class="required">*</span></label>
+                        <input type="password" id="newPassword" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>确认密码 <span class="required">*</span></label>
+                        <input type="password" id="newPasswordConfirm" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label>邮箱 <span class="required">*</span></label>
+                        <input type="email" id="newEmail" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>真实姓名</label>
+                        <input type="text" id="newRealName">
+                    </div>
+
+                    <div class="form-group">
+                        <label>性别 </label>
+                        <select id="newGender">
+                            <option value="">请选择</option>
+                            <option value="male">男</option>
+                            <option value="female">女</option>
+                            <option value="other">其他</option>
+                        </select>
+                    </div>
+
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>手机号</label>
+                        <input type="tel" id="newPhone">
+                    </div>
+                    <div class="form-group">
+                        <label>部门</label>
+                        <input type="text" id="newDepartment">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>职位</label>
+                        <input type="text" id="newPosition">
+                    </div>
+                    <div class="form-group">
+                        <label>用户类型</label>
+                        <select id="newUserType">
+                            <option value="normal">普通用户</option>
+                            <option value="admin">管理员</option>
+                            <option value="super_admin">超级管理员</option>
+                        </select>
+                    </div>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="adminConsole.closeModal('createUserModal')">取消</button>
+            <button class="btn btn-primary" onclick="adminConsole.createUser()">创建用户</button>
+        </div>
+    </div>
+</div>
+
+<!-- 编辑用户模态框 -->
+<div id="editUserModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>编辑用户</h3>
+            <button class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="editUserForm">
+                <input type="hidden" id="editUserId">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>用户名</label>
+                        <input type="text" id="editUsername" readonly>
+                    </div>
+                    <div class="form-group">
+                        <label>新密码（留空则不修改）</label>
+                        <input type="password" id="editPassword">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>真实姓名</label>
+                        <input type="text" id="editRealName">
+                    </div>
+
+                    <div class="form-group">
+                        <label>性别 </label>
+                        <select id="editGender">
+                            <option value="">请选择</option>
+                            <option value="male">男</option>
+                            <option value="female">女</option>
+                            <option value="other">其他</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>手机号</label>
+                        <input type="tel" id="editPhone">
+                    </div>
+
+                    <div class="form-group">
+                        <label>邮箱</label>
+                        <input type="email" id="editEmail">
+                    </div>
+                </div>
+                <div class="form-row">
+
+                    <div class="form-group">
+                        <label>部门</label>
+                        <input type="text" id="editDepartment">
+                    </div>
+                    <div class="form-group">
+                        <label>职位</label>
+                        <input type="text" id="editPosition">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>用户类型</label>
+                        <select id="editUserType">
+                            <option value="normal">普通用户</option>
+                            <option value="admin">管理员</option>
+                            <option value="super_admin">超级管理员</option>
+                        </select>
+                    </div>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <!--                <button class="btn btn-danger" onclick="adminConsole.deleteUser()">删除用户</button>-->
+            <button class="btn btn-secondary" onclick="adminConsole.closeModal('editUserModal')">取消</button>
+            <button class="btn btn-primary" onclick="adminConsole.updateUser()">保存修改</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/utils.js"></script>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/admin.js"></script>
+</body>
+</html>

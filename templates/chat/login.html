@@ -1,0 +1,1481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>大岳企业聊天室 - 登录</title>
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary-color: #409EFF;
+            --primary-dark: #337ecc;
+            --secondary-color: #67C23A;
+            --danger-color: #F56C6C;
+            --text-primary: #303133;
+            --text-secondary: #606266;
+            --text-light: #909399;
+            --bg-primary: #ffffff;
+            --bg-secondary: #f5f7fa;
+            --border-color: #dcdfe6;
+            --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.1);
+            --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.15);
+            --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.2);
+            --border-radius-md: 8px;
+            --border-radius-lg: 12px;
+            --transition: all 0.3s ease;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+                         'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .login-container {
+            display: flex;
+            max-width: 900px;
+            width: 100%;
+            background: var(--bg-primary);
+            border-radius: var(--border-radius-lg);
+            box-shadow: var(--shadow-lg);
+            overflow: hidden;
+        }
+
+        .login-left {
+            flex: 1;
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+            color: white;
+            padding: 60px 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            text-align: center;
+        }
+
+        .login-right {
+            flex: 1;
+            padding: 60px 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 32px;
+        }
+
+        .logo i {
+            font-size: 32px;
+            color: white;
+        }
+
+        .logo span {
+            font-size: 28px;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }
+
+        .welcome-text h1 {
+            font-size: 28px;
+            margin-bottom: 16px;
+            font-weight: 600;
+        }
+
+        .welcome-text p {
+            font-size: 16px;
+            line-height: 1.6;
+            opacity: 0.9;
+        }
+
+        .features {
+            margin-top: 40px;
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+            text-align: left;
+        }
+
+        .feature-item i {
+            background: rgba(255, 255, 255, 0.2);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+
+        .auth-form h2 {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 24px;
+            color: var(--text-primary);
+            text-align: center;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .input-with-icon {
+            position: relative;
+        }
+
+        .input-with-icon i {
+            position: absolute;
+            left: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-light);
+            font-size: 16px;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 12px 12px 12px 44px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius-md);
+            font-size: 16px;
+            outline: none;
+            transition: var(--transition);
+        }
+
+        .form-control:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.1);
+        }
+
+        .remember-forgot {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            font-size: 14px;
+        }
+
+        .remember-me {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .remember-me input {
+            margin: 0;
+        }
+
+        .forgot-password {
+            color: var(--primary-color);
+            text-decoration: none;
+            transition: var(--transition);
+        }
+
+        .forgot-password:hover {
+            color: var(--primary-dark);
+            text-decoration: underline;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: var(--border-radius-md);
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--primary-dark);
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary {
+            background-color: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background-color: #e4e7ed;
+            transform: translateY(-2px);
+        }
+
+        .switch-form {
+            text-align: center;
+            margin-top: 24px;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .switch-form a {
+            color: var(--primary-color);
+            text-decoration: none;
+            font-weight: 600;
+            transition: var(--transition);
+        }
+
+        .switch-form a:hover {
+            color: var(--primary-dark);
+            text-decoration: underline;
+        }
+
+        .error-message {
+            color: var(--danger-color);
+            font-size: 14px;
+            margin-top: 8px;
+            display: none;
+        }
+
+        .success-message {
+            color: var(--secondary-color);
+            font-size: 14px;
+            margin-top: 8px;
+            display: none;
+        }
+
+        /* 滑块验证码弹窗样式 */
+        .captcha-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 10000;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .captcha-modal.show {
+            display: flex;
+        }
+
+        .captcha-modal-content {
+            background: var(--bg-primary);
+            border-radius: var(--border-radius-lg);
+            box-shadow: var(--shadow-lg);
+            width: 90%;
+            max-width: 450px;
+            padding: 32px;
+            text-align: center;
+        }
+
+        .captcha-modal-header {
+            margin-bottom: 24px;
+        }
+
+        .captcha-modal-header h3 {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .captcha-modal-header p {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .captcha-container {
+            margin-bottom: 24px;
+        }
+
+        .slider-captcha-bg {
+            width: 100%;
+            height: 160px;
+            background: linear-gradient(135deg, #f5f7fa 0%, #e4e7ed 100%);
+            border-radius: 8px;
+            margin-bottom: 12px;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            border: 1px solid var(--border-color);
+        }
+
+        .slider-captcha-bg canvas {
+            display: block;
+            border-radius: 8px 8px 0 0;
+        }
+
+        .slider-captcha-track {
+            width: 100%;
+            height: 44px;
+            background: #f5f7fa;
+            border: 1px solid #dcdfe6;
+            border-radius: 22px;
+            position: relative;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        .slider-captcha-thumb {
+            width: 44px;
+            height: 44px;
+            background: linear-gradient(135deg, #409EFF 0%, #337ecc 100%);
+            border-radius: 50%;
+            position: absolute;
+            left: 0;
+            top: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 18px;
+            box-shadow: 0 2px 8px rgba(64, 158, 255, 0.3);
+            transition: transform 0.3s ease, background 0.3s ease;
+            cursor: grab;
+            z-index: 10;
+            border: 2px solid white;
+            visibility: visible !important;
+            opacity: 1 !important;
+        }
+
+        .slider-captcha-thumb.dragging {
+            cursor: grabbing;
+            transform: scale(1.05);
+        }
+
+        .slider-captcha-thumb.success {
+            background: linear-gradient(135deg, #67C23A 0%, #5da934 100%);
+            box-shadow: 0 2px 8px rgba(103, 194, 58, 0.3);
+            animation: slide-to-end 0.5s ease forwards;
+        }
+
+        .slider-captcha-thumb.error {
+            background: linear-gradient(135deg, #F56C6C 0%, #e45a5a 100%);
+            box-shadow: 0 2px 8px rgba(245, 108, 108, 0.3);
+            animation: shake 0.5s;
+        }
+
+        .slider-captcha-text {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            color: #909399;
+            font-size: 14px;
+            white-space: nowrap;
+            transition: color 0.3s ease;
+            z-index: 5;
+            pointer-events: none;
+        }
+
+        .slider-captcha-thumb.success + .slider-captcha-text {
+            color: #67C23A;
+            font-weight: bold;
+        }
+
+        .slider-captcha-thumb.error + .slider-captcha-text {
+            color: #F56C6C;
+            font-weight: bold;
+        }
+
+        /* 轨迹框样式 */
+        .slider-track-box {
+            position: absolute;
+            top: 50px;
+            left: 0;
+            width: 40px;
+            height: 50px;
+            background: rgba(64, 158, 255, 0.2);
+            border: 2px solid rgba(64, 158, 255, 0.5);
+            border-radius: 8px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            z-index: 1;
+        }
+
+        .slider-track-box.show {
+            opacity: 1;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0) scale(1); }
+            25% { transform: translateX(-5px) scale(1.02); }
+            75% { transform: translateX(5px) scale(1.02); }
+        }
+
+        @keyframes slide-to-end {
+            to {
+                transform: translateX(calc(100% - 44px));
+            }
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .login-container {
+                flex-direction: column;
+                max-width: 400px;
+            }
+
+            .login-left {
+                padding: 40px 20px;
+            }
+
+            .login-right {
+                padding: 40px 20px;
+            }
+
+            .logo span {
+                font-size: 24px;
+            }
+
+            .welcome-text h1 {
+                font-size: 22px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            body {
+                padding: 10px;
+            }
+
+            .login-container {
+                max-width: 100%;
+            }
+
+            .features {
+                display: none;
+            }
+
+            .slider-captcha-bg {
+                height: 140px;
+            }
+
+            .captcha-modal-content {
+                width: 95%;
+                padding: 24px;
+            }
+        }
+
+        /* 加载动画 */
+        .loading {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 2px solid transparent;
+            border-top: 2px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .btn .loading {
+            display: none;
+        }
+
+        .btn .text {
+            display: inline-block;
+        }
+
+        /* Toast 提示 */
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            border-radius: 4px;
+            color: white;
+            font-size: 14px;
+            z-index: 10000;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .toast-error {
+            background: #f56c6c;
+        }
+
+        .toast-success {
+            background: #67c23a;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <!-- 左侧欢迎区域 -->
+        <div class="login-left">
+            <div class="logo">
+                <i class="fas fa-comments"></i>
+                <span>大岳企业聊天室</span>
+            </div>
+            <div class="welcome-text">
+                <h1>欢迎使用企业内部通讯平台</h1>
+                <p>安全、高效、实时的企业内部沟通解决方案</p>
+            </div>
+            <div class="features">
+                <div class="feature-item">
+                    <i class="fas fa-shield-alt"></i>
+                    <span>端到端加密，保障企业数据安全</span>
+                </div>
+                <div class="feature-item">
+                    <i class="fas fa-bolt"></i>
+                    <span>实时消息推送，毫秒级响应</span>
+                </div>
+                <div class="feature-item">
+                    <i class="fas fa-users"></i>
+                    <span>支持私聊、群聊、部门通讯</span>
+                </div>
+                <div class="feature-item">
+                    <i class="fas fa-file-alt"></i>
+                    <span>文件共享与协作，提升工作效率</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧表单区域 -->
+        <div class="login-right">
+            <!-- 登录表单 -->
+            <div id="loginForm" class="auth-form">
+                <h2>用户登录</h2>
+                <form id="loginFormElement">
+                    <div class="form-group">
+                        <label for="loginUsername">用户名或邮箱</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-user"></i>
+                            <input
+                                type="text"
+                                id="loginUsername"
+                                class="form-control"
+                                placeholder="请输入用户名或邮箱"
+                                required
+                            >
+                        </div>
+                        <div class="error-message" id="loginUsernameError"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="loginPassword">密码</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-lock"></i>
+                            <input
+                                type="password"
+                                id="loginPassword"
+                                class="form-control"
+                                placeholder="请输入密码"
+                                required
+                            >
+                        </div>
+                        <div class="error-message" id="loginPasswordError"></div>
+                    </div>
+
+                    <div class="remember-forgot">
+                        <label class="remember-me">
+                            <input type="checkbox" id="rememberMe"> 记住我
+                        </label>
+                        <a href="#" class="forgot-password">忘记密码？</a>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" id="loginSubmitBtn">
+                        <span class="text">登录</span>
+                        <span class="loading"></span>
+                    </button>
+
+                    <div class="error-message" id="loginGeneralError"></div>
+                    <div class="success-message" id="loginSuccessMessage"></div>
+                </form>
+
+                <div class="switch-form">
+                    还没有账户？<a href="#" id="showRegisterLink">立即注册</a>
+                </div>
+            </div>
+
+            <!-- 注册表单 -->
+            <div id="registerForm" class="auth-form" style="display: none;">
+                <h2>用户注册</h2>
+                <form id="registerFormElement">
+                    <div class="form-group">
+                        <label for="registerUsername">用户名</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-user"></i>
+                            <input
+                                type="text"
+                                id="registerUsername"
+                                class="form-control"
+                                placeholder="请输入用户名（3-20个字符）"
+                                minlength="3"
+                                maxlength="20"
+                                required
+                            >
+                        </div>
+                        <div class="error-message" id="registerUsernameError"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="registerEmail">邮箱</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-envelope"></i>
+                            <input
+                                type="email"
+                                id="registerEmail"
+                                class="form-control"
+                                placeholder="请输入邮箱"
+                                required
+                            >
+                        </div>
+                        <div class="error-message" id="registerEmailError"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="registerPassword">密码</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-lock"></i>
+                            <input
+                                type="password"
+                                id="registerPassword"
+                                class="form-control"
+                                placeholder="请输入密码（至少8位）"
+                                minlength="8"
+                                required
+                            >
+                        </div>
+                        <div class="error-message" id="registerPasswordError"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="registerPasswordConfirm">确认密码</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-lock"></i>
+                            <input
+                                type="password"
+                                id="registerPasswordConfirm"
+                                class="form-control"
+                                placeholder="请再次输入密码"
+                                required
+                            >
+                        </div>
+                        <div class="error-message" id="registerPasswordConfirmError"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="registerPhone">手机号（可选）</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-phone"></i>
+                            <input
+                                type="tel"
+                                id="registerPhone"
+                                class="form-control"
+                                placeholder="请输入手机号"
+                            >
+                        </div>
+                        <div class="error-message" id="registerPhoneError"></div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" id="registerSubmitBtn">
+                        <span class="text">注册</span>
+                        <span class="loading"></span>
+                    </button>
+
+                    <div class="error-message" id="registerGeneralError"></div>
+                    <div class="success-message" id="registerSuccessMessage"></div>
+                </form>
+
+                <div class="switch-form">
+                    已有账户？<a href="#" id="showLoginLink">立即登录</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 滑块验证码弹窗 -->
+    <div class="captcha-modal" id="captchaModal">
+        <div class="captcha-modal-content">
+            <div class="captcha-modal-header">
+                <h3><i class="fas fa-shield-alt"></i> 人机验证</h3>
+                <p>请完成滑块验证以继续操作</p>
+            </div>
+            <div class="captcha-container" id="captchaContainer"></div>
+            <div class="captcha-actions">
+                <button class="btn btn-secondary" id="captchaCancelBtn">取消</button>
+                <button class="btn btn-primary" id="captchaRefreshBtn">
+                    <i class="fas fa-redo"></i> 换一张
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 完善版滑块验证码类
+        class SliderCaptcha {
+            constructor(containerId, options = {}) {
+                this.container = document.getElementById(containerId);
+                if (!this.container) {
+                    console.error(`SliderCaptcha: Container with id "${containerId}" not found`);
+                    return;
+                }
+
+                this.options = {
+                    width: options.width || 400,
+                    height: options.height || 160,
+                    sliderWidth: options.sliderWidth || 44,
+                    sliderHeight: options.sliderHeight || 44,
+                    onSuccess: options.onSuccess || function() {},
+                    onFail: options.onFail || function() {},
+                    onRefresh: options.onRefresh || function() {},
+                    ...options
+                };
+
+                this.isDragging = false;
+                this.offsetX = 0;
+                this.correctPosition = 0;
+                this.sliderPosition = 0;
+                this.verified = false;
+                this.trackBox = null;
+
+                this.init();
+            }
+
+            init() {
+                this.createHTML();
+                this.bindEvents();
+                this.reset();
+            }
+
+            createHTML() {
+                this.container.innerHTML = `
+                    <div class="slider-captcha-container">
+                        <div class="slider-captcha-bg">
+                            <canvas id="captchaCanvas" width="${this.options.width}" height="${this.options.height}"></canvas>
+                            <div class="slider-track-box" id="trackBox"></div>
+                        </div>
+                        <div class="slider-captcha-track">
+                            <div class="slider-captcha-thumb" id="captchaThumb">
+                                <i class="fas fa-arrow-right"></i>
+                            </div>
+                            <span class="slider-captcha-text" id="captchaText">向右滑动完成验证</span>
+                        </div>
+                    </div>
+                `;
+            }
+
+            bindEvents() {
+                const thumb = document.getElementById('captchaThumb');
+                if (!thumb) {
+                    console.error('SliderCaptcha: Required elements not found');
+                    return;
+                }
+
+                // 鼠标事件
+                thumb.addEventListener('mousedown', (e) => this.startDrag(e));
+                document.addEventListener('mousemove', (e) => this.drag(e));
+                document.addEventListener('mouseup', () => this.endDrag());
+
+                // 触摸事件
+                thumb.addEventListener('touchstart', (e) => this.startDrag(e), { passive: false });
+                document.addEventListener('touchmove', (e) => this.drag(e), { passive: false });
+                document.addEventListener('touchend', () => this.endDrag());
+            }
+
+            startDrag(e) {
+                e.preventDefault();
+                this.isDragging = true;
+                this.offsetX = this.getMouseX(e);
+                document.getElementById('captchaText').textContent = '拖动中...';
+                document.getElementById('captchaThumb').classList.add('dragging');
+
+                // 显示轨迹框
+                const trackBox = document.getElementById('trackBox');
+                if (trackBox) {
+                    trackBox.classList.add('show');
+                }
+            }
+
+            drag(e) {
+                if (!this.isDragging) return;
+
+                const currentX = this.getMouseX(e);
+                const deltaX = currentX - this.offsetX;
+                const maxX = this.options.width - this.options.sliderWidth;
+
+                // 限制滑块位置
+                this.sliderPosition = Math.max(0, Math.min(deltaX, maxX));
+
+                // 更新滑块和轨迹框位置
+                this.updateSliderPosition();
+                this.updateTrackBoxPosition();
+            }
+
+            endDrag() {
+                if (!this.isDragging) return;
+
+                this.isDragging = false;
+                document.getElementById('captchaThumb').classList.remove('dragging');
+
+                // 隐藏轨迹框
+                const trackBox = document.getElementById('trackBox');
+                if (trackBox) {
+                    trackBox.classList.remove('show');
+                }
+
+                // 验证是否在正确位置（允许±10像素误差）
+                if (Math.abs(this.sliderPosition - this.correctPosition) <= 10) {
+                    this.success();
+                } else {
+                    this.fail();
+                    setTimeout(() => this.reset(), 1500);
+                }
+            }
+
+            getMouseX(e) {
+                if (e.clientX) {
+                    return e.clientX;
+                } else if (e.touches && e.touches[0]) {
+                    return e.touches[0].clientX;
+                }
+                return 0;
+            }
+
+            updateSliderPosition() {
+                const thumb = document.getElementById('captchaThumb');
+                if (thumb) {
+                    thumb.style.transform = `translateX(${this.sliderPosition}px)`;
+                }
+            }
+
+            updateTrackBoxPosition() {
+                const trackBox = document.getElementById('trackBox');
+                if (trackBox) {
+                    // 轨迹框跟随滑块移动，但位置稍微偏移以显示拼图缺口
+                    const boxPosition = this.sliderPosition + (this.options.sliderWidth / 2) - 20;
+                    trackBox.style.left = `${boxPosition}px`;
+                }
+            }
+
+            generateCaptcha() {
+                const canvas = document.getElementById('captchaCanvas');
+                const ctx = canvas.getContext('2d');
+
+                if (!ctx) {
+                    console.error('SliderCaptcha: Unable to get canvas context');
+                    return;
+                }
+
+                // 清空画布
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // 绘制背景渐变
+                const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+                gradient.addColorStop(0, '#f0f0f0');
+                gradient.addColorStop(1, '#e0e0e0');
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // 生成随机位置（避开边缘）
+                this.correctPosition = Math.floor(Math.random() * (canvas.width - 140)) + 70;
+
+                // 绘制拼图缺口轮廓（与轨迹框对应）
+                ctx.strokeStyle = 'rgba(64, 158, 255, 0.6)';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([5, 3]);
+                ctx.beginPath();
+                ctx.moveTo(this.correctPosition, 50);
+                ctx.lineTo(this.correctPosition + 40, 50);
+                ctx.lineTo(this.correctPosition + 40, 100);
+                ctx.lineTo(this.correctPosition, 100);
+                ctx.closePath();
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // 绘制装饰图案
+                this.drawDecorations(ctx, canvas.width, canvas.height);
+
+                // 绘制提示文字
+                ctx.fillStyle = '#999';
+                ctx.font = '14px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('拖动滑块完成验证', canvas.width / 2, canvas.height - 20);
+            }
+
+            drawDecorations(ctx, width, height) {
+                // 绘制随机圆点
+                ctx.fillStyle = 'rgba(64, 158, 255, 0.1)';
+                for (let i = 0; i < 25; i++) {
+                    const x = Math.random() * width;
+                    const y = Math.random() * height;
+                    const radius = Math.random() * 12 + 6;
+                    ctx.beginPath();
+                    ctx.arc(x, y, radius, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // 绘制随机线条
+                ctx.strokeStyle = 'rgba(64, 158, 255, 0.2)';
+                ctx.lineWidth = 1;
+                for (let i = 0; i < 15; i++) {
+                    ctx.beginPath();
+                    ctx.moveTo(Math.random() * width, Math.random() * height);
+                    ctx.lineTo(Math.random() * width, Math.random() * height);
+                    ctx.stroke();
+                }
+            }
+
+            reset() {
+                this.sliderPosition = 0;
+                this.updateSliderPosition();
+                this.verified = false;
+
+                const text = document.getElementById('captchaText');
+                const thumb = document.getElementById('captchaThumb');
+
+                if (text) text.textContent = '向右滑动完成验证';
+                if (thumb) {
+                    thumb.className = 'slider-captcha-thumb';
+                    thumb.innerHTML = '<i class="fas fa-arrow-right"></i>';
+                }
+
+                // 隐藏轨迹框
+                const trackBox = document.getElementById('trackBox');
+                if (trackBox) {
+                    trackBox.classList.remove('show');
+                }
+
+                this.generateCaptcha();
+                this.options.onRefresh();
+            }
+
+            success() {
+                this.verified = true;
+                const text = document.getElementById('captchaText');
+                const thumb = document.getElementById('captchaThumb');
+
+                if (text) text.textContent = '验证通过 ✓';
+                if (thumb) {
+                    thumb.className = 'slider-captcha-thumb success';
+                    thumb.innerHTML = '<i class="fas fa-check"></i>';
+                }
+
+                setTimeout(() => {
+                    this.options.onSuccess();
+                }, 500);
+            }
+
+            fail() {
+                this.verified = false;
+                const text = document.getElementById('captchaText');
+                const thumb = document.getElementById('captchaThumb');
+
+                if (text) text.textContent = '验证失败 ✗';
+                if (thumb) {
+                    thumb.className = 'slider-captcha-thumb error';
+                    // 抖动动画
+                    thumb.style.animation = 'shake 0.5s';
+                    thumb.addEventListener('animationend', () => {
+                        thumb.style.animation = '';
+                    });
+                }
+
+                this.options.onFail();
+            }
+
+            isValid() {
+                return this.verified;
+            }
+
+            refresh() {
+                this.reset();
+            }
+        }
+
+        // 页面载入初始化
+        document.addEventListener('DOMContentLoaded', function () {
+            let rememberMe = localStorage.getItem('rememberMe');
+            console.log('rememberMe:', rememberMe);
+            if (rememberMe === 'true') {
+                document.getElementById('rememberMe').checked = true;
+                document.getElementById('loginUsername').value = localStorage.getItem('username') || '';
+                document.getElementById('loginPassword').value = localStorage.getItem('password') || '';
+            } else {
+                document.getElementById('rememberMe').checked = false;
+                document.getElementById('loginUsername').value = '';
+                document.getElementById('loginPassword').value = '';
+            }
+        });
+
+        // API 配置
+        const API_BASE_URL = '/api/auth/';
+
+        // 滑块验证码实例
+        let captcha = null;
+        let currentAction = null; // 'login' or 'register'
+
+        // 初始化滑块验证码
+        function initCaptcha() {
+            captcha = new SliderCaptcha('captchaContainer', {
+                onSuccess: function() {
+                    console.log('滑块验证通过');
+                    // 验证通过后执行相应操作
+                    if (currentAction === 'login') {
+                        performLogin();
+                    } else if (currentAction === 'register') {
+                        performRegister();
+                    }
+                    closeCaptchaModal();
+                },
+                onFail: function() {
+                    console.log('滑块验证失败');
+                },
+                onRefresh: function() {
+                    console.log('滑块已刷新');
+                }
+            });
+        }
+
+        // 显示滑块验证弹窗
+        function showCaptchaModal(action) {
+            currentAction = action;
+            document.getElementById('captchaModal').classList.add('show');
+            // 重置滑块
+            if (captcha) {
+                captcha.reset();
+            } else {
+                initCaptcha();
+            }
+        }
+
+        // 关闭滑块验证弹窗
+        function closeCaptchaModal() {
+            document.getElementById('captchaModal').classList.remove('show');
+            currentAction = null;
+        }
+
+        // 显示登录表单
+        function showLoginForm() {
+            document.getElementById('loginForm').style.display = 'block';
+            document.getElementById('registerForm').style.display = 'none';
+            document.title = '大岳企业聊天室 - 登录';
+            clearFormErrors();
+        }
+
+        // 显示注册表单
+        function showRegisterForm() {
+            document.getElementById('loginForm').style.display = 'none';
+            document.getElementById('registerForm').style.display = 'block';
+            document.title = '大岳企业聊天室 - 注册';
+            clearFormErrors();
+        }
+
+        // 清除表单错误
+        function clearFormErrors() {
+            const errorElements = document.querySelectorAll('.error-message, .success-message');
+            errorElements.forEach(el => {
+                el.style.display = 'none';
+                el.textContent = '';
+            });
+
+            const formControls = document.querySelectorAll('.form-control');
+            formControls.forEach(control => {
+                control.classList.remove('error');
+            });
+        }
+
+        // 显示错误信息
+        function showError(elementId, message) {
+            const errorElement = document.getElementById(elementId);
+            if (errorElement) {
+                errorElement.textContent = message;
+                errorElement.style.display = 'block';
+
+                // 高亮错误字段
+                const fieldId = elementId.replace('Error', '');
+                const field = document.getElementById(fieldId);
+                if (field) {
+                    field.classList.add('error');
+                }
+            }
+        }
+
+        // 显示成功信息
+        function showSuccess(elementId, message) {
+            const successElement = document.getElementById(elementId);
+            if (successElement) {
+                successElement.textContent = message;
+                successElement.style.display = 'block';
+            }
+        }
+
+        // 验证邮箱格式
+        function validateEmail(email) {
+            const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            return re.test(email);
+        }
+
+        // 验证手机号格式
+        function validatePhone(phone) {
+            if (!phone) return true; // 手机号可选
+            const re = /^1[3-9]\d{9}$/;
+            return re.test(phone);
+        }
+
+        // 处理登录（先显示滑块验证）
+        function handleLogin(event) {
+            event.preventDefault();
+            clearFormErrors();
+
+            const username = document.getElementById('loginUsername').value.trim();
+            const password = document.getElementById('loginPassword').value;
+
+            // 基本验证
+            if (!username) {
+                showError('loginUsernameError', '请输入用户名或邮箱');
+                return;
+            }
+
+            if (!password) {
+                showError('loginPasswordError', '请输入密码');
+                return;
+            }
+
+            // 显示滑块验证弹窗
+            showCaptchaModal('login');
+        }
+
+        // 执行登录（滑块验证通过后）
+        async function performLogin() {
+            const username = document.getElementById('loginUsername').value.trim();
+            const password = document.getElementById('loginPassword').value;
+            const rememberMe = document.getElementById('rememberMe').checked;
+
+            // 显示加载状态
+            const loginBtn = document.getElementById('loginSubmitBtn');
+            const loginText = loginBtn.querySelector('.text');
+            const loginLoading = loginBtn.querySelector('.loading');
+            loginText.style.display = 'none';
+            loginLoading.style.display = 'inline-block';
+            loginBtn.disabled = true;
+
+            try {
+                const response = await fetch(API_BASE_URL + 'login/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        username: username,
+                        password: password
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    console.log('登录成功', data);
+                    // 保存 token
+                    localStorage.setItem('access_token', data.access);
+                    localStorage.setItem('refresh_token', data.refresh);
+
+                    if (rememberMe) {
+                        localStorage.setItem('username', username);
+                        localStorage.setItem('password', password);
+                        localStorage.setItem('rememberMe', 'true');
+                    } else {
+                        localStorage.removeItem('username');
+                        localStorage.removeItem('password');
+                        localStorage.removeItem('rememberMe');
+                    }
+
+                    // 重定向到聊天页面
+                    showSuccess('loginSuccessMessage', '登录成功，正在跳转...');
+                    setTimeout(() => {
+                        window.location.href = '/chat/';
+                    }, 1000);
+                } else {
+                    // 处理错误
+                    const errors = data.non_field_errors || data.detail || data;
+                    if (Array.isArray(errors)) {
+                        showError('loginGeneralError', errors[0]);
+                    } else if (typeof errors === 'object') {
+                        for (const [field, messages] of Object.entries(errors)) {
+                            if (field === 'non_field_errors') {
+                                showError('loginGeneralError', messages[0]);
+                            } else {
+                                showError(`login${field.charAt(0).toUpperCase() + field.slice(1)}Error`, messages[0]);
+                            }
+                        }
+                    } else if (typeof errors === 'string') {
+                        try {
+                            const json = JSON.parse(errors);
+                            for (const [field, messages] of Object.entries(json)) {
+                                if (field === 'non_field_errors') {
+                                    showError('loginGeneralError', messages[0]);
+                                } else {
+                                    showError(`login${field.charAt(0).toUpperCase() + field.slice(1)}Error`, messages[0]);
+                                }
+                            }
+                        } catch (e) {
+                            console.error('JSON 解析错误:', e);
+                            showError('loginGeneralError', errors);
+                        }
+                    } else {
+                        showError('loginGeneralError', '登录失败，请检查用户名和密码');
+                    }
+                }
+            } catch (error) {
+                console.error('登录请求失败:', error);
+                showError('loginGeneralError', '网络错误，请稍后重试');
+            } finally {
+                // 恢复按钮状态
+                loginText.style.display = 'inline-block';
+                loginLoading.style.display = 'none';
+                loginBtn.disabled = false;
+            }
+        }
+
+        // 处理注册（先显示滑块验证）
+        function handleRegister(event) {
+            event.preventDefault();
+            clearFormErrors();
+
+            const username = document.getElementById('registerUsername').value.trim();
+            const email = document.getElementById('registerEmail').value.trim();
+            const password = document.getElementById('registerPassword').value;
+            const passwordConfirm = document.getElementById('registerPasswordConfirm').value;
+            const phone = document.getElementById('registerPhone').value.trim();
+
+            // 验证
+            let hasError = false;
+
+            if (!username) {
+                showError('registerUsernameError', '请输入用户名');
+                hasError = true;
+            } else if (username.length < 3 || username.length > 20) {
+                showError('registerUsernameError', '用户名长度必须在3-20个字符之间');
+                hasError = true;
+            }
+
+            if (!email) {
+                showError('registerEmailError', '请输入邮箱');
+                hasError = true;
+            } else if (!validateEmail(email)) {
+                showError('registerEmailError', '请输入有效的邮箱地址');
+                hasError = true;
+            }
+
+            if (!password) {
+                showError('registerPasswordError', '请输入密码');
+                hasError = true;
+            } else if (password.length < 8) {
+                showError('registerPasswordError', '密码长度至少8位');
+                hasError = true;
+            }
+
+            if (!passwordConfirm) {
+                showError('registerPasswordConfirmError', '请确认密码');
+                hasError = true;
+            } else if (password !== passwordConfirm) {
+                showError('registerPasswordConfirmError', '两次输入的密码不一致');
+                hasError = true;
+            }
+
+            if (phone && !validatePhone(phone)) {
+                showError('registerPhoneError', '请输入有效的手机号');
+                hasError = true;
+            }
+
+            if (hasError) return;
+
+            // 显示滑块验证弹窗
+            showCaptchaModal('register');
+        }
+
+        // 执行注册（滑块验证通过后）
+        async function performRegister() {
+            const username = document.getElementById('registerUsername').value.trim();
+            const email = document.getElementById('registerEmail').value.trim();
+            const password = document.getElementById('registerPassword').value;
+            const passwordConfirm = document.getElementById('registerPasswordConfirm').value;
+            const phone = document.getElementById('registerPhone').value.trim();
+
+            // 显示加载状态
+            const registerBtn = document.getElementById('registerSubmitBtn');
+            const registerText = registerBtn.querySelector('.text');
+            const registerLoading = registerBtn.querySelector('.loading');
+            registerText.style.display = 'none';
+            registerLoading.style.display = 'inline-block';
+            registerBtn.disabled = true;
+
+            try {
+                const userData = {
+                    username: username,
+                    email: email,
+                    password: password,
+                    password_confirm: passwordConfirm
+                };
+
+                if (phone) userData.phone = phone;
+
+                const response = await fetch(API_BASE_URL + 'register/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(userData)
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showSuccess('registerSuccessMessage', '注册成功！正在跳转到登录页面...');
+                    setTimeout(() => {
+                        showLoginForm();
+                    }, 2000);
+                } else {
+                    // 处理注册错误
+                    if (data.username) {
+                        showError('registerUsernameError', data.username[0]);
+                    }
+                    if (data.email) {
+                        showError('registerEmailError', data.email[0]);
+                    }
+                    if (data.password) {
+                        showError('registerPasswordError', data.password[0]);
+                    }
+                    if (data.phone) {
+                        showError('registerPhoneError', data.phone[0]);
+                    }
+                    if (data.password_confirm) {
+                        showError('registerPasswordConfirmError', data.password_confirm[0]);
+                    }
+                    if (data.non_field_errors) {
+                        showError('registerGeneralError', data.non_field_errors[0]);
+                    }
+                    if (data.detail) {
+                        showError('registerGeneralError', data.detail);
+                    }
+                }
+            } catch (error) {
+                console.error('注册请求失败:', error);
+                showError('registerGeneralError', '网络错误，请稍后重试');
+            } finally {
+                // 恢复按钮状态
+                registerText.style.display = 'inline-block';
+                registerLoading.style.display = 'none';
+                registerBtn.disabled = false;
+            }
+        }
+
+        // 页面加载完成后的初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            // 绑定表单切换
+            document.getElementById('showRegisterLink').addEventListener('click', function(e) {
+                e.preventDefault();
+                showRegisterForm();
+            });
+
+            document.getElementById('showLoginLink').addEventListener('click', function(e) {
+                e.preventDefault();
+                showLoginForm();
+            });
+
+            // 绑定登录/注册按钮（改为触发滑块验证）
+            document.getElementById('loginSubmitBtn').addEventListener('click', handleLogin);
+            document.getElementById('registerSubmitBtn').addEventListener('click', handleRegister);
+
+            // 绑定滑块弹窗按钮
+            document.getElementById('captchaCancelBtn').addEventListener('click', function() {
+                closeCaptchaModal();
+            });
+
+            document.getElementById('captchaRefreshBtn').addEventListener('click', function() {
+                if (captcha) {
+                    captcha.refresh();
+                }
+            });
+
+            // 点击弹窗外部关闭
+            document.getElementById('captchaModal').addEventListener('click', function(e) {
+                if (e.target === this) {
+                    closeCaptchaModal();
+                }
+            });
+
+            // 回车键提交
+            document.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    const currentForm = document.querySelector('.auth-form:not([style*="display: none"])');
+                    if (currentForm && currentForm.querySelector('form')) {
+                        // 阻止默认提交，改为触发滑块验证
+                        e.preventDefault();
+                        if (currentForm.id === 'loginForm') {
+                            handleLogin(e);
+                        } else if (currentForm.id === 'registerForm') {
+                            handleRegister(e);
+                        }
+                    }
+                }
+            });
+
+            // 检查是否已经登录
+            const token = localStorage.getItem('access_token');
+            if (token) {
+                window.location.href = '/chat/';
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>大岳企业聊天室 - 公司内部通讯</title>
+    <link rel="stylesheet" href="chat.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+
+    <link rel="stylesheet" href="/static/css/chat.css">
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
+
+</head>
+<body>
+<div class="chat-container">
+    <!-- 侧边栏 -->
+    <div class="sidebar show">
+        <div class="sidebar-header">
+            <div class="logo">
+                <i class="fas fa-comments"></i>
+                <span>大岳企业聊天室</span>
+            </div>
+            <div class="user-actions">
+                <button class="btn-icon" title="设置">
+                    <i class="fas fa-cog"></i>
+                </button>
+                <button class="btn-icon" title="退出">
+                    <i class="fas fa-sign-out-alt"></i>
+                </button>
+            </div>
+        </div>
+
+        <div class="user-profile">
+            <img src="/static/images/default-avatar.png" alt="头像" class="avatar" id="currentUserAvatar">
+            <div class="user-info">
+                <div class="username" id="userName">加载中...</div>
+                <div class="status online" id="userStatus">
+                    <span class="status-dot"></span>
+                    <span class="status-text">在线</span>
+                </div>
+            </div>
+        </div>
+
+
+        <div class="sidebar-search">
+            <input type="text" id="chatSearch" placeholder="搜索聊天...">
+        </div>
+
+        <div class="sidebar-tabs">
+            <button class="tab-btn active" data-tab="chats">
+                <i class="fas fa-comments"></i>
+                聊天
+            </button>
+            <button class="tab-btn" data-tab="contacts">
+                <i class="fas fa-address-book"></i>
+                通讯录
+            </button>
+            <button class="tab-btn" data-tab="groups">
+                <i class="fas fa-users"></i>
+                群组
+            </button>
+        </div>
+
+        <div class="chat-list" id="chatList">
+            <!-- 聊天列表将通过JS动态生成 -->
+            <div class="empty-state">
+                <i class="fas fa-inbox"></i>
+                <p>暂无聊天记录</p>
+            </div>
+        </div>
+
+        <div class="contacts-list hidden" id="contactsList">
+            <!-- 通讯录列表将通过JS动态生成 -->
+        </div>
+
+        <div class="groups-list hidden" id="groupsList">
+            <!-- 群组列表将通过JS动态生成 -->
+        </div>
+    </div>
+
+    <!-- 主聊天区域 -->
+    <div class="chat-main">
+        <div class="chat-header">
+            <div class="header-left">
+                <button class="back-btn" id="backBtn">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <div class="chat-info" onclick="chatClient.showProfile(chatClient.currentRoomId)">
+                    <div class="chat-avatar">
+                        <img src="/static/images/default-avatar.png" alt="聊天对象" id="chatAvatar">
+                    </div>
+                    <div class="chat-details">
+                        <div class="chat-title" id="chatTitle">选择聊天</div>
+                        <div class="status offline" id="chatSubtitle">
+                            <span class="status-dot"></span>
+                            <span class="status-text" id="chatStatus">未连接</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="header-right">
+                <button class="btn-icon" title="语音通话">
+                    <i class="fas fa-phone"></i>
+                </button>
+                <button class="btn-icon" title="视频通话">
+                    <i class="fas fa-video"></i>
+                </button>
+                <button class="btn-icon" title="更多操作">
+                    <i class="fas fa-ellipsis-v"></i>
+                </button>
+            </div>
+        </div>
+
+        <div class="messages-container" id="messagesContainer">
+            <div class="messages-empty" id="messagesEmpty">
+                <i class="fas fa-comments"></i>
+                <p>选择聊天对象开始对话</p>
+                <button class="btn btn-primary" onclick="chatClient.openNewChatModal()">
+                    <i class="fas fa-plus"></i>
+                    新建聊天
+                </button>
+            </div>
+            <div class="messages-list" id="messagesList" style="display: none;">
+                <!-- 消息列表将通过JS动态生成 -->
+            </div>
+        </div>
+
+        <div class="chat-input-area">
+            <div class="input-actions">
+                <button class="btn-icon file-upload-btn" title="发送文件" id="fileBtn">
+                    <i class="fas fa-paperclip"></i>
+
+                </button>
+                <input type="file" id="fileInput" hidden multiple>
+                <button class="btn-icon" title="发送图片" id="imageBtn">
+                    <i class="fas fa-image"></i>
+                </button>
+
+                <!--                <button class="btn-icon" title="语音消息" id="voiceBtn">-->
+                <!--                    <i class="fas fa-microphone"></i>-->
+                <!--                </button>-->
+
+
+                <button class="btn-icon" title="表情" id="emojiBtn">
+                    <i class="far fa-smile"></i>
+                </button>
+            </div>
+
+            <!-- 表情包面板（隐藏默认） -->
+            <div class="emoji-panel" id="emojiPanel" style="display: none;">
+                <div class="emoji-grid">
+                    <!-- 常用表情 -->
+                    <span class="emoji-item" data-emoji="😊">😊</span>
+                    <span class="emoji-item" data-emoji="😂">😂</span>
+                    <span class="emoji-item" data-emoji="😍">😍</span>
+                    <span class="emoji-item" data-emoji="👍">👍</span>
+                    <span class="emoji-item" data-emoji="❤️">❤️</span>
+                    <span class="emoji-item" data-emoji="🎉">🎉</span>
+                    <span class="emoji-item" data-emoji="👏">👏</span>
+                    <span class="emoji-item" data-emoji="🙏">🙏</span>
+                    <span class="emoji-item" data-emoji="💪">💪</span>
+                    <span class="emoji-item" data-emoji="🔥">🔥</span>
+                    <span class="emoji-item" data-emoji="💯">💯</span>
+                    <span class="emoji-item" data-emoji="🏆">🏆</span>
+                    <span class="emoji-item" data-emoji="👎">👎</span>
+                    <span class="emoji-item" data-emoji="🙌">🙌</span>
+
+                    <!-- 更多表情可以继续添加 -->
+                </div>
+            </div>
+
+            <div class="input-wrapper">
+                <textarea id="messageInput" placeholder="输入消息..." rows="1"></textarea>
+                <div class="typing-indicator" id="typingIndicator" style="display: none;">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                </div>
+            </div>
+            <button class="send-btn" id="sendBtn">发送</button>
+        </div>
+    </div>
+</div>
+
+<!-- 消息模板 -->
+<template id="messageTemplate">
+    <div class="message-wrapper">
+        <!-- 动态添加 message-left-wrapper 或 message-right-wrapper -->
+    </div>
+</template>
+
+<!-- 时间戳模板 -->
+<template id="timeStampTemplate">
+    <div class="message-time">
+        <span></span>
+    </div>
+</template>
+
+
+<!-- 新建聊天模态框 -->
+<div class="modal" id="newChatModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>新建聊天</h3>
+            <button class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="chat-type-tabs">
+                <button class="tab-btn active" data-target="new-private-chat">私聊</button>
+                <button class="tab-btn" data-target="new-group-chat">群聊</button>
+            </div>
+
+            <!-- 私聊表单 -->
+            <div class="chat-form active" id="new-private-chat">
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="searchUserInput" placeholder="搜索用户...">
+                </div>
+                <div class="user-results" id="userResults">
+                    <!-- 用户列表将通过JS动态生成 -->
+                </div>
+            </div>
+
+            <!-- 群聊表单 -->
+            <div class="chat-form" id="new-group-chat">
+                <div class="form-group">
+                    <label>群组名称 <span class="required">*</span></label>
+                    <input type="text" id="groupNameInput" placeholder="请输入群组名称" maxlength="20">
+                </div>
+                <div class="selected-members" id="selectedMembers">
+                    <div class="selected-member">
+                        <span class="member-name">你</span>
+                        <span class="member-tag">创建者</span>
+                    </div>
+                </div>
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="addGroupMemberInput" placeholder="搜索成员...">
+                </div>
+                <div class="member-results" id="groupMemberResults">
+                    <!-- 成员列表将通过JS动态生成 -->
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary close-btn">取消</button>
+            <button class="btn btn-primary">创建</button>
+        </div>
+    </div>
+</div>
+
+<!-- 设置模态框 -->
+<div class="modal" id="settingsModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>个人设置</h3>
+            <button class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="settings-section">
+                <h4><i class="fas fa-user"></i> 个人资料</h4>
+                <div class="profile-grid">
+                    <div class="profile-avatar-section">
+                        <div class="avatar-upload-container">
+                            <img src="/static/images/default-avatar.png" alt="头像" id="settingsAvatar">
+                            <label class="upload-btn" for="avatarUpload">
+                                <i class="fas fa-camera"></i>
+                                <input type="file" id="avatarUpload" accept="image/*" hidden>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="profile-info-grid">
+                        <div class="form-group">
+                            <label>用户名</label>
+                            <input type="text" id="settingsUsername" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label>姓名</label>
+                            <input type="text" id="settingsRealName">
+                        </div>
+                        <div class="form-group">
+                            <label>部门</label>
+                            <input type="text" id="settingsDepartment">
+                        </div>
+                        <div class="form-group">
+                            <label>职位</label>
+                            <input type="text" id="settingsPosition">
+                        </div>
+                        <div class="form-group">
+                            <label>手机号</label>
+                            <input type="text" id="settingsPhone">
+                        </div>
+                        <div class="form-group">
+                            <label>邮箱</label>
+                            <input type="email" id="settingsEmail">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <h4><i class="fas fa-bell"></i> 通知设置</h4>
+                <div class="notification-grid">
+                    <div class="setting-item">
+                        <label>桌面通知</label>
+                        <label class="switch">
+                            <input type="checkbox" id="desktopNotifications" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="setting-item">
+                        <label>声音提醒</label>
+                        <label class="switch">
+                            <input type="checkbox" id="soundNotifications" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary close-btn">取消</button>
+            <button class="btn btn-primary">保存设置</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/api.js"></script>
+<script src="/static/js/utils.js"></script>
+<script src="/static/js/chat.js"></script>
+<script src="/static/js/spark-md5.min.js"></script>
+</body>
+</html>
