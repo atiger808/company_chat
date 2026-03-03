@@ -38,6 +38,11 @@ urlpatterns = [
          name='admin-toggle-status'),
     path('admin/users/batch-delete/', UserAdminViewSet.as_view({'post': 'batch_delete'}), name='admin-batch-delete'),
     path('admin/users/export/', UserAdminViewSet.as_view({'get': 'export'}), name='admin-export'),
+    # 为用户分配好友
+    path('admin/users/<int:pk>/assign-friends/', UserAdminViewSet.as_view({'post': 'assign_friends'}), name='admin-assign-friends'),
+    # 获取用户的好友列表
+    path('admin/users/<int:pk>/friends/', UserAdminViewSet.as_view({'get': 'get_friends'}), name='admin-get-friends'),
+
 
     # 便捷的URL
     path('me/', UserViewSet.as_view({'get': 'me'}), name='user-me'),
@@ -52,4 +57,9 @@ urlpatterns = [
     path('search_users/', UserViewSet.as_view({'get': 'search_users'}), name='user-search'),
     path('online/', UserViewSet.as_view({'get': 'online_users'}), name='user-online'),
     path('<int:pk>/profile/', UserViewSet.as_view({'get': 'get_user_profile'}), name='user-profile-detail'),
+
+    # 获取用户列表
+    path('list/', UserViewSet.as_view({'get': 'list_users'}), name='user-list'),
+    # 获取好友列表
+    path('friends/', UserViewSet.as_view({'get': 'get_friends'}), name='user-friends'),
 ]

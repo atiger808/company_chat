@@ -70,15 +70,26 @@ class API {
         return await response.json();
     }
 
+    static async logout() {
+        const response = await fetch(`${API_BASE_URL}/auth/logout/`, {
+            method: 'POST',
+            headers: TokenManager.getHeaders()
+        });
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData?.detail || errorData?.error || errorData?.message || '登出失败');
+        }
+        TokenManager.removeToken();
+    }
+
     // 聊天室相关
     static async getChatRooms() {
         const response = await fetch(`${API_BASE_URL}/chat/rooms/`, {
             headers: TokenManager.getHeaders()
         });
         if (!response.ok) {
-            const errorText = await response.text();
-            console.error('获取聊天室失败:', response.status, errorText);
-            throw new Error(`获取聊天室列表失败 (${response.status})`);
+            const errorData = await response.json();
+            throw new Error(errorData?.detail || errorData?.error || errorData?.message || '获取聊天室失败');
         }
         const data = await response.json();
         return data.results || [];
@@ -91,20 +102,21 @@ class API {
             body: JSON.stringify(data)
         });
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            console.error('创建聊天室失败:', response.status, errorData);
-            throw new Error(errorData.error || `创建聊天室失败 (${response.status})`);
+            const errorData = await response.json();
+            throw new Error(errorData?.detail || errorData?.error || errorData?.message || '创建聊天室失败');
         }
         return await response.json();
     }
 
-    static async getChatHistory(roomId, limit = 50) {
+    static async getChatHistory(roomId, limit = 1000) {
         const response = await fetch(
-            `${API_BASE_URL}/chat/messages/?chat_room_id=${roomId}&limit=${limit}`, {
+            `${API_BASE_URL}/chat/messages/?chat_room_id=${roomId}`, {
+                method: 'GET',
                 headers: TokenManager.getHeaders()
             });
         if (!response.ok) {
-            throw new Error('获取聊天历史失败');
+            const errorData = await response.json();
+            throw new Error(errorData?.detail || errorData?.error || errorData?.message || '获取聊天历史失败');
         }
         const data = await response.json();
         return Array.isArray(data) ? data : (data.results || []);
@@ -119,7 +131,7 @@ class API {
 
         if (!response.ok) {
             const errorData = await response.json();
-            throw new Error(errorData.detail || '发送失败');
+            throw new Error(errorData?.detail || errorData?.error || errorData?.message || '发送失败');
         }
 
         return await response.json();
@@ -133,7 +145,7 @@ class API {
         });
         if (!response.ok) {
             const errorData = await response.json();
-            throw new Error(errorData.error || '标记消息为已读失败');
+            throw new Error(errorData?.error || errorData?.message || '标记消息为已读失败');
         }
         return await response.json();
     }
@@ -143,24 +155,39 @@ class API {
             headers: TokenManager.getHeaders()
         });
         if (!response.ok) {
-            throw new Error('获取未读消息数失败');
+            const errorData = await response.json();
+            throw new Error(errorData?.error || errorData?.message || '获取未读消息数失败');
         }
         return await response.json();
     }
 
     // 用户列表
     static async getUsers() {
-        const response = await fetch(`${API_BASE_URL}/auth/users/`, {
+        const response = await fetch(`${API_BASE_URL}/auth/list/`, {
             headers: TokenManager.getHeaders()
         });
         if (!response.ok) {
-            throw new Error('获取用户列表失败');
+            const errorData = await response.json();
+            throw new Error(errorData?.error || errorData?.message || '获取用户列表失败');
         }
         const data = await response.json();
-        console.log("data: ", data);
-        console.log("data type: ", typeof data);
         return data.results || [];
     }
+
+
+    // 好友列表
+    static async getFriends() {
+        const response = await fetch(`${API_BASE_URL}/auth/friends/`, {
+            headers: TokenManager.getHeaders()
+        });
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData?.error || errorData?.message || '获取好友列表失败');
+        }
+        const data = await response.json();
+        return data.results || [];
+    }
+
 
     // 获取部门列表
     static async getDepartments() {
@@ -168,7 +195,8 @@ class API {
             headers: TokenManager.getHeaders()
         });
         if (!response.ok) {
-            throw new Error('获取部门列表失败');
+            const errorData = await response.json();
+            throw new Error(errorData?.error || errorData?.message || '获取部门列表失败');
         }
         const data = await response.json();
         return data.results || [];
@@ -180,7 +208,8 @@ class API {
             headers: TokenManager.getHeaders()
         });
         if (!response.ok) {
-            throw new Error('获取用户信息失败');
+            const errorData = await response.json();
+            throw new Error(errorData?.error || errorData?.message || '获取用户信息失败');
         }
         return await response.json();
     }
@@ -193,9 +222,23 @@ class API {
             headers: TokenManager.getHeaders()
         });
         if (!response.ok) {
-            throw new Error('操作失败');
+            const errorData = await response.json();
+            throw new Error(errorData?.error || errorData?.message || '操作失败');
         }
         return response
+    }
+
+    // 解散群聊
+    static async toggleDismissChatRoom(roomId) {
+        const response = await fetch(`${API_BASE_URL}/chat/rooms/${roomId}/dismiss_chat/`, {
+            method: 'DELETE',
+            headers: TokenManager.getHeaders()
+        })
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData?.error || errorData?.message || '操作失败');
+        }
+        return response;
     }
 
 
@@ -206,7 +249,8 @@ class API {
             headers: TokenManager.getHeaders()
         });
         if (!response.ok) {
-            throw new Error('操作失败');
+            const errorData = await response.json();
+            throw new Error(errorData?.error || errorData?.message || '操作失败');
         }
         const data = await response.json();
         return data;
@@ -232,7 +276,8 @@ class API {
             headers: TokenManager.getHeaders()
         });
         if (!response.ok) {
-            throw new Error('操作失败');
+            const errorData = await response.json();
+            throw new Error(errorData?.detail || errorData?.error || errorData?.message || '操作失败');
         }
         const data = await response.json();
         return data;
@@ -244,7 +289,8 @@ class API {
             headers: TokenManager.getHeaders()
         });
         if (!response.ok) {
-            throw new Error('操作失败');
+            const errorData = await response.json();
+            throw new Error(errorData?.detail || errorData?.error || errorData?.message || '操作失败');
         }
         console.log("response: ", response);
         const data = await response.json();
@@ -258,7 +304,8 @@ class API {
             headers: TokenManager.getHeaders()
         });
         if (!response.ok) {
-            throw new Error('操作失败');
+            const errorData = await response.json();
+            throw new Error(errorData?.detail || errorData?.error || errorData?.message || '操作失败');
         }
         const data = await response.json();
         return data.results || [];
@@ -279,8 +326,8 @@ class API {
         });
 
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || '文件上传失败');
+            const errorData = await response.json();
+            throw new Error(errorData?.detail || errorData?.error || errorData?.message || '文件上传失败');
         }
 
         return await response.json();

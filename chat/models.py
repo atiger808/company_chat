@@ -179,6 +179,34 @@ class Message(models.Model):
     message_type = models.CharField(max_length=20, choices=MESSAGE_TYPE_CHOICES, default='text',
                                     verbose_name='消息类型')
 
+    # 🔧 新增：引用消息字段
+    quote_message = models.ForeignKey(
+        'self',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='quoted_by',
+        verbose_name='引用的消息'
+    )
+    quote_content = models.TextField(blank=True, verbose_name='引用内容')
+    quote_sender = models.CharField(max_length=100, blank=True, verbose_name='引用发送者')
+    quote_sender_id = models.IntegerField(null=True, blank=True, verbose_name='引用发送者ID')
+    quote_timestamp = models.DateTimeField(null=True, blank=True, verbose_name='引用消息时间戳')
+    quote_message_type = models.CharField(
+        max_length=20,
+        choices=MESSAGE_TYPE_CHOICES,
+        default='text',
+        verbose_name='引用消息类型'
+    )
+    # @提及
+    mentioned_users = models.ManyToManyField(
+        CustomUser,
+        blank=True,
+        related_name='mentioned_in_messages',
+        verbose_name='被提及的用户'
+    )
+
+
     # 关键修改：file 字段改为指向 FileUpload
     file = models.ForeignKey(FileUpload, on_delete=models.SET_NULL, null=True, blank=True, verbose_name='文件')
     is_read = models.BooleanField(default=False, verbose_name='是否已读')
@@ -191,8 +219,11 @@ class Message(models.Model):
         verbose_name_plural = '消息'
         ordering = ['-timestamp']
         indexes = [
-            models.Index(fields=['chat_room', 'timestamp']),
-            models.Index(fields=['sender', 'timestamp']),
+            models.Index(fields=['chat_room', '-timestamp']),
+            models.Index(fields=['sender', '-timestamp']),
+            models.Index(fields=['is_deleted', '-timestamp']),
+            # 🔧 新增：优化 before_id/after_id 查询
+            models.Index(fields=['timestamp']),
         ]
 
     def __str__(self):
@@ -241,6 +272,19 @@ class Message(models.Model):
         if self.file:
             return self.file.mime_type  # 假设 FileUpload 模型中有 mime_type 字段
         return "text/plain"  # 默认返回纯文本类型
+
+    def get_quote_info(self):
+        """获取引用消息的完整信息"""
+        if self.quote_message:
+            return {
+                'id': self.quote_message.id,
+                'content': self.quote_content,
+                'sender': self.quote_sender,
+                'sender_id': self.quote_sender_id,
+                'timestamp': self.quote_timestamp.isoformat() if self.quote_timestamp else None,
+                'message_type': self.quote_message_type
+            }
+        return None
 
 
 

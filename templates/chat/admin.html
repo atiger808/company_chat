@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>管理员控制台 - 大岳企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/chat.css">
+    <title>管理员控制台 - 企业聊天室</title>
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260303-1">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
 
@@ -40,18 +40,18 @@
             </a>
         </nav>
 
-<!--        <div class="admin-sidebar-footer">-->
-<!--            <button class="btn btn-secondary btn-block" onclick="logout()">-->
-<!--                <i class="fas fa-sign-out-alt"></i> 退出登录-->
-<!--            </button>-->
-<!--        </div>-->
+        <!--        <div class="admin-sidebar-footer">-->
+        <!--            <button class="btn btn-secondary btn-block" onclick="logout()">-->
+        <!--                <i class="fas fa-sign-out-alt"></i> 退出登录-->
+        <!--            </button>-->
+        <!--        </div>-->
 
         <!-- 侧边栏底部 -->
         <div class="sidebar-footer">
-<!--            <div class="user-info">-->
-<!--                <img src="/static/images/default-avatar.png" id="adminAvatar" alt="头像">-->
-<!--                <span id="adminUsername"></span>-->
-<!--            </div>-->
+            <!--            <div class="user-info">-->
+            <!--                <img src="/static/images/default-avatar.png" id="adminAvatar" alt="头像">-->
+            <!--                <span id="adminUsername"></span>-->
+            <!--            </div>-->
 
             <!-- 跳转到聊天室按钮 -->
             <button id="gotoChatBtn" class="btn-goto-chat">
@@ -99,7 +99,7 @@
                            oninput="adminConsole.searchUsers(this.value)">
                 </div>
 
-                <div class="admin-table-container">
+                <div class="admin-table-container" id="usersTableContainer">
 
                     <div class="scroll-indicator" id="scrollIndicator">左右滑动</div>
                     <table class="admin-table">
@@ -208,6 +208,25 @@
                         </select>
                     </div>
                 </div>
+
+
+<!--                <div class="form-row">-->
+
+                    <!-- 好友分配区域 -->
+                    <div class="form-group">
+                        <label><i class="fas fa-user-friends"></i> 分配好友</label>
+                        <div class="search-box">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="friendSearchCreate" placeholder="搜索用户...">
+                        </div>
+                        <div class="member-grid" id="friendGridCreate">
+                            <!-- 好友列表将动态生成 -->
+                        </div>
+                        <small class="form-hint">点击用户选择/取消好友，选中的用户将出现在该用户的通讯录中</small>
+                    </div>
+
+<!--                </div>-->
+
             </form>
         </div>
         <div class="modal-footer">
@@ -285,6 +304,12 @@
                         </select>
                     </div>
                 </div>
+
+
+                <!-- 好友选择区域 -->
+                <div id="friendSelectionContainer"></div>
+
+
             </form>
         </div>
         <div class="modal-footer">
@@ -295,8 +320,8 @@
     </div>
 </div>
 
-<script src="/static/js/utils.js"></script>
-<script src="/static/js/api.js"></script>
-<script src="/static/js/admin.js"></script>
+<script src="/static/js/utils.js?v=20260303-1"></script>
+<script src="/static/js/api.js?v=20260303-1"></script>
+<script src="/static/js/admin.js?v=20260303-1"></script>
 </body>
 </html>

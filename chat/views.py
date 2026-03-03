@@ -3,6 +3,7 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, Count
 from django.contrib.auth.models import AnonymousUser
 from django.utils import timezone
@@ -45,7 +46,11 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
                     filtered_rooms.append(room)
             else:
                 # 群聊：检查全局删除状态
-                if not room.is_deleted:
+                try:
+                    status_obj = ChatRoomDeleteStatus.objects.get(chat_room=room, user=user)
+                    if not status_obj.is_deleted:
+                        filtered_rooms.append(room)
+                except ChatRoomDeleteStatus.DoesNotExist:
                     filtered_rooms.append(room)
 
         return filtered_rooms
@@ -56,43 +61,40 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         try:
             chat_room = ChatRoom.objects.get(pk=pk, members=request.user)
             logger.info(f"User {request.user} soft deleted chat room {chat_room}. room_type: {chat_room.room_type}")
-            # 如果是私聊，只对当前用户隐藏
-            if chat_room.room_type == 'private':
+            obj, created = ChatRoomDeleteStatus.objects.get_or_create(chat_room=chat_room, user=request.user)
+            logger.info(f"obj {obj} created {created}")
+            if not obj.is_deleted:
+                obj.is_deleted = True
+                obj.deleted_at = timezone.now()
+                obj.save()
 
-                obj, created = ChatRoomDeleteStatus.objects.get_or_create(chat_room=chat_room, user=request.user)
-                logger.info(f"obj {obj} created {created}")
-                if not obj.is_deleted:
-                    obj.is_deleted = True
-                    obj.deleted_at = timezone.now()
-                    obj.save()
-
-                # 使用MessageDeleteStatus 删除该聊天室里的所有消息
-                all_messages = Message.objects.filter(chat_room=chat_room)
-                for message in all_messages:
-                    try:
-                        obj, created = MessageDeleteStatus.objects.get_or_create(message=message, user=request.user)
-                        if not obj.is_deleted:
-                            obj.is_deleted = True
-                            obj.deleted_at = timezone.now()
-                            obj.save()
-                    except MessageDeleteStatus.DoesNotExist:
-                        MessageDeleteStatus.objects.create(message=message, user=request.user, is_deleted=True,
-                                                           deleted_at=timezone.now())
-
-                return Response({'message': '私聊已从您的列表中移除'})
-            else:
-                # 如果是群主，则软删除
-                if request.user == chat_room.creator:
-                    obj, created = ChatRoomDeleteStatus.objects.get_or_create(chat_room=chat_room, user=request.user)
-                    logger.info(f"obj {obj} created {created}")
+            # 使用MessageDeleteStatus 删除该聊天室里的所有消息
+            all_messages = Message.objects.filter(chat_room=chat_room)
+            for message in all_messages:
+                try:
+                    obj, created = MessageDeleteStatus.objects.get_or_create(message=message, user=request.user)
                     if not obj.is_deleted:
                         obj.is_deleted = True
                         obj.deleted_at = timezone.now()
                         obj.save()
-                    return Response({'message': '群聊已删除'})
-                else:
-                    return Response({'message': '只有群主才能删除群聊'})
+                except MessageDeleteStatus.DoesNotExist:
+                    MessageDeleteStatus.objects.create(message=message, user=request.user, is_deleted=True,
+                                                       deleted_at=timezone.now())
+            return Response({'message': '聊天室已移除'})
 
+        except ChatRoom.DoesNotExist:
+            logger.error(f"ChatRoom with ID {pk} does not exist.")
+            return Response({'error': '聊天室不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=True, methods=['delete'])
+    def dismiss_chat(self, request, pk=None):
+        """解散群聊"""
+        try:
+            chat_room = ChatRoom.objects.get(pk=pk)
+            if chat_room.creator != request.user:
+                return Response({'error': '只有群主才能解散群聊'}, status=status.HTTP_403_FORBIDDEN)
+            chat_room.delete()
+            return Response({'message': '群聊已解散'})
         except ChatRoom.DoesNotExist:
             logger.error(f"ChatRoom with ID {pk} does not exist.")
             return Response({'error': '聊天室不存在'}, status=status.HTTP_404_NOT_FOUND)
@@ -453,37 +455,168 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(queryset, many=True, context={'request': request})
         return Response(serializer.data)
 
+    def retrieve(self, request, *args, **kwargs):
+        """获取单个聊天室详情"""
+        try:
+            pk = kwargs['pk']
+            logger.info(f'{request.user} pk: {pk}')
+            instance = ChatRoom.objects.get(id=pk)
+            logger.info(f'{request.user} 获取聊天室详情 {instance}')
+            # 确保用户是该聊天室成员
+            if not instance.members.filter(id=request.user.id).exists():
+                return Response({'error': '无权访问该聊天室'}, status=status.HTTP_403_FORBIDDEN)
+
+            serializer = self.get_serializer(instance)
+            return Response(serializer.data)
+        except ChatRoom.DoesNotExist:
+            return Response({'error': '聊天室不存在'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"获取聊天室详情失败: {e}")
+            return Response({'error': '服务器内部错误'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+class MessagePagination(PageNumberPagination):
+    """消息分页器 - 支持无限滚动"""
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 200
+
+
 
 class MessageViewSet(viewsets.ModelViewSet):
     """消息视图集"""
+    queryset = Message.objects.select_related('sender', 'chat_room', 'file', 'quote_message')
     serializer_class = MessageSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = MessagePagination  # 启用分页
 
     def get_queryset(self):
+        # 获取查询参数
         chat_room_id = self.request.query_params.get('chat_room_id')
+        before_id = self.request.query_params.get('before_id')  # 加载更早的消息
+        after_id = self.request.query_params.get('after_id')  # 加载更新的消息
+
+        # 构建基础查询集
         if chat_room_id:
-            all_messages = Message.objects.filter(
+            queryset = Message.objects.filter(
                 chat_room_id=chat_room_id,
                 chat_room__members=self.request.user,
                 is_deleted=False
-            ).order_by('-timestamp')
+            )
         else:
-            all_messages = Message.objects.filter(
+            queryset = Message.objects.filter(
                 chat_room__members=self.request.user,
                 is_deleted=False
-            ).order_by('-timestamp')
+            )
 
-        # 过滤已删除的消息
-        filtered_messages = []
-        for message in all_messages:
-            status_obj = MessageDeleteStatus.objects.filter(message=message, user=self.request.user).first()
-            if not status_obj:
-                filtered_messages.append(message)
-            else:
-                if not status_obj.is_deleted:
-                    filtered_messages.append(message)
+        # 🔧 优化：使用数据库查询过滤已删除的消息，避免Python循环
+        from django.db.models import Subquery, OuterRef
 
-        return filtered_messages
+        deleted_message_ids = MessageDeleteStatus.objects.filter(
+            user=self.request.user,
+            is_deleted=True,
+            message=OuterRef('pk')
+        ).values('message')
+
+        queryset = queryset.exclude(id__in=Subquery(deleted_message_ids))
+
+        # 🔧 支持 before_id 参数（加载更早的消息）
+        if before_id:
+            try:
+                before_message = Message.objects.get(id=before_id)
+                queryset = queryset.filter(timestamp__lt=before_message.timestamp)
+            except Message.DoesNotExist:
+                pass
+
+        # 🔧 支持 after_id 参数（加载更新的消息）
+        if after_id:
+            try:
+                after_message = Message.objects.get(id=after_id)
+                queryset = queryset.filter(timestamp__gt=after_message.timestamp)
+            except Message.DoesNotExist:
+                pass
+
+        # 按时间倒序（最新消息在前）
+        queryset = queryset.order_by('-timestamp')
+
+        return queryset.select_related('sender', 'chat_room', 'file', 'quote_message')
+
+
+    def perform_create(self, serializer):
+        # 获取当前用户作为 sender
+        sender = self.request.user
+        if not sender.is_authenticated:
+            return Response({'error': '用户未登录'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        # 构造数据字典
+        data = serializer.validated_data
+        data['sender'] = sender  # 显式设置 sender
+
+        # 创建消息实例
+        message = Message.objects.create(**data)
+
+        # 🔧 保存引用字段
+        quote_message_id = data.get('quote_message_id')
+        quote_content = data.get('quote_content')
+        quote_sender = data.get('quote_sender')
+        quote_sender_id = data.get('quote_sender_id')
+        quote_timestamp = data.get('quote_timestamp')
+        quote_message_type = data.get('quote_message_type')
+
+        # 保存引用字段
+        if quote_message_id:
+            try:
+                quote_message = Message.objects.get(id=quote_message_id)
+                message.quote_message = quote_message
+            except Message.DoesNotExist:
+                pass
+
+        if quote_content:
+            message.quote_content = quote_content[:500]  # 限制长度
+
+        if quote_sender:
+            message.quote_sender = quote_sender[:100]
+
+        if quote_sender_id:
+            try:
+                message.quote_sender_id = int(quote_sender_id)
+            except (ValueError, TypeError):
+                pass
+
+        if quote_timestamp:
+            try:
+                if isinstance(quote_timestamp, str):
+                    message.quote_timestamp = timezone.datetime.fromisoformat(quote_timestamp.replace('Z', '+00:00'))
+                else:
+                    message.quote_timestamp = quote_timestamp
+            except:
+                message.quote_timestamp = timezone.now()
+
+        if quote_message_type:
+            message.quote_message_type = quote_message_type
+
+        # 如果有 file_id，关联 FileUpload
+        message_type = data.get('message_type')
+        file_id = data.get('file_id')  # 新增：从前端接收 file_id
+        if file_id and message_type in ['image', 'file', 'video', 'voice']:
+            try:
+                file_upload = FileUpload.objects.get(id=file_id)
+                message.file = file_upload
+                message.save(update_fields=['file'])
+            except FileUpload.DoesNotExist:
+                pass
+
+        # 更新聊天室时间戳
+        message.chat_room.updated_at = timezone.now()
+        message.chat_room.save(update_fields=['updated_at'])
+
+        # 保存所有字段（包括引用字段）
+        message.save()
+
+        serializer.instance = message
+        return message
+
 
     @action(detail=True, methods=['delete'])
     def soft_delete(self, request, pk=None):
@@ -559,40 +692,6 @@ class MessageViewSet(viewsets.ModelViewSet):
 
         return Response({'chat_room_id': chat_room_id, 'unread_count': count})
 
-    # chat/views.py - MessageViewSet
-
-    def perform_create(self, serializer):
-        # 获取当前用户作为 sender
-        sender = self.request.user
-        if not sender.is_authenticated:
-            return Response({'error': '用户未登录'}, status=status.HTTP_401_UNAUTHORIZED)
-
-        # 构造数据字典
-        data = serializer.validated_data
-        data['sender'] = sender  # 显式设置 sender
-
-        # 创建消息实例
-        message = Message.objects.create(**data)
-        serializer.instance = message
-
-        message_type = data.get('message_type')
-        file_url = data.get('file_url')
-        file_id = data.get('file_id')  # 新增：从前端接收 file_id
-
-        # 如果有 file_id，关联 FileUpload
-        if file_id and message_type in ['image', 'file', 'video', 'voice']:
-            try:
-                file_upload = FileUpload.objects.get(id=file_id)
-                message.file = file_upload
-                message.save(update_fields=['file'])
-            except FileUpload.DoesNotExist:
-                pass
-
-        # 更新聊天室时间戳
-        message.chat_room.updated_at = timezone.now()
-        message.chat_room.save(update_fields=['updated_at'])
-
-        return message
 
     @action(detail=False, methods=['post'])
     def mark_as_read(self, request):
@@ -630,6 +729,101 @@ class MessageViewSet(viewsets.ModelViewSet):
                 logger.info(f"message {msg_id} 不存在")
                 continue
         return Response({'status': 'success'})
+
+    @action(detail=False, methods=['post'])
+    def revoke(self, request, pk=None):
+        """撤销消息（10分钟内）"""
+        try:
+            logger.info(f"{request.user} 撤销消息pk: {pk}")
+            message = Message.objects.get(id=pk)
+
+            logger.info(f"{request.user} 撤销消息 {message}")
+            logger.info(f"{request.user} 撤销消息id: {message.id}")
+
+            # 检查是否是发送者
+            if message.sender != request.user:
+                return Response({'error': '无权限撤销此消息'}, status=status.HTTP_403_FORBIDDEN)
+
+            # 检查是否在10分钟内
+            time_diff = timezone.now() - message.timestamp
+            if time_diff.total_seconds() > 600:  # 10分钟
+                return Response({'error': '消息已超过可撤销时间（10分钟）'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 撤销消息（软删除）
+            message.is_deleted = True
+            message.deleted_at = timezone.now()
+            message.content = '[消息已撤销]'
+            message.save(update_fields=['is_deleted', 'deleted_at', 'content'])
+
+            # 🔧 关键修复16: 更新聊天室最后一条消息
+            chat_room = message.chat_room
+            chat_room.updated_at = timezone.now()
+            chat_room.save(update_fields=['updated_at'])
+
+            # 🔧 关键修复17: 通过WebSocket通知聊天室其他成员
+            if chat_room:
+                from channels.layers import get_channel_layer
+                from asgiref.sync import async_to_sync
+
+                channel_layer = get_channel_layer()
+                async_to_sync(channel_layer.group_send)(
+                    f'chat_{chat_room.id}',
+                    {
+                        'type': 'chat_message',
+                        'message': {
+                            'type': 'message_revoked',
+                            'id': message.id,
+                            'message_id': message.id,
+                            'revoked_at': message.deleted_at.isoformat(),
+                            'sender_id': message.sender.id,
+                            'sender_name': message.sender.real_name or message.sender.username,
+                            'chat_room_id': chat_room.id, # 🔧 新增：包含聊天室ID
+                            'room_type': chat_room.room_type,
+                            'content': '[消息已撤销]',
+                            # 🔧 广播引用字段（如果存在）
+                            'quote_message_id': message.quote_message_id,
+                            'quote_content': message.quote_content,
+                            'quote_sender': message.quote_sender,
+                            'quote_sender_id': message.quote_sender_id,
+                            'quote_timestamp': message.quote_timestamp.isoformat() if message.quote_timestamp else None,
+                            'quote_message_type': message.quote_message_type,
+                        }
+                    }
+                )
+
+                # 🔧 关键修复19: 同时发送全局通知（更新聊天列表）
+                async_to_sync(channel_layer.group_send)(
+                    f'user_{request.user.id}_notifications',
+                    {
+                        'type': 'room_updated',
+                        'room_id': chat_room.id,
+                        'room': ChatRoomSerializer(chat_room, context={'request': request}).data
+                    }
+                )
+
+                # 通知其他成员
+                for member in chat_room.members.exclude(id=request.user.id):
+                    async_to_sync(channel_layer.group_send)(
+                        f'user_{member.id}_notifications',
+                        {
+                            'type': 'room_updated',
+                            'room_id': chat_room.id,
+                            'room': ChatRoomSerializer(chat_room, context={'request': request}).data
+                        }
+                    )
+
+            return Response({
+                'message': '消息已撤销',
+                'message_id': message.id,
+                'revoked_at': message.deleted_at.isoformat()
+            })
+
+        except Message.DoesNotExist:
+            logger.info(f"message {pk} 不存在")
+            return Response({'error': '消息不存在'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"Error: {e}")
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class FileUploadView(APIView):

@@ -95,6 +95,15 @@ class CustomUser(AbstractUser):
         related_query_name='customuser'
     )
 
+    # 好友关系（多对多）
+    friends = models.ManyToManyField(
+        'self',
+        symmetrical=False,
+        blank=True,
+        related_name='friend_of',
+        verbose_name='好友列表'
+    )
+
     class Meta:
         verbose_name = '用户'
         verbose_name_plural = '用户'

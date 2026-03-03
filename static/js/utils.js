@@ -67,6 +67,8 @@ class Utils {
     // 验证文件类型
     static isValidFileType(file, allowedTypes = [
         'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp',
+        // dng图片类型
+        'image/dng',
         'application/pdf',
         'text/plain',
         'application/vnd.ms-excel',
@@ -93,9 +95,18 @@ class Utils {
         'video/mp4', 'video/avi', 'video/mov', 'video/wmv', 'video/mkv', 'video/flv',
         'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/m4a'
     ]) {
+        console.log("file type: ", file.type)
         return allowedTypes.includes(file.type) ||
+            file.name.toLowerCase().endsWith('.pdf') ||
+            file.name.toLowerCase().endsWith('.txt') ||
             file.name.toLowerCase().endsWith('.xls') ||
             file.name.toLowerCase().endsWith('.xlsx') ||
+            file.name.toLowerCase().endsWith('.doc') ||
+            file.name.toLowerCase().endsWith('.docx') ||
+            file.name.toLowerCase().endsWith('.ppt') ||
+            file.name.toLowerCase().endsWith('.pptx') ||
+            file.name.toLowerCase().endsWith('.odt') ||
+            file.name.toLowerCase().endsWith('.dng') ||
             file.name.toLowerCase().endsWith('.csv');
     }
 
@@ -195,7 +206,9 @@ class Utils {
         if (isThisYear) {
             return msgDate.toLocaleDateString('zh-CN', {
                 month: '2-digit',
-                day: '2-digit'
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
             });
         }
 
@@ -241,31 +254,88 @@ class Utils {
     }
 
 
-    // 播放提示音
-    static playNotificationSound() {
-        try {
-            // 创建音频上下文
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
+    // 修复：使用用户交互触发的音频上下文
+    static initAudioContext() {
+        if (!Utils.audioContext) {
+            try {
+                Utils.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                Utils.audioGainNode = Utils.audioContext.createGain();
+                Utils.audioGainNode.connect(Utils.audioContext.destination);
+                Utils.audioGainNode.gain.value = 0.5;
 
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
+                // 尝试恢复（如果被暂停）
+                if (Utils.audioContext.state === 'suspended') {
+                    const resumeAudio = () => {
+                        if (Utils.audioContext && Utils.audioContext.state === 'suspended') {
+                            Utils.audioContext.resume().then(() => {
+                                console.log('AudioContext resumed');
+                            }).catch(err => {
+                                console.warn('Failed to resume AudioContext:', err);
+                            });
+                        }
+                        document.removeEventListener('click', resumeAudio);
+                        document.removeEventListener('touchstart', resumeAudio);
+                    };
 
-            oscillator.frequency.value = 800;
-            oscillator.type = 'sine';
-            gainNode.gain.value = 0.1;
-
-            oscillator.start();
-            setTimeout(() => {
-                oscillator.stop();
-            }, 200);
-        } catch (e) {
-            console.log('Audio play failed:', e);
-            // 降级方案：使用系统提示音
-            if ('Notification' in window) {
-                new Notification('新消息', {silent: true});
+                    document.addEventListener('click', resumeAudio, {once: true});
+                    document.addEventListener('touchstart', resumeAudio, {once: true});
+                }
+            } catch (e) {
+                console.warn('Failed to create AudioContext:', e);
+                Utils.audioContext = null;
             }
+        }
+    }
+
+    // 修复：播放提示音（处理 autoplay 限制）
+    static playNotificationSound() {
+        // 确保音频上下文已初始化
+        if (!Utils.audioContext) {
+            Utils.initAudioContext();
+        }
+
+        // 检查音频上下文状态
+        if (Utils.audioContext && Utils.audioContext.state === 'suspended') {
+            // 尝试恢复（需要用户交互）
+            Utils.audioContext.resume().catch(err => {
+                console.warn('AudioContext suspended, cannot play sound:', err);
+                return;
+            });
+        }
+
+        try {
+            if (Utils.audioContext) {
+                // 使用 Web Audio API
+                const oscillator = Utils.audioContext.createOscillator();
+                const gainNode = Utils.audioContext.createGain();
+
+                oscillator.type = 'sine';
+                oscillator.frequency.value = 800;
+                gainNode.gain.value = 0.1;
+
+                oscillator.connect(gainNode);
+                gainNode.connect(Utils.audioGainNode);
+
+                oscillator.start();
+                oscillator.stop(Utils.audioContext.currentTime + 0.15);
+
+                gainNode.gain.exponentialRampToValueAtTime(0.01, Utils.audioContext.currentTime + 0.15);
+            } else {
+                // 降级：使用 Audio 元素（需要预加载）
+                if (!Utils.notificationAudio) {
+                    Utils.notificationAudio = new Audio('/static/sounds/notification.mp3');
+                    Utils.notificationAudio.volume = 0.5;
+                    // 预加载音频（用户交互后）
+                    document.addEventListener('click', () => {
+                        Utils.notificationAudio.load();
+                    }, {once: true});
+                }
+                Utils.notificationAudio.play().catch(err => {
+                    console.warn('Audio playback failed:', err);
+                });
+            }
+        } catch (e) {
+            console.warn('Failed to play notification sound:', e);
         }
     }
 

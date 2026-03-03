@@ -234,6 +234,39 @@ class UserAdminViewSet(viewsets.ModelViewSet):
 
         return super().destroy(request, *args, **kwargs)
 
+    @action(detail=True, methods=['get'])
+    def friends(self, request, pk=None):
+        """获取用户的好友列表"""
+        user = self.get_object()
+        friends = user.friends.all().select_related('department')
+        serializer = UserListSerializer(friends, many=True, context={'request': request})
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def assign_friends(self, request, pk=None):
+        """为用户分配好友"""
+        user = self.get_object()
+        friend_ids = request.data.get('friend_ids', [])
+
+        # 验证好友ID
+        valid_friend_ids = []
+        for fid in friend_ids:
+            try:
+                fid_int = int(fid)
+                if CustomUser.objects.filter(id=fid_int, is_active=True).exists():
+                    valid_friend_ids.append(fid_int)
+            except (ValueError, TypeError):
+                continue
+
+        # 清空当前好友关系并添加新好友
+        user.friends.clear()
+        user.friends.add(*valid_friend_ids)
+
+        return Response({
+            'message': '好友分配成功',
+            'friend_count': len(friend_ids)
+        })
+
 
     @action(detail=False, methods=['get'])
     def export(self, request):
@@ -405,7 +438,7 @@ class UserViewSet(viewsets.ModelViewSet):
 
         user = serializer.validated_data['user']
         refresh = RefreshToken.for_user(user)
-
+        logger.info(f'用户登录：{user}')
         return Response({
             'user': UserDetailSerializer(user, context={'request': request}).data,
             'refresh': str(refresh),
@@ -417,11 +450,10 @@ class UserViewSet(viewsets.ModelViewSet):
     def logout(self, request):
         """用户登出"""
         # 更新在线状态
+        logger.info(f'登出用户：{request.user}')
         request.user.update_online_status(False)
-
         # Django logout
         logout(request)
-
         return Response({
             'message': '登出成功'
         })
@@ -486,6 +518,14 @@ class UserViewSet(viewsets.ModelViewSet):
         serializer.save()
         return Response(UserDetailSerializer(request.user, context={'request': request}).data)
 
+
+    @action(detail=True, methods=['get'])
+    def get_friends(self, request):
+        user = self.get_object()
+        friends = user.friends.all().select_related('department')
+        serializer = UserListSerializer(friends, many=True, context={'request': request})
+        return Response(serializer.data)
+
     @action(detail=False, methods=['get'])
     def list_users(self, request):
         """
@@ -494,7 +534,34 @@ class UserViewSet(viewsets.ModelViewSet):
         - 按部门分组
         - 支持分页
         """
-        queryset = self.get_queryset().order_by('department__name', 'real_name')
+        # 管理员显示所有用户，普通用户只显示好友
+        if request.user.user_type in ['admin', 'super_admin']:
+            # 管理员可以看到所有用户
+            queryset = CustomUser.objects.filter(
+                is_active=True
+            ).exclude(
+                id=request.user.id
+            ).select_related('department')
+        else:
+            # 普通用户只能看到分配的好友
+            queryset = request.user.friends.filter(
+                is_active=True
+            ).select_related('department')
+
+        # 支持搜索
+        search_query = request.query_params.get('search', '')
+        if search_query:
+            queryset = queryset.filter(
+                Q(username__icontains=search_query) |
+                Q(real_name__icontains=search_query) |
+                Q(email__icontains=search_query) |
+                Q(phone__icontains=search_query) |
+                Q(department__name__icontains=search_query) |
+                Q(position__icontains=search_query)
+            )
+
+        # 排序：在线用户在前
+        queryset = queryset.order_by('-is_online', '-last_login')
 
         # 分页处理
         page = self.paginate_queryset(queryset)
@@ -515,8 +582,22 @@ class UserViewSet(viewsets.ModelViewSet):
         if not query:
             return Response([])
 
+        # 管理员显示所有用户，普通用户只显示好友
+        if request.user.user_type in ['admin', 'super_admin']:
+            # 管理员可以看到所有用户
+            queryset = CustomUser.objects.filter(
+                is_active=True
+            ).exclude(
+                id=request.user.id
+            ).select_related('department')
+        else:
+            # 普通用户只能看到分配的好友
+            queryset = request.user.friends.filter(
+                is_active=True
+            ).select_related('department')
+
         # 排除当前用户，按多个维度搜索
-        queryset = CustomUser.objects.filter(
+        queryset =queryset.filter(
             Q(username__icontains=query) |
             Q(real_name__icontains=query) |
             Q(email__icontains=query) |
@@ -524,9 +605,10 @@ class UserViewSet(viewsets.ModelViewSet):
             Q(department__name__icontains=query) |
             Q(position__icontains=query),
             is_active=True  # 只搜索活跃用户
-        ).exclude(
-            id=request.user.id  # 排除自己
-        ).select_related('department').order_by('-is_online', '-last_login')  # 在线用户优先
+        )
+
+        # 排序：在线用户在前
+        queryset = queryset.order_by('-is_online', '-last_login')
 
         # 分页处理
         page = self.paginate_queryset(queryset)
@@ -536,6 +618,9 @@ class UserViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(queryset, many=True, context={'request': request})
         return Response(serializer.data)
+
+
+
 
     @action(detail=True, methods=['post'])
     def promote_user(self, request, pk=None):

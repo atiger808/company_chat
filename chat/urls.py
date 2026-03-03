@@ -25,8 +25,13 @@ urlpatterns = [
     # 聊天室相关操作
     # path('rooms/<int:pk>/clear_history/', ChatRoomViewSet.as_view({'delete': 'clear_history'}), name='clear-history'),
 
+    # 软删除聊天
     path('rooms/<int:pk>/soft_delete/', ChatRoomViewSet.as_view({'delete': 'soft_delete'}),
          name='chatroom-soft-delete'),
+
+    # 解散群聊
+    path('rooms/<int:pk>/dismiss_chat/', ChatRoomViewSet.as_view({'delete': 'dismiss_chat'}), name='chatroom-dismiss-chat'),
+
     path('rooms/<int:pk>/update_group/', ChatRoomViewSet.as_view({'put': 'update_group'}), name='chatroom-update-group'),
     path('rooms/<int:pk>/add_member/', ChatRoomViewSet.as_view({'post': 'add_member'}), name='chatroom-add-member'),
     path('rooms/<int:pk>/remove_member/', ChatRoomViewSet.as_view({'post': 'remove_member'}), name='chatroom-remove-member'),
@@ -39,6 +44,9 @@ urlpatterns = [
     path('messages/<int:pk>/soft_delete/', MessageViewSet.as_view({'delete': 'soft_delete'}), name='message-soft-delete'),
     path('messages/clear_history/', MessageViewSet.as_view({'delete': 'clear_history'}), name='clear-history'),
     path('messages/unread_count/', MessageViewSet.as_view({'get': 'unread_count'}), name='unread-count'),
+
+    # 确保撤销接口已注册
+    path('messages/<int:pk>/revoke/', MessageViewSet.as_view({'post': 'revoke'}), name='message-revoke'),
 
     # 文件上传
     path('upload/', FileUploadView.as_view(), name='file-upload'),

@@ -7,6 +7,7 @@
 # chat/serializers.py
 from rest_framework import serializers
 from django.db.models import Q, Count
+from django.utils import timezone
 from .models import ChatRoom, Message, FileUpload, MessageReadStatus, MessageDeleteStatus, ChatRoomDeleteStatus
 from accounts.models import CustomUser
 from accounts.serializers import UserListSerializer
@@ -81,16 +82,29 @@ class ChatRoomSerializer(serializers.ModelSerializer):
                 return 0
             user = request.user
 
-
-            unread = Message.objects.filter(
-                chat_room=obj,
-                chat_room__members=user,
-                is_deleted=False
+            unread = Message.objects.select_related('sender', 'file').filter(
+                chat_room=obj,  # 修复：使用 obj 而不是 self
+                is_deleted=False,
             ).exclude(
-                read_statuses__user=user
+                id__in=MessageDeleteStatus.objects.filter(
+                    is_deleted=True,
+                    user=user
+                ).values_list('message_id', flat=True)  # 优化：只获取 ID 列表
+            ).exclude(
+                id__in=MessageReadStatus.objects.filter(
+                    user=user
+                ).values_list('message_id', flat=True)
             ).count()
 
-            logger.info(f"Unread count result: {unread}")
+            # unread = Message.objects.filter(
+            #     chat_room=obj,
+            #     chat_room__members=user,
+            #     is_deleted=False
+            # ).exclude(
+            #     read_statuses__user=user
+            # ).count()
+
+            logger.info(f"room: {obj.id} Unread count result: {unread}")
             return unread
         except Exception as e:
             logger.error(f"Error in get_unread_count: {e}")
@@ -104,6 +118,9 @@ class MessageSerializer(serializers.ModelSerializer):
     is_read = serializers.SerializerMethodField()
 
     file_id = serializers.IntegerField(write_only=True, required=False)  # ✅ 明确接收 file_id
+
+    # 🔧 新增：引用消息字段
+    quote_info = serializers.SerializerMethodField()
 
     def create(self, validated_data):
         file_id = validated_data.pop('file_id', None)
@@ -122,7 +139,10 @@ class MessageSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'chat_room', 'sender', 'content', 'message_type',
             'file_info', 'is_read', 'timestamp', 'is_deleted', 'deleted_at',
-            'file_id'  # ✅ 添加到 fields 列表中
+            'file_id',  # ✅ 添加到 fields 列表中
+            # 🔧 引用字段
+            'quote_message', 'quote_content', 'quote_sender', 'quote_sender_id',
+            'quote_timestamp', 'quote_message_type', 'quote_info',
         ]
         read_only_fields = ['sender', 'timestamp', 'is_deleted', 'deleted_at']
 
@@ -131,7 +151,6 @@ class MessageSerializer(serializers.ModelSerializer):
 
         # 1. 优先调用模型原方法
         info = obj.get_file_info()
-        logger.info(f"File info result: {info} obj: {obj}")
         if info is not None:
             return info
 
@@ -169,6 +188,60 @@ class MessageSerializer(serializers.ModelSerializer):
                 message=obj, user=user
             ).exists()
         return obj.is_read
+
+    # 🔧 新增：序列化引用信息
+    def get_quote_info(self, obj):
+        if obj.quote_message_id:
+            return {
+                'id': obj.quote_message_id,
+                'content': obj.quote_content,
+                'sender': obj.quote_sender,
+                'sender_id': obj.quote_sender_id,
+                'timestamp': obj.quote_timestamp.isoformat() if obj.quote_timestamp else None,
+                'message_type': obj.quote_message_type
+            }
+        return None
+
+    def create(self, validated_data):
+        # 🔧 保存引用字段
+        quote_message_id = self.context['request'].data.get('quote_message_id')
+        quote_content = self.context['request'].data.get('quote_content')
+        quote_sender = self.context['request'].data.get('quote_sender')
+        quote_sender_id = self.context['request'].data.get('quote_sender_id')
+        quote_timestamp = self.context['request'].data.get('quote_timestamp')
+        quote_message_type = self.context['request'].data.get('quote_message_type')
+
+        message = Message.objects.create(**validated_data)
+
+        # 保存引用信息
+        if quote_message_id:
+            try:
+                quote_message = Message.objects.get(id=quote_message_id)
+                message.quote_message = quote_message
+            except Message.DoesNotExist:
+                pass
+
+        if quote_content:
+            message.quote_content = quote_content[:500]  # 限制长度
+
+        if quote_sender:
+            message.quote_sender = quote_sender[:100]
+
+        if quote_sender_id:
+            message.quote_sender_id = int(quote_sender_id)
+
+        if quote_timestamp:
+            try:
+                message.quote_timestamp = timezone.datetime.fromisoformat(quote_timestamp.replace('Z', '+00:00'))
+            except:
+                message.quote_timestamp = timezone.now()
+
+        if quote_message_type:
+            message.quote_message_type = quote_message_type
+
+        message.save()
+
+        return message
 
 
 

@@ -29,8 +29,8 @@ urlpatterns = [
     path('login/', TemplateView.as_view(template_name='chat/login.html'), name='login'),
     path('register/', TemplateView.as_view(template_name='chat/register.html'), name='login'),
     path('control/', TemplateView.as_view(template_name='chat/admin.html'), name='login'),
+    path('manifest.json', TemplateView.as_view(template_name='manifest.json',content_type='application/json'), name='manifest'),
 ]
-
 
 # if settings.DEBUG:
 # urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

@@ -9,15 +9,53 @@ import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.utils import timezone
-from .models import ChatRoom, Message, MessageReadStatus
+
+from accounts.models import CustomUser
+from .models import ChatRoom, Message, MessageReadStatus, ChatRoomDeleteStatus
 from django.conf import settings
 import logging
 # logger = logging.getLogger(__name__)
 from loguru import logger
 
+
 class ChatConsumer(AsyncWebsocketConsumer):
     """聊天WebSocket消费者"""
 
+    # 在 ChatConsumer 类中添加
+    async def update_and_broadcast_online_status(self, is_online):
+        """更新用户在线状态并广播给相关用户"""
+        # 更新数据库状态
+        await self.update_user_online_status(is_online)
+
+        # 获取当前用户所在的所有聊天室
+        chat_rooms = await database_sync_to_async(
+            lambda: list(ChatRoom.objects.filter(members=self.user))
+        )()
+
+        # 广播状态变化给所有相关聊天室
+        for chat_room in chat_rooms:
+            # 获取聊天室其他成员
+            members = await database_sync_to_async(
+                lambda: list(chat_room.members.exclude(id=self.user.id))
+            )()
+
+            for member in members:
+                group_name = f'user_{member.id}_notifications'
+                await self.channel_layer.group_send(
+                    group_name,
+                    {
+                        'type': 'user_online_status',
+                        'user_id': self.user.id,
+                        'username': self.user.username,
+                        'real_name': self.user.real_name,
+                        'avatar_url': self.user.avatar.url if self.user.avatar else None,
+                        'is_online': is_online,
+                        'last_seen': timezone.now().isoformat() if not is_online else None,
+                        'chat_room_id': chat_room.id  # 通知发生在哪个聊天室
+                    }
+                )
+
+    # 修改 connect 方法
     async def connect(self):
         """建立连接"""
         try:
@@ -40,8 +78,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.close()
                 return
 
-            # 更新用户在线状态
-            await self.update_user_online_status(True)
+            # 🔧 关键修复：连接时更新并广播在线状态
+            await self.update_and_broadcast_online_status(True)
 
             # 加入房间组
             await self.channel_layer.group_add(self.room_group_name, self.channel_name)
@@ -54,23 +92,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
             logger.error(f"Error during WebSocket connection: {e}")
             await self.close()
 
-
+    # 修改 disconnect 方法
     async def disconnect(self, close_code):
         logger.info(
             f"WebSocket disconnected for user {getattr(self.user, 'username', 'unknown')} with code {close_code}")
 
         """断开连接"""
         # 离开房间组
-        # 只有在 room_group_name 存在时才离开房间组
         if self.room_group_name:
             await self.channel_layer.group_discard(
                 self.room_group_name,
                 self.channel_name
             )
 
-        # 更新用户在线状态（只有认证用户才更新）
+        # 🔧 关键修复：断开时更新并广播离线状态
         if hasattr(self, 'user') and not self.user.is_anonymous:
-            await self.update_user_online_status(False)
+            await self.update_and_broadcast_online_status(False)
+
 
 
 
@@ -84,7 +122,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             text_data_json = json.loads(text_data)
             message_type = text_data_json.get('type', 'chat_message')
 
-            logger.info(f"Received message message_type: {message_type} from {self.user} - {self.user.username}: {text_data_json}")
+            logger.info(
+                f"Received message message_type: {message_type} from {self.user} - {self.user.username}: {text_data_json}")
 
             if message_type == 'chat_message':
                 await self.handle_chat_message(text_data_json)
@@ -96,6 +135,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
             logger.error("Invalid JSON received")
             return
 
+    async def send_unread_count_update(self, chat_room_id, unread_count):
+        """发送未读消息数更新"""
+        await self.channel_layer.group_send(
+            f'user_{self.user.id}_notifications',
+            {
+                'type': 'unread_count_update',
+                'chat_room_id': chat_room_id,
+                'unread_count': unread_count
+            }
+        )
+
     async def handle_chat_message(self, data):
         """处理聊天消息"""
 
@@ -104,12 +154,31 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         content = data.get('content', '')
         message_type = data.get('message_type', 'text')
-        file_id = data.get('file_id', None)  # 新增：支持 file_id
+        file_id = data.get('file_id', None)
+        temp_id = data.get('temp_id')
+        # 🔧 新增：获取引用字段
+        quote_message_id = data.get('quote_message_id')
+        quote_content = data.get('quote_content')
+        quote_sender = data.get('quote_sender')
+        quote_sender_id = data.get('quote_sender_id')
+        quote_timestamp = data.get('quote_timestamp')
+        quote_message_type = data.get('quote_message_type')
 
         # 保存消息到数据库
-        message = await self.save_message(content, message_type, file_id=file_id)
+        message = await self.save_message(
+            content,
+            message_type,
+            file_id=file_id,
+            quote_message_id=quote_message_id,
+            quote_content=quote_content,
+            quote_sender=quote_sender,
+            quote_sender_id=quote_sender_id,
+            quote_timestamp=quote_timestamp,
+            quote_message_type=quote_message_type
+        )
+        logger.info(
+            f'user: {self.user} file_id: {file_id} message_type: {message_type} content: {content} temp_id: {temp_id}')
 
-        logger.info(f'user: {self.user} file_id: {file_id} message_type: {message_type} content: {content}')
         sender = {
             'id': self.user.id,
             'username': self.user.username,
@@ -120,7 +189,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'is_online': self.user.is_online,
         }
 
-        # 发送消息到房间组
+        # 🔧 关键修复：广播消息时必须包含完整的引用字段
         await self.channel_layer.group_send(
             self.room_group_name,
             {
@@ -135,6 +204,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'message_type': message_type,
                 'file_info': message.get_file_info() if file_id else None,
                 'timestamp': message.timestamp.isoformat(),
+                'temp_id': temp_id,
+                # 🔧 完整广播引用字段（接收端需要这些字段渲染引用内容）
+                'quote_message_id': message.quote_message_id,
+                'quote_content': message.quote_content,
+                'quote_sender': message.quote_sender,
+                'quote_sender_id': message.quote_sender_id,
+                'quote_timestamp': message.quote_timestamp.isoformat() if message.quote_timestamp else None,
+                'quote_message_type': message.quote_message_type,
             }
         )
 
@@ -149,7 +226,65 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'message_type': message_type,
             'file_info': message.get_file_info() if file_id else None,
             'timestamp': message.timestamp.isoformat(),
+            'temp_id': temp_id,
+            # 🔧 全局通知也包含引用字段
+            'quote_message_id': message.quote_message_id,
+            'quote_content': message.quote_content,
+            'quote_sender': message.quote_sender,
+            'quote_sender_id': message.quote_sender_id,
+            'quote_timestamp': message.quote_timestamp.isoformat() if message.quote_timestamp else None,
+            'quote_message_type': message.quote_message_type,
         })
+
+        # 🔧 关键修复：发送未读数更新给接收方（如果不是自己）
+        # 获取聊天室所有成员（排除发送者）
+        chat_room = await database_sync_to_async(lambda: message.chat_room)()
+        members = await database_sync_to_async(
+            lambda: list(chat_room.members.exclude(id=self.user.id).values_list('id', flat=True))
+        )()
+
+        for member_id in members:
+            # 获取该成员的未读消息数
+            unread_count = await self.get_unread_count(chat_room.id, member_id)
+
+            # 发送未读数更新
+            await self.send_unread_count_update(message.chat_room.id, unread_count)
+
+
+
+    @database_sync_to_async
+    def get_unread_count(self, chat_room_id, user_id):
+        """获取指定聊天室的未读消息数"""
+        from chat.models import Message, MessageReadStatus, ChatRoom
+        from django.db.models import Q
+
+        try:
+            # 验证聊天室是否存在且用户是成员
+            chat_room = ChatRoom.objects.get(id=chat_room_id, members__id=user_id)
+
+            # 获取未读消息数
+            # 未读消息 = 未删除的消息 - 已读消息
+            unread_count = Message.objects.filter(
+                chat_room=chat_room,
+                chat_room__members__id=user_id,
+                is_deleted=False
+            ).exclude(
+                read_statuses__user__id=user_id
+            ).count()
+
+            logger.info(f"用户 {user_id} 在聊天室 {chat_room_id} 的未读消息数: {unread_count}")
+            return unread_count
+
+        except ChatRoom.DoesNotExist:
+            logger.warning(f"聊天室 {chat_room_id} 不存在或用户 {user_id} 不是成员")
+            return 0
+        except Exception as e:
+            logger.error(f"获取未读消息数失败: {e}")
+            return 0
+
+
+
+
 
     async def handle_typing(self, data):
         """处理输入状态"""
@@ -178,21 +313,44 @@ class ChatConsumer(AsyncWebsocketConsumer):
         for message_id in message_ids:
             await self.mark_message_as_read(message_id)
 
+    # 新增：处理消息事件（包括撤销）
     async def chat_message(self, event):
-        """接收聊天消息事件"""
-        await self.send(text_data=json.dumps({
-            'type': 'chat_message',
-            'chat_room': event['chat_room'],
-            'message_id': event['message_id'],
-            'is_read': event['is_read'],
-            'sender': event['sender'],
-            'sender_id': event['sender_id'],
-            'sender_name': event['sender_name'],
-            'content': event['content'],
-            'message_type': event['message_type'],
-            'file_info': event.get('file_info'),
-            'timestamp': event['timestamp'],
-        }))
+        """接收聊天消息事件并转发给前端"""
+        # 撤销消息处理保持不变
+        if event.get('message') and event['message'].get('type') == 'message_revoked':
+            message = event['message']
+            await self.send(text_data=json.dumps({
+                'type': 'message_revoked',
+                'message_id': message['id'],
+                'revoked_at': message['revoked_at'],
+                'sender_id': message['sender_id'],
+                'chat_room_id': message.get('chat_room_id'),
+                'sender_name': message.get('sender_name'),
+                'room_type': message.get('room_type'),
+            }))
+        else:
+            # 🔧 关键修复：转发所有引用字段给前端
+            await self.send(text_data=json.dumps({
+                'type': 'chat_message',
+                'chat_room': event['chat_room'],
+                'message_id': event['message_id'],
+                'is_read': event['is_read'],
+                'sender': event['sender'],
+                'sender_id': event['sender_id'],
+                'sender_name': event['sender_name'],
+                'content': event['content'],
+                'message_type': event['message_type'],
+                'file_info': event.get('file_info'),
+                'timestamp': event['timestamp'],
+                'temp_id': event.get('temp_id'),
+                # 🔧 必须转发引用字段
+                'quote_message_id': event.get('quote_message_id'),
+                'quote_content': event.get('quote_content'),
+                'quote_sender': event.get('quote_sender'),
+                'quote_sender_id': event.get('quote_sender_id'),
+                'quote_timestamp': event.get('quote_timestamp'),
+                'quote_message_type': event.get('quote_message_type'),
+            }))
 
     async def user_typing(self, event):
         """接收用户输入状态事件"""
@@ -220,10 +378,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
         }))
 
     @database_sync_to_async
-    def save_message(self, content, message_type, file_id=None):
+    def save_message(self, content, message_type, file_id=None,
+                     quote_message_id=None, quote_content=None,
+                     quote_sender=None, quote_sender_id=None,
+                     quote_timestamp=None, quote_message_type=None):
         from chat.models import ChatRoom, Message, FileUpload
         logger.info(f'room_name: {self.room_name} file_id: {file_id} content: {content}')
         chat_room = ChatRoom.objects.get(id=self.room_name)
+
+        # 批量恢复ChatRoomDeleteStatus聊天室删除状态以标记为删除的聊天室恢复到正常状态
+        try:
+            ChatRoomDeleteStatus.objects.filter(chat_room_id=self.room_name, is_deleted=True).update(is_deleted=False)
+        except Exception as e:
+            logger.error(f"Error restoring ChatRoomDeleteStatus: {e}")
 
         # 创建消息
         message = Message.objects.create(
@@ -232,6 +399,35 @@ class ChatConsumer(AsyncWebsocketConsumer):
             content=content,
             message_type=message_type
         )
+
+        # 🔧 保存引用字段
+        if quote_message_id:
+            try:
+                quote_message = Message.objects.get(id=quote_message_id)
+                message.quote_message = quote_message
+            except Message.DoesNotExist:
+                pass
+
+        if quote_content:
+            message.quote_content = quote_content[:500]
+
+        if quote_sender:
+            message.quote_sender = quote_sender[:100]
+
+        if quote_sender_id:
+            message.quote_sender_id = int(quote_sender_id)
+
+        if quote_timestamp:
+            try:
+                if isinstance(quote_timestamp, str):
+                    message.quote_timestamp = timezone.datetime.fromisoformat(quote_timestamp.replace('Z', '+00:00'))
+                else:
+                    message.quote_timestamp = quote_timestamp
+            except:
+                message.quote_timestamp = timezone.now()
+
+        if quote_message_type:
+            message.quote_message_type = quote_message_type
 
         # 如果提供了 file_id，则关联 FileUpload
         if file_id:
@@ -245,7 +441,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         # 更新聊天室时间戳
         message.chat_room.updated_at = timezone.now()
         message.chat_room.save(update_fields=['updated_at'])
-
+        message.save()  # 保存所有字段
         return message
 
     @database_sync_to_async
@@ -382,16 +578,18 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             'room': event['room'],
         }))
 
+
+
+    # 在 NotificationConsumer 类中添加
     async def user_online_status(self, event):
         """用户在线状态变化"""
         await self.send(text_data=json.dumps({
             'type': 'user_online_status',
             'user_id': event['user_id'],
+            'username': event.get('username'),
+            'real_name': event.get('real_name'),
+            'avatar_url': event.get('avatar_url'),
             'is_online': event['is_online'],
+            'last_seen': event.get('last_seen'),
+            'chat_room_id': event.get('chat_room_id')  # 可用于更新特定聊天室的状态
         }))
-
-
-
-
-
-

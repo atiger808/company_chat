@@ -8,6 +8,7 @@ const API_ADMIN_URL = '/api/auth';
 class AdminConsole {
     constructor() {
         this.users = [];
+        this.allUsersForFriends = [];
         this.currentUser = null;
         this.currentPage = 1;
         this.pageSize = 20;
@@ -126,67 +127,83 @@ class AdminConsole {
 
 
     // 修改 admin.js 中的 initSidebar 方法
-
-// ==================== 侧边栏伸缩功能 ====================
+    // ==================== 侧边栏伸缩功能 ====================
     initSidebar() {
         const sidebarToggleBtn = document.getElementById('sidebarToggleBtn');
         const sidebarCloseBtn = document.getElementById('sidebarCloseBtn');
         const adminSidebar = document.getElementById('adminSidebar');
+        const adminMain = document.querySelector('.admin-main');
 
-        // 侧边栏伸缩按钮
+        // 侧边栏伸缩按钮 - 统一切换逻辑
         if (sidebarToggleBtn && adminSidebar) {
-            sidebarToggleBtn.addEventListener('click', () => {
-                if (window.innerWidth <= 768) {
-                    // 移动端：打开侧边栏
-                    adminSidebar.classList.add('open');
-                } else {
-                    // 桌面端：折叠/展开侧边栏
-                    this.toggleSidebar();
-                }
+            sidebarToggleBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.toggleSidebar();
             });
         }
 
         // 侧边栏关闭按钮（移动端）
         if (sidebarCloseBtn && adminSidebar) {
-            sidebarCloseBtn.addEventListener('click', () => {
+            sidebarCloseBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
                 adminSidebar.classList.remove('open');
             });
         }
 
         // 点击侧边栏外部关闭（移动端）
-        if (adminSidebar && sidebarToggleBtn) {
-            document.addEventListener('click', (e) => {
-                if (window.innerWidth <= 768 &&
-                    adminSidebar.classList.contains('open') &&
-                    !adminSidebar.contains(e.target) &&
-                    !sidebarToggleBtn.contains(e.target)) {
-                    adminSidebar.classList.remove('open');
-                }
-            });
-        }
+        document.addEventListener('click', (e) => {
+            if (window.innerWidth <= 768 &&
+                adminSidebar.classList.contains('open') &&
+                !adminSidebar.contains(e.target) &&
+                !sidebarToggleBtn.contains(e.target)) {
+                adminSidebar.classList.remove('open');
+            }
+        });
 
         // 窗口大小变化时调整侧边栏
-        if (adminSidebar) {
-            window.addEventListener('resize', () => {
-                if (window.innerWidth > 768) {
-                    adminSidebar.classList.remove('open');
-                }
-            });
-        }
+        window.addEventListener('resize', () => {
+            if (window.innerWidth > 768) {
+                adminSidebar.classList.remove('open');
+            }
+        });
     }
 
     toggleSidebar() {
         const adminSidebar = document.getElementById('adminSidebar');
         const adminMain = document.querySelector('.admin-main');
 
+        if (!adminSidebar || !adminMain) return;
+
+        // 移动端处理（768px以下）
+        if (window.innerWidth <= 768) {
+            // 切换 open 类
+            adminSidebar.classList.toggle('open');
+            return;
+        }
+
+        // 桌面端处理
         if (this.sidebarCollapsed) {
+            // 展开侧边栏
             adminSidebar.classList.remove('collapsed');
             adminMain.classList.remove('full-width');
             this.sidebarCollapsed = false;
+
+            // 更新按钮图标（可选）
+            const toggleBtnIcon = document.querySelector('#sidebarToggleBtn i');
+            if (toggleBtnIcon) {
+                toggleBtnIcon.className = 'fas fa-bars';
+            }
         } else {
+            // 折叠侧边栏
             adminSidebar.classList.add('collapsed');
             adminMain.classList.add('full-width');
             this.sidebarCollapsed = true;
+
+            // 更新按钮图标（可选）
+            const toggleBtnIcon = document.querySelector('#sidebarToggleBtn i');
+            if (toggleBtnIcon) {
+                toggleBtnIcon.className = 'fas fa-indent';
+            }
         }
     }
 
@@ -240,55 +257,6 @@ class AdminConsole {
         } finally {
             this.hideLoading();
         }
-    }
-
-    renderUsersTable_v1() {
-        const tbody = document.getElementById('usersTableBody');
-        if (!tbody) return;
-
-        let html = '';
-        this.users.forEach(user => {
-            html += `
-            <tr class="${!user.is_active ? 'user-disabled-row' : ''}">
-                <td>${user.id}</td>
-                <td><img src="${user.avatar_url || '/static/images/default-avatar.png'}" alt="头像"></td>
-                <td>${user.username}</td>
-                <td>${user.real_name || '-'}</td>
-                <td>${user.department_info?.name || user.department || '-'}</td>
-                <td>${user.position || '-'}</td>
-                <td><span class="user-type-badge user-type-${user.user_type}">${this.getUserTypeText(user.user_type)}</span></td>
-                <td>
-                    <span class="user-status ${user.is_online ? 'online' : 'offline'}">
-                        <i class="fas fa-${user.is_online ? 'circle' : 'circle'}"></i>
-                        ${user.is_online ? '在线' : '离线'}
-                    </span>
-                </td>
-                <td>
-                    <div class="toggle-btn-container" onclick="event.stopPropagation()">
-                        <label class="toggle-switch">
-                            <input type="checkbox" 
-                                   onchange="adminConsole.toggleUserStatus(${user.id}, this.checked, '${user.username}')" 
-                                   ${user.is_active ? 'checked' : ''}>
-                            <span class="toggle-slider"></span>
-                        </label>
-                        <span>${user.is_active ? '启用' : '禁用'}</span>
-                    </div>
-                </td>
-                <td>
-                    <div class="action-buttons">
-                        <button class="action-btn" onclick="adminConsole.openEditUserModal(${user.id})" title="编辑">
-                            <i class="fas fa-edit"></i>
-                        </button>
-                        <button class="action-btn delete" onclick="adminConsole.confirmDeleteUser(${user.id}, '${user.username}')" title="删除">
-                            <i class="fas fa-trash"></i>
-                        </button>
-                    </div>
-                </td>
-            </tr>
-            `;
-        });
-
-        tbody.innerHTML = html || '<tr><td colspan="10" style="text-align: center; padding: 40px;">暂无用户</td></tr>';
     }
 
 
@@ -413,14 +381,21 @@ class AdminConsole {
     }
 
     // ==================== 创建用户 ====================
-    openCreateUserModal() {
+    async openCreateUserModal() {
         // 重置表单
         document.getElementById('createUserForm').reset();
+
+        // 加载所有用户用于好友分配
+        await this.loadAllUsersForFriends();
+        console.log('allUsersForFriends:', this.allUsersForFriends)
+
+        // 渲染好友选择界面（初始无好友）
+        this.renderFriendSelection_create('friendGridCreate', [], 'friendSearchCreate');
+
         this.openModal('createUserModal');
     }
 
-    // 修改 admin.js 中的 createUser 方法
-
+    // 修改 createUser 方法，添加好友分配
     async createUser() {
         const username = document.getElementById('newUsername').value.trim();
         const password = document.getElementById('newPassword').value;
@@ -466,6 +441,7 @@ class AdminConsole {
                 }
             }
 
+            // 创建用户
             const response = await fetch(`${API_ADMIN_URL}/admin/users/`, {
                 method: 'POST',
                 headers: TokenManager.getHeaders(),
@@ -476,6 +452,15 @@ class AdminConsole {
                 const errorData = await this.parseErrorResponse(response);
                 throw new Error(errorData.message || errorData.detail || '创建用户失败');
             }
+
+            const newUser = await response.json();
+            console.log('创建用户成功:', newUser);
+
+            // 保存好友关系
+            const selectedFriends = Array.from(document.querySelectorAll('#friendGridCreate .member-grid-item.selected'))
+                .map(item => parseInt(item.dataset.userId));
+
+            await this.assignFriends(newUser.id, selectedFriends)
 
             this.showSuccess('创建成功', '用户创建成功');
             this.closeModal('createUserModal');
@@ -489,7 +474,7 @@ class AdminConsole {
         }
     }
 
-// 修改 updateUser 方法
+    // 修改 updateUser 方法，保存好友关系
     async updateUser() {
         const userId = document.getElementById('editUserId').value;
         const password = document.getElementById('editPassword').value;
@@ -541,6 +526,12 @@ class AdminConsole {
                 throw new Error(errorData.message || errorData.detail || '更新用户失败');
             }
 
+            // 保存好友关系
+            const selectedFriends = Array.from(document.querySelectorAll('#friendGrid .member-grid-item.selected'))
+                .map(item => parseInt(item.dataset.userId));
+
+            await this.assignFriends(userId, selectedFriends)
+
             this.showSuccess('更新成功', '用户信息更新成功');
             this.closeModal('editUserModal');
             await this.loadUsers();
@@ -553,7 +544,7 @@ class AdminConsole {
         }
     }
 
-// 新增：获取或创建部门
+    // 新增：获取或创建部门
     async getOrCreateDepartment(departmentName) {
         try {
             // 1. 先查询部门是否存在
@@ -601,6 +592,202 @@ class AdminConsole {
         }
     }
 
+
+    // 加载所有用户用于好友分配
+    async loadAllUsersForFriends() {
+        try {
+            const response = await fetch(`${API_ADMIN_URL}/users/`, {
+                headers: TokenManager.getHeaders()
+            });
+
+            if (!response.ok) {
+                const errorData = await this.parseErrorResponse(response);
+                throw new Error(errorData.message || '加载用户列表失败');
+            }
+
+            const data = await response.json();
+            console.log('data:', data)
+            this.allUsersForFriends = Array.isArray(data) ? data : (data.results || []);
+            console.log('this.allUsersForFriends:', this.allUsersForFriends)
+            return this.allUsersForFriends;
+        } catch (error) {
+            console.error('加载用户列表失败:', error);
+            this.showError('加载失败', error.message);
+            return [];
+        }
+    }
+
+
+    // 加载用户好友列表
+    async loadUserFriends(userId) {
+        try {
+            const response = await fetch(`${API_ADMIN_URL}/admin/users/${userId}/friends/`, {
+                headers: TokenManager.getHeaders()
+            });
+
+            if (response.ok) {
+                const friends = await response.json();
+                // 渲染好友选择界面，传入已选好友
+                this.renderFriendSelection_edit(friends, userId);
+            }
+        } catch (error) {
+            console.error('加载好友列表失败:', error);
+        }
+    }
+
+    // 分配好友
+    async assignFriends(userId, selectedFriends = []) {
+        try {
+            const response = await fetch(`${API_ADMIN_URL}/admin/users/${userId}/assign-friends/`, {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify({friend_ids: selectedFriends})
+            });
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData?.error || errorData?.message || '分配好友失败');
+            }
+            return response;
+        } catch (error) {
+            console.error('分配好友失败:', error);
+            this.showError('分配好友失败', error || error.message);
+
+        }
+    }
+
+    // 渲染好友选择界面
+    renderFriendSelection_edit(friends, userId) {
+        const friendContainer = document.getElementById('friendSelectionContainer');
+        if (!friendContainer) return;
+
+        // 获取所有用户（排除当前用户）
+        const allUsers = this.users.filter(u => u.id !== userId);
+
+        let html = `
+        <div class="form-group">
+            <label><i class="fas fa-user-friends"></i> 分配好友</label>
+            <div class="search-box">
+                <i class="fas fa-search"></i>
+                <input type="text" id="friendSearch" placeholder="搜索用户...">
+            </div>
+            <div class="member-grid" id="friendGrid">
+    `;
+
+        allUsers.forEach(user => {
+            const isSelected = friends.some(f => f.id === user.id);
+            html += `
+            <div class="member-grid-item ${isSelected ? 'selected' : ''}" data-user-id="${user.id}">
+                <div class="member-grid-avatar">
+                    <img src="${user.avatar_url || '/static/images/default-avatar.png'}" alt="${user.username}">
+                </div>
+                <div class="member-grid-name">${user.real_name || user.username}</div>
+                ${isSelected ? '<div class="member-grid-tag">已选</div>' : ''}
+            </div>
+        `;
+        });
+
+        html += `
+            </div>
+            <small class="form-hint">点击用户选择/取消好友，选中的用户将出现在该用户的通讯录中</small>
+        </div>
+    `;
+
+        friendContainer.innerHTML = html;
+
+        // 绑定好友选择事件
+        document.querySelectorAll('#friendGrid .member-grid-item').forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                item.classList.toggle('selected');
+            });
+        });
+
+        // 绑定搜索事件
+        const friendSearch = document.getElementById('friendSearch');
+        if (friendSearch) {
+            friendSearch.addEventListener('input', (e) => {
+                const keyword = e.target.value.toLowerCase();
+                document.querySelectorAll('#friendGrid .member-grid-item').forEach(item => {
+                    const username = item.querySelector('.member-grid-name').textContent.toLowerCase();
+                    item.style.display = username.includes(keyword) ? 'flex' : 'none';
+                });
+            });
+        }
+    }
+
+
+    // 渲染好友选择界面（创建用户和编辑用户通用）
+    renderFriendSelection_create(containerId, selectedFriends = [], searchInputId = 'friendSearch') {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+
+        // 获取所有用户（排除当前用户 - 仅在编辑用户时需要）
+        // let allUsers = this.allUsersForFriends;
+        let allUsers = this.users;
+        if (document.getElementById('editUserId')) {
+            // 编辑用户时排除当前用户
+            const currentUserId = parseInt(document.getElementById('editUserId').value || '0');
+            allUsers = allUsers.filter(u => u.id !== currentUserId);
+        }
+
+        // 将已选好友排到前面
+        const sortedUsers = [...allUsers].sort((a, b) => {
+            const aSelected = selectedFriends.some(f => f.id === a.id);
+            const bSelected = selectedFriends.some(f => f.id === b.id);
+            if (aSelected && !bSelected) return -1;
+            if (!aSelected && bSelected) return 1;
+            return 0;
+        });
+
+        let html = '';
+
+        sortedUsers.forEach(user => {
+            const isSelected = selectedFriends.some(f => f.id === user.id);
+            html += `
+            <div class="member-grid-item ${isSelected ? 'selected' : ''}" data-user-id="${user.id}">
+                <div class="member-grid-avatar">
+                    <img src="${user.avatar_url || '/static/images/default-avatar.png'}" alt="${user.username}">
+                </div>
+                <div class="member-grid-name">${user.real_name || user.username}</div>
+                ${isSelected ? '<div class="member-grid-tag">已选</div>' : ''}
+            </div>
+        `;
+        });
+
+        container.innerHTML = html || '<div class="empty-state"><p>暂无用户</p></div>';
+
+        // 绑定好友选择事件
+        document.querySelectorAll(`#${containerId} .member-grid-item`).forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                item.classList.toggle('selected');
+                const tag = item.querySelector('.member-grid-tag');
+                if (tag) {
+                    tag.remove();
+                } else {
+                    const tagEl = document.createElement('div');
+                    tagEl.className = 'member-grid-tag';
+                    tagEl.textContent = '已选';
+                    item.appendChild(tagEl);
+                }
+            });
+        });
+
+        // 绑定搜索事件
+        const friendSearch = document.getElementById(searchInputId);
+        if (friendSearch) {
+            friendSearch.addEventListener('input', (e) => {
+                const keyword = e.target.value.toLowerCase();
+                document.querySelectorAll(`#${containerId} .member-grid-item`).forEach(item => {
+                    const username = item.querySelector('.member-grid-name').textContent.toLowerCase();
+                    item.style.display = username.includes(keyword) ? 'flex' : 'none';
+                });
+            });
+        }
+    }
+
+
     // ==================== 编辑用户 ====================
     async openEditUserModal(userId) {
         try {
@@ -620,6 +807,12 @@ class AdminConsole {
             document.getElementById('editDepartment').value = user.department_info?.name || user.department || '';
             document.getElementById('editPosition').value = user.position || '';
             document.getElementById('editUserType').value = user.user_type;
+
+            // 加载所有用户用于好友分配
+            await this.loadAllUsersForFriends();
+
+            // 加载当前用户的好友列表
+            await this.loadUserFriends(userId);
 
             this.openModal('editUserModal');
         } catch (error) {
@@ -1160,7 +1353,13 @@ document.addEventListener('DOMContentLoaded', () => {
 function logout() {
     adminConsole.showConfirmDialog('退出登录', '确定要退出登录吗？', 'confirm').then((confirmed) => {
         if (confirmed) {
-            localStorage.removeItem('access_token');
+            try {
+                API.logout();
+                console.log('登出成功');
+            } catch (error) {
+                console.error('登出失败:', error);
+                localStorage.removeItem('access_token');
+            }
             window.location.href = '/login/';
         }
     });

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <title>大岳企业聊天室 - 登录</title>
+    <title>企业聊天室 - 登录</title>
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -563,7 +563,7 @@
         <div class="login-left">
             <div class="logo">
                 <i class="fas fa-comments"></i>
-                <span>大岳企业聊天室</span>
+                <span>企业聊天室</span>
             </div>
             <div class="welcome-text">
                 <h1>欢迎使用企业内部通讯平台</h1>
@@ -641,9 +641,9 @@
                     <div class="success-message" id="loginSuccessMessage"></div>
                 </form>
 
-                <div class="switch-form">
-                    还没有账户？<a href="#" id="showRegisterLink">立即注册</a>
-                </div>
+<!--                <div class="switch-form">-->
+<!--                    还没有账户？<a href="#" id="showRegisterLink">立即注册</a>-->
+<!--                </div>-->
             </div>
 
             <!-- 注册表单 -->
@@ -1108,7 +1108,7 @@
         function showLoginForm() {
             document.getElementById('loginForm').style.display = 'block';
             document.getElementById('registerForm').style.display = 'none';
-            document.title = '大岳企业聊天室 - 登录';
+            document.title = '企业聊天室 - 登录';
             clearFormErrors();
         }
 
@@ -1116,7 +1116,7 @@
         function showRegisterForm() {
             document.getElementById('loginForm').style.display = 'none';
             document.getElementById('registerForm').style.display = 'block';
-            document.title = '大岳企业聊天室 - 注册';
+            document.title = '企业聊天室 - 注册';
             clearFormErrors();
         }
 
@@ -1224,7 +1224,6 @@
                 const data = await response.json();
 
                 if (response.ok) {
-                    console.log('登录成功', data);
                     // 保存 token
                     localStorage.setItem('access_token', data.access);
                     localStorage.setItem('refresh_token', data.refresh);
@@ -1422,10 +1421,10 @@
         // 页面加载完成后的初始化
         document.addEventListener('DOMContentLoaded', function() {
             // 绑定表单切换
-            document.getElementById('showRegisterLink').addEventListener('click', function(e) {
-                e.preventDefault();
-                showRegisterForm();
-            });
+            // document.getElementById('showRegisterLink').addEventListener('click', function(e) {
+            //     e.preventDefault();
+            //     showRegisterForm();
+            // });
 
             document.getElementById('showLoginLink').addEventListener('click', function(e) {
                 e.preventDefault();

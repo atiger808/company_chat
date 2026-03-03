@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PWA图标生成器 - 企业聊天室</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 800px;
+            width: 100%;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 28px;
+        }
+
+        .icons-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .icon-item {
+            text-align: center;
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 16px;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .icon-item:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+        }
+
+        canvas {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            margin-bottom: 15px;
+            display: block;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .icon-name {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+            font-size: 16px;
+        }
+
+        .icon-size {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 15px;
+        }
+
+        .download-btn {
+            background: linear-gradient(135deg, #409EFF 0%, #337ecc 100%);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            width: 100%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .download-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(64, 158, 255, 0.4);
+        }
+
+        .download-btn i {
+            font-size: 18px;
+        }
+
+        .instructions {
+            background: #e7f3ff;
+            border-left: 4px solid #409EFF;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 30px;
+        }
+
+        .instructions h2 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+
+        .instructions ol {
+            padding-left: 20px;
+            margin-top: 10px;
+            color: #555;
+            line-height: 1.8;
+        }
+
+        .instructions li {
+            margin-bottom: 8px;
+        }
+
+        .instructions code {
+            background: #d1e7ff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+    </style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <h1><i class="fas fa-icons"></i> PWA图标生成器</h1>
+        <p style="text-align: center; color: #666; margin-bottom: 30px;">为企业聊天室生成PWA应用所需的所有图标</p>
+
+        <div class="icons-grid">
+            <!-- 主图标 192x192 -->
+            <div class="icon-item">
+                <canvas id="icon192" width="192" height="192"></canvas>
+                <div class="icon-name">icon-192x192.png</div>
+                <div class="icon-size">192×192 像素</div>
+                <button class="download-btn" onclick="downloadIcon('icon192', 'icon-192x192.png')">
+                    <i class="fas fa-download"></i> 下载
+                </button>
+            </div>
+
+            <!-- 主图标 512x512 -->
+            <div class="icon-item">
+                <canvas id="icon512" width="512" height="512"></canvas>
+                <div class="icon-name">icon-512x512.png</div>
+                <div class="icon-size">512×512 像素</div>
+                <button class="download-btn" onclick="downloadIcon('icon512', 'icon-512x512.png')">
+                    <i class="fas fa-download"></i> 下载
+                </button>
+            </div>
+
+            <!-- 聊天快捷方式图标 -->
+            <div class="icon-item">
+                <canvas id="chat192" width="192" height="192"></canvas>
+                <div class="icon-name">chat-192.png</div>
+                <div class="icon-size">192×192 像素</div>
+                <button class="download-btn" onclick="downloadIcon('chat192', 'chat-192.png')">
+                    <i class="fas fa-download"></i> 下载
+                </button>
+            </div>
+
+            <!-- 通讯录快捷方式图标 -->
+            <div class="icon-item">
+                <canvas id="contacts192" width="192" height="192"></canvas>
+                <div class="icon-name">contacts-192.png</div>
+                <div class="icon-size">192×192 像素</div>
+                <button class="download-btn" onclick="downloadIcon('contacts192', 'contacts-192.png')">
+                    <i class="fas fa-download"></i> 下载
+                </button>
+            </div>
+        </div>
+
+        <div class="instructions">
+            <h2><i class="fas fa-info-circle"></i> 使用说明</h2>
+            <ol>
+                <li>点击每个图标的"下载"按钮，右键保存图片到本地</li>
+                <li>将下载的图标放入项目目录：<code>/static/icons/</code></li>
+                <li>确保 <code>manifest.json</code> 中正确引用这些图标路径</li>
+                <li>重新加载PWA应用，图标将自动更新</li>
+            </ol>
+        </div>
+    </div>
+
+    <script>
+        // 生成主图标 (蓝色背景 + 白色聊天气泡)
+        function drawMainIcon(ctx, size) {
+            // 蓝色渐变背景
+            const gradient = ctx.createLinearGradient(0, 0, size, size);
+            gradient.addColorStop(0, '#409EFF');
+            gradient.addColorStop(1, '#337ecc');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, size, size);
+
+            // 白色聊天气泡
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.moveTo(size * 0.2, size * 0.75);
+            ctx.lineTo(size * 0.3, size * 0.85);
+            ctx.lineTo(size * 0.2, size * 0.95);
+            ctx.closePath();
+            ctx.fill();
+
+            // 气泡主体
+            ctx.beginPath();
+            ctx.arc(size * 0.5, size * 0.45, size * 0.35, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 气泡内的三条消息线
+            ctx.fillStyle = '#409EFF';
+            const lineWidth = size * 0.4;
+            const lineHeight = size * 0.04;
+            const spacing = size * 0.08;
+
+            // 第一条线
+            ctx.fillRect(size * 0.35, size * 0.35, lineWidth, lineHeight);
+            // 第二条线
+            ctx.fillRect(size * 0.3, size * 0.45, lineWidth * 1.1, lineHeight);
+            // 第三条线
+            ctx.fillRect(size * 0.35, size * 0.55, lineWidth, lineHeight);
+        }
+
+        // 生成聊天快捷方式图标 (绿色背景 + 白色对话框)
+        function drawChatIcon(ctx, size) {
+            // 绿色渐变背景
+            const gradient = ctx.createLinearGradient(0, 0, size, size);
+            gradient.addColorStop(0, '#67C23A');
+            gradient.addColorStop(1, '#5da934');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, size, size);
+
+            // 白色对话框
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(size * 0.5, size * 0.4, size * 0.3, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 对话框内的消息图标
+            ctx.fillStyle = '#67C23A';
+            ctx.font = `bold ${size * 0.35}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('💬', size * 0.5, size * 0.45);
+
+            // 底部小气泡
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.beginPath();
+            ctx.arc(size * 0.3, size * 0.75, size * 0.08, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(size * 0.7, size * 0.8, size * 0.06, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // 生成通讯录快捷方式图标 (紫色背景 + 白色用户组)
+        function drawContactsIcon(ctx, size) {
+            // 紫色渐变背景
+            const gradient = ctx.createLinearGradient(0, 0, size, size);
+            gradient.addColorStop(0, '#764ba2');
+            gradient.addColorStop(1, '#5e3a85');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, size, size);
+
+            // 白色用户组图标
+            ctx.fillStyle = 'white';
+
+            // 第一个用户 (大)
+            ctx.beginPath();
+            ctx.arc(size * 0.5, size * 0.4, size * 0.18, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(size * 0.5, size * 0.65, size * 0.12, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 第二个用户 (小，右上)
+            ctx.beginPath();
+            ctx.arc(size * 0.75, size * 0.3, size * 0.12, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(size * 0.75, size * 0.45, size * 0.08, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 第三个用户 (小，左上)
+            ctx.beginPath();
+            ctx.arc(size * 0.25, size * 0.3, size * 0.12, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(size * 0.25, size * 0.45, size * 0.08, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // 下载图标
+        function downloadIcon(canvasId, filename) {
+            const canvas = document.getElementById(canvasId);
+            const link = document.createElement('a');
+            link.download = filename;
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+
+            // 显示成功提示
+            const btn = event.target;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-check"></i> 已下载';
+            btn.style.background = 'linear-gradient(135deg, #67C23A 0%, #5da934 100%)';
+
+            setTimeout(() => {
+                btn.innerHTML = originalText;
+                btn.style.background = 'linear-gradient(135deg, #409EFF 0%, #337ecc 100%)';
+            }, 2000);
+        }
+
+        // 初始化所有图标
+        window.onload = function() {
+            // 主图标 192x192
+            const canvas192 = document.getElementById('icon192');
+            const ctx192 = canvas192.getContext('2d');
+            drawMainIcon(ctx192, 192);
+
+            // 主图标 512x512
+            const canvas512 = document.getElementById('icon512');
+            const ctx512 = canvas512.getContext('2d');
+            drawMainIcon(ctx512, 512);
+
+            // 聊天快捷方式图标
+            const chatCanvas = document.getElementById('chat192');
+            const chatCtx = chatCanvas.getContext('2d');
+            drawChatIcon(chatCtx, 192);
+
+            // 通讯录快捷方式图标
+            const contactsCanvas = document.getElementById('contacts192');
+            const contactsCtx = contactsCanvas.getContext('2d');
+            drawContactsIcon(contactsCtx, 192);
+        };
+    </script>
+</body>
+</html>

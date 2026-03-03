@@ -73,7 +73,7 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
 
         # 如果手机号已存在，则不允许修改
         user = self.instance
-        if user.phone != value and CustomUser.objects.filter(phone=value).exists():
+        if value and user.phone != value and CustomUser.objects.filter(phone=value).exists():
             raise serializers.ValidationError("该手机号已被其他用户使用")
 
         return value
@@ -229,7 +229,7 @@ class AdminProfileUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("手机号长度必须为11位")
         # 检查手机号是否被其他用户使用
         user = self.instance
-        if user and user.phone != value and CustomUser.objects.filter(phone=value).exists():
+        if value and user and user.phone != value and CustomUser.objects.filter(phone=value).exists():
             raise serializers.ValidationError("该手机号已被其他用户使用")
         return value
 
@@ -459,7 +459,7 @@ class RegisterSerializer(serializers.ModelSerializer):
             if len(value) != 11:
                 raise serializers.ValidationError("手机号长度必须为11位")
             # 如果手机号已被其他用户使用:
-            if CustomUser.objects.filter(phone=value).exists():
+            if value and CustomUser.objects.filter(phone=value).exists():
                 raise serializers.ValidationError("该手机号已被其他用户使用")
         return value
 
@@ -517,7 +517,6 @@ class LoginSerializer(serializers.Serializer):
         password = data.get('password')
 
         logger.info(f"用户 {username} 尝试登录")
-        logger.info(f"用户 {username} 登录密码：{password}")
 
         # 尝试用用户名或邮箱登录
         user = None

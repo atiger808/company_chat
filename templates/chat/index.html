@@ -2,13 +2,117 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>大岳企业聊天室 - 公司内部通讯</title>
-    <link rel="stylesheet" href="chat.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <title>企业聊天室 - 公司内部通讯</title>
 
-    <link rel="stylesheet" href="/static/css/chat.css">
+    <!-- iOS PWA 专用设置 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="企业聊天">
+    <meta name="format-detection" content="telephone=no, email=no, address=no">
+
+
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="/manifest.json">
+
+    <!-- iOS Safari 添加到主屏幕 -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="企业聊天">
+    <link rel="apple-touch-icon" href="/static/icons/icon-192x192.png">
+
+    <!-- Windows Tiles -->
+    <meta name="msapplication-TileColor" content="#409EFF">
+    <meta name="msapplication-TileImage" content="/static/icons/icon-144x144.png">
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css">-->
+
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260303-1">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
+
+    <!-- 🔧 iOS 专用样式修复 -->
+    <style>
+        /* 修复 iOS Safari 软键盘弹出时的布局问题 */
+        @media screen and (max-width: 768px) {
+            /* 禁止 iOS 自动放大表单元素 */
+            input, textarea, select, button {
+                font-size: 16px !important;
+                -webkit-text-size-adjust: 100% !important;
+            }
+
+            /* 修复软键盘弹出时输入框被遮挡 */
+            .chat-container.ios-fix {
+                height: 100vh !important;
+                min-height: 100vh !important;
+                position: fixed !important;
+                top: 0 !important;
+                left: 0 !important;
+                right: 0 !important;
+                bottom: 0 !important;
+                overflow: hidden !important;
+            }
+
+            /* 输入框聚焦时确保可见 */
+            .chat-input-area:focus-within {
+                position: fixed !important;
+                bottom: 0 !important;
+                left: 0 !important;
+                right: 0 !important;
+                z-index: 1000 !important;
+                background: var(--bg-primary) !important;
+                box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1) !important;
+            }
+        }
+    </style>
+
+
+    <!-- iOS PWA 专用样式 -->
+    <style>
+        /* 修复 iOS PWA 安全区域 */
+        @supports (-webkit-touch-callout: none) {
+            /* iPhone X 及以上 */
+            @media (min-aspect-ratio: 4/3) {
+                body {
+                    padding-top: env(safe-area-inset-top);
+                    padding-bottom: env(safe-area-inset-bottom);
+                }
+
+                .sidebar-header {
+                    padding-top: calc(16px + env(safe-area-inset-top));
+                }
+
+                .chat-header {
+                    padding-top: calc(16px + env(safe-area-inset-top));
+                }
+
+                .chat-input-area {
+                    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+                }
+            }
+        }
+
+        /* 通用安全区域适配 */
+        .sidebar-header {
+            padding-top: max(16px, env(safe-area-inset-top));
+        }
+
+        .chat-header {
+            padding-top: max(16px, env(safe-area-inset-top));
+        }
+
+        .chat-input-area {
+            padding-bottom: max(8px, env(safe-area-inset-bottom));
+        }
+
+        /* 检测是否为standalone模式 */
+        @media all and (display-mode: standalone) {
+            .sidebar-header,
+            .chat-header {
+                padding-top: max(20px, env(safe-area-inset-top));
+            }
+        }
+    </style>
 
 </head>
 <body>
@@ -18,19 +122,28 @@
         <div class="sidebar-header">
             <div class="logo">
                 <i class="fas fa-comments"></i>
-                <span>大岳企业聊天室</span>
+                <span>企业聊天室</span>
             </div>
             <div class="user-actions">
                 <!-- 管理员控制台按钮（默认隐藏） -->
                 <button class="btn-icon" id="adminConsoleBtn" style="display: none;" title="管理员控制台">
                     <i class="fas fa-shield-alt"></i>
                 </button>
+
                 <button class="btn-icon" id="settingsBtn" title="个人设置">
                     <i class="fas fa-cog"></i>
                 </button>
+
                 <button class="btn-icon" title="退出">
                     <i class="fas fa-sign-out-alt"></i>
                 </button>
+
+
+                <!-- 清除缓存按钮 -->
+                <button id="clearCacheBtn" class="btn-clear-cache" title="清除缓存">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
+
             </div>
         </div>
 
@@ -93,30 +206,30 @@
 
 
         <!-- 侧边栏底部操作区域 -->
-<!--        <div class="sidebar-footer">-->
-<!--            <div class="user-info">-->
-<!--                <img src="/static/images/default-avatar.png" id="adminAvatar" alt="头像">-->
-<!--                <div class="user-details">-->
-<!--                    <div class="username" id="adminUsername"></div>-->
-<!--                    <div class="status">-->
-<!--                        <span class="status-dot"></span>-->
-<!--                        <span class="status-text">在线</span>-->
-<!--                    </div>-->
-<!--                </div>-->
-<!--            </div>-->
+        <!--        <div class="sidebar-footer">-->
+        <!--            <div class="user-info">-->
+        <!--                <img src="/static/images/default-avatar.png" id="adminAvatar" alt="头像">-->
+        <!--                <div class="user-details">-->
+        <!--                    <div class="username" id="adminUsername"></div>-->
+        <!--                    <div class="status">-->
+        <!--                        <span class="status-dot"></span>-->
+        <!--                        <span class="status-text">在线</span>-->
+        <!--                    </div>-->
+        <!--                </div>-->
+        <!--            </div>-->
 
-<!--            &lt;!&ndash; 管理员控制台按钮 &ndash;&gt;-->
-<!--            <button id="adminConsoleBtn" class="btn-admin-console" title="管理员控制台">-->
-<!--                <i class="fas fa-shield-alt"></i>-->
-<!--                <span>管理控制台</span>-->
-<!--            </button>-->
+        <!--            &lt;!&ndash; 管理员控制台按钮 &ndash;&gt;-->
+        <!--            <button id="adminConsoleBtn" class="btn-admin-console" title="管理员控制台">-->
+        <!--                <i class="fas fa-shield-alt"></i>-->
+        <!--                <span>管理控制台</span>-->
+        <!--            </button>-->
 
-<!--            &lt;!&ndash; 退出登录按钮 &ndash;&gt;-->
-<!--            <button onclick="chatClient.logout()" class="btn-logout">-->
-<!--                <i class="fas fa-sign-out-alt"></i>-->
-<!--                <span>退出登录</span>-->
-<!--            </button>-->
-<!--        </div>-->
+        <!--            &lt;!&ndash; 退出登录按钮 &ndash;&gt;-->
+        <!--            <button onclick="chatClient.logout()" class="btn-logout">-->
+        <!--                <i class="fas fa-sign-out-alt"></i>-->
+        <!--                <span>退出登录</span>-->
+        <!--            </button>-->
+        <!--        </div>-->
     </div>
 
     <!-- 主聊天区域 -->
@@ -164,6 +277,33 @@
             <div class="messages-list" id="messagesList" style="display: none;">
                 <!-- 消息列表将通过JS动态生成 -->
             </div>
+
+
+            <!-- 🔧 关键修复1: 按钮和徽章分离，徽章在按钮外部右上角 -->
+            <div id="scrollToBottomContainer" class="scroll-to-bottom-container">
+                <div id="scrollToBottomBtn" class="scroll-to-bottom-btn" style="display: none;">
+                    <div class="scroll-to-bottom-icon">
+                        <i class="fas fa-arrow-down"></i>
+                    </div>
+                </div>
+                <div class="scroll-to-bottom-count" id="unreadCountBadge" style="display: none;">0</div>
+            </div>
+
+
+            <!-- 引用预览区域（动态显示） -->
+            <div id="quotePreview" class="quote-preview" style="display: none;">
+                <div class="quote-preview-header">
+                    <span><i class="fas fa-quote-left"></i> 引用消息</span>
+                    <button class="quote-close" onclick="chatClient.clearQuoteMessage()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="quote-preview-content">
+                    <div class="quote-preview-sender" id="quoteSender">发送者</div>
+                    <div class="quote-preview-text" id="quoteContent">引用内容</div>
+                </div>
+            </div>
+
         </div>
 
         <div class="chat-input-area">
@@ -209,6 +349,9 @@
                     <!-- 更多表情可以继续添加 -->
                 </div>
             </div>
+
+
+            <div id="atPanel"></div>
 
             <div class="input-wrapper">
                 <textarea id="messageInput" placeholder="输入消息..." rows="1"></textarea>
@@ -401,6 +544,16 @@
                             <span class="slider"></span>
                         </label>
                     </div>
+                    <div class="notification-item">
+                        <label>
+                            <i class="fas fa-mobile-alt"></i>
+                            震动提醒
+                        </label>
+                        <label class="switch">
+                            <input type="checkbox" id="vibrateNotifications">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
                 </div>
             </div>
         </div>
@@ -412,9 +565,44 @@
 
 </div>
 
-<script src="/static/js/api.js"></script>
-<script src="/static/js/utils.js"></script>
-<script src="/static/js/chat.js"></script>
+<div id="notificationContainer"></div>
+<div id="toastContainer"></div>
+
+<script src="/static/js/api.js?v=20260303-1"></script>
+<script src="/static/js/utils.js?v=20260303-1"></script>
+<script src="/static/js/chat.js?v=20260303-1"></script>
 <script src="/static/js/spark-md5.min.js"></script>
+
+<!-- 在 body 末尾添加 -->
+<script>
+    // 页面加载时检查缓存清除参数
+    (function () {
+        const urlParams = new URLSearchParams(window.location.search);
+        const cacheBust = urlParams.get('cacheBust');
+
+        if (cacheBust) {
+            // 清除 URL 中的缓存参数（美化 URL）
+            const cleanUrl = window.location.pathname + window.location.hash;
+            window.history.replaceState({}, document.title, cleanUrl);
+
+            // 显示缓存清除成功提示
+            setTimeout(() => {
+                if (typeof chatClient !== 'undefined' && chatClient.showSuccess) {
+                    chatClient.showSuccess('缓存已清除', '页面已重新加载最新资源');
+                } else {
+                    alert('✓ 缓存已清除，页面已加载最新资源');
+                }
+            }, 1000);
+        }
+    })();
+
+    // 添加全局错误处理，捕获资源加载失败
+    window.addEventListener('error', (e) => {
+        if (e.target && (e.target.tagName === 'LINK' || e.target.tagName === 'SCRIPT')) {
+            console.warn('资源加载失败，尝试清除缓存:', e.target.src || e.target.href);
+            // 可以在这里触发自动缓存清除
+        }
+    }, true);
+</script>
 </body>
 </html>
