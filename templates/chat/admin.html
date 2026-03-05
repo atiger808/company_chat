@@ -4,9 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理员控制台 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260303-1">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260305-1">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260305-1">
 
 </head>
 <body>
@@ -320,8 +320,39 @@
     </div>
 </div>
 
-<script src="/static/js/utils.js?v=20260303-1"></script>
-<script src="/static/js/api.js?v=20260303-1"></script>
-<script src="/static/js/admin.js?v=20260303-1"></script>
+<script src="/static/js/utils.js?v=20260305-1"></script>
+<script src="/static/js/api.js?v=20260305-1"></script>
+<script src="/static/js/admin.js?v=20260305-1"></script>
+
+
+<!-- 版本检测脚本（简化版，移除无效的 document.write） -->
+<script>
+    // 从构建时注入的版本号
+    const CURRENT_VERSION = '20260305-1';
+
+    // 检查版本是否更新
+    const LAST_VERSION = sessionStorage.getItem('appVersion');
+    if (LAST_VERSION && LAST_VERSION !== CURRENT_VERSION) {
+        console.log(`✅ 检测到新版本: ${LAST_VERSION} → ${CURRENT_VERSION}`);
+        sessionStorage.setItem('appVersion', CURRENT_VERSION);
+
+        // 5秒后自动提示刷新（避免打断用户操作）
+        setTimeout(() => {
+            if (confirm('🎉 检测到新版本，是否立即刷新以加载最新功能？')) {
+                // 清除 Service Worker 缓存
+                if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.getRegistrations().then(registrations => {
+                        registrations.forEach(reg => reg.unregister());
+                    });
+                }
+                // 强制刷新
+                location.reload(true);
+            }
+        }, 5000);
+    } else {
+        sessionStorage.setItem('appVersion', CURRENT_VERSION);
+    }
+</script>
+
 </body>
 </html>

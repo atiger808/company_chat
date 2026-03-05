@@ -6960,3 +6960,1064 @@ body.pwa-mode .chat-input-area {
         font-size: 12px;
     }
 }
+
+
+
+
+/* ==================== 语音消息样式优化 ==================== */
+/* 语音按钮 */
+.voice-btn {
+    position: relative;
+    z-index: 2001; /* 🔧 关键修复：高于覆盖层，确保可点击 */
+    background: var(--bg-primary);
+    border: 2px solid var(--border-color);
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+.voice-btn:hover {
+    background: rgba(64, 158, 255, 0.1);
+    border-color: var(--primary-color);
+}
+
+.voice-btn:active,
+.voice-btn.recording {
+    background: #ff4d4f !important;
+    border-color: #ff4d4f !important;
+    transform: scale(1.05);
+    box-shadow: 0 0 0 3px rgba(255, 77, 79, 0.3);
+}
+
+.voice-btn:active i,
+.voice-btn.recording i {
+    transform: scale(1.2);
+    color: white !important;
+}
+
+.voice-btn-text,
+.voice-btn-recording-text {
+    position: absolute;
+    bottom: -28px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.2s ease, bottom 0.2s ease;
+    pointer-events: none;
+    font-weight: 500;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.voice-btn:hover .voice-btn-text,
+.voice-btn:active .voice-btn-text {
+    opacity: 1;
+    bottom: -32px;
+}
+
+.voice-btn.recording .voice-btn-recording-text {
+    opacity: 1;
+    bottom: -32px;
+    background: rgba(255, 77, 79, 0.9);
+    animation: pulseHint 2s infinite;
+}
+
+@keyframes pulseHint {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.8; }
+}
+
+/* 语音录音覆盖层 */
+.voice-recorder-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 2000; /* 低于语音按钮 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none; /* 默认不拦截事件 */
+}
+
+.voice-recorder-backdrop {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    pointer-events: auto; /* 背景可点击 */
+}
+
+.voice-recorder-panel {
+    position: relative;
+    background: white;
+    border-radius: 20px;
+    padding: 32px 24px;
+    width: 90%;
+    max-width: 360px;
+    text-align: center;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    transform: scale(0.9);
+    animation: scaleIn 0.3s ease forwards;
+    pointer-events: auto; /* 面板可点击 */
+    z-index: 2001;
+}
+
+
+/* 🔧 新增：发送按钮 */
+.voice-recorder-send-btn {
+    margin-top: 20px;
+    padding: 10px 24px;
+    background: linear-gradient(135deg, #409EFF 0%, #337ECC 100%);
+    color: white;
+    border: none;
+    border-radius: 24px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: all 0.2s ease;
+    box-shadow: 0 4px 15px rgba(64, 158, 255, 0.3);
+    width: 100%;
+    max-width: 200px;
+}
+
+.voice-recorder-send-btn:hover {
+    transform: translateY(-2px) scale(1.05);
+    box-shadow: 0 6px 20px rgba(64, 158, 255, 0.4);
+    background: linear-gradient(135deg, #3385e6 0%, #2a75c4 100%);
+}
+
+.voice-recorder-send-btn:active {
+    transform: translateY(1px) scale(0.98);
+    box-shadow: 0 2px 10px rgba(64, 158, 255, 0.3);
+}
+
+
+
+@keyframes scaleIn {
+    to { transform: scale(1); }
+}
+
+.voice-recorder-cancel-area {
+    position: absolute;
+    top: -60px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: white;
+    opacity: 0;
+    transform: translate(-50%, -20px);
+    transition: all 0.2s ease;
+}
+
+.voice-recorder-overlay.cancelling .voice-recorder-cancel-area {
+    opacity: 1;
+    transform: translateX(-50%);
+}
+
+.voice-recorder-cancel-area i {
+    font-size: 48px;
+    margin-bottom: 8px;
+    color: #ff4d4f;
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+}
+
+.voice-recorder-cancel-area span {
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.voice-recorder-wave-container {
+    height: 100px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 24px 0;
+}
+
+.voice-recorder-wave {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    height: 60px;
+    gap: 4px;
+}
+
+.voice-recorder-wave .wave-bar {
+    width: 6px;
+    height: 10%;
+    background: var(--primary-color);
+    border-radius: 3px;
+    transition: height 0.1s ease;
+    animation: wave 1.2s ease-in-out infinite;
+    animation-delay: calc(var(--i) * 0.1s);
+}
+
+.voice-recorder-wave .wave-bar:nth-child(1) { --i: 1; animation-delay: 0.1s; }
+.voice-recorder-wave .wave-bar:nth-child(2) { --i: 2; animation-delay: 0.2s; }
+.voice-recorder-wave .wave-bar:nth-child(3) { --i: 3; animation-delay: 0.3s; }
+.voice-recorder-wave .wave-bar:nth-child(4) { --i: 4; animation-delay: 0.4s; }
+.voice-recorder-wave .wave-bar:nth-child(5) { --i: 5; animation-delay: 0.5s; }
+.voice-recorder-wave .wave-bar:nth-child(6) { --i: 6; animation-delay: 0.6s; }
+.voice-recorder-wave .wave-bar:nth-child(7) { --i: 7; animation-delay: 0.7s; }
+.voice-recorder-wave .wave-bar:nth-child(8) { --i: 8; animation-delay: 0.8s; }
+.voice-recorder-wave .wave-bar:nth-child(9) { --i: 9; animation-delay: 0.9s; }
+.voice-recorder-wave .wave-bar:nth-child(10) { --i: 10; animation-delay: 1s; }
+
+@keyframes wave {
+    0%, 100% { height: 10%; }
+    50% { height: 80%; }
+}
+
+.voice-recorder-time {
+    font-size: 32px;
+    font-weight: bold;
+    color: var(--text-primary);
+    margin: 16px 0;
+    font-family: 'DIN', 'Arial', sans-serif;
+}
+
+.voice-recorder-hint {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    margin-top: 16px;
+}
+
+.voice-recorder-hint i {
+    font-size: 20px;
+    color: var(--primary-color);
+}
+
+/* 语音消息 */
+.message-voice {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: var(--bg-secondary);
+    border-radius: 16px;
+    max-width: 280px;
+    cursor: pointer;
+    transition: var(--transition);
+    position: relative;
+}
+
+.message-voice:hover {
+    background: var(--bg-primary);
+}
+
+.message-voice.playing {
+    background: rgba(64, 158, 255, 0.1);
+}
+
+.voice-play-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: var(--transition);
+    position: relative;
+}
+
+.voice-play-btn:hover {
+    transform: scale(1.05);
+    background: var(--primary-dark);
+}
+
+.voice-play-btn i {
+    font-size: 14px;
+    position: absolute;
+    opacity: 1;
+    transition: opacity 0.2s ease;
+}
+
+.voice-play-btn i.fa-pause {
+    opacity: 0;
+}
+
+.voice-play-btn.playing i.fa-play {
+    opacity: 0;
+}
+
+.voice-play-btn.playing i.fa-pause {
+    opacity: 1;
+}
+
+.voice-duration {
+    font-size: 14px;
+    color: var(--text-secondary);
+    min-width: 36px;
+    text-align: right;
+    font-weight: 500;
+}
+
+.voice-progress {
+    flex: 1;
+    height: 4px;
+    background: var(--border-color);
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+}
+
+.voice-progress-bar {
+    height: 100%;
+    background: var(--primary-color);
+    width: 0%;
+    transition: width 0.1s linear;
+    border-radius: 2px;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+    .voice-btn {
+        padding: 8px;
+    }
+
+    .voice-recorder-send-btn {
+        display: none; /* 移动端隐藏发送按钮，使用松开发送 */
+    }
+
+    .voice-btn {
+        z-index: 2001;
+    }
+
+    .chat-input-area {
+        position: fixed !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        z-index: 2001 !important; /* 确保输入区域在覆盖层之上 */
+    }
+
+    .voice-recorder-panel {
+        padding: 28px 20px;
+        max-width: 320px;
+        margin-bottom: 90%;
+    }
+
+    .voice-recorder-wave {
+        height: 50px;
+    }
+
+    .voice-recorder-time {
+        font-size: 28px;
+    }
+
+    .voice-recorder-cancel-area i {
+        font-size: 40px;
+    }
+
+    .message-voice {
+        max-width: 240px;
+    }
+}
+
+@media (max-width: 480px) {
+    .voice-recorder-panel {
+        padding: 24px 16px;
+        max-width: 280px;
+        margin-bottom: 80%;
+    }
+
+    .voice-recorder-time {
+        font-size: 24px;
+    }
+
+    .message-voice {
+        max-width: 200px;
+    }
+}
+
+/* 语音按钮移动端优化 */
+@media (max-width: 768px) {
+    .voice-btn {
+        padding: 10px !important;
+    }
+
+    .voice-btn-text {
+        font-size: 13px;
+        padding: 3px 10px;
+    }
+
+    /* 长按反馈 */
+    .voice-btn:active::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 100px;
+        height: 100px;
+        background: rgba(255, 77, 79, 0.2);
+        border-radius: 50%;
+        transform: translate(-50%, -50%) scale(0);
+        animation: ripple 0.6s ease-out;
+    }
+
+    @keyframes ripple {
+        to {
+            transform: translate(-50%, -50%) scale(2);
+            opacity: 0;
+        }
+    }
+}
+
+
+/* 语音功能不可用提示 */
+.voice-not-supported-tip {
+    color: #ff4d4f;
+    font-size: 18px;
+    margin-left: 8px;
+    cursor: help;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+
+
+
+/* ==================== 语音录音覆盖层（移动端优化） ==================== */
+.voice-recorder-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.voice-recorder-backdrop {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: auto;
+}
+
+.voice-recorder-panel {
+    position: relative;
+    background: white;
+    border-radius: 24px;
+    padding: 40px 32px;
+    width: 90%;
+    max-width: 380px;
+    text-align: center;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35);
+    transform: scale(0.9);
+    transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    pointer-events: auto;
+    z-index: 2001;
+}
+
+/* 取消区域（上滑时显示） */
+.voice-recorder-cancel-area {
+    position: absolute;
+    top: -70px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-20px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: white;
+    opacity: 0;
+    transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.voice-recorder-overlay.cancelling .voice-recorder-cancel-area {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+.voice-recorder-cancel-area i {
+    font-size: 56px;
+    margin-bottom: 12px;
+    color: #ff4d4f;
+    animation: pulseCancel 1.2s ease-in-out infinite;
+}
+
+@keyframes pulseCancel {
+    0%, 100% { transform: scale(1) rotate(0deg); }
+    50% { transform: scale(1.1) rotate(5deg); }
+}
+
+.voice-recorder-cancel-area span {
+    font-size: 18px;
+    font-weight: 600;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* 波形容器 */
+.voice-recorder-wave-container {
+    height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 28px 0;
+}
+
+.voice-recorder-wave {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    height: 70px;
+    gap: 5px;
+}
+
+.voice-recorder-wave .wave-bar {
+    width: 7px;
+    height: 10%;
+    background: linear-gradient(to top, #409EFF, #66b1ff);
+    border-radius: 4px;
+    transition: height 0.12s ease;
+    animation: waveMobile 1.3s ease-in-out infinite;
+    animation-delay: calc(var(--i) * 0.11s);
+}
+
+@keyframes waveMobile {
+    0%, 100% { height: 10%; background: #409EFF; }
+    50% { height: 85%; background: #66b1ff; }
+}
+
+/* 录音时间 */
+.voice-recorder-time {
+    font-size: 36px;
+    font-weight: bold;
+    color: #333;
+    margin: 20px 0;
+    font-family: 'DIN', 'Helvetica Neue', Arial, sans-serif;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* 提示文字 */
+.voice-recorder-hint {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: #666;
+    font-size: 15px;
+    margin-top: 16px;
+    padding: 12px;
+    background: rgba(64, 158, 255, 0.08);
+    border-radius: 16px;
+    border: 1px solid rgba(64, 158, 255, 0.2);
+}
+
+.voice-recorder-hint i {
+    font-size: 22px;
+    color: #409EFF;
+}
+
+/* 🔧 移动端专用：松开发送提示 */
+.voice-recorder-send-hint {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: #409EFF;
+    font-size: 16px;
+    font-weight: 600;
+    margin-top: 20px;
+    padding: 10px 20px;
+    background: rgba(64, 158, 255, 0.1);
+    border-radius: 20px;
+    border: 2px solid rgba(64, 158, 255, 0.3);
+    animation: slideUpHint 2s ease-in-out infinite;
+}
+
+@keyframes slideUpHint {
+    0%, 100% { transform: translateY(0); opacity: 1; }
+    50% { transform: translateY(-8px); opacity: 0.9; }
+}
+
+.voice-recorder-send-hint i {
+    font-size: 18px;
+    animation: bounceArrow 1.5s ease-in-out infinite;
+}
+
+@keyframes bounceArrow {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+    .voice-recorder-panel {
+        padding: 36px 28px;
+        max-width: 340px;
+        border-radius: 28px;
+        margin-bottom: 90%;
+    }
+
+    .voice-recorder-wave-container {
+        height: 100px;
+    }
+
+    .voice-recorder-wave {
+        height: 60px;
+    }
+
+    .voice-recorder-time {
+        font-size: 32px;
+    }
+
+    .voice-recorder-hint {
+        font-size: 14px;
+        padding: 10px;
+    }
+
+    .voice-recorder-hint i {
+        font-size: 20px;
+    }
+
+    .voice-recorder-send-hint {
+        font-size: 15px;
+        padding: 8px 16px;
+    }
+
+    .voice-recorder-send-hint i {
+        font-size: 16px;
+    }
+}
+
+@media (max-width: 480px) {
+    .voice-recorder-panel {
+        padding: 32px 24px;
+        max-width: 300px;
+        border-radius: 24px;
+        margin-bottom: 80%;
+    }
+
+    .voice-recorder-wave-container {
+        height: 90px;
+    }
+
+    .voice-recorder-wave {
+        height: 50px;
+        gap: 4px;
+    }
+
+    .voice-recorder-wave .wave-bar {
+        width: 6px;
+    }
+
+    .voice-recorder-time {
+        font-size: 28px;
+        margin: 16px 0;
+    }
+
+    .voice-recorder-cancel-area i {
+        font-size: 48px;
+    }
+
+    .voice-recorder-cancel-area span {
+        font-size: 16px;
+    }
+
+    .voice-recorder-hint {
+        font-size: 13px;
+        padding: 8px;
+    }
+
+    .voice-recorder-send-hint {
+        font-size: 14px;
+        padding: 6px 12px;
+        margin-top: 16px;
+    }
+}
+
+
+
+
+
+
+
+
+/* 20260303 */
+/* ==================== 移动端输入区域优化 ==================== */
+@media (max-width: 768px) {
+    .chat-input-area {
+        padding: 12px 16px;
+        background: var(--bg-primary);
+        border-top: 1px solid var(--border-color);
+        box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.08);
+    }
+
+    /* 语音按钮放在最左侧，增大点击区域 */
+    .input-actions {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 10px;
+    }
+
+    .action-btn {
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg-secondary);
+        border: 2px solid var(--border-color);
+        transition: all 0.2s ease;
+        position: relative;
+        flex-shrink: 0;
+    }
+
+    .action-btn:hover {
+        transform: scale(1.05);
+        border-color: var(--primary-color);
+    }
+
+    .action-btn i {
+        font-size: 20px;
+        color: var(--text-primary);
+    }
+
+    /* 🔧 语音按钮特殊样式（最左侧） */
+    /*.voice-btn {*/
+    /*    width: 52px;*/
+    /*    height: 52px;*/
+    /*    background: linear-gradient(135deg, #ff4d4f 0%, #ff7a7a 100%);*/
+    /*    border-color: #ff4d4f;*/
+    /*    box-shadow: 0 4px 12px rgba(255, 77, 79, 0.3);*/
+    /*    z-index: 2001;*/
+    /*}*/
+
+    /*.voice-btn:hover {*/
+    /*    background: linear-gradient(135deg, #ff3838 0%, #ff6666 100%);*/
+    /*    transform: scale(1.08);*/
+    /*    box-shadow: 0 6px 16px rgba(255, 77, 79, 0.4);*/
+    /*}*/
+
+    /*.voice-btn i {*/
+    /*    color: white;*/
+    /*    font-size: 22px;*/
+    /*}*/
+
+    /*.voice-btn:active,*/
+    /*.voice-btn.recording {*/
+    /*    background: linear-gradient(135deg, #ff1a1a 0%, #ff4d4f 100%) !important;*/
+    /*    transform: scale(1.1) !important;*/
+    /*    box-shadow: 0 0 0 4px rgba(255, 77, 79, 0.3) !important;*/
+    /*}*/
+
+    /*.voice-btn:active i,*/
+    /*.voice-btn.recording i {*/
+    /*    transform: scale(1.25) !important;*/
+    /*}*/
+
+    /* 输入框优化 */
+    .input-wrapper {
+        position: relative;
+        flex: 1;
+        min-height: 44px;
+    }
+
+    #messageInput {
+        width: 100%;
+        min-height: 44px;
+        max-height: 120px;
+        padding: 12px 16px;
+        padding-right: 60px; /* 为发送按钮留空间 */
+        border: 2px solid var(--border-color);
+        border-radius: 24px;
+        font-size: 16px; /* 防止 iOS 自动放大 */
+        line-height: 1.5;
+        resize: none;
+        background: white;
+        transition: all 0.2s ease;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    }
+
+    #messageInput:focus {
+        outline: none;
+        border-color: var(--primary-color);
+        box-shadow: 0 2px 12px rgba(64, 158, 255, 0.2);
+    }
+
+    /* 发送按钮优化 */
+    .send-btn {
+        position: absolute;
+        right: 8px;
+        bottom: 8px;
+        top: 8px;
+        width: auto;
+        min-width: 60px;
+        padding: 0 16px;
+        border-radius: 20px;
+        font-size: 15px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+    }
+
+    .send-btn:active {
+        transform: scale(0.95);
+    }
+
+    /* 表情按钮优化 */
+    #emojiBtn {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg-secondary);
+        border: 2px solid var(--border-color);
+    }
+
+    #emojiBtn i {
+        font-size: 18px;
+        color: var(--text-primary);
+    }
+
+    /* 输入区域安全区域适配 */
+    .chat-input-area {
+        padding-bottom: calc(12px + env(safe-area-inset-bottom, 0));
+    }
+
+    /* 防止键盘遮挡输入框 */
+    body:has(.chat-input-area:focus-within) {
+        position: fixed;
+        width: 100%;
+        height: 100%;
+    }
+}
+
+@media (max-width: 480px) {
+    .chat-input-area {
+        padding: 10px 12px;
+    }
+
+    .action-btn {
+        width: 40px;
+        height: 40px;
+    }
+
+    .voice-btn {
+        width: 48px;
+        height: 48px;
+    }
+
+    #messageInput {
+        min-height: 40px;
+        font-size: 15px;
+        padding: 10px 14px;
+        padding-right: 56px;
+    }
+
+    .send-btn {
+        min-width: 52px;
+        font-size: 14px;
+        padding: 0 14px;
+    }
+}
+/* 20260303 */
+
+
+
+
+
+
+/* 语音消息移动端优化 */
+@media (max-width: 768px) {
+    .message-voice {
+        max-width: 240px;
+        padding: 10px 14px;
+    }
+
+    .voice-play-btn {
+        width: 36px;
+        height: 36px;
+    }
+
+    .voice-play-btn i {
+        font-size: 16px;
+    }
+
+    .voice-duration {
+        font-size: 13px;
+        min-width: 32px;
+    }
+
+    .voice-progress {
+        height: 3px;
+    }
+
+    /* 确保音频元素不占用空间 */
+    .voice-audio {
+        display: none;
+    }
+}
+
+
+/* 电脑端录音界面优化 */
+@media (min-width: 769px) {
+    .voice-recorder-panel {
+        max-width: 400px;
+        padding: 40px 32px;
+    }
+
+    .voice-recorder-wave-container {
+        height: 110px;
+    }
+
+    .voice-recorder-wave {
+        height: 65px;
+    }
+
+    .voice-recorder-time {
+        font-size: 34px;
+        margin: 22px 0;
+    }
+
+    .voice-recorder-hint {
+        font-size: 14px;
+        padding: 10px;
+    }
+
+    .voice-recorder-send-btn {
+        display: block; /* 电脑端显示发送按钮 */
+        margin-top: 24px;
+    }
+
+    /* 语音按钮悬停效果增强 */
+    .voice-btn {
+        transition: all 0.3s ease;
+    }
+
+    .voice-btn:hover {
+        transform: scale(1.08);
+        box-shadow: 0 4px 15px rgba(255, 77, 79, 0.3);
+    }
+
+    .voice-btn:active {
+        transform: scale(1.12);
+    }
+}
+
+
+
+
+/* 版本更新提示 */
+.version-update-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(135deg, #409EFF 0%, #337ecc 100%);
+    color: white;
+    padding: 12px 20px;
+    text-align: center;
+    z-index: 9999;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    animation: slideDown 0.3s ease;
+}
+
+.version-update-banner.fade-out {
+    animation: slideUp 0.3s ease forwards;
+}
+
+@keyframes slideDown {
+    from { transform: translateY(-100%); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes slideUp {
+    from { transform: translateY(0); opacity: 1; }
+    to { transform: translateY(-100%); opacity: 0; }
+}
+
+.update-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 15px;
+    flex-wrap: wrap;
+}
+
+.update-content i {
+    font-size: 18px;
+    animation: rotate 1.5s linear infinite;
+}
+
+@keyframes rotate {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.update-btn {
+    background: white;
+    color: #409EFF;
+    border: none;
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.update-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.update-close {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    border: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    font-size: 18px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.update-close:hover {
+    background: rgba(255, 255, 255, 0.3);
+}

@@ -121,6 +121,8 @@ class MessageSerializer(serializers.ModelSerializer):
 
     # 🔧 新增：引用消息字段
     quote_info = serializers.SerializerMethodField()
+    # 🔧 新增：语音精确时长字段
+    voice_duration = serializers.FloatField(read_only=True)
 
     def create(self, validated_data):
         file_id = validated_data.pop('file_id', None)
@@ -143,8 +145,10 @@ class MessageSerializer(serializers.ModelSerializer):
             # 🔧 引用字段
             'quote_message', 'quote_content', 'quote_sender', 'quote_sender_id',
             'quote_timestamp', 'quote_message_type', 'quote_info',
+            # 🔧 添加语音时长字段
+            'voice_duration',
         ]
-        read_only_fields = ['sender', 'timestamp', 'is_deleted', 'deleted_at']
+        read_only_fields = ['id', 'timestamp', 'is_read', 'is_deleted', 'deleted_at', 'sender', 'sender_id', 'sender_name', 'voice_duration']
 
     def get_file_info(self, obj):
 

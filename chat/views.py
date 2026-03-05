@@ -3,23 +3,63 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, Count
 from django.contrib.auth.models import AnonymousUser
 from django.utils import timezone
 
-from django.http import JsonResponse
-from django.views.decorators.http import require_GET
-import hashlib
-
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
+from django.db import transaction
+from django.conf import settings
+from django.http import JsonResponse
 import os
+import subprocess
+import shutil
+import hashlib
 
 from .models import ChatRoom, Message, MessageReadStatus, MessageDeleteStatus, ChatRoomDeleteStatus, FileUpload
 from .serializers import ChatRoomSerializer, MessageSerializer
 from accounts.views import IsAdminOrSuperAdmin
 from loguru import logger
+
+
+def get_version(request):
+    """
+    获取应用版本信息
+    返回格式:
+    {
+        "app_version": "2.3.1",          # 应用业务版本
+        "static_version": "20260304-1",  # 静态资源版本（CSS/JS）
+        "build_time": "2026-03-04T10:30:00Z",
+        "force_update": false,           # 是否强制更新
+        "update_message": "修复语音消息播放问题"  # 更新说明
+    }
+    """
+    # 从环境变量或 settings 获取版本
+    app_version = os.environ.get('APP_VERSION', getattr(settings, 'APP_VERSION', '1.0.0'))
+    static_version = os.environ.get('STATIC_VERSION', getattr(settings, 'STATIC_VERSION', app_version))
+    build_time = getattr(settings, 'BUILD_TIME', None)
+
+    # 检查是否需要强制更新（可通过环境变量配置）
+    force_update = os.environ.get('FORCE_UPDATE', 'false').lower() == 'true'
+
+    # 更新说明（可从文件读取）
+    update_message = ""
+    update_msg_file = os.path.join(settings.BASE_DIR, 'VERSION_MESSAGE.txt')
+    if os.path.exists(update_msg_file):
+        with open(update_msg_file, 'r', encoding='utf-8') as f:
+            update_message = f.read().strip()
+
+    return JsonResponse({
+        'app_version': app_version,
+        'static_version': static_version,
+        'build_time': build_time,
+        'force_update': force_update,
+        'update_message': update_message,
+        'environment': settings.ENVIRONMENT if hasattr(settings, 'ENVIRONMENT') else 'production'
+    })
 
 
 class ChatRoomViewSet(viewsets.ModelViewSet):
@@ -699,8 +739,6 @@ class MessageViewSet(viewsets.ModelViewSet):
         message_ids = request.data.get('message_ids', [])
         chat_room_id = request.data.get('chat_room_id')
 
-        logger.info(f"message_ids: {message_ids}")
-        logger.info(f"chat_room_id: {chat_room_id}")
 
         if not chat_room_id:
             return Response({'error': '缺少 chat_room_id'}, status=status.HTTP_400_BAD_REQUEST)
@@ -711,10 +749,6 @@ class MessageViewSet(viewsets.ModelViewSet):
         except ChatRoom.DoesNotExist:
             return Response({'error': '聊天室不存在'}, status=status.HTTP_404_NOT_FOUND)
 
-        logger.info(f"chat_room: {chat_room}")
-        logger.info(f"chat_room.room_type: {chat_room.room_type}")
-        logger.info(f"chat_room.id: {chat_room.id}")
-        logger.info(f"chat_room type: {type(chat_room)}")
 
         # 遍历消息 ID 并标记为已读 使用 MessageReadStatus
         for msg_id in message_ids:
@@ -827,16 +861,17 @@ class MessageViewSet(viewsets.ModelViewSet):
 
 
 class FileUploadView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
         file = request.FILES.get('file')
         if not file:
-            return Response({'error': '没有文件'}, status=400)
+            return Response({'error': '没有文件'}, status=status.HTTP_400_BAD_REQUEST)
 
         # 检查文件大小
         if file.size == 0:
-            return Response({'error': '上传的文件大小为 0'}, status=400)
+            return Response({'error': '上传的文件大小为 0'}, status=status.HTTP_400_BAD_REQUEST)
 
         # 缓存文件内容
         file_content = file.read()
@@ -860,10 +895,16 @@ class FileUploadView(APIView):
                 'exists': True,
                 'mime_type': existing_file.mime_type,
                 'file_id': existing_file.id,  # 返回 FileUpload ID
-                'id': existing_file.id  # 返回 FileUpload ID
+                'id': existing_file.id,  # 返回 FileUpload ID
+                # 🔧 返回MP3 URL（如果存在）
+                'mp3_url': existing_file.get_mp3_url() if existing_file.mp3_status == 'completed' else None,
+                'mp3_status': existing_file.mp3_status,
+                'duration': existing_file.duration,  # 🔧 返回精确时长
+                'is_ios_compatible': existing_file.mp3_status == 'completed' and bool(existing_file.mp3_file)
             })
         except FileUpload.DoesNotExist:
             pass
+
 
         # 保存新文件
         filename = f"{request.user.id}_{timezone.now().strftime('%Y%m%d%H%M%S')}_{file.name}"
@@ -877,8 +918,34 @@ class FileUploadView(APIView):
             filename=file.name,
             size=file.size,
             mime_type=file.content_type or '',
-            uploaded_by=request.user
+            uploaded_by=request.user,
+            # 🔧 关键修复：根据文件类型设置初始转码状态
+            mp3_status='pending' if self.is_audio_file(file.content_type or '') else 'completed'
         )
+
+        # 🔧 关键修复2: 如果是语音消息，根据设备类型决定转码策略, 关键修复：如果是语音消息，尝试转码为MP3（iOS兼容）
+        if file_upload.get_file_type() == 'voice' or self.is_audio_file(file.content_type or ''):
+            duration = self.extract_audio_duration(file_upload.file.path)
+            if duration:
+                file_upload.duration = duration
+                file_upload.save(update_fields=['duration'])
+                logger.info(f"file_upload {file_upload.id} 提取音频时长: {duration}秒")
+
+            # 标记为转码中
+            file_upload.mp3_status = 'converting'
+            file_upload.save(update_fields=['mp3_status'])
+
+            # 在事务提交后触发异步转码
+            # transaction.on_commit(lambda: self.trigger_async_conversion(file_upload))
+
+            if self.is_ios_request(request) or self.is_android_request(request):
+                # iOS设备：同步转码（用户需要立即播放）
+                logger.info(f"iOS设备: 同步转码")
+                self.convert_to_mp3(file_upload, file_content)
+            else:
+                # 非iOS设备：异步转码（提高响应速度）
+                logger.info(f"非iOS设备: 异步转码")
+                transaction.on_commit(lambda: self.async_convert_to_mp3(file_upload, file_content))
 
         return Response({
             'file_url': file_url,
@@ -887,9 +954,482 @@ class FileUploadView(APIView):
             'md5': file_md5,
             'exists': False,
             'mime_type': file.content_type or '',
-            'file_id': file_upload.id,  # 返回 FileUpload ID
-            'id': file_upload.id  # 返回 FileUpload ID
+            'file_id': file_upload.id,
+            'id': file_upload.id,
+            'mp3_url': file_upload.get_mp3_url() if file_upload.mp3_status == 'completed' else None,
+            'mp3_status': file_upload.mp3_status,
+            'duration': file_upload.duration,  # 🔧 返回精确时长
+            'is_ios_compatible': file_upload.mp3_status == 'completed' and bool(file_upload.mp3_file)
         })
+
+    def is_audio_file(self, mime_type):
+        """判断是否为音频文件"""
+        mime_type = mime_type.lower()
+        audio_extensions = ('.webm', '.ogg', '.m4a', '.mp3', '.wav', '.aac', '.flac')
+        return mime_type.startswith('audio/') or any(mime_type.endswith(ext) for ext in audio_extensions)
+
+    def extract_audio_duration(self, file_path):
+        """使用 ffprobe 提取音频时长（秒）"""
+        try:
+            # 检查 ffprobe 是否可用
+            if not shutil.which('ffprobe'):
+                logger.warning("ffprobe not found, skipping duration extraction")
+                return None
+
+            # 使用 ffprobe 获取音频时长
+            result = subprocess.run([
+                'ffprobe',
+                '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                file_path
+            ], capture_output=True, text=True, timeout=10)
+
+            if result.returncode == 0 and result.stdout.strip():
+                duration = float(result.stdout.strip())
+                # 限制时长在 1-60 秒之间（语音消息限制）
+                return max(1.0, min(60.0, duration))
+            else:
+                logger.warning(f"ffprobe failed for {file_path}: {result.stderr}")
+                return None
+
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError, Exception) as e:
+            logger.error(f"提取音频时长失败: {file_path}, error: {str(e)}")
+            return None
+
+
+    def is_ios_request(self, request):
+        """检测请求是否来自iOS设备"""
+        user_agent = request.META.get('HTTP_USER_AGENT', '').lower()
+        return 'iphone' in user_agent or 'ipad' in user_agent or 'ipod' in user_agent
+
+    def is_android_request(self, request):
+        """检测请求是否来自Android设备"""
+        user_agent = request.META.get('HTTP_USER_AGENT', '').lower()
+        return 'android' in user_agent or 'mobile' in user_agent
+
+    def trigger_async_conversion(self, file_upload):
+        """触发异步转码（在独立线程中执行）"""
+        import threading
+
+        def convert_in_thread():
+            try:
+                logger.info(f"开始异步转码文件: {file_upload.id}")
+                success = self.convert_to_mp3_sync(file_upload)
+
+                if success and file_upload.mp3_file:
+                    logger.info(f"文件 {file_upload.id} 转码成功")
+                else:
+                    logger.error(f"文件 {file_upload.id} 转码失败")
+
+            except Exception as e:
+                logger.error(f"异步转码异常: {file_upload.id}, error: {str(e)}", exc_info=True)
+            finally:
+                # 确保状态被更新（即使失败）
+                file_upload.refresh_from_db()
+                if file_upload.mp3_status == 'converting':
+                    file_upload.mp3_status = 'failed' if not file_upload.mp3_file else 'completed'
+                    file_upload.save(update_fields=['mp3_status'])
+
+        # 在独立线程中执行转码（避免阻塞 Django worker）
+        thread = threading.Thread(target=convert_in_thread, daemon=True)
+        thread.start()
+
+    def convert_to_mp3_sync(self, file_upload):
+        """同步转码为 MP3 格式（在独立线程中调用）"""
+        import shutil
+        import subprocess
+        import os
+        from django.core.files.base import ContentFile
+
+        try:
+            # 检查 ffmpeg 是否可用
+            if not shutil.which('ffmpeg'):
+                logger.warning("ffmpeg not found, skipping MP3 conversion")
+                return False
+
+            # 获取原始文件路径
+            original_path = file_upload.file.path
+
+            # 准备输出路径
+            mp3_filename = f"{os.path.splitext(file_upload.filename)[0]}.mp3"
+            mp3_dir = os.path.join(settings.MEDIA_ROOT, 'chat', 'uploads', 'mp3')
+            os.makedirs(mp3_dir, exist_ok=True)
+            mp3_path = os.path.join(mp3_dir,
+                                    f"{file_upload.uploaded_by.id}_{timezone.now().strftime('%Y%m%d%H%M%S')}_{mp3_filename}")
+
+            # 使用 ffmpeg 转码（优化参数，iOS 兼容）
+            subprocess.run([
+                'ffmpeg', '-y', '-i', original_path,
+                '-acodec', 'libmp3lame',
+                '-ab', '128k',
+                '-ar', '44100',  # iOS 推荐采样率
+                '-ac', '2',  # 双声道
+                mp3_path
+            ], check=True, capture_output=True, timeout=30)
+
+            # 保存 MP3 文件到模型
+            with open(mp3_path, 'rb') as f:
+                relative_path = os.path.relpath(mp3_path, settings.MEDIA_ROOT)
+                file_upload.mp3_file.name = relative_path
+                file_upload.mp3_status = 'completed'
+                file_upload.save(update_fields=['mp3_file', 'mp3_status'])
+
+            logger.info(f"成功转码语音文件 {file_upload.id} 为 MP3: {mp3_path}")
+            return True
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"转码超时: {file_upload.id}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"转码失败: {file_upload.id}, stderr: {e.stderr.decode()[:200]}")
+        except FileNotFoundError:
+            logger.warning("ffmpeg 未安装，跳过转码")
+        except Exception as e:
+            logger.error(f"转码异常: {file_upload.id}, error: {str(e)}", exc_info=True)
+        finally:
+            # 清理临时文件
+            if 'mp3_path' in locals() and os.path.exists(mp3_path):
+                try:
+                    pass
+                    # os.remove(mp3_path)
+                except:
+                    pass
+
+        return False
+
+    def ensure_mp3_conversion(self, file_upload):
+        """确保语音文件已转码为MP3（如果尚未转码）"""
+        if not file_upload.mp3_converted and file_upload.get_file_type() == 'voice':
+            self.convert_to_mp3(file_upload)
+
+    def convert_to_mp3(self, file_upload, file_content=None):
+        """同步转码为MP3格式（iOS兼容）"""
+        try:
+            # 检查ffmpeg是否可用
+            if not shutil.which('ffmpeg'):
+                logger.warning("ffmpeg not found, skipping MP3 conversion")
+                return
+
+            # 获取原始文件路径
+            if file_content:
+                # 从内存转码（避免二次读取磁盘）
+                temp_input = os.path.join('/tmp', f'temp_{file_upload.id}.webm')
+                with open(temp_input, 'wb') as f:
+                    f.write(file_content)
+                input_path = temp_input
+                cleanup_input = True
+            else:
+                input_path = file_upload.file.path
+                cleanup_input = False
+
+            # 准备输出路径
+            mp3_filename = f"{os.path.splitext(file_upload.filename)[0]}.mp3"
+            mp3_dir = os.path.join(settings.MEDIA_ROOT, 'chat', 'uploads', 'mp3')
+            os.makedirs(mp3_dir, exist_ok=True)
+            mp3_path = os.path.join(mp3_dir,
+                                    f"{file_upload.uploaded_by.id}_{timezone.now().strftime('%Y%m%d%H%M%S')}_{mp3_filename}")
+
+            # 使用ffmpeg转码（优化参数，iOS兼容）
+            p = subprocess.run([
+                'ffmpeg', '-y', '-i', input_path,
+                '-acodec', 'libmp3lame',
+                '-ab', '128k',
+                '-ar', '44100',  # iOS 推荐采样率
+                '-ac', '2',  # 双声道
+                mp3_path
+            ], check=True, capture_output=True, timeout=60)
+
+            logger.info(f"转码输出: {p.stdout.decode()}")
+
+            # 保存MP3文件到模型
+            with open(mp3_path, 'rb') as f:
+                relative_path = os.path.relpath(mp3_path, settings.MEDIA_ROOT)
+                file_upload.mp3_file.name = relative_path
+
+                file_upload.mp3_status = 'completed'
+                file_upload.mp3_converted = True
+                file_upload.save(update_fields=['mp3_file', 'mp3_converted', 'mp3_status'])
+
+            logger.info(f"成功转码语音文件 {file_upload.id} input_path: {input_path}")
+            logger.info(f"成功转码语音文件 {file_upload.id} 为MP3: {mp3_path}")
+            logger.info(f"成功转码语音文件 {file_upload.id} 为MP3: {os.path.exists(mp3_path)}")
+
+            # 清理临时文件
+            if cleanup_input and os.path.exists(input_path):
+                os.remove(input_path)
+            # if os.path.exists(mp3_path):
+            #     os.remove(mp3_path)
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"转码超时: {file_upload.id}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"转码失败: {file_upload.id}, stderr: {e.stderr.decode()[:200]}")
+        except FileNotFoundError:
+            logger.warning("ffmpeg 未安装，跳过转码")
+        except Exception as e:
+            logger.error(f"转码异常: {file_upload.id}, error: {str(e)}", exc_info=True)
+        finally:
+            # 确保状态及时更新，即使是失败
+
+            if file_upload.mp3_status == 'converting':
+                if not file_upload.mp3_file:
+                    file_upload.mp3_converted = False
+                    file_upload.mp3_status = 'failed'
+                    logger.info(f"转码失败: {file_upload.id}")
+                else:
+                    file_upload.mp3_converted = True
+                    file_upload.mp3_status = 'completed'
+                    logger.info(f"转码成功: {file_upload.id}")
+                file_upload.save(update_fields=['mp3_converted', 'mp3_status'])
+
+            # 确保清理临时文件
+            if 'input_path' in locals() and cleanup_input and os.path.exists(input_path):
+                try:
+                    os.remove(input_path)
+                except:
+                    pass
+            # if 'mp3_path' in locals() and os.path.exists(mp3_path):
+            #     try:
+            #         os.remove(mp3_path)
+            #     except:
+            #         pass
+
+    def async_convert_to_mp3(self, file_upload, file_content=None):
+        """异步转码（在事务提交后执行）"""
+        # 简单实现：直接调用（生产环境建议使用Celery）
+        self.convert_to_mp3(file_upload, file_content)
+
+
+# chat/views.py - 新增视图
+
+class AudioFormatView(APIView):
+    """按需提供音频格式转换"""
+    permission_classes = [permissions.IsAuthenticated]
+
+
+    def get(self, request, file_id):
+        try:
+            format = request.query_params.get('format', '')
+            logger.info(f"Getting audio format for file: {file_id} format: {format}")
+            format = format or 'mp3'
+
+            # 🔧 关键修复1: 验证 file_id 是整数
+            try:
+                file_id = int(file_id)
+            except (ValueError, TypeError):
+                return Response({'error': '无效的文件ID'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 检查请求的格式
+            if format != 'mp3':
+                return Response({'error': '仅支持 MP3 格式转换'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 获取文件记录
+            try:
+                file_upload = FileUpload.objects.get(id=file_id)
+            except FileUpload.DoesNotExist:
+                logger.error(f"文件不存在或无权限: {file_id}, user: {request.user.id}")
+                return Response({'error': '文件不存在或无访问权限'}, status=status.HTTP_404_NOT_FOUND)
+
+            logger.info(f"File found: {file_upload} file_upload.mp3_file: {file_upload.mp3_file}")
+            logger.info(f"File found: {file_upload} file_upload.mp3_converted: {file_upload.mp3_converted}")
+
+            # 检查是否为音频文件
+            if file_upload.get_file_type() != 'voice':
+                return Response({'error': '非音频文件'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 🔧 关键修复3: 检查转码状态
+            if file_upload.mp3_status == 'completed' and file_upload.mp3_file:
+                logger.info(f"文件 {file_id} 已有 MP3 格式: {file_upload.mp3_file.url}")
+                return Response({
+                    'url': file_upload.get_mp3_url(),
+                    'is_ready': True,
+                    'mime_type': 'audio/mpeg',
+                    'status': 'completed'
+                })
+
+            # 🔧 关键修复4: 如果是 pending 状态，触发转码
+            if file_upload.mp3_status == 'pending':
+                # 标记为转码中
+                file_upload.mp3_status = 'converting'
+                file_upload.save(update_fields=['mp3_status'])
+
+                # 触发异步转码
+                transaction.on_commit(lambda: self.trigger_async_conversion(file_upload))
+
+                logger.info(f"已触发文件 {file_id} 的异步转码")
+                return Response({
+                    'url': file_upload.get_file_url(),
+                    'is_ready': False,
+                    'converting': True,
+                    'status': 'converting',
+                    'message': '音频格式转换已启动，请稍后重试'
+                }, status=status.HTTP_202_ACCEPTED)
+
+            # 🔧 关键修复5: 如果是 converting 状态，返回转码中
+            if file_upload.mp3_status == 'converting':
+                logger.info(f"文件 {file_id} 正在转码中")
+                return Response({
+                    'url': file_upload.get_file_url(),
+                    'is_ready': False,
+                    'converting': True,
+                    'status': 'converting',
+                    'message': '音频格式转换中，请稍后重试'
+                }, status=status.HTTP_202_ACCEPTED)
+
+            # 转码失败
+            if file_upload.mp3_status == 'failed':
+                logger.warning(f"文件 {file_id} 转码失败")
+                return Response({
+                    'error': '音频转码失败，请重试或联系管理员',
+                    'url': file_upload.get_file_url(),
+                    'status': 'failed'
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+            # 默认情况（不应发生）
+            return Response({
+                'url': file_upload.get_file_url(),
+                'is_ready': True,
+                'status': 'unknown'
+            })
+
+
+        except FileUpload.DoesNotExist:
+            logger.error(f"文件不存在: {file_id}")
+            return Response({'error': '文件不存在'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"音频格式请求失败: {e}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def trigger_async_conversion(self, file_upload):
+        """复用 FileUploadView 的异步转码方法"""
+        from .views import FileUploadView
+        view = FileUploadView()
+        view.trigger_async_conversion(file_upload)
+
+
+
+    def convert_to_mp3_sync(self, file_upload):
+        """同步转码为 MP3 格式"""
+        try:
+            # 检查 ffmpeg 是否可用
+            if not shutil.which('ffmpeg'):
+                logger.warning("ffmpeg not found, skipping MP3 conversion")
+                return False
+
+            # 获取原始文件路径
+            original_path = file_upload.file.path
+
+            # 准备输出路径
+            mp3_filename = f"{os.path.splitext(file_upload.filename)[0]}.mp3"
+            mp3_dir = os.path.join(settings.MEDIA_ROOT, 'chat', 'uploads', 'mp3')
+            os.makedirs(mp3_dir, exist_ok=True)
+            mp3_path = os.path.join(mp3_dir,
+                                    f"{file_upload.uploaded_by.id}_{timezone.now().strftime('%Y%m%d%H%M%S')}_{mp3_filename}")
+
+            # 标记为转码中（避免重复转码）
+            file_upload.mp3_converted = None
+            file_upload.save(update_fields=['mp3_converted'])
+
+            # 使用 ffmpeg 转码
+            subprocess.run([
+                'ffmpeg', '-y', '-i', original_path,
+                '-acodec', 'libmp3lame',
+                '-ab', '128k',
+                '-ar', '44100',
+                '-ac', '2',
+                mp3_path
+            ], check=True, capture_output=True, timeout=60)
+
+            # 保存 MP3 文件到模型
+            with open(mp3_path, 'rb') as f:
+                relative_path = os.path.relpath(mp3_path, settings.MEDIA_ROOT)
+                file_upload.mp3_file.name = relative_path
+                file_upload.mp3_converted = True
+                file_upload.save(update_fields=['mp3_file', 'mp3_converted'])
+
+            logger.info(f"成功转码语音文件 {file_upload.id} 为 MP3")
+            return True
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"转码超时: {file_upload.id}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"转码失败: {file_upload.id}, stderr: {e.stderr.decode()[:200]}")
+        except FileNotFoundError:
+            logger.warning(f"转码失败: {file_upload.id} ffmpeg 未安装，跳过转码")
+        except Exception as e:
+            logger.error(f"转码异常: {file_upload.id}, error: {str(e)}", exc_info=True)
+        finally:
+            # 清理临时文件
+            if 'mp3_path' in locals() and os.path.exists(mp3_path):
+                try:
+                    pass
+                    # os.remove(mp3_path)
+                except:
+                    pass
+
+        # 转码失败，标记为不可用
+        if file_upload.mp3_converted is None:
+            file_upload.mp3_converted = False
+            file_upload.save(update_fields=['mp3_converted'])
+        return False
+
+
+    def convert_to_mp3(self, file_upload):
+        """同步转码为MP3格式"""
+        try:
+            # 检查ffmpeg是否可用
+            if not shutil.which('ffmpeg'):
+                logger.warning("ffmpeg not found, skipping MP3 conversion")
+                return
+
+            # 获取原始文件路径
+            original_path = file_upload.file.path
+            mp3_filename = f"{os.path.splitext(file_upload.filename)[0]}.mp3"
+            mp3_dir = os.path.join(settings.MEDIA_ROOT, 'chat', 'uploads', 'mp3')
+            os.makedirs(mp3_dir, exist_ok=True)
+            mp3_path = os.path.join(mp3_dir,
+                                    f"{file_upload.uploaded_by.id}_{timezone.now().strftime('%Y%m%d%H%M%S')}_{mp3_filename}")
+
+            # 使用ffmpeg转码（优化参数）
+            subprocess.run([
+                'ffmpeg', '-y', '-i', original_path,
+                '-acodec', 'libmp3lame',
+                '-ab', '128k',
+                '-ar', '44100',  # iOS 推荐采样率
+                '-ac', '2',  # 双声道
+                mp3_path
+            ], check=True, capture_output=True, timeout=30)
+
+            # 保存MP3文件到模型
+            with open(mp3_path, 'rb') as f:
+                relative_path = os.path.relpath(mp3_path, settings.MEDIA_ROOT)
+                file_upload.mp3_file.name = relative_path
+                file_upload.mp3_converted = True
+                file_upload.save(update_fields=['mp3_file', 'mp3_converted'])
+
+            logger.info(f"成功转码语音文件 {file_upload.id} 为MP3: {mp3_path}")
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"转码超时: {file_upload.id}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"转码失败: {file_upload.id}, stderr: {e.stderr.decode()[:200]}")
+        except FileNotFoundError:
+            logger.warning("ffmpeg 未安装，跳过转码")
+        except Exception as e:
+            logger.error(f"转码异常: {file_upload.id}, error: {str(e)}", exc_info=True)
+        finally:
+            # 清理临时文件（如果存在）
+            if 'mp3_path' in locals() and os.path.exists(mp3_path):
+                try:
+                    os.remove(mp3_path)
+                except:
+                    pass
+
+    def async_convert_to_mp3(self, file_upload):
+        """异步转码（在事务提交后执行）"""
+        # 简单实现：直接调用（生产环境建议使用Celery）
+        self.convert_to_mp3(file_upload)
 
 
 class ChatRoomAdminViewSet(viewsets.ModelViewSet):

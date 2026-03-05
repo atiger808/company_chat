@@ -13,7 +13,7 @@
 
 
     <!-- PWA Manifest -->
-    <link rel="manifest" href="/manifest.json">
+    <link rel="manifest" href="/manifest.json?v=20260305-1">
 
     <!-- iOS Safari 添加到主屏幕 -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -23,13 +23,11 @@
 
     <!-- Windows Tiles -->
     <meta name="msapplication-TileColor" content="#409EFF">
-    <meta name="msapplication-TileImage" content="/static/icons/icon-144x144.png">
-
+    <meta name="msapplication-TileImage" content="/static/icons/icon-144x144.png?v=20260305-1">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css">-->
-
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260303-1">
-    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260305-1">
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260305-1">
 
     <!-- 🔧 iOS 专用样式修复 -->
     <style>
@@ -308,18 +306,27 @@
 
         <div class="chat-input-area">
             <div class="input-actions">
+
+                <!-- 语音消息按钮（优化版） -->
+                <button class="action-btn voice-btn" id="voiceBtn" title="按住 说话">
+                    <i class="fas fa-microphone"></i>
+                    <span class="voice-btn-text">按住 说话</span>
+                    <span class="voice-btn-recording-text" style="display: none;">松开 结束</span>
+                </button>
+                <span id="voiceNotSupportedTip" class="voice-not-supported-tip" style="display: none;"
+                      title="语音消息功能不可用">
+                    <i class="fas fa-exclamation-circle"></i>
+                </span>
+
                 <button class="action-btn" id="imageBtn" title="图片/视频">
                     <i class="fas fa-image"></i>
                     <input type="file" id="imageInput" accept="image/*,video/*" multiple style="display:none;">
                 </button>
+
                 <button class="action-btn" id="fileBtn" title="文件">
                     <i class="fas fa-paperclip"></i>
                     <input type="file" id="fileInput" multiple style="display:none;">
                 </button>
-
-                <!--                <button class="btn-icon" title="语音消息" id="voiceBtn">-->
-                <!--                    <i class="fas fa-microphone"></i>-->
-                <!--                </button>-->
 
 
                 <button class="btn-icon" title="表情" id="emojiBtn">
@@ -362,7 +369,65 @@
                 </div>
             </div>
             <button class="send-btn" id="sendBtn">发送</button>
+
+
+            <!-- 语音录音覆盖层（移动端优化版） -->
+            <div id="voiceRecorderOverlay" class="voice-recorder-overlay" style="display: none;">
+                <div class="voice-recorder-backdrop"></div>
+                <div class="voice-recorder-panel">
+                    <div class="voice-recorder-cancel-area">
+                        <i class="fas fa-times-circle"></i>
+                        <span>松开手指 取消发送</span>
+                    </div>
+                    <div class="voice-recorder-wave-container">
+                        <div class="voice-recorder-wave">
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                        </div>
+                    </div>
+                    <div class="voice-recorder-time" id="voiceRecorderTime">00:00</div>
+                    <div class="voice-recorder-hint">
+                        <i class="fas fa-microphone"></i>
+                        <span>手指上滑 取消发送</span>
+                    </div>
+                    <!-- 🔧 移动端专用：发送按钮（松开发送） -->
+                    <div class="voice-recorder-send-hint">
+                        <i class="fas fa-arrow-up"></i>
+                        <span>松开 结束</span>
+                    </div>
+                </div>
+            </div>
+
         </div>
+
+        <!-- 语音消息模板（移动端优化） -->
+        <template id="voiceMessageTemplate">
+            <div class="message-voice">
+                <button class="voice-play-btn" aria-label="播放语音">
+                    <i class="fas fa-play"></i>
+                    <i class="fas fa-pause"></i>
+                </button>
+                <div class="voice-duration">0"</div>
+                <div class="voice-progress">
+                    <div class="voice-progress-bar"></div>
+                </div>
+                <!-- 🔧 关键修复：添加移动端必需的属性 -->
+                <audio class="voice-audio"
+                       preload="metadata"
+                       playsinline
+                       webkit-playsinline
+                       crossOrigin="anonymous"></audio>
+            </div>
+        </template>
+
     </div>
 </div>
 
@@ -568,41 +633,41 @@
 <div id="notificationContainer"></div>
 <div id="toastContainer"></div>
 
-<script src="/static/js/api.js?v=20260303-1"></script>
-<script src="/static/js/utils.js?v=20260303-1"></script>
-<script src="/static/js/chat.js?v=20260303-1"></script>
-<script src="/static/js/spark-md5.min.js"></script>
 
-<!-- 在 body 末尾添加 -->
+<!-- 🔧 关键修复：脚本资源直接带版本参数 -->
+<script src="/static/js/api.js?v=20260305-1"></script>
+<script src="/static/js/utils.js?v=20260305-1"></script>
+<script src="/static/js/chat.js?v=20260305-1"></script>
+<script src="/static/js/spark-md5.min.js?v=20260305-1"></script>
+
+<!-- 版本检测脚本（简化版，移除无效的 document.write） -->
 <script>
-    // 页面加载时检查缓存清除参数
-    (function () {
-        const urlParams = new URLSearchParams(window.location.search);
-        const cacheBust = urlParams.get('cacheBust');
+    // 从构建时注入的版本号
+    const CURRENT_VERSION = '20260305-1';
 
-        if (cacheBust) {
-            // 清除 URL 中的缓存参数（美化 URL）
-            const cleanUrl = window.location.pathname + window.location.hash;
-            window.history.replaceState({}, document.title, cleanUrl);
+    // 检查版本是否更新
+    const LAST_VERSION = sessionStorage.getItem('appVersion');
+    if (LAST_VERSION && LAST_VERSION !== CURRENT_VERSION) {
+        console.log(`✅ 检测到新版本: ${LAST_VERSION} → ${CURRENT_VERSION}`);
+        sessionStorage.setItem('appVersion', CURRENT_VERSION);
 
-            // 显示缓存清除成功提示
-            setTimeout(() => {
-                if (typeof chatClient !== 'undefined' && chatClient.showSuccess) {
-                    chatClient.showSuccess('缓存已清除', '页面已重新加载最新资源');
-                } else {
-                    alert('✓ 缓存已清除，页面已加载最新资源');
+        // 5秒后自动提示刷新（避免打断用户操作）
+        setTimeout(() => {
+            if (confirm('🎉 检测到新版本，是否立即刷新以加载最新功能？')) {
+                // 清除 Service Worker 缓存
+                if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.getRegistrations().then(registrations => {
+                        registrations.forEach(reg => reg.unregister());
+                    });
                 }
-            }, 1000);
-        }
-    })();
-
-    // 添加全局错误处理，捕获资源加载失败
-    window.addEventListener('error', (e) => {
-        if (e.target && (e.target.tagName === 'LINK' || e.target.tagName === 'SCRIPT')) {
-            console.warn('资源加载失败，尝试清除缓存:', e.target.src || e.target.href);
-            // 可以在这里触发自动缓存清除
-        }
-    }, true);
+                // 强制刷新
+                location.reload(true);
+            }
+        }, 5000);
+    } else {
+        sessionStorage.setItem('appVersion', CURRENT_VERSION);
+    }
 </script>
+
 </body>
 </html>

@@ -8,9 +8,11 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
+    get_version,
     ChatRoomViewSet,
     MessageViewSet,
     FileUploadView,
+    AudioFormatView,
     ChatRoomAdminViewSet,
 )
 
@@ -21,6 +23,8 @@ router.register(r'admin/rooms', ChatRoomAdminViewSet, basename='admin-rooms')
 
 urlpatterns = [
     path('', include(router.urls)),
+
+    path('version/', get_version, name='version'),
 
     # 聊天室相关操作
     # path('rooms/<int:pk>/clear_history/', ChatRoomViewSet.as_view({'delete': 'clear_history'}), name='clear-history'),
@@ -50,6 +54,8 @@ urlpatterns = [
 
     # 文件上传
     path('upload/', FileUploadView.as_view(), name='file-upload'),
+    # 🔧 新增：音频格式路由
+    path('audio/<int:file_id>/format/', AudioFormatView.as_view(), name='audio-format'),
 
     # 聊天室管理
     path('admin/rooms/<int:pk>/force-delete/', ChatRoomAdminViewSet.as_view({'post': 'force_delete'}), name='admin-force-delete'),

@@ -15,6 +15,8 @@ import sys
 import os
 from decouple import config
 from datetime import timedelta
+import re
+import datetime
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -87,31 +89,45 @@ WSGI_APPLICATION = 'company_chat.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
-DATABASES = {
-    # 'default': {
-    #     'ENGINE': 'django.db.backends.sqlite3',
-    #     'NAME': BASE_DIR / 'db.sqlite3',
-    # }
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('DB_NAME'),
-        'USER': config('DB_USER'),
-        'PASSWORD': config('DB_PASSWORD'),
-        'HOST': config('DB_HOST'),
-        'PORT': config('DB_PORT'),
-        'OPTIONS': {
-            'connect_timeout': 15,
-            'options': '-c statement_timeout=30000',
-            'keepalives': 1,  # 启用 TCP Keepalive
-            'keepalives_idle': 30,  # 空闲 30 秒后发送探测包
+if sys.platform == 'linux':
+
+    DATABASES = {
+        # 'default': {
+        #     'ENGINE': 'django.db.backends.sqlite3',
+        #     'NAME': BASE_DIR / 'db.sqlite3',
+        # }
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': config('DB_NAME'),
+            'USER': config('DB_USER'),
+            'PASSWORD': config('DB_PASSWORD'),
+            'HOST': config('DB_HOST'),
+            'PORT': config('DB_PORT'),
+            'OPTIONS': {
+                'connect_timeout': 15,
+                'options': '-c statement_timeout=30000',
+                'keepalives': 1,  # 启用 TCP Keepalive
+                'keepalives_idle': 30,  # 空闲 30 秒后发送探测包
+            }
         }
     }
-}
 
-# redis 配置
-REDIS_HOST = config('REDIS_HOST')
-REDIS_PASSWORD = config('REDIS_PASSWORD')
-REDIS_PORT = config('REDIS_PORT', default=6379, cast=int)
+    # redis 配置
+    REDIS_HOST = config('REDIS_HOST')
+    REDIS_PASSWORD = config('REDIS_PASSWORD')
+    REDIS_PORT = config('REDIS_PORT', default=6379, cast=int)
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
+
+    # redis 配置
+    REDIS_HOST = '127.0.0.1'
+    REDIS_PASSWORD = 'dayue123456'
+    REDIS_PORT = 6379
 
 # REDIS_LOCATION = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
 REDIS_LOCATION = f"redis://{REDIS_HOST}:{REDIS_PORT}"
@@ -219,6 +235,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://192.168.20.33:5173",  # 前端地址
     "http://chat.first-iq.com:10900",  # 前端地址
     "http://chat.first-iq.com:10901",  # 前端地址
+    "https://chat.first-iq.com",  # 前端地址
 ]
 
 # 指定允许的后端地址（推荐用于生产环境）
@@ -227,6 +244,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://192.168.20.33:5173",  # 前端地址
     "http://chat.first-iq.com:10900",
     "http://chat.first-iq.com:10901",  # 前端地址
+    "https://chat.first-iq.com",  # 前端地址
     # Add other trusted origins if needed
 ]
 
@@ -261,20 +279,50 @@ USE_TZ = True
 # MEDIA_URL = '/media/'
 # MEDIA_ROOT = BASE_DIR / 'media'
 
-
-STATIC_URL = 'static/'
-STATIC_ROOT = BASE_DIR / 'static'
-
 DEFAULT_FILE_STORAGE = 'django.core.files.storage.FileSystemStorage'
-# 素材上传配置
-MEDIA_URL = 'media/'
-MEDIA_ROOT = BASE_DIR / 'media'
 
+if sys.platform == 'linux':
 
-BASE_URL = 'http://chat.first-iq.com:10901/'
+    STATIC_URL = 'static/'
+    STATIC_ROOT = BASE_DIR / 'static'
+
+    # 素材上传配置
+    MEDIA_URL = 'media/'
+    MEDIA_ROOT = BASE_DIR / 'media'
+else:
+    # 静态文件配置
+    STATIC_URL = '/static/'
+    STATICFILES_DIRS = [
+        os.path.join(BASE_DIR, 'static'),  # 前端静态资源目录
+    ]
+    STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')  # collectstatic 收集目录
+
+    # 多媒体文件配置（用户上传的文件）
+    MEDIA_URL = '/media/'
+    MEDIA_ROOT = os.path.join(BASE_DIR, 'media')  # 上传文件存储目录
+
+    # 确保 media 目录存在
+    if not os.path.exists(MEDIA_ROOT):
+        os.makedirs(MEDIA_ROOT)
+
+BASE_URL = 'https://chat.first-iq.com/'
 
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+# 静态文件版本（每次部署更新）
+STATIC_VERSION = '20260305-3'
+
+# 构建时间
+BUILD_TIME = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+
+# # 静态文件存储（生产环境使用 WhiteNoise 或 CDN）
+# STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+# # WhiteNoise 配置
+# WHITENOISE_MAX_AGE = 31536000  # 1年
+# WHITENOISE_IMMUTABLE_FILE_TEST = lambda path, url: re.match(r'^.+\.[0-9a-f]{12}\..+$', url)

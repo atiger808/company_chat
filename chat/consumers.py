@@ -189,7 +189,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'is_online': self.user.is_online,
         }
 
-        # 🔧 关键修复：广播消息时必须包含完整的引用字段
+        # 🔧 关键修复：广播消息时必须包含完整的引用字段,包含精确语音时长
         await self.channel_layer.group_send(
             self.room_group_name,
             {
@@ -212,6 +212,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'quote_sender_id': message.quote_sender_id,
                 'quote_timestamp': message.quote_timestamp.isoformat() if message.quote_timestamp else None,
                 'quote_message_type': message.quote_message_type,
+                # 🔧 广播语音精确时长
+                'voice_duration': message.voice_duration if hasattr(message, 'voice_duration') else None,
             }
         )
 
@@ -234,6 +236,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'quote_sender_id': message.quote_sender_id,
             'quote_timestamp': message.quote_timestamp.isoformat() if message.quote_timestamp else None,
             'quote_message_type': message.quote_message_type,
+            # 🔧 广播语音精确时长
+            'voice_duration': message.voice_duration if hasattr(message, 'voice_duration') else None,
         })
 
         # 🔧 关键修复：发送未读数更新给接收方（如果不是自己）

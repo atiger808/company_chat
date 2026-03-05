@@ -373,9 +373,20 @@ class Utils {
         return name.charAt(0).toUpperCase();
     }
 
-    // 检测移动设备
+
+    // 检测是否为 iOS 设备
+    static isIOS() {
+        return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    }
+
+    // 检测是否为 Android 设备
+    static isAndroid() {
+        return /Android/i.test(navigator.userAgent);
+    }
+
+    // 检测是否为移动端
     static isMobile() {
-        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        return this.isIOS() || this.isAndroid() || /Mobile|Tablet/i.test(navigator.userAgent);
     }
 
     // 复制到剪贴板

@@ -20,6 +20,7 @@ from django.urls import path, include
 from django.views.generic import TemplateView
 from django.conf import settings
 from django.conf.urls.static import static
+import sys
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -32,6 +33,9 @@ urlpatterns = [
     path('manifest.json', TemplateView.as_view(template_name='manifest.json',content_type='application/json'), name='manifest'),
 ]
 
-# if settings.DEBUG:
-# urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
-# urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+if sys.platform != 'linux' and settings.DEBUG:
+    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+    # urlpatterns.append(path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}))
+    # urlpatterns.append(path(r'^static/(?P<path>.*)$', serve, {'document_root': settings.STATIC_ROOT}))

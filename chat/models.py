@@ -6,7 +6,10 @@ from django.conf import settings
 from accounts.models import CustomUser
 import os
 import hashlib
+from loguru import logger
 
+# 引入AudioSegment， VideoFileClip
+# from moviepy.editor import AudioSegment, VideoFileClip
 
 def upload_to(instance, filename):
     """文件上传路径"""
@@ -109,6 +112,39 @@ class FileUpload(models.Model):
     """统一文件上传记录（用于MD5去重和文件管理）"""
     md5 = models.CharField(max_length=32, unique=True, verbose_name='文件MD5')
     file = models.FileField(upload_to='chat/uploads/', verbose_name='文件')
+
+    # 🔧 关键修复1: 使用 CharField 表示 MP3 转码状态（避免 NULL 问题）
+    mp3_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', '待转码'),
+            ('converting', '转码中'),
+            ('completed', '已完成'),
+            ('failed', '失败')
+        ],
+        default='pending',
+        verbose_name='MP3转码状态'
+    )
+
+    # 🔧 新增：MP3格式文件（用于iOS兼容）
+    mp3_file = models.FileField(upload_to='chat/uploads/mp3/', null=True, blank=True, verbose_name='MP3格式文件')
+    mp3_converted = models.BooleanField(default=False, verbose_name='是否已转码为MP3')
+
+    mp3_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', '待转码'),
+            ('converting', '转码中'),
+            ('completed', '已完成'),
+            ('failed', '失败')
+        ],
+        default='pending',
+        verbose_name='MP3转码状态'
+    )
+
+    # 🔧 新增：音频时长字段（秒）
+    duration = models.FloatField(null=True, blank=True, verbose_name='音频时长(秒)')
+
     filename = models.CharField(max_length=255, verbose_name='原始文件名')
     size = models.BigIntegerField(verbose_name='文件大小')
     mime_type = models.CharField(max_length=100, verbose_name='MIME类型')
@@ -121,6 +157,7 @@ class FileUpload(models.Model):
         indexes = [
             models.Index(fields=['md5']),
             models.Index(fields=['uploaded_by']),
+            models.Index(fields=['mp3_status']),  # 🔧 新增索引
         ]
 
     def __str__(self):
@@ -133,17 +170,36 @@ class FileUpload(models.Model):
 
         return None
 
+    def get_mp3_url(self):
+        """获取MP3格式URL"""
+        if self.mp3_file and hasattr(self.mp3_file, 'url'):
+            return os.path.join(settings.BASE_URL, self.mp3_file.url.strip('/'))
+            # return self.mp3_file.url
+        return None
+
 
     def get_file_info(self):
         """获取文件信息字典"""
-        return {
+        info = {
             'url': self.get_file_url(),
             'name': self.filename,
             'size': self.size,
             'type': self.get_file_type(),
             'mime_type': self.mime_type,
-            'md5': self.md5
+            'md5': self.md5,
+            'id': self.id,
+            'file_id': self.id,
+            'mp3_status': self.mp3_status,
+            # 🔧 关键修复：返回精确音频时长
+            'duration': self.duration if self.duration else None
         }
+
+        # 🔧 关键修复：如果是语音消息且已转码为MP3，提供MP3 URL
+        if self.mp3_status == 'completed' and self.mp3_file:
+            info['mp3_url'] = self.get_mp3_url()
+            info['is_ios_compatible'] = True
+
+        return info
 
     def get_file_type(self):
         """根据 MIME 类型推断消息类型"""
@@ -152,7 +208,7 @@ class FileUpload(models.Model):
             return 'image'
         elif mime.startswith('video/'):
             return 'video'
-        elif mime.startswith('audio/'):
+        elif mime.startswith('audio/') or self.filename.lower().endswith(('.webm', '.ogg', '.m4a', '.mp3', '.wav')):
             return 'voice'
         elif mime.startswith('text/'):
             return 'text'
@@ -205,6 +261,9 @@ class Message(models.Model):
         related_name='mentioned_in_messages',
         verbose_name='被提及的用户'
     )
+
+    # 🔧 新增：语音消息精确时长（秒）
+    voice_duration = models.FloatField(null=True, blank=True, verbose_name='语音时长(秒)')
 
 
     # 关键修改：file 字段改为指向 FileUpload
@@ -285,6 +344,13 @@ class Message(models.Model):
                 'message_type': self.quote_message_type
             }
         return None
+
+    def save(self, *args, **kwargs):
+        # 🔧 关键修复：自动从关联的 FileUpload 获取时长
+        if self.file and not self.voice_duration:
+            if hasattr(self.file, 'duration') and self.file.duration:
+                self.voice_duration = self.file.duration
+        super().save(*args, **kwargs)
 
 
 

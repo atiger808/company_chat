@@ -1,5 +1,296 @@
 // static/js/chat.js
 
+
+// 版本管理器
+class VersionManager {
+    constructor() {
+        this.STORAGE_KEY = 'app_version_info';
+        this.CHECK_INTERVAL = 5 * 60 * 1000; // 5分钟检查一次
+        this.lastCheckTime = 0;
+        this.isChecking = false;
+        this.updateBanner = null;
+    }
+
+    // 获取存储的版本信息
+    getStoredVersion() {
+        try {
+            const stored = localStorage.getItem(this.STORAGE_KEY);
+            return stored ? JSON.parse(stored) : null;
+        } catch (e) {
+            console.warn('读取版本信息失败:', e);
+            return null;
+        }
+    }
+
+    // 保存版本信息
+    saveVersionInfo(info) {
+        try {
+            localStorage.setItem(this.STORAGE_KEY, JSON.stringify(info));
+            return true;
+        } catch (e) {
+            console.warn('保存版本信息失败:', e);
+            return false;
+        }
+    }
+
+    // 比较版本（支持语义化版本和时间戳）
+    compareVersions(current, latest) {
+        // 处理时间戳格式 (20260304-1)
+        if (current.includes('-') && latest.includes('-')) {
+            return latest.localeCompare(current);
+        }
+
+        // 处理语义化版本 (2.3.1)
+        const currentParts = current.split('.').map(Number);
+        const latestParts = latest.split('.').map(Number);
+
+        for (let i = 0; i < Math.max(currentParts.length, latestParts.length); i++) {
+            const currentVal = currentParts[i] || 0;
+            const latestVal = latestParts[i] || 0;
+
+            if (latestVal > currentVal) return 1;  // 需要更新
+            if (latestVal < currentVal) return -1; // 降级
+        }
+
+        return 0; // 相同版本
+    }
+
+    // 检查是否需要更新
+    async checkForUpdates(force = false) {
+        // 避免频繁检查
+        if (this.isChecking) return null;
+        if (!force && Date.now() - this.lastCheckTime < this.CHECK_INTERVAL) {
+            return null;
+        }
+
+        this.isChecking = true;
+        this.lastCheckTime = Date.now();
+
+        try {
+            const response = await fetch('/api/chat/version/?t=' + Date.now(), {
+                method: 'GET',
+                cache: 'no-cache', // 强制从网络获取
+                headers: {
+                    'Cache-Control': 'no-cache, no-store, must-revalidate',
+                    'Pragma': 'no-cache',
+                    'Expires': '0'
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const serverVersion = await response.json();
+            const localVersion = this.getStoredVersion();
+
+            // 首次访问，保存版本
+            if (!localVersion) {
+                this.saveVersionInfo(serverVersion);
+                return null;
+            }
+
+            // 比较版本
+            const staticDiff = this.compareVersions(localVersion.static_version || '', serverVersion.static_version || '');
+            const appDiff = this.compareVersions(localVersion.app_version || '', serverVersion.app_version || '');
+
+            // 构建更新信息
+            const updateInfo = {
+                hasUpdate: staticDiff > 0 || appDiff > 0,
+                staticUpdated: staticDiff > 0,
+                appUpdated: appDiff > 0,
+                forceUpdate: serverVersion.force_update,
+                current: localVersion,
+                latest: serverVersion,
+                updateMessage: serverVersion.update_message || '发现新版本，建议更新以获得最佳体验'
+            };
+
+            // 保存最新版本信息
+            this.saveVersionInfo(serverVersion);
+
+            return updateInfo;
+
+        } catch (error) {
+            console.warn('版本检查失败:', error);
+            return null;
+        } finally {
+            this.isChecking = false;
+        }
+    }
+
+    // 显示更新提示
+    showUpdatePrompt(updateInfo) {
+        // 移除旧的提示
+        if (this.updateBanner && this.updateBanner.parentNode) {
+            this.updateBanner.parentNode.removeChild(this.updateBanner);
+        }
+
+        // 创建更新提示
+        this.updateBanner = document.createElement('div');
+        this.updateBanner.className = 'version-update-banner';
+
+        // 根据更新类型设置样式
+        const isCritical = updateInfo.forceUpdate || updateInfo.appUpdated;
+        this.updateBanner.classList.add(isCritical ? 'critical' : 'minor');
+
+        // 构建提示内容
+        let content = `
+            <div class="update-content">
+                <div class="update-icon">
+                    <i class="fas fa-${isCritical ? 'exclamation-triangle' : 'sync-alt'}"></i>
+                </div>
+                <div class="update-text">
+                    <div class="update-title">
+                        ${isCritical ? '重要更新' : '发现新版本'}
+                    </div>
+                    <div class="update-desc">
+                        ${updateInfo.updateMessage}
+                    </div>
+                    ${updateInfo.latest.build_time ? `
+                    <div class="update-time">
+                        <small>更新时间: ${new Date(updateInfo.latest.build_time).toLocaleString('zh-CN')}</small>
+                    </div>
+                    ` : ''}
+                </div>
+                <div class="update-actions">
+        `;
+
+        if (isCritical) {
+            // 强制更新：只有"立即更新"按钮
+            content += `
+                <button class="update-btn critical" id="updateNowBtn">
+                    <i class="fas fa-redo"></i> 立即更新
+                </button>
+            `;
+        } else {
+            // 静默更新：提供"稍后更新"选项
+            content += `
+                <button class="update-btn minor" id="updateNowBtn">
+                    <i class="fas fa-redo"></i> 立即更新
+                </button>
+                <button class="update-btn later" id="updateLaterBtn">
+                    稍后
+                </button>
+            `;
+        }
+
+        content += `
+                </div>
+                <button class="update-close" id="updateCloseBtn">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        `;
+
+        this.updateBanner.innerHTML = content;
+        document.body.appendChild(this.updateBanner);
+
+        // 绑定事件
+        document.getElementById('updateNowBtn').onclick = () => {
+            this.performUpdate(updateInfo);
+        };
+
+        const closeBtn = document.getElementById('updateCloseBtn');
+        if (closeBtn) {
+            closeBtn.onclick = () => {
+                this.dismissUpdatePrompt(false);
+            };
+        }
+
+        const laterBtn = document.getElementById('updateLaterBtn');
+        if (laterBtn) {
+            laterBtn.onclick = () => {
+                this.dismissUpdatePrompt(true);
+            };
+        }
+
+        // 自动隐藏（非强制更新）
+        if (!isCritical) {
+            setTimeout(() => {
+                if (this.updateBanner && this.updateBanner.parentNode) {
+                    this.dismissUpdatePrompt(true);
+                }
+            }, 30000); // 30秒后自动隐藏
+        }
+
+        // 强制更新：5秒后自动刷新
+        if (isCritical) {
+            setTimeout(() => {
+                this.performUpdate(updateInfo);
+            }, 5000);
+        }
+    }
+
+    // 消除更新提示
+    dismissUpdatePrompt(remindLater = false) {
+        if (!this.updateBanner || !this.updateBanner.parentNode) return;
+
+        this.updateBanner.classList.add('fade-out');
+        setTimeout(() => {
+            if (this.updateBanner && this.updateBanner.parentNode) {
+                this.updateBanner.parentNode.removeChild(this.updateBanner);
+                this.updateBanner = null;
+            }
+        }, 300);
+
+        // 稍后提醒：10分钟后再次检查
+        if (remindLater) {
+            setTimeout(() => {
+                this.checkForUpdates(true).then(updateInfo => {
+                    if (updateInfo && updateInfo.hasUpdate) {
+                        this.showUpdatePrompt(updateInfo);
+                    }
+                });
+            }, 10 * 60 * 1000);
+        }
+    }
+
+
+    // 执行更新（清除所有缓存层）
+    performUpdate(updateInfo) {
+        // 1. 清除 Service Worker
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(registrations => {
+                registrations.forEach(reg => reg.unregister());
+            }).catch(console.warn);
+
+            // 清除 Cache Storage
+            if ('caches' in window) {
+                caches.keys().then(keys => {
+                    keys.forEach(key => caches.delete(key));
+                }).catch(console.warn);
+            }
+        }
+
+        // 2. 清除 localStorage 中的缓存标记
+        Object.keys(localStorage).forEach(key => {
+            if (key.includes('cache') || key.includes('version') || key.includes('static')) {
+                localStorage.removeItem(key);
+            }
+        });
+
+        // 3. 保存滚动位置
+        sessionStorage.setItem('preUpdateScrollY', window.scrollY.toString());
+
+        // 4. 强制刷新（带唯一时间戳）
+        const url = new URL(window.location.href);
+        url.searchParams.set('updated', Date.now());
+        window.location.replace(url.toString());
+    }
+
+    // 页面加载时恢复滚动位置
+    restoreScrollPosition() {
+        const scrollY = sessionStorage.getItem('preUpdateScrollY');
+        if (scrollY) {
+            setTimeout(() => {
+                window.scrollTo(0, parseInt(scrollY));
+                sessionStorage.removeItem('preUpdateScrollY');
+            }, 100);
+        }
+    }
+}
+
+
 class ChatClient {
     constructor() {
         this.globalWs = null;  // 全局 WebSocket 连接
@@ -49,6 +340,18 @@ class ChatClient {
         this.chatCreationLock = false; // 全局创建锁
 
 
+        // 🔧 语音消息相关
+        this.isRecording = false;
+        this.mediaRecorder = null;
+        this.audioChunks = [];
+        this.audioStream = null;
+        this.recordingStartTime = null;
+        this.recordingTimer = null;
+        this.maxRecordingTime = 60000; // 60秒
+        this.isCancelling = false;
+        this.voicePlayers = new Map(); // 存储音频播放器实例
+
+
         // 等待 DOM 加载完成后再初始化
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', () => this.init());
@@ -75,7 +378,7 @@ class ChatClient {
 
     // 修复 iOS Safari 输入框遮挡问题
     fixIOSSafariInput() {
-        if (!this.isIOS()) return;
+        if (!Utils.isIOS()) return;
 
         const messageInput = document.getElementById('messageInput');
         if (!messageInput) return;
@@ -136,7 +439,7 @@ class ChatClient {
 
     // 修复iOS PWA布局
     fixPWALayout() {
-        if (!this.isIOS()) return;
+        if (!Utils.isIOS()) return;
 
         // 检测是否为standalone模式
         if (this.isPWAStandaloneMode()) {
@@ -271,6 +574,8 @@ class ChatClient {
             // 移动端优化
             if (Utils.isMobile()) {
                 this.setupMobileOptimizations();
+                // 🔧 关键修复：初始化移动端音频上下文
+                this.initAudioContextForMobile();
             }
 
             // 🔧 关键修复：调用 iOS 专用修复
@@ -281,6 +586,12 @@ class ChatClient {
 
             // 恢复滚动位置（页面刷新后）
             this.restoreScrollPosition();
+
+            // this.checkAppVersion()
+
+            // 🔧 关键修复：初始化版本管理
+            await this.initVersionManagement();
+
 
             // 设置@功能监听
             this.setupAtMentionListener();
@@ -293,6 +604,9 @@ class ChatClient {
 
             // 设置用户交互监听器以恢复音频
             this.setupUserInteractionListeners();
+
+            // 🔧 初始化语音消息功能
+            this.initVoiceMessage();
 
             console.log('ChatClient 初始化完成');
         } catch
@@ -1128,7 +1442,7 @@ class ChatClient {
             if (this.shouldPlayNotificationSound()) {
                 this.playNotificationSound();
             }
-            if (this.isIOS() || Utils.isMobile()) {
+            if (Utils.isIOS() || Utils.isMobile()) {
                 this.vibrateOnNewMessage();
             }
             return;
@@ -1238,7 +1552,7 @@ class ChatClient {
         }
 
         // 震动提示（移动端）
-        if (this.isIOS() || Utils.isMobile()) {
+        if (Utils.isIOS() || Utils.isMobile()) {
             this.vibrateOnNewMessage();
         }
     }
@@ -2726,6 +3040,10 @@ class ChatClient {
                 break;
 
             case 'voice':
+                this.renderVoiceMessage(message, container);
+                break
+
+            case 'audio':
                 if (message.file_info?.url) {
                     const audio = document.createElement('audio');
                     audio.src = message.file_info.url;
@@ -2736,6 +3054,7 @@ class ChatClient {
                     container.textContent = '[语音加载失败]';
                 }
                 break;
+
 
             case 'location':
                 if (message.file_info?.url) {
@@ -3132,7 +3451,7 @@ class ChatClient {
             if (user.id === this.currentUser.id) return; // 排除自己
 
             html += `
-            <div class="user-list-item" data-user-id="${user.id}" onclick="chatClient.selectUserForChat(${user.id})">
+            <div class="user-list-item" data-user-id="${user.id}" onclick="chatClient.showUserProfile(${user.id})">
                 <img src="${user.avatar_url || '/static/images/default-avatar.png'}" 
                      alt="${user.real_name || user.username}" class="user-list-avatar">
                 <div class="user-list-info">
@@ -3912,13 +4231,12 @@ class ChatClient {
     }
 
 
-    // 清除静态文件缓存（增强版）
+    // 优化清除缓存方法（使用版本管理器）
     clearStaticCache() {
         return new Promise((resolve) => {
-            // 显示确认对话框
             this.showConfirmDialog(
                 '清除缓存',
-                '确定要清除页面缓存吗？<br><small style="color: var(--text-light);">这将清除本地数据并强制重新加载所有资源</small>',
+                '确定要清除所有缓存并重新加载最新资源吗？<br><small style="color: var(--text-light);">这将刷新页面并强制加载最新版本</small>',
                 'confirm'
             ).then((confirmed) => {
                 if (!confirmed) {
@@ -3926,121 +4244,221 @@ class ChatClient {
                     return;
                 }
 
-                // 显示加载指示器
                 this.showLoading();
 
                 try {
-                    // 1. 清除 Service Worker 缓存
-                    this.clearServiceWorkerCache();
+                    // 使用版本管理器执行更新
+                    versionManager.performUpdate({
+                        forceUpdate: true,
+                        updateMessage: '手动清除缓存并更新'
+                    });
 
-                    // 2. 清除所有本地存储
-                    this.clearAllStorage();
-
-                    // 3. 清除网络缓存（通过 Cache API）
-                    this.clearNetworkCache();
-
-                    // 4. 延迟后强制刷新页面（带时间戳参数）
-                    setTimeout(() => {
-                        this.forceReloadWithCacheBust();
-                        resolve(true);
-                    }, 800);
-
+                    resolve(true);
                 } catch (error) {
                     console.error('清除缓存失败:', error);
                     this.hideLoading();
-                    this.showError('清除失败 ' + ' 清除缓存时发生错误: ' + (error.error || error.message || '未知错误'));
+                    this.showError('清除失败: ' + (error.message || '未知错误'));
                     resolve(false);
                 }
             });
         });
     }
 
-    // 清除 Service Worker 缓存
-    clearServiceWorkerCache() {
+    // 清除所有缓存层
+    clearAllCaches() {
+        const timestamp = Date.now();
+
+        // 1. 清除 Service Worker
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(registrations => {
-                registrations.forEach(registration => {
-                    registration.unregister().catch(console.error);
-                });
-            }).catch(console.error);
+                registrations.forEach(reg => reg.unregister());
+            }).catch(console.warn);
 
-            // 清除所有 Cache Storage
+            // 清除 Cache Storage
             if ('caches' in window) {
                 caches.keys().then(keys => {
-                    keys.forEach(key => {
-                        caches.delete(key).catch(console.error);
-                    });
-                }).catch(console.error);
+                    keys.forEach(key => caches.delete(key));
+                });
             }
         }
-    }
 
-    // 清除所有本地存储
-    clearAllStorage() {
-        // 保存必要数据（如当前聊天室ID）
-        const currentRoomId = this.currentRoomId;
+        // 2. 清除 localStorage 中的缓存标记
+        Object.keys(localStorage).forEach(key => {
+            if (key.includes('cache') || key.includes('version') || key.includes('static')) {
+                localStorage.removeItem(key);
+            }
+        });
 
-        // 清除所有存储
-        // localStorage.clear();
+        // 3. 清除 sessionStorage（保留必要数据）
+        const currentRoomId = sessionStorage.getItem('lastRoomId');
         sessionStorage.clear();
-
-        // 恢复必要数据
         if (currentRoomId) {
-            sessionStorage.setItem('lastRoomId', currentRoomId.toString());
+            sessionStorage.setItem('lastRoomId', currentRoomId);
         }
-    }
 
-    // 清除网络缓存
-    clearNetworkCache() {
-        // 尝试清除 HTTP 缓存（通过重新请求资源）
+        // 4. 清除 IndexedDB（如果使用）
+        if ('indexedDB' in window) {
+            indexedDB.databases().then(dbs => {
+                dbs.forEach(db => {
+                    if (db.name.includes('cache') || db.name.includes('static')) {
+                        indexedDB.deleteDatabase(db.name);
+                    }
+                });
+            }).catch(console.warn);
+        }
+
+        // 5. 清除内存缓存（通过重新请求资源）
         const resources = [
             '/static/css/chat.css',
             '/static/js/chat.js',
             '/static/js/api.js',
             '/static/js/utils.js',
-            '/static/js/admin.js'
+            '/static/js/admin.js',
+            '/static/js/spark-md5.min.js'
         ];
 
         resources.forEach(url => {
-            fetch(url, {
+            // 使用 fetch 强制重新验证
+            fetch(url + `?cacheBust=${timestamp}`, {
                 method: 'GET',
-                cache: 'reload',
-                headers: {'Cache-Control': 'no-cache, no-store, must-revalidate'}
+                cache: 'reload', // 强制从网络获取
+                headers: {
+                    'Cache-Control': 'no-cache, no-store, must-revalidate',
+                    'Pragma': 'no-cache',
+                    'Expires': '0'
+                }
             }).catch(() => {
                 // 忽略错误，继续执行
+                console.warn('预热资源失败:', url);
             });
         });
     }
 
-    // 强制刷新页面并绕过缓存
-    forceReloadWithCacheBust() {
-        // 构建带时间戳的 URL
+    // 强制硬刷新（绕过所有缓存）
+    forceHardReload() {
+        // 🔧 关键修复：使用 location.replace + 时间戳 + reload(true)
         const url = new URL(window.location.href);
-
-        // 移除旧的缓存参数
-        url.searchParams.delete('v');
-        url.searchParams.delete('cacheBust');
-
-        // 添加新的时间戳参数
         url.searchParams.set('cacheBust', Date.now());
 
-        // 保存当前滚动位置（用于恢复）
-        const scrollY = window.scrollY;
-        sessionStorage.setItem('preReloadScrollY', scrollY.toString());
+        // 保存滚动位置
+        sessionStorage.setItem('preReloadScrollY', window.scrollY.toString());
 
-        // 强制重定向（不使用 location.reload 因为它可能被缓存）
+        // 先 replace URL，再强制刷新
         window.location.replace(url.toString());
+
+        // 双重保险：1秒后强制 reload(true)
+        setTimeout(() => {
+            location.reload(true); // true = 绕过缓存
+        }, 1000);
     }
 
-    // 在页面加载时恢复滚动位置
+    // 恢复滚动位置（在 init 方法中调用）
     restoreScrollPosition() {
         const scrollY = sessionStorage.getItem('preReloadScrollY');
         if (scrollY) {
-            setTimeout(() => {
+            // 使用 requestAnimationFrame 确保在渲染后滚动
+            requestAnimationFrame(() => {
                 window.scrollTo(0, parseInt(scrollY));
                 sessionStorage.removeItem('preReloadScrollY');
-            }, 100);
+            });
         }
+    }
+
+
+    // 检查应用版本（启动时调用）
+    async checkAppVersion() {
+        try {
+            // 从 API 获取当前版本
+            const response = await fetch('/api/chat/version/?t=' + Date.now(), {
+                cache: 'no-cache'
+            });
+
+            if (response.ok) {
+                const versionData = await response.json();
+                const serverVersion = versionData.version;
+                const clientVersion = sessionStorage.getItem('appVersion') || 'unknown';
+
+                // 版本不同且不是首次加载
+                if (clientVersion !== 'unknown' && clientVersion !== serverVersion) {
+                    console.log(`版本更新检测: ${clientVersion} → ${serverVersion}`);
+
+                    // 显示更新提示
+                    this.showVersionUpdatePrompt(serverVersion);
+                } else {
+                    sessionStorage.setItem('appVersion', serverVersion);
+                }
+            }
+        } catch (error) {
+            console.warn('版本检测失败:', error);
+        }
+    }
+
+    // 显示版本更新提示
+    showVersionUpdatePrompt(newVersion) {
+        // 创建更新提示
+        const updateBanner = document.createElement('div');
+        updateBanner.className = 'version-update-banner';
+        updateBanner.innerHTML = `
+            <div class="update-content">
+                <i class="fas fa-sync-alt"></i>
+                <span>检测到新版本 ${newVersion}，点击刷新以获取最新功能</span>
+                <button class="update-btn" id="updateNowBtn">立即更新</button>
+                <button class="update-close" id="updateLaterBtn">×</button>
+            </div>
+        `;
+
+        document.body.appendChild(updateBanner);
+
+        // 绑定事件
+        document.getElementById('updateNowBtn').onclick = () => {
+            this.clearAllCaches();
+            location.reload(true);
+        };
+
+        document.getElementById('updateLaterBtn').onclick = () => {
+            updateBanner.remove();
+        };
+
+        // 5秒后自动隐藏
+        setTimeout(() => {
+            if (updateBanner.parentNode) {
+                updateBanner.classList.add('fade-out');
+                setTimeout(() => {
+                    if (updateBanner.parentNode) {
+                        updateBanner.remove();
+                    }
+                }, 300);
+            }
+        }, 5000);
+    }
+
+
+    // 初始化版本管理
+    async initVersionManagement() {
+        // 页面加载时恢复滚动位置
+        versionManager.restoreScrollPosition();
+
+        // 首次检查版本（立即执行）
+        const updateInfo = await versionManager.checkForUpdates(true);
+        if (updateInfo && updateInfo.hasUpdate) {
+            versionManager.showUpdatePrompt(updateInfo);
+        }
+
+        // 设置定期检查（每5分钟）
+        setInterval(async () => {
+            const updateInfo = await versionManager.checkForUpdates();
+            if (updateInfo && updateInfo.hasUpdate) {
+                versionManager.showUpdatePrompt(updateInfo);
+            }
+        }, versionManager.CHECK_INTERVAL);
+
+        // 监听在线状态变化，恢复连接时检查版本
+        window.addEventListener('online', async () => {
+            const updateInfo = await versionManager.checkForUpdates(true);
+            if (updateInfo && updateInfo.hasUpdate) {
+                versionManager.showUpdatePrompt(updateInfo);
+            }
+        });
     }
 
 
@@ -4241,14 +4659,14 @@ class ChatClient {
         }
 
 
-        // 语音按钮事件（简化版，实际项目可能需要录音功能）
-        const voiceBtn = document.getElementById('voiceBtn');
-        if (voiceBtn) {
-            voiceBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                alert('语音消息功能将在后续版本中实现');
-            });
-        }
+        // // 语音按钮事件（简化版，实际项目可能需要录音功能）
+        // const voiceBtn = document.getElementById('voiceBtn');
+        // if (voiceBtn) {
+        //     voiceBtn.addEventListener('click', (e) => {
+        //         e.preventDefault();
+        //         this.showSuccess('语音消息功能将在后续版本中实现');
+        //     });
+        // }
 
 
         // 搜索聊天
@@ -6925,7 +7343,7 @@ class ChatClient {
         this.updateDocumentTitle(count);
 
         // 4. iOS PWA 专用：更新应用图标角标（需要原生支持，这里用降级方案）
-        if (this.isIOS() && this.isPWAStandaloneMode()) {
+        if (Utils.isIOS() && this.isPWAStandaloneMode()) {
             // iOS 16.4+ 支持 setAppBadge
             if ('setAppBadge' in navigator) {
                 if (count > 0) {
@@ -7168,6 +7586,928 @@ class ChatClient {
         this.closeAtPanel();
     }
 
+
+    // 初始化语音消息功能
+    initVoiceMessage() {
+        const voiceBtn = document.getElementById('voiceBtn');
+        const voiceRecorderOverlay = document.getElementById('voiceRecorderOverlay');
+        const voiceRecorderSendBtn = document.getElementById('voiceRecorderSendBtn');
+        const voiceRecorderBackdrop = document.querySelector('.voice-recorder-backdrop');
+
+        if (!voiceBtn || !voiceRecorderOverlay || !voiceRecorderBackdrop) return;
+
+        // 检查浏览器支持
+        const isVoiceSupported =
+            navigator.mediaDevices &&
+            navigator.mediaDevices.getUserMedia &&
+            window.MediaRecorder &&
+            (location.protocol === 'https:' ||
+                location.hostname === 'localhost' ||
+                location.hostname === '127.0.0.1');
+
+        if (!isVoiceSupported) {
+            voiceBtn.style.display = 'none';
+            console.warn('语音消息功能不可用');
+            return;
+        }
+
+        // 🔧 关键修复：电脑端和移动端统一使用录音界面
+        voiceBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            if (this.isRecording) {
+                // 正在录音，停止并发送
+                this.stopRecording();
+            } else {
+                // 未录音，开始录音
+                this.startRecording();
+            }
+        });
+
+        // 🔧 关键修复：移动端长按录音（保留原有交互）
+        if (Utils.isMobile()) {
+            let touchStartY = 0;
+            let isLongPress = false;
+            let longPressTimer = null;
+
+            voiceBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                touchStartY = e.touches[0].clientY;
+                voiceBtn.classList.add('recording');
+                document.querySelector('.voice-btn-text').style.display = 'none';
+                document.querySelector('.voice-btn-recording-text').style.display = 'block';
+
+                // 长按200ms开始录音
+                longPressTimer = setTimeout(() => {
+                    isLongPress = true;
+                    this.startRecording();
+                }, 200);
+            });
+
+            voiceBtn.addEventListener('touchmove', (e) => {
+                if (!this.isRecording || !isLongPress) return;
+
+                e.preventDefault();
+                const touchY = e.touches[0].clientY;
+                const diffY = touchStartY - touchY;
+
+                // 上滑超过50px取消录音
+                if (diffY > 50 && !this.isCancelling) {
+                    this.isCancelling = true;
+                    voiceRecorderOverlay.classList.add('cancelling');
+                } else if (diffY <= 50 && this.isCancelling) {
+                    this.isCancelling = false;
+                    voiceRecorderOverlay.classList.remove('cancelling');
+                }
+            });
+
+            voiceBtn.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                clearTimeout(longPressTimer);
+                voiceBtn.classList.remove('recording');
+                document.querySelector('.voice-btn-text').style.display = 'block';
+                document.querySelector('.voice-btn-recording-text').style.display = 'none';
+
+                if (!isLongPress) return;
+                isLongPress = false;
+
+                if (this.isCancelling) {
+                    this.cancelRecording();
+                } else if (this.isRecording) {
+                    this.stopRecording(); // 松开手指停止并发送
+                }
+            });
+        }
+
+        // 点击覆盖层背景取消录音
+        voiceRecorderBackdrop.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (this.isRecording && !this.isCancelling) {
+                this.cancelRecording();
+            }
+        });
+
+        // 点击发送按钮停止并发送（电脑端）
+        if (voiceRecorderSendBtn) {
+            voiceRecorderSendBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (this.isRecording) {
+                    this.stopRecording();
+                }
+            });
+        }
+
+        // 点击取消区域取消录音
+        const cancelArea = document.querySelector('.voice-recorder-cancel-area');
+        if (cancelArea) {
+            cancelArea.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (this.isRecording) {
+                    this.cancelRecording();
+                }
+            });
+        }
+    }
+
+    // 录音开始震动反馈
+    startRecordingVibration() {
+        if ('vibrate' in navigator && Utils.isMobile()) {
+            navigator.vibrate([50, 30, 50]); // 短-短-短震动
+        }
+    }
+
+    // 录音结束震动反馈
+    stopRecordingVibration() {
+        if ('vibrate' in navigator && Utils.isMobile()) {
+            navigator.vibrate(100); // 长震动
+        }
+    }
+
+
+    // 开始录音
+    async startRecording() {
+        if (this.isRecording) return;
+
+        // 检查浏览器支持（双重检查）
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            this.showError('浏览器不支持录音功能');
+            return;
+        }
+
+        if (location.protocol !== 'https:' &&
+            location.hostname !== 'localhost' &&
+            location.hostname !== '127.0.0.1') {
+            this.showError('录音功能需要在 HTTPS 环境下使用');
+            return;
+        }
+
+        if (!window.MediaRecorder) {
+            this.showError('浏览器不支持录音功能');
+            return;
+        }
+
+        try {
+            // 🔧 关键修复：电脑端和移动端使用不同的采样率
+            const isMobile = Utils.isMobile();
+            const isIOS = Utils.isIOS();
+            const isAndroid = Utils.isAndroid();
+
+            // 音频约束（移动端使用 44.1kHz 采样率）
+            const audioConstraints = {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                sampleRate: isMobile ? 44100 : 48000
+            };
+
+
+            // 请求麦克风权限
+            this.audioStream = await navigator.mediaDevices.getUserMedia({audio: audioConstraints});
+
+            // 智能选择 MIME 类型（iOS 优先 AAC/MP4）
+            let mimeType = '';
+            const supportedTypes = MediaRecorder.isTypeSupported.bind(MediaRecorder);
+
+            // iOS 优先选择 AAC/MP3
+            if (isIOS) {
+                // iOS 推荐格式：audio/mp4 (AAC) 或 audio/mpeg
+                const iosTypes = [
+                    'audio/mp4;codecs=mp4a.40.2',  // AAC-LC (最兼容)
+                    'audio/mp4;codecs=mp4a.40.5',  // HE-AAC
+                    'audio/mpeg',                   // MP3
+                    'audio/x-m4a'                   // Apple 专用
+                    // 'audio/webm;codecs=opus'           // 降级
+                ];
+                for (const type of iosTypes) {
+                    if (supportedTypes(type)) {
+                        mimeType = type;
+                        break;
+                    }
+                }
+                console.log('iOS 最终 mimeType:', mimeType || '默认');
+                // this.showSuccess('iOS 检测到的 mimeType: ' + (mimeType || '默认'));
+            }
+            // Android 优先 WebM (Opus)
+            else if (isAndroid) {
+                // 安卓端支持的音频格式
+                const androidTypes = [
+                    'audio/mpeg',
+                    'audio/webm;codecs=opus',
+                    'audio/webm'
+                ];
+                for (const type2 of androidTypes) {
+                    if (supportedTypes(type2)) {
+                        mimeType = type2;
+                        break;
+                    }
+                }
+                console.log('Android 检测到的 mimeType:', mimeType || '默认');
+                // this.showSuccess('Android 检测到的 mimeType: ' + (mimeType || '默认'));
+            }
+            // 桌面端优先 WebM (Opus)
+            else {
+                const desktopTypes = [
+                    'audio/mpeg',
+                    'audio/webm;codecs=opus',
+                    'audio/webm'
+                ];
+                for (const type3 of desktopTypes) {
+                    if (supportedTypes(type3)) {
+                        mimeType = type3
+                        break
+                    }
+                }
+                console.log('桌面检测到的 mimeType:', mimeType || '默认');
+                // this.showSuccess('桌面检测到的 mimeType: ' + (mimeType || '默认'));
+            }
+
+
+            // 创建 MediaRecorder
+            const options = {
+                audioBitsPerSecond: isMobile ? 128000 : 256000 // 移动端降低比特率
+            };
+
+            if (mimeType) options.mimeType = mimeType;
+
+            this.mediaRecorder = new MediaRecorder(this.audioStream, options);
+            this.audioChunks = [];
+
+            this.mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    this.audioChunks.push(event.data);
+                }
+            };
+
+            this.mediaRecorder.onstop = () => {
+                this.audioStream.getTracks().forEach(track => track.stop());
+            };
+
+            // 🔧 关键修复：开始录音前确保录音界面已准备好
+            this.showRecordingOverlay();
+
+            // 开始录音
+            this.mediaRecorder.start(100);
+            this.isRecording = true;
+            this.isCancelling = false;
+            this.recordingStartTime = Date.now();
+
+            // 移动端震动反馈
+            this.startRecordingVibration();
+
+
+            // 更新录音时间
+            this.updateRecordingTime();
+
+            // 60秒后自动停止
+            setTimeout(() => {
+                if (this.isRecording) {
+                    this.stopRecording();
+                }
+            }, this.maxRecordingTime);
+
+        } catch (error) {
+            console.error('录音失败:', error);
+
+            let errorMessage = '录音失败';
+            if (error.name === 'NotAllowedError') {
+                errorMessage = '麦克风权限被拒绝，请在浏览器设置中允许访问麦克风';
+            } else if (error.name === 'NotFoundError') {
+                errorMessage = '未检测到麦克风设备，请检查设备连接';
+            } else if (error.name === 'NotReadableError') {
+                errorMessage = '麦克风正被其他应用占用，请关闭其他使用麦克风的程序';
+            } else if (error.name === 'OverconstrainedError') {
+                errorMessage = '麦克风配置错误，请检查设备设置';
+            } else if (error.message && error.message.includes('mimeType')) {
+                errorMessage = '浏览器不支持该音频格式，请尝试更新浏览器';
+            } else {
+                errorMessage = error.message || '请检查麦克风权限和设备连接';
+            }
+
+            this.showError('录音失败: ' + errorMessage);
+            this.isRecording = false;
+
+            // 隐藏录音界面
+            this.hideRecordingOverlay();
+        }
+    }
+
+    // 显示录音界面
+    showRecordingOverlay() {
+        const voiceRecorderOverlay = document.getElementById('voiceRecorderOverlay');
+        if (!voiceRecorderOverlay) return;
+
+        voiceRecorderOverlay.style.display = 'flex';
+        setTimeout(() => {
+            voiceRecorderOverlay.style.opacity = '1';
+            const panel = voiceRecorderOverlay.querySelector('.voice-recorder-panel');
+            if (panel) {
+                panel.style.transform = 'scale(1)';
+            }
+        }, 10);
+
+        // 🔧 关键修复：电脑端禁用页面滚动
+        if (!Utils.isMobile()) {
+            document.body.style.overflow = 'hidden';
+        }
+    }
+
+    // 隐藏录音界面
+    hideRecordingOverlay() {
+        const voiceRecorderOverlay = document.getElementById('voiceRecorderOverlay');
+        if (!voiceRecorderOverlay) return;
+
+        voiceRecorderOverlay.style.opacity = '0';
+        const panel = voiceRecorderOverlay.querySelector('.voice-recorder-panel');
+        if (panel) {
+            panel.style.transform = 'scale(0.9)';
+        }
+
+        setTimeout(() => {
+            voiceRecorderOverlay.style.display = 'none';
+
+            // 🔧 关键修复：恢复页面滚动
+            document.body.style.overflow = '';
+        }, 200);
+    }
+
+    // 停止录音
+    stopRecording() {
+        if (!this.isRecording || !this.mediaRecorder) return;
+
+        console.log('停止录音')
+
+        this.mediaRecorder.stop();
+        this.isRecording = false;
+
+        // 隐藏录音界面
+        const voiceRecorderOverlay = document.getElementById('voiceRecorderOverlay');
+        if (voiceRecorderOverlay) {
+            voiceRecorderOverlay.style.opacity = '0';
+            voiceRecorderOverlay.querySelector('.voice-recorder-panel').style.transform = 'scale(0.9)';
+            setTimeout(() => {
+                voiceRecorderOverlay.style.display = 'none';
+            }, 200);
+        }
+
+        // 清除定时器
+        if (this.recordingTimer) {
+            clearInterval(this.recordingTimer);
+            this.recordingTimer = null;
+        }
+
+        // 🔧 移动端震动反馈
+        if (Utils.isMobile()) {
+            this.stopRecordingVibration();
+        }
+
+        // 检查录音时长（至少1秒）
+        const recordingDuration = Date.now() - this.recordingStartTime;
+        if (recordingDuration < 1000) {
+            console.log('录音时间太短, 请至少录制1秒')
+            this.showError('录音时间太短，请至少录制1秒');
+            this.audioChunks = [];
+            return;
+        }
+
+        // 发送语音消息
+        if (this.audioChunks.length > 0) {
+            console.log('发送语音消息')
+            this.sendVoiceMessage();
+        } else {
+            console.log('没有录音数据')
+        }
+    }
+
+    // 取消录音
+    cancelRecording() {
+        if (!this.isRecording) return;
+
+        console.log('取消录音')
+
+
+        this.isRecording = false;
+        this.isCancelling = false;
+        this.mediaRecorder.stop();
+        this.audioStream.getTracks().forEach(track => track.stop());
+
+        // 隐藏录音界面
+        const voiceRecorderOverlay = document.getElementById('voiceRecorderOverlay');
+        if (voiceRecorderOverlay) {
+            voiceRecorderOverlay.classList.remove('cancelling');
+            voiceRecorderOverlay.style.opacity = '0';
+            voiceRecorderOverlay.querySelector('.voice-recorder-panel').style.transform = 'scale(0.9)';
+            setTimeout(() => {
+                voiceRecorderOverlay.style.display = 'none';
+            }, 200);
+        }
+
+        // 清除定时器
+        if (this.recordingTimer) {
+            clearInterval(this.recordingTimer);
+            this.recordingTimer = null;
+        }
+
+        // 清空录音数据
+        this.audioChunks = [];
+
+        // 显示取消提示
+        this.showToast('已取消录音', 'info');
+    }
+
+    // 更新录音时间
+    updateRecordingTime() {
+        if (!this.isRecording) return;
+
+        const voiceRecorderTime = document.getElementById('voiceRecorderTime');
+        if (!voiceRecorderTime) return;
+
+        const elapsed = Date.now() - this.recordingStartTime;
+        const seconds = Math.floor(elapsed / 1000);
+        const minutes = Math.floor(seconds / 60);
+        const displaySeconds = (seconds % 60).toString().padStart(2, '0');
+        const displayMinutes = minutes.toString().padStart(2, '0');
+
+        voiceRecorderTime.textContent = `${displayMinutes}:${displaySeconds}`;
+
+        this.recordingTimer = setTimeout(() => this.updateRecordingTime(), 100);
+    }
+
+    // 发送语音消息（添加 iOS 兼容标记）
+    async sendVoiceMessage() {
+        if (this.audioChunks.length === 0) {
+            console.error('录音内容为空');
+            this.showError('录音内容为空');
+            return;
+        }
+
+        // 创建音频文件
+        const audioBlob = new Blob(this.audioChunks, {type: this.mediaRecorder.mimeType || 'audio/webm'});
+        console.log('创建音频文件成功')
+
+        // 限制最小录音时长（1秒）
+        if (audioBlob.size < 5000) {
+            console.error('录音时间太短，请至少录制1秒');
+            this.showError('录音时间太短，请至少录制1秒');
+            return;
+        }
+
+        // 🔧 关键修复：根据设备类型设置文件扩展名
+        const isIOS = Utils.isIOS();
+        const isAndroid = Utils.isAndroid();
+
+        const extension = isIOS ? 'm4a' : isAndroid ? 'mp3' : 'webm';
+        const mimeType = isIOS ? 'audio/mp4' : (this.mediaRecorder.mimeType || 'audio/webm');
+
+        const audioFile = new File([audioBlob], `voice_${Date.now()}.${extension}`, {
+            type: mimeType,
+            lastModified: Date.now()
+        });
+
+        // 显示上传中消息
+        const tempMessageId = Date.now();
+        const uploadingMessage = {
+            id: tempMessageId,
+            temp_id: tempMessageId,
+            uploading_id: tempMessageId,
+            sender_id: this.currentUser.id,
+            sender_name: this.currentUser.username,
+            sender: this.currentUser,
+            content: '正在上传语音...',
+            timestamp: new Date().toISOString(),
+            is_read: true,
+            chat_room: parseInt(this.currentRoomId),
+            message_type: 'voice',
+            file_info: {
+                name: audioFile.name,
+                size: audioFile.size,
+                url: '/static/images/uploading.gif',
+                mime_type: audioFile.type,
+                is_ios_compatible: isIOS,  // 🔧 标记是否为 iOS 兼容格式
+                is_android_compatible: isAndroid // 标记是否为 android 兼容格式
+            },
+            is_temp: true
+        };
+
+        this.messages.push(uploadingMessage);
+        this.renderMessage(uploadingMessage, 'sent');
+        Utils.scrollToBottom(document.getElementById('messagesList'));
+
+        try {
+            // 上传文件
+            const uploadResult = await API.uploadFile(audioFile);
+
+            // 通过 WebSocket 发送
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                const wsMessage = {
+                    type: 'chat_message',
+                    content: '[语音]',
+                    message_type: 'voice',
+                    file_id: uploadResult?.file_id || uploadResult?.id,
+                    temp_id: tempMessageId,
+                    // 🔧 传递设备信息以便后端转码
+                    device_info: {
+                        is_ios: isIOS,
+                        is_android: Utils.isAndroid(),
+                        user_agent: navigator.userAgent
+                    }
+                };
+
+                this.ws.send(JSON.stringify(wsMessage));
+                console.log('通过 WebSocket 发送语音成功')
+            } else {
+                // WebSocket 不可用时加入队列
+                this.messageQueue.push({
+                    chat_room: parseInt(this.currentRoomId),
+                    content: '[语音]',
+                    message_type: 'voice',
+                    file_id: uploadResult?.file_id || uploadResult?.id,
+                    temp_id: tempMessageId,
+                    device_info: {
+                        is_ios: isIOS,
+                        is_android: Utils.isAndroid(),
+                        user_agent: navigator.userAgent
+                    }
+                });
+                this.showError('网络连接不稳定，消息将在连接恢复后发送');
+            }
+
+            // 本地预更新聊天室最后一条消息
+            this.updateChatRoomLastMessage(this.currentRoomId, '[语音消息]', uploadingMessage.timestamp);
+
+        } catch (error) {
+            console.error('发送语音消息失败:', error);
+            this.showError('发送语音消息失败: ' + (error.message || '未知错误'));
+
+            // 删除上传中的消息
+            this.messages = this.messages.filter(msg => msg.temp_id !== tempMessageId);
+            this.renderChatHistory();
+        }
+    }
+
+
+    // 渲染语音消息
+    renderVoiceMessage(message, container) {
+        const template = document.getElementById('voiceMessageTemplate');
+        if (!template) return;
+
+        const voiceElement = template.content.cloneNode(true).firstElementChild;
+        voiceElement.dataset.messageId = message.id || message.message_id;
+
+        // 设置语音时长
+        const durationElement = voiceElement.querySelector('.voice-duration');
+        let duration = 0;
+
+        // 1. 优先使用 message.voice_duration（来自Message模型）
+        if (message.voice_duration) {
+            duration = Math.min(Math.floor(message.voice_duration), 59);
+        }
+        // 2. 其次使用 file_info.duration（来自FileUpload模型）
+        else if (message.file_info?.duration) {
+            duration = Math.min(Math.floor(message.file_info.duration), 59);
+        }
+        // 3. 最后使用估算（兼容旧数据）
+        else if (message.file_info?.size) {
+            // 估算：每8KB约1秒（降低比特率后）
+            duration = Math.min(Math.max(Math.floor(message.file_info.size / 8000), 1), 59);
+        } else {
+            duration = 5;
+        }
+
+        console.log('语音精确时长:', duration, '秒 (来源:',
+            message.voice_duration ? 'message.voice_duration' :
+                (message.file_info?.duration ? 'file_info.duration' : '估算'), ')');
+
+        durationElement.textContent = `${duration}"`;
+
+        // 🔧 关键修复：智能选择音频源（优先 iOS 兼容格式）
+        const audioElement = voiceElement.querySelector('.voice-audio');
+        if (message.file_info?.url) {
+            // 检测设备类型
+            const isIOS = Utils.isIOS();
+            const isMobible = Utils.isMobile();
+            const isAndroid = Utils.isAndroid();
+            let audioUrl = message.file_info.url;
+
+            // OS 设备优先使用 MP3 格式（如果后端已提供）
+            if (isIOS && message.file_info?.mp3_url) {
+                audioUrl = message.file_info.mp3_url;
+                console.log('iOS设备使用MP3格式:', audioUrl);
+            }
+            // iOS 设备但只有 WebM，尝试请求 MP3 格式（触发后端转码）
+            else if (isMobible && audioUrl.includes('.webm')) {
+                // 🔧 关键修复2: 正确获取 file_id（优先使用 message.file_id）
+                const fileId = message.file_info?.file_id || message.file_info?.id || message.file_id;
+
+                if (fileId) {
+                    // 尝试获取 MP3 格式
+                    // 构建查询参数
+                    const params = new URLSearchParams({
+                        format: 'mp3'
+                    });
+                    const mp3CheckUrl = `/api/chat/audio/${fileId}/format/`;
+                    console.log('尝试获取 MP3 格式:', mp3CheckUrl);
+
+                    fetch(mp3CheckUrl, {
+                        headers: TokenManager.getHeaders()
+                    })
+                        .then(response => {
+                            if (!response.ok) {
+                                console.error('获取 MP3 状态失败:', response.status);
+                                console.error('获取 MP3 状态失败response:', response);
+                                // this.showError('获取 MP3 失败:' + response);
+                                throw new Error(`HTTP ${response.status}`);
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            console.log('MP3 格式检查结果:', data);
+
+                            if (data.is_ready && data.url) {
+                                // 转码已完成，更新音频源
+                                audioUrl = data.url + `?t=${Date.now()}`;
+                                audioElement.src = audioUrl;
+                                console.log('iOS 设备获取到 MP3 格式:', audioUrl);
+                            } else if (data.converting) {
+                                // 转码中，保持原始 URL，稍后重试
+                                console.log('MP3 格式转换中，稍后重试...');
+                                setTimeout(() => {
+                                    // 5秒后重试
+                                    fetch(mp3CheckUrl, {
+                                        headers: TokenManager.getHeaders()
+                                    })
+                                        .then(response => response.json())
+                                        .then(data => {
+                                            if (data.is_ready && data.url) {
+                                                audioElement.src = data.url + `?t=${Date.now()}`;
+                                                console.log('重试成功，使用 MP3 格式:', data.url);
+                                            }
+                                        })
+                                        .catch(err => {
+                                            console.warn('重试获取 MP3 失败:', err);
+                                        });
+                                }, 5000);
+                            }
+                        })
+                        .catch(err => {
+                            console.warn('MP3 格式检查失败:', err);
+                            // 保持原始 URL，让用户尝试播放（部分 iOS 版本可能支持）
+                        });
+                } else {
+                    console.warn('无法获取 file_id，无法请求 MP3 格式');
+                }
+
+            }
+
+            // 添加时间戳防止缓存
+            audioUrl = audioUrl.includes('?')
+                ? `${audioUrl}&t=${Date.now()}`
+                : `${audioUrl}?t=${Date.now()}`;
+
+            audioElement.src = audioUrl;
+            audioElement.crossOrigin = 'anonymous'; // 处理跨域
+
+            // iOS 必需属性
+            if (isIOS) {
+                audioElement.setAttribute('playsinline', 'playsinline');
+                audioElement.setAttribute('webkit-playsinline', 'webkit-playsinline');
+            }
+
+            // 🔧 关键修复3: 添加 canplaythrough 事件确保音频可播放
+            audioElement.addEventListener('canplaythrough', () => {
+                console.log('音频已准备好');
+            }, {once: true});
+
+            // 🔧 错误处理（详细日志 + 降级方案）
+            audioElement.addEventListener('error', (e) => {
+                const error = audioElement.error;
+                let errorMsg = '未知错误';
+                if (error) {
+                    switch (error.code) {
+                        case MediaError.MEDIA_ERR_ABORTED:
+                            errorMsg = '加载中止';
+                            break;
+                        case MediaError.MEDIA_ERR_NETWORK:
+                            errorMsg = '网络错误';
+                            break;
+                        case MediaError.MEDIA_ERR_DECODE:
+                            errorMsg = '解码失败';
+                            break;
+                        case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+                            errorMsg = '不支持的音频格式';
+                            break;
+                    }
+                }
+
+                console.error('音频加载错误:', errorMsg, {
+                    src: audioElement.src,
+                    networkState: audioElement.networkState,
+                    readyState: audioElement.readyState,
+                    error: error?.code
+                });
+
+
+                // 智能降级提示
+                if (isIOS && audioUrl.includes('.webm')) {
+                    this.showToast(`iOS 不支持 WebM 格式，建议发送方重发语音: ${errorMsg}`, 'error');
+                } else if (isAndroid && audioUrl.includes('.webm')) {
+                    this.showToast(`Android 不支持 WebM 格式，建议发送方重发语音: ${errorMsg}`, 'error');
+                } else {
+                    console.log('音频播放失败: ', errorMsg)
+                    // this.showToast(`音频播放失败: ${errorMsg}`, 'error');
+                }
+
+                // 🔧 降级方案：提供下载链接
+                this.offerAudioDownload(message);
+
+                // 可选：在 UI 上显示错误提示
+                const playBtn = voiceElement.querySelector('.voice-play-btn');
+                if (playBtn) playBtn.title = `播放失败: ${errorMsg}`;
+
+                // 尝试重新加载
+                // setTimeout(() => {
+                //     audioElement.load();
+                // }, 500);
+            });
+
+            // 🔧 关键修复5: iOS 特殊处理 - 添加 loadedmetadata 事件
+            if (Utils.isIOS()) {
+                audioElement.addEventListener('loadedmetadata', () => {
+                    console.log('iOS: 音频元数据已加载');
+                }, {once: true});
+            }
+        }
+
+        // 播放按钮事件
+        const playBtn = voiceElement.querySelector('.voice-play-btn');
+        playBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.toggleVoicePlay(voiceElement, audioElement, playBtn, message);
+        };
+
+        // 进度和结束事件...
+        audioElement.ontimeupdate = () => {
+            if (audioElement.duration) {
+                const progress = (audioElement.currentTime / audioElement.duration) * 100;
+                const progressBar = voiceElement.querySelector('.voice-progress-bar');
+                if (progressBar) {
+                    progressBar.style.width = `${progress}%`;
+                }
+            }
+        };
+
+        // 播放结束
+        audioElement.onended = () => {
+            playBtn.classList.remove('playing');
+            const progressBar = voiceElement.querySelector('.voice-progress-bar');
+            if (progressBar) {
+                progressBar.style.width = '0%';
+            }
+        };
+
+        container.appendChild(voiceElement);
+    }
+
+
+    // 切换语音播放（增强错误处理）
+    toggleVoicePlay(voiceElement, audioElement, playBtn, message) {
+        // 暂停其他正在播放的语音
+        this.voicePlayers.forEach((player, key) => {
+            if (player !== audioElement && !player.paused) {
+                player.pause();
+                const otherBtn = document.querySelector(`.message-voice[data-message-id="${key}"] .voice-play-btn`);
+                if (otherBtn) {
+                    otherBtn.classList.remove('playing');
+                    const otherProgress = document.querySelector(`.message-voice[data-message-id="${key}"] .voice-progress-bar`);
+                    if (otherProgress) otherProgress.style.width = '0%';
+                }
+            }
+        });
+
+        if (!audioElement.paused) {
+            audioElement.pause();
+            playBtn.classList.remove('playing');
+            return;
+        }
+
+        // 暂停其他音频
+        this.voicePlayers.forEach((player) => {
+            if (player !== audioElement) player.pause();
+        });
+
+
+        // iOS 专用：确保 AudioContext 已恢复（如果使用 Web Audio）
+        if (Utils.isIOS() && this.audioContextForMobile) {
+            if (this.audioContextForMobile.state === 'suspended') {
+                this.audioContextForMobile.resume().catch(console.warn);
+            }
+        }
+
+
+        // 尝试播放
+        const attemptPlay = () => {
+            audioElement.play().catch(err => {
+                console.error('播放失败:', err);
+                // 根据错误类型给出提示
+                if (err.name === 'NotSupportedError') {
+                    this.showToast('您的设备不支持此音频格式', 'error');
+                    // 提供下载按钮
+                    this.offerAudioDownload(message);
+                } else if (err.name === 'NotAllowedError') {
+                    this.showToast('请先与页面交互后再试', 'error');
+                } else {
+                    // 通用重试
+                    setTimeout(() => {
+                        audioElement.load();
+                        audioElement.play().catch(err2 => {
+                            console.error('重试播放失败:', err2);
+                            this.showToast('播放失败，请检查网络或稍后重试', 'error');
+                            this.offerAudioDownload(message);
+                        });
+                    }, 500);
+                }
+            });
+        };
+
+        // 智能加载策略 如果音频已加载元数据，直接播放；否则等待
+        if (audioElement.readyState >= HTMLMediaElement.HAVE_METADATA) {
+            attemptPlay();
+        } else {
+            audioElement.addEventListener('loadedmetadata', attemptPlay, {once: true});
+            audioElement.load(); // 强制加载
+
+            // 超时处理
+            setTimeout(() => {
+                audioElement.removeEventListener('loadedmetadata', attemptPlay);
+                attemptPlay(); // 超时后强制尝试
+            }, 3000);
+        }
+
+        playBtn.classList.add('playing');
+        const messageId = voiceElement.dataset.messageId;
+        this.voicePlayers.set(messageId, audioElement);
+
+
+    }
+
+
+    // 🔧 新增：提供音频下载（降级方案）
+    offerAudioDownload(message) {
+        if (!message.file_info?.url) return;
+        console.log('offerAudioDownload', message.file_info?.url);
+        // return
+
+        // 创建下载按钮
+        const downloadBtn = document.createElement('button');
+        downloadBtn.className = 'voice-download-btn';
+        downloadBtn.innerHTML = '<i class="fas fa-download"></i> 下载音频';
+        downloadBtn.onclick = (e) => {
+            e.stopPropagation();
+            const link = document.createElement('a');
+            link.href = message.file_info.url;
+            link.download = `voice_${Date.now()}.${message.file_info.url.split('.').pop() || 'mp3'}`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            downloadBtn.remove();
+        };
+
+        // 添加到语音消息容器
+        const container = downloadBtn.closest('.message-content') || downloadBtn.parentElement;
+        if (container) {
+            container.appendChild(downloadBtn);
+        }
+    }
+
+
+    // 初始化音频上下文（用于移动端播放）
+    initAudioContextForMobile() {
+        if (this.audioContextForMobile) return;
+
+        try {
+            // 创建音频上下文（用于移动端播放）
+            this.audioContextForMobile = new (window.AudioContext || window.webkitAudioContext)();
+
+            // 尝试恢复（需要用户手势）
+            const resumeAudio = () => {
+                if (this.audioContextForMobile && this.audioContextForMobile.state === 'suspended') {
+                    this.audioContextForMobile.resume().catch(err => {
+                        console.warn('AudioContext resume failed:', err);
+                    });
+                }
+                document.removeEventListener('touchstart', resumeAudio);
+                document.removeEventListener('click', resumeAudio);
+            };
+
+            document.addEventListener('touchstart', resumeAudio, {once: true});
+            document.addEventListener('click', resumeAudio, {once: true});
+        } catch (e) {
+            console.warn('Failed to create AudioContext for mobile:', e);
+            this.audioContextForMobile = null;
+        }
+    }
+
+
     // 监听输入框的@输入
     setupAtMentionListener() {
         const messageInput = document.getElementById('messageInput');
@@ -7225,8 +8565,13 @@ class ChatClient {
 
 }
 
+
+// 全局版本管理器实例
+const versionManager = new VersionManager();
+
 // 初始化全局实例
 let chatClient = null;
+
 
 document
     .addEventListener(
