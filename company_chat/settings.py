@@ -318,7 +318,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 STATIC_VERSION = '20260305-3'
 
 # 构建时间
-BUILD_TIME = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+BUILD_TIME = str(datetime.datetime.now())[:19]
 
 # # 静态文件存储（生产环境使用 WhiteNoise 或 CDN）
 # STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'

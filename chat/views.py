@@ -40,7 +40,8 @@ def get_version(request):
     # 从环境变量或 settings 获取版本
     app_version = os.environ.get('APP_VERSION', getattr(settings, 'APP_VERSION', '1.0.0'))
     static_version = os.environ.get('STATIC_VERSION', getattr(settings, 'STATIC_VERSION', app_version))
-    build_time = getattr(settings, 'BUILD_TIME', None)
+    build_time = os.environ.get('BUILD_TIME', getattr(settings, 'BUILD_TIME'))
+
 
     # 检查是否需要强制更新（可通过环境变量配置）
     force_update = os.environ.get('FORCE_UPDATE', 'false').lower() == 'true'
@@ -52,6 +53,7 @@ def get_version(request):
         with open(update_msg_file, 'r', encoding='utf-8') as f:
             update_message = f.read().strip()
 
+    logger.info(f"get_version: app_version={app_version}, static_version={static_version}, build_time={build_time}, force_update={force_update}, update_message={update_message}")
     return JsonResponse({
         'app_version': app_version,
         'static_version': static_version,

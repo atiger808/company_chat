@@ -148,7 +148,7 @@ class VersionManager {
                     </div>
                     ${updateInfo.latest.build_time ? `
                     <div class="update-time">
-                        <small>更新时间: ${new Date(updateInfo.latest.build_time).toLocaleString('zh-CN')}</small>
+                        <small>更新时间: ${updateInfo.latest.build_time}</small>
                     </div>
                     ` : ''}
                 </div>

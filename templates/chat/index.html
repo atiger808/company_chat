@@ -13,21 +13,21 @@
 
 
     <!-- PWA Manifest -->
-    <link rel="manifest" href="/manifest.json?v=20260305-1">
+    <link rel="manifest" href="/manifest.json">
 
     <!-- iOS Safari 添加到主屏幕 -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="企业聊天">
-    <link rel="apple-touch-icon" href="/static/icons/icon-192x192.png">
+    <link rel="apple-touch-icon" href="/static/icons/icon-192x192.png?v=20260305-bf3655b">
 
     <!-- Windows Tiles -->
     <meta name="msapplication-TileColor" content="#409EFF">
-    <meta name="msapplication-TileImage" content="/static/icons/icon-144x144.png?v=20260305-1">
+    <meta name="msapplication-TileImage" content="/static/icons/icon-144x144.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css">-->
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260305-1">
-    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260305-1">
+    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20260305-bf3655b">-->
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260305-bf3655b">
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
 
     <!-- 🔧 iOS 专用样式修复 -->
     <style>
@@ -146,7 +146,8 @@
         </div>
 
         <div class="user-profile">
-            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260305-1" alt="头像" class="avatar">
+            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260305-bf3655b"
+                 alt="头像" class="avatar">
             <div class="user-info">
                 <div class="username" id="currentUsername">加载中...</div>
                 <div class="status" id="userStatus">
@@ -201,33 +202,6 @@
         <div class="groups-list hidden" id="groupsList">
             <!-- 群组列表将通过JS动态生成 -->
         </div>
-
-
-        <!-- 侧边栏底部操作区域 -->
-        <!--        <div class="sidebar-footer">-->
-        <!--            <div class="user-info">-->
-        <!--                <img src="/static/images/default-avatar.png" id="adminAvatar" alt="头像">-->
-        <!--                <div class="user-details">-->
-        <!--                    <div class="username" id="adminUsername"></div>-->
-        <!--                    <div class="status">-->
-        <!--                        <span class="status-dot"></span>-->
-        <!--                        <span class="status-text">在线</span>-->
-        <!--                    </div>-->
-        <!--                </div>-->
-        <!--            </div>-->
-
-        <!--            &lt;!&ndash; 管理员控制台按钮 &ndash;&gt;-->
-        <!--            <button id="adminConsoleBtn" class="btn-admin-console" title="管理员控制台">-->
-        <!--                <i class="fas fa-shield-alt"></i>-->
-        <!--                <span>管理控制台</span>-->
-        <!--            </button>-->
-
-        <!--            &lt;!&ndash; 退出登录按钮 &ndash;&gt;-->
-        <!--            <button onclick="chatClient.logout()" class="btn-logout">-->
-        <!--                <i class="fas fa-sign-out-alt"></i>-->
-        <!--                <span>退出登录</span>-->
-        <!--            </button>-->
-        <!--        </div>-->
     </div>
 
     <!-- 主聊天区域 -->
@@ -239,7 +213,8 @@
                 </button>
                 <div class="chat-info" onclick="chatClient.showProfile(chatClient.currentRoomId)">
                     <div class="chat-avatar">
-                        <img src="/static/images/default-avatar.png" alt="聊天对象" id="chatAvatar">
+                        <img src="/static/images/default-avatar.png?v=20260305-bf3655b"
+                             alt="聊天对象" id="chatAvatar">
                     </div>
                     <div class="chat-details">
                         <div class="chat-title" id="chatTitle">选择聊天</div>
@@ -516,7 +491,8 @@
                 </div>
                 <div class="profile-avatar-section">
                     <div class="avatar-upload-container">
-                        <img id="settingsAvatar" src="/static/images/default-avatar.png" alt="头像">
+                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20260305-bf3655b"
+                             alt="头像">
                         <label class="upload-btn" for="avatarUpload">
                             <i class="fas fa-camera"></i>
                         </label>
@@ -635,15 +611,15 @@
 
 
 <!-- 🔧 关键修复：脚本资源直接带版本参数 -->
-<script src="/static/js/api.js?v=20260305-1"></script>
-<script src="/static/js/utils.js?v=20260305-1"></script>
-<script src="/static/js/chat.js?v=20260305-1"></script>
-<script src="/static/js/spark-md5.min.js?v=20260305-1"></script>
+<script src="/static/js/api.js?v=20260305-bf3655b"></script>
+<script src="/static/js/utils.js?v=20260305-bf3655b"></script>
+<script src="/static/js/chat.js?v=20260305-bf3655b"></script>
+<script src="/static/js/spark-md5.min.js"></script>
 
 <!-- 版本检测脚本（简化版，移除无效的 document.write） -->
 <script>
     // 从构建时注入的版本号
-    const CURRENT_VERSION = '20260305-1';
+    const CURRENT_VERSION = '20260305-24f5887';
 
     // 检查版本是否更新
     const LAST_VERSION = sessionStorage.getItem('appVersion');
@@ -652,18 +628,23 @@
         sessionStorage.setItem('appVersion', CURRENT_VERSION);
 
         // 5秒后自动提示刷新（避免打断用户操作）
-        setTimeout(() => {
-            if (confirm('🎉 检测到新版本，是否立即刷新以加载最新功能？')) {
-                // 清除 Service Worker 缓存
-                if ('serviceWorker' in navigator) {
-                    navigator.serviceWorker.getRegistrations().then(registrations => {
-                        registrations.forEach(reg => reg.unregister());
-                    });
-                }
-                // 强制刷新
-                location.reload(true);
-            }
-        }, 5000);
+        // setTimeout(() => {
+        //
+        //     if (typeof chatClient !== 'undefined' && chatClient.showConfirmDialog) {
+        //         chatClient.showConfirmDialog('版本更新', '🎉 检测到新版本，是否立即刷新以加载最新功能？').then(
+        //             () => {
+        //                 // 清除 Service Worker 缓存
+        //                 if ('serviceWorker' in navigator) {
+        //                     navigator.serviceWorker.getRegistrations().then(registrations => {
+        //                         registrations.forEach(reg => reg.unregister());
+        //                     });
+        //                 }
+        //                 // 强制刷新
+        //                 location.reload(true);
+        //             }
+        //         );
+        //     }
+        // }, 5000);
     } else {
         sessionStorage.setItem('appVersion', CURRENT_VERSION);
     }

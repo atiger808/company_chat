@@ -2,6 +2,9 @@
 # build.sh - 自动为静态资源添加版本参数
 
 set -e
+echo "build: update static versions"
+git add ./
+git commit -m "build: update static versions"
 
 # 🔧 修复1: 正确生成 VERSION（处理非 Git 环境）
 if git rev-parse --git-dir > /dev/null 2>&1; then
@@ -15,6 +18,12 @@ fi
 
 echo "📦 构建版本: ${VERSION}"
 
+# 0. 更新 settings.py 中的 BUILD_TIME
+if [ -f "company_chat/settings.py" ]; then
+    BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+    sed -i "s/BUILD_TIME = '[^']*'/BUILD_TIME = '${BUILD_TIME}'/" company_chat/settings.py
+    echo "✓ 更新 settings.py: BUILD_TIME=${BUILD_TIME}"
+fi
 
 
 # 1. 更新 settings.py 中的 STATIC_VERSION
@@ -30,29 +39,6 @@ if [ -f "company_chat/settings.py" ]; then
 fi
 
 # 2. 更新 HTML 中的静态资源链接（添加版本参数）
-if [ -f "templates/chat/index.html" ]; then
-    # 备份原文件
-    cp templates/chat/index.html templates/chat/index.html.bak
-
-    # 为所有 /static/ 资源链接添加 ?v=VERSION 参数（避免重复添加）
-    sed -i "s|\(href=\"/static/[^?]*\)\"|\1?v=${VERSION}\"|g" templates/chat/index.html
-    sed -i "s|\(src=\"/static/[^?]*\)\"|\1?v=${VERSION}\"|g" templates/chat/index.html
-
-    # 移除重复的 ?v= 参数（如果已存在）
-    sed -i "s|\?v=[^&\"]*&v=${VERSION}|\?v=${VERSION}|g" templates/chat/index.html
-    sed -i "s|\?v=[^&\"]*\"\?v=${VERSION}|?v=${VERSION}|g" templates/chat/index.html
-
-    echo "✓ 更新 index.html: 为静态资源添加版本参数 v=${VERSION}"
-
-    # 验证更新
-    if grep -q "?v=${VERSION}" templates/chat/index.html; then
-        echo "✓ 验证: index.html 已包含版本参数"
-        rm templates/chat/index.html.bak  # 删除备份
-    else
-        echo "⚠️  警告: 未在 index.html 中找到版本参数，恢复备份"
-        mv templates/chat/index.html.bak templates/chat/index.html
-    fi
-fi
 
 # 3. 更新 JS 中的 CURRENT_VERSION（用于版本检测）
 if [ -f "templates/chat/index.html" ]; then
@@ -70,6 +56,7 @@ fi
 
 # 使用绝对路径运行 Python
 $CONDA_ENV_PATH/bin/python manage.py collectstatic --noinput
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/index.html" ${VERSION}
 
 
 # 5. 重启服务
