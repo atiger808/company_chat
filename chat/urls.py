@@ -8,23 +8,31 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
-    get_version,
+    VersionView,
     ChatRoomViewSet,
     MessageViewSet,
     FileUploadView,
     AudioFormatView,
     ChatRoomAdminViewSet,
+    AdminStatisticsViewSet,
+    SystemSettingsViewSet,
 )
 
 router = DefaultRouter()
 router.register(r'rooms', ChatRoomViewSet, basename='chatroom')
 router.register(r'messages', MessageViewSet, basename='message')
-router.register(r'admin/rooms', ChatRoomAdminViewSet, basename='admin-rooms')
+router.register(r'admin/chat-rooms', ChatRoomAdminViewSet, basename='admin-chat-room')  # 🔑 关键：注册管理路由
+
+# 🔧 关键：注册统计视图集（basename 决定 URL 前缀）
+router.register(r'admin/statistics', AdminStatisticsViewSet, basename='admin-statistics')
+
+router.register(r'admin/settings', SystemSettingsViewSet, basename='admin-settings')  # 🔧 注册系统设置路由
+
 
 urlpatterns = [
     path('', include(router.urls)),
 
-    path('version/', get_version, name='version'),
+    path('version/', VersionView.as_view(), name='version'),
 
     # 聊天室相关操作
     # path('rooms/<int:pk>/clear_history/', ChatRoomViewSet.as_view({'delete': 'clear_history'}), name='clear-history'),
@@ -57,8 +65,26 @@ urlpatterns = [
     # 🔧 新增：音频格式路由
     path('audio/<int:file_id>/format/', AudioFormatView.as_view(), name='audio-format'),
 
-    # 聊天室管理
-    path('admin/rooms/<int:pk>/force-delete/', ChatRoomAdminViewSet.as_view({'post': 'force_delete'}), name='admin-force-delete'),
-    path('admin/rooms/statistics/', ChatRoomAdminViewSet.as_view({'get': 'statistics'}), name='admin-room-statistics'),
+    # # 🔑 管理控制台 - 聊天室管理（仅超级管理员）
+    # path('admin/chat-rooms/', ChatRoomAdminViewSet.as_view({'get': 'list'}), name='admin-chat-rooms-list'),
+    # path('admin/chat-rooms/<int:pk>/', ChatRoomAdminViewSet.as_view({'get': 'retrieve', 'delete': 'destroy'}),
+    #      name='admin-chat-room-detail'),
+
+    # path('admin/chat-rooms/messages/history/', ChatRoomAdminViewSet.as_view({'get': 'get_room_history'}),
+    #      name='admin-chat-room-messages-history'),
+
+    # path('admin/chat-rooms/<int:pk>/export-history/', ChatRoomAdminViewSet.as_view({'get': 'export_history'}),
+    #      name='admin-chat-room-export-history'),
+    # path('admin/chat-rooms/<int:pk>/force-delete/', ChatRoomAdminViewSet.as_view({'post': 'force_delete'}),
+    #      name='admin-chat-room-force-delete'),
+    # path('admin/chat-rooms/statistics/', ChatRoomAdminViewSet.as_view({'get': 'statistics'}),
+    #      name='admin-chat-room-statistics'),
+    # path('admin/chat-rooms/search/', ChatRoomAdminViewSet.as_view({'get': 'search_chats'}),
+    #      name='admin-chat-room-search'),
+
+
+    # 系统设置
+    # path('admin/settings/list_configs/', SystemSettingsViewSet.as_view({'get': 'list_configs'}), name='admin-settings-list-configs'),
+    # path('admin/settings/export_configs/', SystemSettingsViewSet.as_view({'get': 'export_configs'}), name='admin-settings-export-configs'),
 
 ]

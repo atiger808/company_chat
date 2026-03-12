@@ -251,13 +251,15 @@ class CoreModel(models.Model):
 
 
 class LoginLog(CoreModel):
-    LOGIN_TYPE_CHOICES = ((1, "普通登录"), (2, "扫码登录"),)
+    LOGIN_TYPE_CHOICES = ((1, "普通登录"), (2, "扫码登录"), (3, "邮箱登录"))
 
     id = models.BigAutoField(primary_key=True, help_text="Id", verbose_name="Id")
     description = models.CharField(max_length=255, verbose_name="描述", null=True, blank=True, help_text="描述")
     creator = models.ForeignKey(to=CustomUser, related_query_name='creator_query', null=True,
                                 verbose_name='创建人', help_text="创建人", on_delete=models.SET_NULL,
                                 db_constraint=False, db_index=True)
+
+
 
     username = models.CharField(max_length=32, verbose_name="登录用户名", null=True, blank=True, help_text="登录用户名", db_index=True)
     ip = models.CharField(max_length=50, verbose_name="登录ip", null=True, blank=True, help_text="登录ip", db_index=True)

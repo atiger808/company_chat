@@ -5,63 +5,75 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Q, Count
+from rest_framework.exceptions import ValidationError
+from django.db.models import Q, Count, Sum
+from django.http import HttpResponse
 from django.contrib.auth.models import AnonymousUser
 from django.utils import timezone
 
+from django.db import connection
+from django.core.cache import cache as django_cache
+import django
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
+from django.core.cache import cache
 from django.db import transaction
 from django.conf import settings
 from django.http import JsonResponse
+
+import csv
+import psutil
+import platform
 import os
 import subprocess
 import shutil
 import hashlib
-
-from .models import ChatRoom, Message, MessageReadStatus, MessageDeleteStatus, ChatRoomDeleteStatus, FileUpload
-from .serializers import ChatRoomSerializer, MessageSerializer
-from accounts.views import IsAdminOrSuperAdmin
+import json
+import re
+from datetime import datetime, timedelta
 from loguru import logger
 
-
-def get_version(request):
-    """
-    获取应用版本信息
-    返回格式:
-    {
-        "app_version": "2.3.1",          # 应用业务版本
-        "static_version": "20260304-1",  # 静态资源版本（CSS/JS）
-        "build_time": "2026-03-04T10:30:00Z",
-        "force_update": false,           # 是否强制更新
-        "update_message": "修复语音消息播放问题"  # 更新说明
-    }
-    """
-    # 从环境变量或 settings 获取版本
-    app_version = os.environ.get('APP_VERSION', getattr(settings, 'APP_VERSION', '1.0.0'))
-    static_version = os.environ.get('STATIC_VERSION', getattr(settings, 'STATIC_VERSION', app_version))
-    build_time = os.environ.get('BUILD_TIME', getattr(settings, 'BUILD_TIME'))
+from accounts.models import CustomUser, Department
+from .models import ChatRoom, Message, MessageReadStatus, MessageDeleteStatus, ChatRoomDeleteStatus, FileUpload, SystemConfig
+from .serializers import ChatRoomSerializer, MessageSerializer, MemberListSerializer
+from .pagination import ChatRoomPagination, MessageHistoryPagination, MessagePagination
+from accounts.views import IsAdminOrSuperAdmin, IsSuperAdmin
+from utils.utils import SystemConfigManager
 
 
-    # 检查是否需要强制更新（可通过环境变量配置）
-    force_update = os.environ.get('FORCE_UPDATE', 'false').lower() == 'true'
 
-    # 更新说明（可从文件读取）
-    update_message = ""
-    update_msg_file = os.path.join(settings.BASE_DIR, 'VERSION_MESSAGE.txt')
-    if os.path.exists(update_msg_file):
-        with open(update_msg_file, 'r', encoding='utf-8') as f:
-            update_message = f.read().strip()
+class VersionView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
 
-    logger.info(f"get_version: app_version={app_version}, static_version={static_version}, build_time={build_time}, force_update={force_update}, update_message={update_message}")
-    return JsonResponse({
-        'app_version': app_version,
-        'static_version': static_version,
-        'build_time': build_time,
-        'force_update': force_update,
-        'update_message': update_message,
-        'environment': settings.ENVIRONMENT if hasattr(settings, 'ENVIRONMENT') else 'production'
-    })
+    """版本信息视图"""
+
+    def get(self, request):
+        """获取版本信息"""
+        # 从环境变量或 settings 获取版本
+        app_version = os.environ.get('APP_VERSION', getattr(settings, 'APP_VERSION', '1.0.0'))
+        static_version = os.environ.get('STATIC_VERSION', getattr(settings, 'STATIC_VERSION', app_version))
+        build_time = os.environ.get('BUILD_TIME', getattr(settings, 'BUILD_TIME'))
+
+        # 检查是否需要强制更新（可通过环境变量配置）
+        force_update = os.environ.get('FORCE_UPDATE', 'false').lower() == 'true'
+
+        # 更新说明（可从文件读取）
+        update_message = ""
+        update_msg_file = os.path.join(settings.BASE_DIR, 'VERSION_MESSAGE.txt')
+        if os.path.exists(update_msg_file):
+            with open(update_msg_file, 'r', encoding='utf-8') as f:
+                update_message = f.read().strip()
+
+        logger.info(
+            f"get_version: app_version={app_version}, static_version={static_version}, build_time={build_time}, force_update={force_update}, update_message={update_message}")
+        return JsonResponse({
+            'app_version': app_version,
+            'static_version': static_version,
+            'build_time': build_time,
+            'force_update': force_update,
+            'update_message': update_message,
+            'environment': settings.ENVIRONMENT if hasattr(settings, 'ENVIRONMENT') else 'production'
+        })
 
 
 class ChatRoomViewSet(viewsets.ModelViewSet):
@@ -517,15 +529,6 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
             return Response({'error': '服务器内部错误'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-
-class MessagePagination(PageNumberPagination):
-    """消息分页器 - 支持无限滚动"""
-    page_size = 50
-    page_size_query_param = 'page_size'
-    max_page_size = 200
-
-
-
 class MessageViewSet(viewsets.ModelViewSet):
     """消息视图集"""
     queryset = Message.objects.select_related('sender', 'chat_room', 'file', 'quote_message')
@@ -583,7 +586,6 @@ class MessageViewSet(viewsets.ModelViewSet):
         queryset = queryset.order_by('-timestamp')
 
         return queryset.select_related('sender', 'chat_room', 'file', 'quote_message')
-
 
     def perform_create(self, serializer):
         # 获取当前用户作为 sender
@@ -659,7 +661,6 @@ class MessageViewSet(viewsets.ModelViewSet):
         serializer.instance = message
         return message
 
-
     @action(detail=True, methods=['delete'])
     def soft_delete(self, request, pk=None):
         """软删除消息"""
@@ -734,13 +735,11 @@ class MessageViewSet(viewsets.ModelViewSet):
 
         return Response({'chat_room_id': chat_room_id, 'unread_count': count})
 
-
     @action(detail=False, methods=['post'])
     def mark_as_read(self, request):
         """批量标记消息为已读"""
         message_ids = request.data.get('message_ids', [])
         chat_room_id = request.data.get('chat_room_id')
-
 
         if not chat_room_id:
             return Response({'error': '缺少 chat_room_id'}, status=status.HTTP_400_BAD_REQUEST)
@@ -750,7 +749,6 @@ class MessageViewSet(viewsets.ModelViewSet):
             chat_room = ChatRoom.objects.get(id=chat_room_id, members=request.user)
         except ChatRoom.DoesNotExist:
             return Response({'error': '聊天室不存在'}, status=status.HTTP_404_NOT_FOUND)
-
 
         # 遍历消息 ID 并标记为已读 使用 MessageReadStatus
         for msg_id in message_ids:
@@ -813,7 +811,7 @@ class MessageViewSet(viewsets.ModelViewSet):
                             'revoked_at': message.deleted_at.isoformat(),
                             'sender_id': message.sender.id,
                             'sender_name': message.sender.real_name or message.sender.username,
-                            'chat_room_id': chat_room.id, # 🔧 新增：包含聊天室ID
+                            'chat_room_id': chat_room.id,  # 🔧 新增：包含聊天室ID
                             'room_type': chat_room.room_type,
                             'content': '[消息已撤销]',
                             # 🔧 广播引用字段（如果存在）
@@ -868,6 +866,7 @@ class FileUploadView(APIView):
 
     def post(self, request):
         file = request.FILES.get('file')
+        file_md5 = request.data.get('file_md5')  # 🔧 支持前端传递 MD5 用于去重
         if not file:
             return Response({'error': '没有文件'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -875,14 +874,82 @@ class FileUploadView(APIView):
         if file.size == 0:
             return Response({'error': '上传的文件大小为 0'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # 🔧 关键修复1: 从配置读取文件大小限制（实际生效）
+        max_upload_size_mb = SystemConfigManager.get_config('file.max_upload_size_mb', 50)
+        max_size_bytes = max_upload_size_mb * 1024 * 1024
+
+        if file.size > max_size_bytes:
+            return Response({
+                'error': f'文件大小超过限制（最大{max_upload_size_mb}MB）'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 🔧 关键修复2: 根据文件类型应用不同限制
+        file_category = self.get_file_category(file.content_type)
+
+        if file_category == 'image':
+            image_max_size_mb = SystemConfigManager.get_config('file.image_max_size_mb', 20)
+            if file.size > image_max_size_mb * 1024 * 1024:
+                return Response({
+                    'error': f'图片大小超过限制（最大{image_max_size_mb}MB）'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        elif file_category == 'video':
+            video_max_size_mb = SystemConfigManager.get_config('file.video_max_size_mb', 100)
+            if file.size > video_max_size_mb * 1024 * 1024:
+                return Response({
+                    'error': f'视频大小超过限制（最大{video_max_size_mb}MB）'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        elif file_category == 'audio':
+            audio_max_size_mb = SystemConfigManager.get_config('file.audio_max_size_mb', 30)
+            if file.size > audio_max_size_mb * 1024 * 1024:
+                return Response({
+                    'error': f'音频大小超过限制（最大{audio_max_size_mb}MB）'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 🔧 关键修复3: 验证文件类型白名单
+        allowed_types = SystemConfigManager.get_config('file.allowed_types', ['image', 'video', 'audio', 'file'])
+
+        if file_category not in allowed_types:
+            return Response({
+                'error': f'不支持的文件类型（允许：{", ".join(allowed_types)}）'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 🔧 关键修复4: 验证文件格式白名单
+        if file_category == 'image':
+            allowed_formats = SystemConfigManager.get_config('file.image_formats',
+                                                             ['jpg', 'jpeg', 'png', 'gif', 'webp'])
+            file_ext = file.name.split('.')[-1].lower() if '.' in file.name else ''
+            if file_ext and file_ext not in allowed_formats:
+                return Response({
+                    'error': f'不支持的图片格式（允许：{", ".join(allowed_formats)}）'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        elif file_category == 'video':
+            allowed_formats = SystemConfigManager.get_config('file.video_formats', ['mp4', 'webm', 'mov'])
+            file_ext = file.name.split('.')[-1].lower() if '.' in file.name else ''
+            if file_ext and file_ext not in allowed_formats:
+                return Response({
+                    'error': f'不支持的视频格式（允许：{", ".join(allowed_formats)}）'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        elif file_category == 'audio':
+            allowed_formats = SystemConfigManager.get_config('voice.allowed_formats', ['webm', 'mp3', 'm4a', 'ogg'])
+            file_ext = file.name.split('.')[-1].lower() if '.' in file.name else ''
+            if file_ext and file_ext not in allowed_formats:
+                return Response({
+                    'error': f'不支持的音频格式（允许：{", ".join(allowed_formats)}）'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+
         # 缓存文件内容
         file_content = file.read()
         logger.info(f"File content length: {len(file_content)}")
-
-        # 计算文件MD5
-        md5_hash = hashlib.md5()
-        md5_hash.update(file_content)
-        file_md5 = md5_hash.hexdigest()
+        if not file_md5 or len(str(file_md5)) != 32:
+            # 计算文件MD5
+            md5_hash = hashlib.md5()
+            md5_hash.update(file_content)
+            file_md5 = md5_hash.hexdigest()
 
         # 检查是否已存在相同文件
         try:
@@ -906,7 +973,6 @@ class FileUploadView(APIView):
             })
         except FileUpload.DoesNotExist:
             pass
-
 
         # 保存新文件
         filename = f"{request.user.id}_{timezone.now().strftime('%Y%m%d%H%M%S')}_{file.name}"
@@ -964,6 +1030,53 @@ class FileUploadView(APIView):
             'is_ios_compatible': file_upload.mp3_status == 'completed' and bool(file_upload.mp3_file)
         })
 
+    def get_file_category(self, content_type):
+        """🔧 根据 MIME 类型获取文件分类"""
+        if not content_type:
+            return 'file'
+
+        content_type = content_type.lower()
+
+        # 图片类型
+        if content_type.startswith('image/'):
+            return 'image'
+
+        # 视频类型
+        if content_type.startswith('video/'):
+            return 'video'
+
+        # 音频类型（包括 voice）
+        if content_type.startswith('audio/'):
+            return 'audio'
+
+        # 文档类型
+        if content_type in [
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-powerpoint',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'text/plain',
+            'text/csv',
+            'text/markdown',
+        ]:
+            return 'file'
+
+        # 压缩包类型
+        if content_type in [
+            'application/zip',
+            'application/x-rar-compressed',
+            'application/x-7z-compressed',
+            'application/gzip',
+        ]:
+            return 'file'
+
+        # 默认返回 file
+        return 'file'
+
+
     def is_audio_file(self, mime_type):
         """判断是否为音频文件"""
         mime_type = mime_type.lower()
@@ -998,7 +1111,6 @@ class FileUploadView(APIView):
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError, Exception) as e:
             logger.error(f"提取音频时长失败: {file_path}, error: {str(e)}")
             return None
-
 
     def is_ios_request(self, request):
         """检测请求是否来自iOS设备"""
@@ -1202,12 +1314,9 @@ class FileUploadView(APIView):
         self.convert_to_mp3(file_upload, file_content)
 
 
-# chat/views.py - 新增视图
-
 class AudioFormatView(APIView):
     """按需提供音频格式转换"""
     permission_classes = [permissions.IsAuthenticated]
-
 
     def get(self, request, file_id):
         try:
@@ -1228,6 +1337,21 @@ class AudioFormatView(APIView):
             # 获取文件记录
             try:
                 file_upload = FileUpload.objects.get(id=file_id)
+
+                # 🔧 关键修复：从配置读取语音时长限制
+                max_duration = SystemConfigManager.get_config('voice.max_duration_seconds', 60)
+                min_duration = SystemConfigManager.get_config('voice.min_duration_seconds', 1)
+
+                if file_upload.duration:
+                    if file_upload.duration > max_duration:
+                        return Response({
+                            'error': f'语音时长超过限制（最大{max_duration}秒）'
+                        }, status=status.HTTP_400_BAD_REQUEST)
+                    if file_upload.duration < min_duration:
+                        return Response({
+                            'error': f'语音时长过短（最小{min_duration}秒）'
+                        }, status=status.HTTP_400_BAD_REQUEST)
+
             except FileUpload.DoesNotExist:
                 logger.error(f"文件不存在或无权限: {file_id}, user: {request.user.id}")
                 return Response({'error': '文件不存在或无访问权限'}, status=status.HTTP_404_NOT_FOUND)
@@ -1287,7 +1411,6 @@ class AudioFormatView(APIView):
                     'status': 'failed'
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-
             # 默认情况（不应发生）
             return Response({
                 'url': file_upload.get_file_url(),
@@ -1308,8 +1431,6 @@ class AudioFormatView(APIView):
         from .views import FileUploadView
         view = FileUploadView()
         view.trigger_async_conversion(file_upload)
-
-
 
     def convert_to_mp3_sync(self, file_upload):
         """同步转码为 MP3 格式"""
@@ -1376,7 +1497,6 @@ class AudioFormatView(APIView):
             file_upload.save(update_fields=['mp3_converted'])
         return False
 
-
     def convert_to_mp3(self, file_upload):
         """同步转码为MP3格式"""
         try:
@@ -1436,9 +1556,10 @@ class AudioFormatView(APIView):
 
 class ChatRoomAdminViewSet(viewsets.ModelViewSet):
     """聊天室管理视图集（管理员专用）"""
-    queryset = ChatRoom.objects.all()
+    queryset = ChatRoom.objects.select_related('creator')
     serializer_class = ChatRoomSerializer
-    permission_classes = [IsAdminOrSuperAdmin]
+    permission_classes = [IsSuperAdmin]
+    pagination_class = ChatRoomPagination  # 🔑 关键修复：添加分页支持
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -1458,6 +1579,154 @@ class ChatRoomAdminViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(room_type=room_type)
 
         return queryset.order_by('-updated_at')
+
+    def list(self, request, *args, **kwargs):
+        """
+        🔑 超级管理员专用：获取聊天室列表（支持分页、搜索、过滤）
+        重写内置 list 方法以支持自定义逻辑
+        """
+        # 使用父类的 list 方法（已支持分页和搜索）
+        # if request.user.username != 'superman':
+        #     return Response({'error': '无操作权限'}, status=status.HTTP_403_FORBIDDEN)
+
+        return super().list(request, *args, **kwargs)
+
+    @action(detail=False, methods=['get'], url_path='messages/history')
+    def get_room_history(self, request):
+        """
+        🔑 超级管理员专用：获取指定聊天室的历史消息
+        支持分页、时间范围、消息类型、发送者过滤
+        """
+        try:
+            # if request.user.username != 'superman':
+            #     return Response({'error': '无操作权限'}, status=status.HTTP_403_FORBIDDEN)
+
+            room_id = request.query_params.get('room_id')
+            if not room_id:
+                return Response({'error': 'room_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+            logger.info(f"SuperAdmin {request.user.username} (ID: {request.user.id}) "
+                        f"viewed chat history for room {room_id}")
+
+            try:
+                chat_room = ChatRoom.objects.get(id=room_id)
+            except ChatRoom.DoesNotExist:
+                return Response({'error': 'Chat room not found'}, status=status.HTTP_404_NOT_FOUND)
+
+            # 获取查询参数
+            page = int(request.query_params.get('page', 1))
+            page_size = min(int(request.query_params.get('page_size', 50)), 200)
+            start_time = request.query_params.get('start_time')
+            end_time = request.query_params.get('end_time')
+            message_type = request.query_params.get('message_type')
+            sender_id = request.query_params.get('sender_id')
+            search_content = request.query_params.get('search', '')
+
+            # 构建基础查询集
+            messages = Message.objects.filter(
+                chat_room=chat_room
+            ).select_related(
+                'sender', 'file', 'quote_message'
+            ).order_by('-timestamp')
+
+            # 时间范围过滤
+            if start_time:
+                try:
+                    start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                    messages = messages.filter(timestamp__gte=start_dt)
+                except ValueError:
+                    return Response(
+                        {'error': '无效的开始时间格式，应为 ISO 8601 格式'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            if end_time:
+                try:
+                    end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+                    messages = messages.filter(timestamp__lte=end_dt)
+                except ValueError:
+                    return Response(
+                        {'error': '无效的结束时间格式，应为 ISO 8601 格式'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            # 消息类型过滤
+            if message_type:
+                valid_types = ['text', 'image', 'file', 'video', 'voice', 'audio', 'location', 'emoji']
+                if message_type not in valid_types:
+                    return Response(
+                        {'error': f'无效的消息类型，有效类型: {", ".join(valid_types)}'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                messages = messages.filter(message_type=message_type)
+
+            # 发送者过滤
+            if sender_id:
+                try:
+                    sender_id_int = int(sender_id)
+                    messages = messages.filter(sender_id=sender_id_int)
+                except (ValueError, TypeError):
+                    return Response(
+                        {'error': '无效的发送者ID'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            # 内容搜索
+            if search_content:
+                messages = messages.filter(
+                    Q(content__icontains=search_content) |
+                    Q(sender__username__icontains=search_content) |
+                    Q(sender__real_name__icontains=search_content)
+                )
+
+            # 🔧 关键修复：使用分页器
+            paginator = self.pagination_class()
+            paginated_messages = paginator.paginate_queryset(messages, request, view=self)
+
+            # 序列化消息
+            serializer = MessageSerializer(
+                paginated_messages,
+                many=True,
+                context={'request': request}
+            )
+
+            # 序列化成员
+            members_serializer = MemberListSerializer(
+                chat_room.members.all(),
+                many=True,
+                context={'request': request}
+            )
+
+            # 构建响应数据
+            response_data = {
+                'results': serializer.data,
+                'count': messages.count(),
+                'next': paginator.get_next_link(),  # 🔧 返回下一页链接（用于判断是否有更多）
+                'previous': paginator.get_previous_link(),
+                'page': page,
+                'page_size': page_size,
+                'has_next': paginator.get_next_link() is not None,  # 🔧 添加 has_next 字段
+                'room_info': {
+                    'id': chat_room.id,
+                    'name': chat_room.display_name,
+                    'room_type': chat_room.room_type,
+                    'creator': chat_room.creator.id if chat_room.creator else None,
+                    'created_at': chat_room.created_at.isoformat() if chat_room.created_at else None,
+                    'updated_at': chat_room.updated_at.isoformat() if chat_room.updated_at else None,
+                    'is_pinned': chat_room.is_pinned,
+                    'is_muted': chat_room.is_muted,
+                    'members': members_serializer.data
+                }
+            }
+
+            return Response(response_data)
+
+        except Exception as e:
+            logger.error(f"获取聊天室历史失败: {str(e)}", exc_info=True)
+            return Response(
+                {'error': f'获取聊天室历史失败: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     @action(detail=True, methods=['post'])
     def force_delete(self, request, pk=None):
@@ -1500,3 +1769,1285 @@ class ChatRoomAdminViewSet(viewsets.ModelViewSet):
             'group_rooms': group_rooms,
             'active_rooms': active_data,
         })
+
+    @action(detail=False, methods=['get'])
+    def search_chats(self, request):
+        """
+        🔑 超级管理员专用：搜索聊天室（支持按成员、消息内容搜索）
+        """
+        query = request.query_params.get('q', '').strip()
+        if not query:
+            return Response([])
+
+        # 按聊天室名称/成员搜索
+        chat_rooms = ChatRoom.objects.filter(
+            Q(name__icontains=query) |
+            Q(members__username__icontains=query) |
+            Q(members__real_name__icontains=query)
+        ).distinct().order_by('-updated_at')[:20]
+
+        # 使用分页器
+        paginator = self.pagination_class()
+        paginated_rooms = paginator.paginate_queryset(chat_rooms, request)
+
+        # 序列化结果
+        serializer = self.get_serializer(paginated_rooms, many=True, context={'request': request})
+        return paginator.get_paginated_response(serializer.data)
+
+    @action(detail=True, methods=['get'])
+    def export_history(self, request, pk=None):
+        """
+        🔑 超级管理员专用：导出聊天室历史记录为CSV
+        """
+        try:
+            chat_room = self.get_object()
+
+            # 记录导出操作
+            logger.info(
+                f"SuperAdmin {request.user.username} exported chat history "
+                f"for room {chat_room.id} (type: {chat_room.room_type})"
+            )
+
+            # 获取所有消息（分批处理避免内存溢出）
+            messages = Message.objects.filter(
+                chat_room=chat_room
+            ).select_related('sender').order_by('timestamp')
+
+            # 生成CSV内容
+            import csv
+            import io
+            output = io.StringIO()
+            writer = csv.writer(output)
+
+            # 写入表头
+            writer.writerow([
+                '时间', '发送者ID', '发送者', '消息类型', '内容',
+                '文件名', '文件大小', '文件URL', '是否已读', '撤回时间'
+            ])
+
+            # 写入消息数据
+            for msg in messages:
+                sender_name = msg.sender.real_name if msg.sender and msg.sender.real_name else \
+                    (msg.sender.username if msg.sender else '未知')
+
+                file_name = msg.file_info.get('name', '') if msg.file_info else ''
+                file_size = msg.file_info.get('size', '') if msg.file_info else ''
+                file_url = msg.file_info.get('url', '') if msg.file_info else ''
+
+                writer.writerow([
+                    msg.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                    msg.sender_id or '',
+                    sender_name,
+                    msg.message_type,
+                    msg.content.replace('\n', ' ').replace('\r', '') if msg.content else '[无内容]',
+                    file_name,
+                    file_size,
+                    file_url,
+                    '是' if msg.is_read else '否',
+                    msg.deleted_at.strftime('%Y-%m-%d %H:%M:%S') if msg.deleted_at else ''
+                ])
+
+            # 生成响应
+            response = Response(
+                output.getvalue(),
+                content_type='text/csv'
+            )
+            response[
+                'Content-Disposition'] = f'attachment; filename="chat_history_{chat_room.id}_{timezone.now().strftime("%Y%m%d_%H%M%S")}.csv"'
+            return response
+
+        except Exception as e:
+            logger.error(f"导出聊天室历史失败: {str(e)}", exc_info=True)
+            return Response(
+                {'error': '导出失败'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class AdminStatisticsViewSet(viewsets.ViewSet):
+    """管理控制台 - 数据统计视图集"""
+    permission_classes = [IsSuperAdmin]
+
+    @action(detail=False, methods=['get'])
+    def overview(self, request):
+        """📊 概览统计（今日/昨日/本周/本月）"""
+        now = timezone.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday_start = today_start - timedelta(days=1)
+        week_start = today_start - timedelta(days=now.weekday())
+        month_start = today_start.replace(day=1)
+
+        # 用户统计
+        total_users = CustomUser.objects.count()
+        active_users_today = CustomUser.objects.filter(
+            last_login__gte=today_start
+        ).count()
+        new_users_today = CustomUser.objects.filter(
+            date_joined__gte=today_start
+        ).count()
+        online_users = CustomUser.objects.filter(is_online=True).count()
+
+        # 聊天室统计
+        total_rooms = ChatRoom.objects.count()
+        active_rooms_today = ChatRoom.objects.filter(
+            messages__timestamp__gte=today_start
+        ).distinct().count()
+
+        # 消息统计
+        messages_today = Message.objects.filter(
+            timestamp__gte=today_start
+        ).count()
+        messages_yesterday = Message.objects.filter(
+            timestamp__gte=yesterday_start,
+            timestamp__lt=today_start
+        ).count()
+        messages_week = Message.objects.filter(
+            timestamp__gte=week_start
+        ).count()
+        messages_month = Message.objects.filter(
+            timestamp__gte=month_start
+        ).count()
+
+        # 文件统计
+        files_today = FileUpload.objects.filter(
+            created_at__gte=today_start
+        ).count()
+        storage_used = FileUpload.objects.aggregate(
+            total=Sum('size')
+        )['total'] or 0
+
+        # 增长率计算
+        user_growth = ((active_users_today - new_users_today) / max(total_users - new_users_today, 1)) * 100
+        message_growth = ((messages_today - messages_yesterday) / max(messages_yesterday, 1)) * 100
+
+        return Response({
+            'users': {
+                'total': total_users,
+                'active_today': active_users_today,
+                'new_today': new_users_today,
+                'online': online_users,
+                'growth_rate': round(user_growth, 2)
+            },
+            'chat_rooms': {
+                'total': total_rooms,
+                'active_today': active_rooms_today
+            },
+            'messages': {
+                'today': messages_today,
+                'yesterday': messages_yesterday,
+                'week': messages_week,
+                'month': messages_month,
+                'growth_rate': round(message_growth, 2)
+            },
+            'files': {
+                'today': files_today,
+                'storage_used': storage_used,
+                'storage_used_formatted': self.format_file_size(storage_used)
+            },
+            'timestamp': now.isoformat()
+        })
+
+    @action(detail=False, methods=['get'])
+    def user_trends(self, request):
+        """📈 用户趋势统计（近 30 天）"""
+        days = int(request.query_params.get('days', 30))
+        end_date = timezone.now().date()
+        start_date = end_date - timedelta(days=days)
+
+        trends = []
+        current_date = start_date
+        while current_date <= end_date:
+            next_date = current_date + timedelta(days=1)
+            new_users = CustomUser.objects.filter(
+                date_joined__gte=current_date,
+                date_joined__lt=next_date
+            ).count()
+            active_users = CustomUser.objects.filter(
+                last_login__gte=current_date,
+                last_login__lt=next_date
+            ).count()
+            online_users = CustomUser.objects.filter(
+                is_online=True,
+                last_seen__gte=current_date
+            ).count()
+
+            trends.append({
+                'date': current_date.isoformat(),
+                'new_users': new_users,
+                'active_users': active_users,
+                'online_users': online_users
+            })
+            current_date = next_date
+
+        return Response({'trends': trends, 'days': days})
+
+    @action(detail=False, methods=['get'])
+    def message_trends(self, request):
+        """💬 消息趋势统计（近 30 天）"""
+        days = int(request.query_params.get('days', 30))
+        end_date = timezone.now().date()
+        start_date = end_date - timedelta(days=days)
+
+        trends = []
+        current_date = start_date
+        while current_date <= end_date:
+            next_date = current_date + timedelta(days=1)
+            total_messages = Message.objects.filter(
+                timestamp__gte=current_date,
+                timestamp__lt=next_date
+            ).count()
+            text_messages = Message.objects.filter(
+                message_type='text',
+                timestamp__gte=current_date,
+                timestamp__lt=next_date
+            ).count()
+            file_messages = Message.objects.filter(
+                message_type__in=['image', 'file', 'video', 'voice'],
+                timestamp__gte=current_date,
+                timestamp__lt=next_date
+            ).count()
+
+            trends.append({
+                'date': current_date.isoformat(),
+                'total': total_messages,
+                'text': text_messages,
+                'files': file_messages
+            })
+            current_date = next_date
+
+        return Response({'trends': trends, 'days': days})
+
+    # chat/views.py - 最终推荐代码
+
+    @action(detail=False, methods=['get'])
+    def department_stats(self, request):
+        """🏢 部门统计"""
+        from django.db.models import Count, Q
+        from accounts.models import CustomUser, Department
+        from chat.models import Message
+
+        # 获取所有部门
+        departments = Department.objects.all().order_by('-id')
+
+        stats = []
+        for dept in departments:
+            # 🔧 分步查询，避免复杂 JOIN 导致的错误
+            user_count = CustomUser.objects.filter(
+                department=dept,
+                is_active=True
+            ).count()
+
+            active_users = CustomUser.objects.filter(
+                department=dept,
+                is_active=True,
+                is_online=True
+            ).count()
+
+            # 🔧 通过 sender__department 关联统计消息
+            message_count = Message.objects.filter(
+                sender__department=dept
+            ).count()
+
+            stats.append({
+                'id': dept.id,
+                'name': dept.name,
+                'user_count': user_count,
+                'active_users': active_users,
+                'message_count': message_count,
+                'activity_rate': round((active_users / max(user_count, 1)) * 100, 2)
+            })
+
+        return Response({'departments': stats})
+
+    # chat/views.py - 修复 active_users_ranking 方法
+
+    @action(detail=False, methods=['get'])
+    def active_users_ranking(self, request):
+        """🏆 活跃用户排行榜（修复外键名称）"""
+        limit = int(request.query_params.get('limit', 10))
+        days = int(request.query_params.get('days', 7))
+        start_date = timezone.now() - timedelta(days=days)
+
+        # 🔧 关键修复：使用正确的外键名称 'chat_rooms' 而不是 'chatroom_members'
+        # 同时使用 'sent_messages' 而不是 'messages'
+        users = CustomUser.objects.annotate(
+            message_count=Count('sent_messages', filter=Q(sent_messages__timestamp__gte=start_date)),
+            chat_room_count=Count('chat_rooms', distinct=True),  # ✅ 修复：chat_rooms
+        ).filter(
+            is_active=True
+        ).order_by('-message_count')[:limit]
+
+        ranking = []
+        for user in users:
+            ranking.append({
+                'id': user.id,
+                'username': user.username,
+                'real_name': user.real_name,
+                'avatar_url': user.get_avatar_url() if hasattr(user, 'get_avatar_url') else (
+                    user.avatar.url if user.avatar else None),
+                'department': user.department.name if user.department else None,
+                'message_count': user.message_count,
+                'chat_room_count': user.chat_room_count,
+                'last_active': user.last_login.isoformat() if user.last_login else None
+            })
+
+        return Response({'ranking': ranking, 'days': days, 'limit': limit})
+
+    # chat/views.py - 检查 chat_room_ranking 方法
+
+    @action(detail=False, methods=['get'])
+    def chat_room_ranking(self, request):
+        """👥 热门聊天室排行榜"""
+        limit = int(request.query_params.get('limit', 10))
+        days = int(request.query_params.get('days', 7))
+        start_date = timezone.now() - timedelta(days=days)
+
+        # ✅ 这里使用 'messages' 是正确的，因为 ChatRoom.messages 是正确的外键
+        rooms = ChatRoom.objects.annotate(
+            message_count=Count('messages', filter=Q(messages__timestamp__gte=start_date)),
+            member_count=Count('members', distinct=True)
+        ).filter(
+            is_deleted=False
+        ).order_by('-message_count')[:limit]
+
+        ranking = []
+        for room in rooms:
+            ranking.append({
+                'id': room.id,
+                'name': room.display_name,
+                'room_type': room.room_type,
+                'message_count': room.message_count,
+                'member_count': room.member_count,
+                'created_at': room.created_at.isoformat()
+            })
+
+        return Response({'ranking': ranking, 'days': days, 'limit': limit})
+
+    @action(detail=False, methods=['get'])
+    def message_type_distribution(self, request):
+        """📊 消息类型分布"""
+        days = int(request.query_params.get('days', 30))
+        start_date = timezone.now() - timedelta(days=days)
+
+        distribution = Message.objects.filter(
+            timestamp__gte=start_date
+        ).values('message_type').annotate(
+            count=Count('id')
+        ).order_by('-count')
+
+        total = sum(item['count'] for item in distribution)
+
+        result = []
+        for item in distribution:
+            result.append({
+                'type': item['message_type'],
+                'count': item['count'],
+                'percentage': round((item['count'] / max(total, 1)) * 100, 2)
+            })
+
+        return Response({
+            'distribution': result,
+            'total': total,
+            'days': days
+        })
+
+    @action(detail=False, methods=['get'])
+    def peak_hours(self, request):
+        """⏰ 活跃时段分析"""
+        days = int(request.query_params.get('days', 7))
+        start_date = timezone.now() - timedelta(days=days)
+
+        # 按小时统计消息数
+        from django.db.models.functions import ExtractHour
+        hourly_stats = Message.objects.filter(
+            timestamp__gte=start_date
+        ).annotate(
+            hour=ExtractHour('timestamp')
+        ).values('hour').annotate(
+            count=Count('id')
+        ).order_by('hour')
+
+        # 填充 24 小时数据
+        hours_data = {i: 0 for i in range(24)}
+        for item in hourly_stats:
+            hours_data[item['hour']] = item['count']
+
+        peak_hour = max(hours_data, key=hours_data.get)
+
+        return Response({
+            'hourly_distribution': [{'hour': h, 'count': c} for h, c in hours_data.items()],
+            'peak_hour': peak_hour,
+            'peak_count': hours_data[peak_hour],
+            'days': days
+        })
+
+    @action(detail=False, methods=['get'])
+    def export_report(self, request):
+        """📑 导出统计报表"""
+        report_type = request.query_params.get('type', 'overview')
+        response = HttpResponse(content_type='text/csv')
+        response[
+            'Content-Disposition'] = f'attachment; filename="statistics_{report_type}_{timezone.now().strftime("%Y%m%d")}.csv"'
+
+        writer = csv.writer(response)
+
+        if report_type == 'overview':
+            writer.writerow(['统计类型', '数值', '单位'])
+            writer.writerow(['总用户数', CustomUser.objects.count(), '人'])
+            writer.writerow(['今日活跃用户', CustomUser.objects.filter(
+                last_login__gte=timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)).count(), '人'])
+            writer.writerow(['在线用户', CustomUser.objects.filter(is_online=True).count(), '人'])
+            writer.writerow(['总聊天室', ChatRoom.objects.count(), '个'])
+            writer.writerow(['今日消息数', Message.objects.filter(
+                timestamp__gte=timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)).count(), '条'])
+
+        elif report_type == 'users':
+            writer.writerow(['用户 ID', '用户名', '真实姓名', '部门', '消息数', '最后登录'])
+            for user in CustomUser.objects.all()[:100]:
+                writer.writerow([
+                    user.id,
+                    user.username,
+                    user.real_name or '',
+                    user.department.name if user.department else '',
+                    user.messages.count(),
+                    user.last_login.strftime('%Y-%m-%d %H:%M:%S') if user.last_login else ''
+                ])
+
+        return response
+
+    def format_file_size(self, size_bytes):
+        """格式化文件大小"""
+        if size_bytes == 0:
+            return "0 B"
+        units = ['B', 'KB', 'MB', 'GB', 'TB']
+        unit_index = 0
+        size = float(size_bytes)
+        while size >= 1024 and unit_index < len(units) - 1:
+            size /= 1024
+            unit_index += 1
+        return f"{size:.2f} {units[unit_index]}"
+
+
+# chat/views.py - SystemSettingsViewSet 重构版
+
+class SystemSettingsViewSet(viewsets.ViewSet):
+    """🔧 系统设置视图集（企业级配置管理）"""
+    permission_classes = [IsSuperAdmin]
+
+    CACHE_PREFIX = 'company_chat:config:'  # ✅ 添加前缀避免冲突
+
+    # 🔧 预定义配置项（企业级聊天室核心配置）
+    PREDEFINED_CONFIGS = {
+        # ==================== 基础设置 ====================
+        'system.name': {
+            'name': '系统名称',
+            'value_type': 'string',
+            'default': '企业聊天室',
+            'description': '显示在页面标题和登录页的系统名称',
+            'category': 'basic',
+            'validation': {'min_length': 2, 'max_length': 50}
+        },
+        'system.logo_url': {
+            'name': '系统 Logo',
+            'value_type': 'string',
+            'default': '/static/images/logo.png',
+            'description': '系统标识图片的 URL 地址',
+            'category': 'basic',
+            'validation': {'pattern': r'^https?://.*\.(png|jpg|jpeg|svg)$'}
+        },
+        'system.maintenance_mode': {
+            'name': '维护模式',
+            'value_type': 'boolean',
+            'default': 'false',
+            'description': '开启后普通用户无法访问，仅管理员可用',
+            'category': 'basic'
+        },
+        'system.user_registration_enabled': {
+            'name': '用户注册',
+            'value_type': 'boolean',
+            'default': 'false',
+            'description': '是否允许新用户自主注册',
+            'category': 'basic'
+        },
+        'system.default_language': {
+            'name': '默认语言',
+            'value_type': 'string',
+            'default': 'zh-CN',
+            'description': '新用户默认界面语言',
+            'category': 'basic',
+            'choices': ['zh-CN', 'en-US', 'ja-JP']
+        },
+        'system.timezone': {
+            'name': '默认时区',
+            'value_type': 'string',
+            'default': 'Asia/Shanghai',
+            'description': '新用户默认时区设置',
+            'category': 'basic'
+        },
+
+        # ==================== 聊天设置 ====================
+        'chat.max_message_length': {
+            'name': '消息最大长度',
+            'value_type': 'integer',
+            'default': '2000',
+            'description': '单条消息允许的最大字符数',
+            'category': 'chat',
+            'validation': {'min': 100, 'max': 10000}
+        },
+        'chat.typing_timeout': {
+            'name': '输入状态超时',
+            'value_type': 'integer',
+            'default': '5',
+            'description': '输入状态显示超时时间（秒）',
+            'category': 'chat',
+            'validation': {'min': 1, 'max': 30}
+        },
+        'chat.message_retention_days': {
+            'name': '消息保留天数',
+            'value_type': 'integer',
+            'default': '365',
+            'description': '消息自动清理保留天数（0=永久保留）',
+            'category': 'chat',
+            'validation': {'min': 0, 'max': 3650}
+        },
+        'chat.read_receipt_enabled': {
+            'name': '已读回执',
+            'value_type': 'boolean',
+            'default': 'true',
+            'description': '是否显示消息已读状态',
+            'category': 'chat'
+        },
+        'chat.history_sync_enabled': {
+            'name': '历史消息同步',
+            'value_type': 'boolean',
+            'default': 'true',
+            'description': '新设备登录时是否同步历史消息',
+            'category': 'chat'
+        },
+        'chat.emoji_enabled': {
+            'name': '表情功能',
+            'value_type': 'boolean',
+            'default': 'true',
+            'description': '是否启用表情发送功能',
+            'category': 'chat'
+        },
+
+        # ==================== 文件设置 ====================
+        'file.max_upload_size_mb': {
+            'name': '文件上传总上限',
+            'value_type': 'integer',
+            'default': '50',
+            'description': '单个文件允许的最大上传大小（MB）',
+            'category': 'file',
+            'validation': {'min': 1, 'max': 500}
+        },
+        'file.image_max_size_mb': {
+            'name': '图片大小上限',
+            'value_type': 'integer',
+            'default': '20',
+            'description': '图片文件允许的最大大小（MB）',
+            'category': 'file',
+            'validation': {'min': 1, 'max': 100}
+        },
+        'file.video_max_size_mb': {
+            'name': '视频大小上限',
+            'value_type': 'integer',
+            'default': '100',
+            'description': '视频文件允许的最大大小（MB）',
+            'category': 'file',
+            'validation': {'min': 10, 'max': 500}
+        },
+        'file.audio_max_size_mb': {
+            'name': '音频大小上限',
+            'value_type': 'integer',
+            'default': '30',
+            'description': '音频文件允许的最大大小（MB）',
+            'category': 'file',
+            'validation': {'min': 1, 'max': 100}
+        },
+        'file.allowed_types': {
+            'name': '允许的文件类型',
+            'value_type': 'json',
+            'default': '["image", "video", "audio", "file"]',
+            'description': '允许上传的文件类型列表',
+            'category': 'file',
+            'validation': {'is_array': True}
+        },
+        'file.image_formats': {
+            'name': '允许的图片格式',
+            'value_type': 'json',
+            'default': '["jpg", "jpeg", "png", "gif", "webp"]',
+            'description': '允许上传的图片文件格式',
+            'category': 'file'
+        },
+        'file.video_formats': {
+            'name': '允许的视频格式',
+            'value_type': 'json',
+            'default': '["mp4", "webm", "mov"]',
+            'description': '允许上传的视频文件格式',
+            'category': 'file'
+        },
+
+        # ==================== 语音设置 ====================
+        'voice.max_duration_seconds': {
+            'name': '语音消息最大时长',
+            'value_type': 'integer',
+            'default': '60',
+            'description': '语音消息允许的最大录制时长（秒）',
+            'category': 'voice',
+            'validation': {'min': 10, 'max': 300}
+        },
+        'voice.min_duration_seconds': {
+            'name': '语音消息最小时长',
+            'value_type': 'integer',
+            'default': '1',
+            'description': '语音消息允许的最小录制时长（秒）',
+            'category': 'voice',
+            'validation': {'min': 1, 'max': 10}
+        },
+        'voice.allowed_formats': {
+            'name': '语音格式',
+            'value_type': 'json',
+            'default': '["webm", "mp3", "m4a", "ogg"]',
+            'description': '允许的语音文件格式',
+            'category': 'voice'
+        },
+        'voice.auto_transcribe': {
+            'name': '语音转文字',
+            'value_type': 'boolean',
+            'default': 'false',
+            'description': '是否自动将语音消息转换为文字',
+            'category': 'voice'
+        },
+
+        # ==================== 安全设置 ====================
+        'security.login_max_attempts': {
+            'name': '登录最大尝试次数',
+            'value_type': 'integer',
+            'default': '5',
+            'description': '连续登录失败最大次数后锁定账户',
+            'category': 'security',
+            'validation': {'min': 3, 'max': 20}
+        },
+        'security.login_lockout_minutes': {
+            'name': '登录锁定时间',
+            'value_type': 'integer',
+            'default': '15',
+            'description': '登录失败锁定账户的时长（分钟）',
+            'category': 'security',
+            'validation': {'min': 5, 'max': 1440}
+        },
+        'security.session_timeout_hours': {
+            'name': '会话超时时间',
+            'value_type': 'integer',
+            'default': '24',
+            'description': '用户会话无操作超时时间（小时）',
+            'category': 'security',
+            'validation': {'min': 1, 'max': 168}
+        },
+        'security.password_min_length': {
+            'name': '密码最小长度',
+            'value_type': 'integer',
+            'default': '8',
+            'description': '用户密码要求的最小长度',
+            'category': 'security',
+            'validation': {'min': 6, 'max': 32}
+        },
+        'security.password_require_special': {
+            'name': '密码特殊字符',
+            'value_type': 'boolean',
+            'default': 'true',
+            'description': '密码是否必须包含特殊字符',
+            'category': 'security'
+        },
+        'security.sensitive_words': {
+            'name': '敏感词过滤',
+            'value_type': 'json',
+            'default': '[]',
+            'description': '消息内容敏感词列表（正则表达式）',
+            'category': 'security',
+            'validation': {'is_array': True}
+        },
+
+        # ==================== 通知设置 ====================
+        'notification.desktop_enabled': {
+            'name': '桌面通知',
+            'value_type': 'boolean',
+            'default': 'true',
+            'description': '是否启用浏览器桌面通知',
+            'category': 'notification'
+        },
+        'notification.sound_enabled': {
+            'name': '声音提醒',
+            'value_type': 'boolean',
+            'default': 'true',
+            'description': '是否启用新消息声音提醒',
+            'category': 'notification'
+        },
+        'notification.vibrate_enabled': {
+            'name': '震动提醒',
+            'value_type': 'boolean',
+            'default': 'true',
+            'description': '是否启用移动端震动提醒',
+            'category': 'notification'
+        },
+        'notification.mention_sound': {
+            'name': '@提醒声音',
+            'value_type': 'boolean',
+            'default': 'true',
+            'description': '@提及是否使用特殊提醒音',
+            'category': 'notification'
+        },
+        'notification.badge_enabled': {
+            'name': '角标显示',
+            'value_type': 'boolean',
+            'default': 'true',
+            'description': '是否在浏览器标签显示未读数角标',
+            'category': 'notification'
+        },
+
+        # ==================== 高级设置 ====================
+        'advanced.cache_ttl_seconds': {
+            'name': '缓存过期时间',
+            'value_type': 'integer',
+            'default': '300',
+            'description': '系统缓存默认过期时间（秒）',
+            'category': 'advanced',
+            'validation': {'min': 60, 'max': 86400}
+        },
+        'advanced.api_rate_limit': {
+            'name': 'API 限流',
+            'value_type': 'integer',
+            'default': '100',
+            'description': '每用户每分钟最大请求次数',
+            'category': 'advanced',
+            'validation': {'min': 10, 'max': 1000}
+        },
+        'advanced.log_level': {
+            'name': '日志级别',
+            'value_type': 'string',
+            'default': 'INFO',
+            'description': '系统日志记录级别',
+            'category': 'advanced',
+            'choices': ['DEBUG', 'INFO', 'WARNING', 'ERROR']
+        },
+        'advanced.enable_compression': {
+            'name': '响应压缩',
+            'value_type': 'boolean',
+            'default': 'true',
+            'description': '是否启用响应数据压缩',
+            'category': 'advanced'
+        },
+    }
+
+    # 配置分类定义
+    CONFIG_CATEGORIES = [
+        {'key': 'basic', 'name': '基础设置', 'icon': 'fas fa-cog', 'order': 1},
+        {'key': 'chat', 'name': '聊天设置', 'icon': 'fas fa-comments', 'order': 2},
+        {'key': 'file', 'name': '文件设置', 'icon': 'fas fa-file', 'order': 3},
+        {'key': 'voice', 'name': '语音设置', 'icon': 'fas fa-microphone', 'order': 4},
+        {'key': 'security', 'name': '安全设置', 'icon': 'fas fa-shield-alt', 'order': 5},
+        {'key': 'notification', 'name': '通知设置', 'icon': 'fas fa-bell', 'order': 6},
+        {'key': 'advanced', 'name': '高级设置', 'icon': 'fas fa-sliders-h', 'order': 7},
+    ]
+
+    @action(detail=False, methods=['get'])
+    def categories(self, request):
+        """📋 获取配置分类列表"""
+        return Response({'categories': self.CONFIG_CATEGORIES})
+
+    @action(detail=False, methods=['get'])
+    def list_configs(self, request):
+        """📋 获取所有系统配置（支持分类过滤）"""
+
+        category = request.query_params.get('category', '')
+        search = request.query_params.get('search', '').strip()
+
+        queryset = SystemConfig.objects.all()
+
+        # 分类过滤
+        if category:
+            queryset = queryset.filter(category=category)
+
+        # 搜索过滤
+        if search:
+            queryset = queryset.filter(
+                Q(key__icontains=search) |
+                Q(name__icontains=search) |
+                Q(description__icontains=search)
+            )
+
+        configs = []
+        for config in queryset.order_by('key'):
+            predefined = self.PREDEFINED_CONFIGS.get(config.key, {})
+            configs.append({
+                'key': config.key,
+                'name': config.name,
+                'value': config.get_typed_value(),
+                'value_type': config.value_type,
+                'category': config.category,
+                'description': config.description,
+                'default_value': config.default_value,
+                'choices': predefined.get('choices'),
+                'validation': predefined.get('validation'),
+                'updated_at': config.updated_at.isoformat() if config.updated_at else None,
+                'updated_by': config.updated_by.username if config.updated_by else None,
+                'is_modified': config.value != config.default_value
+            })
+
+        return Response({
+            'configs': configs,
+            'total': len(configs),
+            'categories': self.CONFIG_CATEGORIES
+        })
+
+    @action(detail=False, methods=['get'])
+    def get_config(self, request):
+        """🔍 获取单个配置项详情"""
+        
+
+        key = request.query_params.get('key')
+        if not key:
+            return Response({'error': '配置键不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            config = SystemConfig.objects.get(key=key)
+            predefined = self.PREDEFINED_CONFIGS.get(key, {})
+
+            return Response({
+                'key': config.key,
+                'name': config.name,
+                'value': config.get_typed_value(),
+                'value_type': config.value_type,
+                'category': config.category,
+                'description': config.description,
+                'default_value': config.default_value,
+                'choices': predefined.get('choices'),
+                'validation': predefined.get('validation'),
+                'updated_at': config.updated_at.isoformat() if config.updated_at else None,
+                'updated_by': config.updated_by.username if config.updated_by else None
+            })
+        except SystemConfig.DoesNotExist:
+            # 返回预定义配置（未创建过）
+            if key in self.PREDEFINED_CONFIGS:
+                predefined = self.PREDEFINED_CONFIGS[key]
+                return Response({
+                    'key': key,
+                    'name': predefined['name'],
+                    'value': predefined.get('default'),
+                    'value_type': predefined['value_type'],
+                    'category': predefined['category'],
+                    'description': predefined.get('description', ''),
+                    'default_value': predefined.get('default'),
+                    'choices': predefined.get('choices'),
+                    'validation': predefined.get('validation'),
+                    'is_default': True
+                })
+            return Response({'error': '配置项不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=False, methods=['get'])
+    def export_configs(self, request):
+        """📤 导出系统配置（修复版）"""
+
+        # 获取导出格式（默认 CSV）
+        export_format = request.query_params.get('fmt', 'csv').lower()
+        category = request.query_params.get('category', '')
+
+        logger.info(f'导出系统配置: {category} by {request.user} export_format: {export_format}')
+
+        # 构建查询集
+        queryset = SystemConfig.objects.all()
+        if category:
+            queryset = queryset.filter(category=category)
+
+        # 按分类和键排序
+        queryset = queryset.order_by('category', 'key')
+
+
+        if export_format == 'json':
+            # JSON 格式导出
+            configs = []
+            for config in queryset:
+                configs.append({
+                    'key': config.key,
+                    'name': config.name,
+                    'value': config.get_typed_value(),
+                    'value_type': config.value_type,
+                    'category': config.category,
+                    'description': config.description,
+                    'default_value': config.default_value,
+                    'updated_at': config.updated_at.isoformat() if config.updated_at else None,
+                    'updated_by': config.updated_by.username if config.updated_by else None
+                })
+
+            response = HttpResponse(
+                json.dumps(configs, ensure_ascii=False, indent=2),
+                content_type='application/json; charset=utf-8'
+            )
+            filename = f'system_configs_{timezone.now().strftime("%Y%m%d_%H%M%S")}.json'
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
+
+        else:
+            # CSV 格式导出（默认）
+            response = HttpResponse(content_type='text/csv; charset=utf-8')
+            filename = f'system_configs_{timezone.now().strftime("%Y%m%d_%H%M%S")}.csv'
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+            # 🔧 关键修复：添加 BOM 头，确保 Excel 正确显示中文
+            response.write('\ufeff')
+
+            writer = csv.writer(response)
+
+            # 写入表头
+            writer.writerow([
+                '配置键', '配置名称', '配置值', '值类型', '分类',
+                '描述', '默认值', '更新时间', '更新人'
+            ])
+
+            # 写入数据
+            for config in queryset:
+                writer.writerow([
+                    config.key,
+                    config.name,
+                    config.get_typed_value(),
+                    config.value_type,
+                    config.get_category_display(),
+                    config.description or '',
+                    config.default_value or '',
+                    config.updated_at.strftime('%Y-%m-%d %H:%M:%S') if config.updated_at else '',
+                    config.updated_by.username if config.updated_by else ''
+                ])
+
+            return response
+
+
+    @action(detail=False, methods=['post'])
+    def update_config(self, request):
+        """✏️ 更新单个配置项"""
+        
+        from django.core.cache import cache
+
+        key = request.data.get('key')
+        value = request.data.get('value')
+
+
+        if not key or value is None:
+            return Response({'error': '配置键和值不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 验证配置项是否存在于预定义列表中
+        if key not in self.PREDEFINED_CONFIGS:
+            return Response({'error': f'无效的配置项: {key}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        predefined = self.PREDEFINED_CONFIGS[key]
+        value_type = predefined['value_type']
+
+        # 🔧 类型验证和转换
+        try:
+            if value_type == 'integer':
+                value = int(value)
+                self._validate_integer(value, predefined.get('validation'))
+            elif value_type == 'float':
+                value = float(value)
+            elif value_type == 'boolean':
+                value = str(value).lower() in ('true', '1', 'yes', True)
+            elif value_type == 'json':
+                if isinstance(value, str):
+                    value = json.loads(value)
+                self._validate_json(value, predefined.get('validation'))
+                value = json.dumps(value, ensure_ascii=False)
+            elif value_type == 'string':
+                value = str(value).strip()
+                self._validate_string(value, predefined.get('validation'))
+        except (ValueError, json.JSONDecodeError, ValidationError) as e:
+            return Response({'error': f'值验证失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 🔧 业务规则验证
+        self._validate_business_rules(key, value)
+
+        with transaction.atomic():
+            config, created = SystemConfig.objects.update_or_create(
+                key=key,
+                defaults={
+                    'name': predefined['name'],
+                    'value': str(value),
+                    'value_type': value_type,
+                    'description': predefined.get('description', ''),
+                    'category': predefined['category'],
+                    'default_value': predefined.get('default', ''),
+                    'updated_by': request.user
+                }
+            )
+
+            # 🔧 关键修复：安全的缓存清除（带异常处理 + 统一前缀）
+            try:
+                cache_key = f'{self.CACHE_PREFIX}{key}'
+                cache.delete(cache_key)
+                cache.delete(f'{self.CACHE_PREFIX}all')
+            except Exception as e:
+                # ✅ 缓存失败不影响配置更新，仅记录日志
+                logger.warning(f'清除缓存失败：{e}')
+
+        logger.info(f'配置更新：{key} = {value} by {request.user.username}')
+
+        return Response({
+            'message': '配置更新成功',
+            'config': {
+                'key': config.key,
+                'name': config.name,
+                'value': config.get_typed_value(),
+                'updated_at': config.updated_at.isoformat()
+            }
+        })
+
+    @action(detail=False, methods=['post'])
+    def batch_update(self, request):
+        """📦 批量更新配置"""
+        
+
+        configs = request.data.get('configs', [])
+        if not configs:
+            return Response({'error': '配置列表不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+        results = []
+        errors = []
+
+        with transaction.atomic():
+            for item in configs:
+                key = item.get('key')
+                value = item.get('value')
+
+                if not key or key not in self.PREDEFINED_CONFIGS:
+                    errors.append({'key': key, 'error': '无效的配置项'})
+                    continue
+
+                try:
+                    predefined = self.PREDEFINED_CONFIGS[key]
+                    value_type = predefined['value_type']
+
+                    # 类型转换
+                    if value_type == 'integer':
+                        value = int(value)
+                        self._validate_integer(value, predefined.get('validation'))
+                    elif value_type == 'float':
+                        value = float(value)
+                    elif value_type == 'boolean':
+                        value = str(value).lower() in ('true', '1', 'yes', True)
+                    elif value_type == 'json':
+                        if isinstance(value, str):
+                            value = json.loads(value)
+                        self._validate_json(value, predefined.get('validation'))
+                        value = json.dumps(value, ensure_ascii=False)
+                    elif value_type == 'string':
+                        value = str(value).strip()
+                        self._validate_string(value, predefined.get('validation'))
+
+                    config, _ = SystemConfig.objects.update_or_create(
+                        key=key,
+                        defaults={
+                            'name': predefined['name'],
+                            'value': str(value),
+                            'value_type': value_type,
+                            'category': predefined['category'],
+                            'updated_by': request.user
+                        }
+                    )
+                    cache.delete(f'{self.CACHE_PREFIX}{key}')
+                    results.append({'key': key, 'status': 'success'})
+
+                except Exception as e:
+                    errors.append({'key': key, 'error': str(e)})
+
+        return Response({
+            'message': f'批量更新完成: {len(results)} 成功, {len(errors)} 失败',
+            'results': results,
+            'errors': errors
+        })
+
+    @action(detail=False, methods=['post'])
+    def reset_to_default(self, request):
+        """🔄 重置配置为默认值"""
+        
+
+        key = request.data.get('key')
+        if not key:
+            return Response({'error': '配置键不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if key not in self.PREDEFINED_CONFIGS:
+            return Response({'error': '无效的配置项'}, status=status.HTTP_400_BAD_REQUEST)
+
+        predefined = self.PREDEFINED_CONFIGS[key]
+
+        with transaction.atomic():
+            config, created = SystemConfig.objects.update_or_create(
+                key=key,
+                defaults={
+                    'name': predefined['name'],
+                    'value': predefined.get('default', ''),
+                    'value_type': predefined['value_type'],
+                    'category': predefined['category'],
+                    'default_value': predefined.get('default', ''),
+                    'updated_by': request.user
+                }
+            )
+            cache.delete(f'{self.CACHE_PREFIX}{key}')
+
+        return Response({
+            'message': '配置已重置为默认值',
+            'config': {
+                'key': config.key,
+                'value': config.get_typed_value()
+            }
+        })
+
+    @action(detail=False, methods=['get'])
+    def system_info(self, request):
+        """💻 获取系统信息（修复缓存调用）"""
+
+        # 🔧 安全的缓存检查
+        def safe_cache_check():
+            try:
+                result = cache.get_or_set('system_health_check', lambda: True, timeout=60)
+                return 'ok' if result else 'error'
+            except Exception as e:
+                logger.warning(f'缓存检查失败: {e}')
+                return 'degraded'
+
+        # 资源信息（带异常处理）
+        try:
+            cpu_percent = psutil.cpu_percent(interval=0.5)
+            cpu_count = psutil.cpu_count()
+        except:
+            cpu_percent, cpu_count = 0, 0
+
+        try:
+            memory = psutil.virtual_memory()
+            memory_info = {
+                'total_gb': round(memory.total / (1024 ** 3), 2),
+                'used_gb': round(memory.used / (1024 ** 3), 2),
+                'available_gb': round(memory.available / (1024 ** 3), 2),
+                'usage_percent': memory.percent
+            }
+        except:
+            memory_info = {'total_gb': 0, 'used_gb': 0, 'available_gb': 0, 'usage_percent': 0}
+
+        try:
+            disk = psutil.disk_usage('/')
+            disk_info = {
+                'total_gb': round(disk.total / (1024 ** 3), 2),
+                'used_gb': round(disk.used / (1024 ** 3), 2),
+                'free_gb': round(disk.free / (1024 ** 3), 2),
+                'usage_percent': disk.percent
+            }
+        except:
+            disk_info = {'total_gb': 0, 'used_gb': 0, 'free_gb': 0, 'usage_percent': 0}
+
+        db_config = settings.DATABASES.get('default', {})
+
+        return Response({
+            'server': {
+                'hostname': platform.node(),
+                'os': f'{platform.system()} {platform.release()}',
+                'python_version': platform.python_version(),
+                'django_version': django.get_version()
+            },
+            'resources': {
+                'cpu': {'usage_percent': cpu_percent, 'cores': cpu_count},
+                'memory': memory_info,
+                'disk': disk_info
+            },
+            'database': {
+                'engine': db_config.get('ENGINE', ''),
+                'name': db_config.get('NAME', ''),
+                'connections': len(connection.queries) if settings.DEBUG else 'N/A'
+            },
+            'cache': {
+                'backend': settings.CACHES['default']['BACKEND'],
+                'status': safe_cache_check()
+            },
+            'timestamp': timezone.now().isoformat()
+        })
+
+    @action(detail=False, methods=['post'])
+    def clear_cache(self, request):
+        """🗑️ 清除系统缓存"""
+        cache_type = request.data.get('type', 'all')
+
+        if cache_type == 'all':
+            cache.clear()
+            message = '所有缓存已清除'
+        elif cache_type == 'config':
+            for key in self.PREDEFINED_CONFIGS.keys():
+                cache.delete(f'{self.CACHE_PREFIX}{key}')
+            message = '配置缓存已清除'
+        elif cache_type == 'user':
+            pattern = 'user_*'
+            message = '用户缓存已清除'
+        else:
+            return Response({'error': '无效的缓存类型'}, status=status.HTTP_400_BAD_REQUEST)
+
+        logger.info(f'缓存清除: {cache_type} by {request.user.username}')
+        return Response({'message': message})
+
+    @action(detail=False, methods=['post'])
+    def send_test_notification(self, request):
+        """📧 发送测试通知"""
+        from django.core.mail import send_mail
+
+        email = request.data.get('email', request.user.email)
+
+        try:
+            send_mail(
+                subject='企业聊天室 - 系统通知测试',
+                message=f'这是一封测试通知邮件。\n\n发送时间: {timezone.now().strftime("%Y-%m-%d %H:%M:%S")}\n接收者: {email}',
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[email],
+                fail_silently=False
+            )
+            return Response({'message': f'测试通知已发送至 {email}'})
+        except Exception as e:
+            logger.error(f'发送测试通知失败: {e}')
+            return Response({'error': f'发送失败: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    # ==================== 辅助验证方法 ====================
+
+    def _validate_integer(self, value, validation):
+        if not validation:
+            return
+        if 'min' in validation and value < validation['min']:
+            raise ValidationError(f'值不能小于 {validation["min"]}')
+        if 'max' in validation and value > validation['max']:
+            raise ValidationError(f'值不能大于 {validation["max"]}')
+
+    def _validate_string(self, value, validation):
+        if not validation:
+            return
+        if 'min_length' in validation and len(value) < validation['min_length']:
+            raise ValidationError(f'长度不能小于 {validation["min_length"]} 字符')
+        if 'max_length' in validation and len(value) > validation['max_length']:
+            raise ValidationError(f'长度不能大于 {validation["max_length"]} 字符')
+        if 'pattern' in validation and not re.match(validation['pattern'], value):
+            raise ValidationError('格式不符合要求')
+
+    def _validate_json(self, value, validation):
+        if not validation:
+            return
+        if validation.get('is_array') and not isinstance(value, list):
+            raise ValidationError('必须是数组格式')
+
+    def _validate_business_rules(self, key, value):
+        """业务规则验证"""
+        rules = {
+            'file.max_upload_size_mb': lambda v: v <= 500 or '文件上传大小不能超过 500MB',
+            'file.image_max_size_mb': lambda v: v <= 100 or '图片大小不能超过 100MB',
+            'file.video_max_size_mb': lambda v: v <= 500 or '视频大小不能超过 500MB',
+            'voice.max_duration_seconds': lambda v: v <= 300 or '语音时长不能超过 5 分钟',
+            'chat.message_retention_days': lambda v: v <= 3650 or '消息保留天数不能超过 10 年',
+            'security.login_max_attempts': lambda v: 3 <= v <= 20 or '登录尝试次数必须在 3-20 之间',
+        }
+
+        if key in rules:
+            result = rules[key](value)
+            if result is not True:
+                raise ValidationError(result)
+

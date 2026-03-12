@@ -4,9 +4,26 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理员控制台 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260305-1">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260312-27acf00">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260312-27acf00">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260305-1">
+    <!-- 🔧 新增：Chart.js 用于图表展示 -->
+<!--    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>-->
+    <script src="/static/js/dist/chart.min.js"></script>
+    <!-- 🔧 关键修复2: 添加 Chart.js 加载失败的回退方案 -->
+    <script>
+        // 检查 Chart.js 是否加载成功
+        if (typeof Chart === 'undefined') {
+            console.warn('Chart.js 加载失败，尝试备用 CDN...');
+            // 备用 CDN
+            const fallbackScript = document.createElement('script');
+            fallbackScript.src = 'https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js';
+            fallbackScript.integrity = 'sha256-21g/1W4ab2N5LXN6s4xQ5Z5a2xQ5Z5a2xQ5Z5a2xQ5Z=';
+            fallbackScript.crossOrigin = 'anonymous';
+            document.head.appendChild(fallbackScript);
+        }
+    </script>
 
 </head>
 <body>
@@ -26,33 +43,21 @@
         </div>
 
         <nav class="admin-nav">
-            <a href="#" class="nav-item active" data-tab="users">
+            <a href="#" class="nav-item active" data-tab="stats">
+                <i class="fas fa-chart-bar"></i> 数据统计
+            </a>
+            <a href="#" class="nav-item" data-tab="users">
                 <i class="fas fa-users"></i> 用户管理
             </a>
             <a href="#" class="nav-item" data-tab="rooms">
                 <i class="fas fa-comments"></i> 聊天室管理
-            </a>
-            <a href="#" class="nav-item" data-tab="stats">
-                <i class="fas fa-chart-bar"></i> 数据统计
             </a>
             <a href="#" class="nav-item" data-tab="settings">
                 <i class="fas fa-cog"></i> 系统设置
             </a>
         </nav>
 
-        <!--        <div class="admin-sidebar-footer">-->
-        <!--            <button class="btn btn-secondary btn-block" onclick="logout()">-->
-        <!--                <i class="fas fa-sign-out-alt"></i> 退出登录-->
-        <!--            </button>-->
-        <!--        </div>-->
-
-        <!-- 侧边栏底部 -->
         <div class="sidebar-footer">
-            <!--            <div class="user-info">-->
-            <!--                <img src="/static/images/default-avatar.png" id="adminAvatar" alt="头像">-->
-            <!--                <span id="adminUsername"></span>-->
-            <!--            </div>-->
-
             <!-- 跳转到聊天室按钮 -->
             <button id="gotoChatBtn" class="btn-goto-chat">
                 <i class="fas fa-comments"></i>
@@ -60,7 +65,7 @@
             </button>
 
             <!-- 退出登录按钮 -->
-            <button onclick="logout()" class="btn-logout">
+            <button onclick="adminConsole.logout()" class="btn-logout">
                 <i class="fas fa-sign-out-alt"></i>
                 <span>退出登录</span>
             </button>
@@ -76,18 +81,152 @@
             </div>
             <div class="admin-header-right">
                 <span id="adminUsername"></span>
-                <img id="adminAvatar" src="/static/images/default-avatar.png" alt="头像">
+                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260312-27acf00" alt="头像">
             </div>
         </header>
 
         <div class="admin-content">
-            <!-- 用户管理 -->
-            <div id="usersTab" class="admin-tab active">
+
+            <!-- 数据统计标签页 -->
+            <div id="statsTab" class="admin-tab active">
+                <div class="tab-header">
+                    <h2><i class="fas fa-chart-bar"></i> 数据统计</h2>
+                    <div class="time-selector">
+                        <select id="timeRangeSelect" class="dropdown">
+                            <option value="7" selected>近 7 天</option>
+                            <option value="30">近 30 天</option>
+                            <option value="90">近 90 天</option>
+                        </select>
+                        <button onclick="adminStatistics.refreshAll()" class="btn btn-secondary">
+                            <i class="fas fa-sync"></i> 刷新
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 概览统计卡片 -->
+                <div class="stats-overview" id="statsOverview">
+                    <div class="stat-card">
+                        <div class="stat-icon users">
+                            <i class="fas fa-users"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="totalUsers">0</h3>
+                            <p>总用户数</p>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon online">
+                            <i class="fas fa-signal"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="onlineUsers">0</h3>
+                            <p>在线用户</p>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon active">
+                            <i class="fas fa-user-check"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="activeUsers">0</h3>
+                            <p>今日活跃</p>
+                            <div class="stat-trend" id="userGrowth">
+                                <i class="fas fa-minus"></i> 0%
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon messages">
+                            <i class="fas fa-comments"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="todayMessages">0</h3>
+                            <p>今日消息</p>
+                            <div class="stat-trend" id="messageGrowth">
+                                <i class="fas fa-minus"></i> 0%
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon rooms">
+                            <i class="fas fa-door-open"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="totalRooms">0</h3>
+                            <p>聊天室总数</p>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon storage">
+                            <i class="fas fa-hdd"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="storageUsed">0 B</h3>
+                            <p>存储使用</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 主图表区域 -->
+                <div class="charts-container">
+                    <div class="chart-row">
+                        <div class="chart-box">
+                            <!-- 🔧 关键修复：标题使用静态文本，变量在 JS 中动态设置 -->
+                            <h4><i class="fas fa-chart-line"></i> 用户趋势</h4>
+                            <canvas id="userTrendsChart"></canvas>
+                        </div>
+                        <div class="chart-box">
+                            <h4><i class="fas fa-chart-area"></i> 消息趋势</h4>
+                            <canvas id="messageTrendsChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="chart-row">
+                        <div class="chart-box">
+                            <h4><i class="fas fa-chart-pie"></i> 消息类型分布</h4>
+                            <canvas id="typeChart"></canvas>
+                        </div>
+                        <div class="chart-box">
+                            <h4><i class="fas fa-clock"></i> 活跃时段分析</h4>
+                            <canvas id="peakHoursChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="chart-row">
+                        <div class="chart-box">
+                            <h4><i class="fas fa-trophy"></i> 活跃用户 TOP 10</h4>
+                            <div id="userRankingList"></div>
+                        </div>
+                        <div class="chart-box">
+                            <h4><i class="fas fa-share-alt"></i> 热门聊天室 TOP 5</h4>
+                            <div id="roomRankingList"></div>
+                        </div>
+                    </div>
+
+                    <div class="chart-row">
+                        <div class="chart-box chart-full">
+                            <h4><i class="fas fa-building"></i> 部门用户分布</h4>
+                            <canvas id="departmentChart"></canvas>
+                        </div>
+                    </div>
+
+
+                </div>
+            </div>
+
+
+            <!-- 用户管理标签页 -->
+            <div id="usersTab" class="admin-tab">
                 <div class="admin-toolbar">
-                    <!--                    <div class="search-box">-->
-                    <!--                        <i class="fas fa-search"></i>-->
-                    <!--                        <input type="text" id="userSearch" placeholder="搜索用户...">-->
-                    <!--                    </div>-->
+                    <div class="search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" id="userSearch" placeholder="搜索用户...">
+                    </div>
                     <button class="btn btn-primary" onclick="adminConsole.openCreateUserModal()">
                         <i class="fas fa-plus"></i> 添加用户
                     </button>
@@ -95,8 +234,8 @@
                         <i class="fas fa-sync"></i> 刷新
                     </button>
 
-                    <input type="text" class="search-input" placeholder="搜索用户..."
-                           oninput="adminConsole.searchUsers(this.value)">
+                    <!--                    <input type="text" class="search-input" placeholder="搜索用户..."-->
+                    <!--                           oninput="adminConsole.searchUsers(this.value)">-->
                 </div>
 
                 <div class="admin-table-container" id="usersTableContainer">
@@ -123,16 +262,159 @@
                 </div>
             </div>
 
-            <!-- 其他标签页 -->
+
+            <!-- 🔑 聊天室管理标签页（仅超级管理员可见） -->
             <div id="roomsTab" class="admin-tab">
-                <h3>聊天室管理功能开发中...</h3>
+                <!-- 聊天室列表区域 -->
+                <div id="chatRoomsListContainer">
+                    <div class="admin-toolbar" style="display: flex">
+                        <div class="search-box">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="roomSearchInput" placeholder="搜索聊天室...">
+                        </div>
+                        <span class="room-count" id="roomCount" style="display: none">0 个聊天室</span>
+                        <button class="btn btn-secondary" id="refreshRoomsBtn">
+                            <i class="fas fa-sync-alt"></i> 刷新
+                        </button>
+                    </div>
+
+                    <div class="admin-table-container">
+                        <table class="admin-table">
+                            <thead>
+                            <tr>
+                                <th>聊天室</th>
+                                <th>类型</th>
+                                <th>成员</th>
+                                <th>最后消息</th>
+                                <th>更新时间</th>
+                                <th>操作</th>
+                            </tr>
+                            </thead>
+                            <tbody id="chatRoomsTableBody">
+                            <!-- 聊天室列表将通过JS动态生成 -->
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- 聊天室列表加载更多按钮容器 -->
+                    <div id="loadMoreChatRoomsContainer" class="load-more-container" style="display: none;">
+                        <button id="loadMoreChatRoomsBtn" class="btn btn-secondary">
+                            加载更多
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 聊天历史区域（初始隐藏） -->
+                <div id="roomHistoryContainer" style="display:none;">
+                    <div class="admin-toolbar">
+                        <div class="search-box">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="messageSearchInput" placeholder="搜索消息...">
+                        </div>
+                        <button class="btn btn-secondary" id="backToRoomsBtn">
+                            <i class="fas fa-arrow-left"></i> 返回
+                        </button>
+                        <span id="roomHistoryTitle">聊天历史</span>
+                        <div class="room-info-badge" id="roomTypeBadge">群聊</div>
+                        <button class="btn btn-secondary" id="exportHistoryBtn" style="display: none;">
+                            <i class="fas fa-download"></i> 导出
+                        </button>
+                        <!--                        <div class="toolbar-left">-->
+                        <!--                        </div>-->
+                        <!--                        <div class="toolbar-right">-->
+                        <!--                        </div>-->
+                    </div>
+
+                    <div class="messages-history-container" id="messagesHistoryContainer">
+
+                        <div class="messages-history-list" id="messagesHistoryList">
+                            <!-- 消息将通过JS动态生成 -->
+                        </div>
+
+
+                        <div class="load-more-container" id="loadMoreMessagesContainer" style="display: none;">
+                            <button class="btn btn-secondary" id="loadMoreMessagesBtn">加载更多消息</button>
+                        </div>
+
+                        <div class="empty-state" id="historyEmptyState" style="display: none;">
+                            <i class="fas fa-inbox"></i>
+                            <p>暂无消息记录</p>
+                        </div>
+                    </div>
+                </div>
+
             </div>
-            <div id="statsTab" class="admin-tab">
-                <h3>数据统计功能开发中...</h3>
-            </div>
+
+
+            <!-- admin.html - 系统设置标签页重构 -->
+
+            <!-- 🔧 系统设置标签页 -->
             <div id="settingsTab" class="admin-tab">
-                <h3>系统设置功能开发中...</h3>
+                <!-- 分类标签 -->
+                <div class="settings-tabs" id="settingsCategoryTabs">
+                    <!-- 动态生成 -->
+                </div>
+
+                <!-- 配置列表区域 -->
+                <div class="settings-content">
+                    <div class="settings-header">
+                        <h3 id="settingsCategoryTitle">基础设置</h3>
+                        <div class="settings-actions">
+                            <button class="btn btn-secondary" id="refreshBtn"
+                                    onclick="adminSettings.loadConfigs(adminSettings.currentCategory)">
+                                <i class="fas fa-sync"></i> 刷新
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="configList">
+                        <!-- 动态生成配置项 -->
+                    </div>
+                </div>
+
+                <!-- 系统信息面板 -->
+                <div class="settings-section">
+                    <h3><i class="fas fa-info-circle"></i> 系统信息</h3>
+                    <div id="systemInfoPanel">
+                        <!-- 动态生成 -->
+                    </div>
+                </div>
+
+                <!-- 高级操作 -->
+                <div class="settings-section">
+                    <h3><i class="fas fa-tools"></i> 高级操作</h3>
+                    <div class="advanced-actions">
+                        <button class="btn btn-secondary" id="clearCacheBtn">
+                            <i class="fas fa-broom"></i> 清除缓存
+                        </button>
+                        <button class="btn btn-secondary" id="testNotifyBtn">
+                            <i class="fas fa-envelope"></i> 发送测试通知
+                        </button>
+
+                        <!-- 🔧 新增：导出配置按钮组 -->
+                        <div class="btn-group">
+                            <button class="btn btn-secondary" onclick="adminSettings.exportCurrentCategoryConfigs()">
+                                <i class="fas fa-download"></i> 导出当前分类
+                            </button>
+                            <button class="btn btn-primary" onclick="adminSettings.exportAllConfigs()">
+                                <i class="fas fa-file-export"></i> 导出全部配置
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 🔧 导出格式选择（可选扩展） -->
+                    <div class="export-options" style="margin-top: 15px; display: none;">
+                        <small class="text-muted">导出格式：</small>
+                        <label class="radio-inline">
+                            <input type="radio" name="exportFormat" value="csv" checked> CSV
+                        </label>
+                        <label class="radio-inline">
+                            <input type="radio" name="exportFormat" value="json"> JSON
+                        </label>
+                    </div>
+                </div>
             </div>
+
         </div>
     </main>
 </div>
@@ -210,22 +492,22 @@
                 </div>
 
 
-<!--                <div class="form-row">-->
+                <!--                <div class="form-row">-->
 
-                    <!-- 好友分配区域 -->
-                    <div class="form-group">
-                        <label><i class="fas fa-user-friends"></i> 分配好友</label>
-                        <div class="search-box">
-                            <i class="fas fa-search"></i>
-                            <input type="text" id="friendSearchCreate" placeholder="搜索用户...">
-                        </div>
-                        <div class="member-grid" id="friendGridCreate">
-                            <!-- 好友列表将动态生成 -->
-                        </div>
-                        <small class="form-hint">点击用户选择/取消好友，选中的用户将出现在该用户的通讯录中</small>
+                <!-- 好友分配区域 -->
+                <div class="form-group">
+                    <label><i class="fas fa-user-friends"></i> 分配好友</label>
+                    <div class="search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" id="friendSearchCreate" placeholder="搜索用户...">
                     </div>
+                    <div class="member-grid" id="friendGridCreate">
+                        <!-- 好友列表将动态生成 -->
+                    </div>
+                    <small class="form-hint">点击用户选择/取消好友，选中的用户将出现在该用户的通讯录中</small>
+                </div>
 
-<!--                </div>-->
+                <!--                </div>-->
 
             </form>
         </div>
@@ -320,38 +602,55 @@
     </div>
 </div>
 
-<script src="/static/js/utils.js?v=20260305-1"></script>
-<script src="/static/js/api.js?v=20260305-1"></script>
-<script src="/static/js/admin.js?v=20260305-1"></script>
+
+<!-- 加载指示器 -->
+<div class="loading-overlay" id="loadingOverlay" style="display: none;">
+    <div class="loading-spinner">
+        <div class="spinner"></div>
+    </div>
+</div>
+
+<script src="/static/js/utils.js?v=20260312-27acf00"></script>
+<script src="/static/js/api.js?v=20260312-27acf00"></script>
+<script src="/static/js/admin.js?v=20260312-27acf00"></script>
+<script src="/static/js/admin_chat_rooms.js?v=20260312-27acf00"></script>
+<!-- 🔧 新增：数据统计和系统设置 JS -->
+<script src="/static/js/admin_statistics.js?v=20260312-27acf00"></script>
+<script src="/static/js/admin_settings.js?v=20260312-27acf00"></script>
 
 
-<!-- 版本检测脚本（简化版，移除无效的 document.write） -->
 <script>
-    // 从构建时注入的版本号
-    const CURRENT_VERSION = '20260305-1';
-
-    // 检查版本是否更新
-    const LAST_VERSION = sessionStorage.getItem('appVersion');
-    if (LAST_VERSION && LAST_VERSION !== CURRENT_VERSION) {
-        console.log(`✅ 检测到新版本: ${LAST_VERSION} → ${CURRENT_VERSION}`);
-        sessionStorage.setItem('appVersion', CURRENT_VERSION);
-
-        // 5秒后自动提示刷新（避免打断用户操作）
-        setTimeout(() => {
-            if (confirm('🎉 检测到新版本，是否立即刷新以加载最新功能？')) {
-                // 清除 Service Worker 缓存
-                if ('serviceWorker' in navigator) {
-                    navigator.serviceWorker.getRegistrations().then(registrations => {
-                        registrations.forEach(reg => reg.unregister());
-                    });
+    // 🔑 初始化聊天室管理（仅超级管理员）
+    document.addEventListener('DOMContentLoaded', () => {
+        // 检查是否为超级管理员
+        if (window.adminConsole && window.adminConsole.currentUser) {
+            console.log('Current user:', window.adminConsole.currentUser);
+            if (window.adminConsole.currentUser.user_type === 'super_admin') {
+                const chatRoomsNavItem = document.getElementById('chatRoomsNavItem');
+                if (chatRoomsNavItem) {
+                    chatRoomsNavItem.style.display = 'flex';
                 }
-                // 强制刷新
-                location.reload(true);
+                // 初始化聊天室管理客户端
+                if (typeof AdminChatRoomsClient !== 'undefined') {
+                    window.adminChatRoomsClient = new AdminChatRoomsClient();
+                }
             }
-        }, 5000);
-    } else {
-        sessionStorage.setItem('appVersion', CURRENT_VERSION);
-    }
+        }
+
+        // 🔧 新增：初始化数据统计模块（所有管理员可访问）
+        if (typeof AdminStatisticsClient !== 'undefined' &&
+            window.adminConsole && window.adminConsole.currentUser) {
+            window.adminStatistics = new AdminStatisticsClient();
+        }
+
+        // 🔧 新增：初始化系统设置模块（所有管理员可访问）
+        if (typeof AdminSettingsClient !== 'undefined' &&
+            window.adminConsole && window.adminConsole.currentUser) {
+            window.adminSettings = new AdminSettingsClient();
+        }
+
+
+    });
 </script>
 
 </body>

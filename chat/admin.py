@@ -1,5 +1,7 @@
 from django.contrib import admin
-from .models import ChatRoom, Message, MessageReadStatus, MessageDeleteStatus, UserOnlineStatus, ChatRoomDeleteStatus, FileUpload
+from .models import ChatRoom, Message, MessageReadStatus, MessageDeleteStatus, UserOnlineStatus, ChatRoomDeleteStatus, FileUpload, SystemConfig
+
+
 @admin.register(ChatRoom)
 class ChatRoomAdmin(admin.ModelAdmin):
     list_display = ('id', 'name', 'creator', 'room_type',  'is_pinned', 'is_muted', 'is_deleted', 'deleted_at', 'updated_at', 'created_at')
@@ -9,7 +11,7 @@ class ChatRoomAdmin(admin.ModelAdmin):
 @admin.register(Message)
 class MessageAdmin(admin.ModelAdmin):
     list_display = ('id', 'chat_room', 'sender', 'content', 'message_type', 'is_read', 'is_deleted', 'deleted_at', 'timestamp')
-    list_filter = ('chat_room', 'sender')
+    list_filter = ('chat_room', 'sender', 'message_type')
     list_per_page = 20
 
 
@@ -42,5 +44,12 @@ class FileUploadAdmin(admin.ModelAdmin):
 class UserOnlineStatusAdmin(admin.ModelAdmin):
     list_display = ('id', 'user', 'is_online', 'last_seen', 'updated_at')
     list_filter = ('user', 'is_online')
+    list_per_page = 20
+
+
+@admin.register(SystemConfig)
+class SystemConfigAdmin(admin.ModelAdmin):
+    list_display = ('id', 'key', 'name', 'value', 'value_type', 'category', 'description', 'is_public', 'created_at', 'updated_at', 'updated_by')
+    list_filter = ('is_public',)
     list_per_page = 20
 

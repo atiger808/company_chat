@@ -11,6 +11,9 @@ from rest_framework_simplejwt.tokens import UntypedToken
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from urllib.parse import parse_qs
 
+from utils.utils import SystemConfigManager
+from django.core.cache import cache
+
 
 @database_sync_to_async
 def get_user(user_id):
@@ -57,3 +60,27 @@ class TokenAuthMiddleware:
             scope['user'] = AnonymousUser()
 
         return await self.inner(scope, receive, send)
+
+
+class SystemConfigCacheMiddleware:
+    """系统配置缓存中间件 - 确保配置高效读取"""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        # 在请求开始时预加载常用配置到缓存
+        common_configs = [
+            'file.max_upload_size_mb',
+            'chat.max_message_length',
+            'voice.max_duration_seconds',
+            'security.login_max_attempts',
+            'system.user_registration_enabled'
+        ]
+
+        for key in common_configs:
+            # 预加载配置（如果缓存不存在）
+            SystemConfigManager.get_config(key)
+
+        response = self.get_response(request)
+        return response

@@ -34,19 +34,19 @@ class AdminConsole {
 
             // 检查管理员权限
             this.currentUser = await API.getCurrentUser();
-            if (this.currentUser.user_type === 'normal') {
+            if (this.currentUser.user_type !== 'super_admin' || this.currentUser.user_type === 'normal' || this.currentUser.user_type === 'visitor') {
                 // 替换原生 alert 为优雅的提示框
                 this.showAlert('权限不足', '您没有管理员权限').then(() => {
                     window.location.href = '/chat/';
                 });
                 return;
 
-                // this.showError('权限不足', '您没有管理员权限');
-                // setTimeout(() => {
-                //     window.location.href = '/chat/';
-                // }, 1500);
-                // return;
             }
+            if (this.currentUser?.id) {
+                localStorage.setItem('user_id', this.currentUser.id);
+                localStorage.setItem('user_type', this.currentUser?.user_type);
+            }
+
 
             // 渲染管理员信息
             this.renderAdminInfo();
@@ -69,10 +69,17 @@ class AdminConsole {
                 });
             }
 
+            // 🔑 初始化聊天室管理（仅超级管理员）
+            this.initChatRoomManagement();
+
+            console.log('AdminConsole 初始化完成');
+
 
         } catch (error) {
             console.error('初始化失败:', error);
             localStorage.removeItem('access_token');
+            localStorage.removeItem('user_id');
+            localStorage.removeItem('user_type');
             this.showError('初始化失败', error.message);
             setTimeout(() => {
                 window.location.href = '/login/';
@@ -81,7 +88,7 @@ class AdminConsole {
     }
 
 
-// ==================== 初始化表格滚动检测 ====================
+    // ==================== 初始化表格滚动检测 ====================
     initTableScroll() {
         const tableContainer = document.getElementById('usersTableContainer');
         const scrollIndicator = document.getElementById('scrollIndicator');
@@ -1340,7 +1347,105 @@ class AdminConsole {
             overlay.parentNode.removeChild(overlay);
         }
     }
+
+
+    // ==================== 聊天室管理初始化 ====================
+    initChatRoomManagement() {
+        // 仅超级管理员显示聊天室管理菜单
+        if (this.currentUser && this.currentUser.user_type === 'super_admin') {
+            const chatRoomsNavItem = document.getElementById('chatRoomsNavItem');
+            if (chatRoomsNavItem) {
+                chatRoomsNavItem.style.display = 'flex';
+            }
+        }
+
+        // 绑定聊天室管理事件
+        this.setupChatRoomManagementListeners();
+    }
+
+    // 设置聊天室管理事件监听
+    setupChatRoomManagementListeners() {
+        // 刷新按钮
+        const refreshRoomsBtn = document.getElementById('refreshRoomsBtn');
+        if (refreshRoomsBtn) {
+            refreshRoomsBtn.addEventListener('click', () => {
+                if (window.adminChatRoomsClient) {
+                    window.adminChatRoomsClient.loadChatRooms();
+                }
+            });
+        }
+
+        // 返回按钮
+        const backToRoomsBtn = document.getElementById('backToRoomsBtn');
+        if (backToRoomsBtn) {
+            backToRoomsBtn.addEventListener('click', () => {
+                if (window.adminChatRoomsClient) {
+                    window.adminChatRoomsClient.backToRooms();
+                }
+            });
+        }
+
+        // 搜索聊天室
+        const roomSearchInput = document.getElementById('roomSearchInput');
+        if (roomSearchInput) {
+            roomSearchInput.addEventListener('input', (e) => {
+                if (window.adminChatRoomsClient) {
+                    window.adminChatRoomsClient.searchRooms(e.target.value);
+                }
+            });
+        }
+
+        // 搜索消息
+        const messageSearchInput = document.getElementById('messageSearchInput');
+        if (messageSearchInput) {
+            messageSearchInput.addEventListener('input', (e) => {
+                if (window.adminChatRoomsClient) {
+                    window.adminChatRoomsClient.searchMessages(e.target.value);
+                }
+            });
+        }
+
+        // 加载更多消息
+        const loadMoreMessagesBtn = document.getElementById('loadMoreMessagesBtn');
+        if (loadMoreMessagesBtn) {
+            loadMoreMessagesBtn.addEventListener('click', () => {
+                if (window.adminChatRoomsClient) {
+                    window.adminChatRoomsClient.loadMoreHistory();
+                }
+            });
+        }
+
+        // 导出历史
+        const exportHistoryBtn = document.getElementById('exportHistoryBtn');
+        if (exportHistoryBtn) {
+            exportHistoryBtn.addEventListener('click', () => {
+                if (window.adminChatRoomsClient) {
+                    window.adminChatRoomsClient.exportRoomHistory();
+                }
+            });
+        }
+    }
+
+    // 退出登录
+    async logout() {
+        const confirmed = await this.showConfirmDialog('退出登录', '确定要退出登录吗？', 'confirm');
+        if (confirmed) {
+            try {
+                await API.logout();
+                console.log('登出成功');
+            } catch (error) {
+                console.error('登出失败:', error);
+            } finally {
+                localStorage.removeItem('access_token');
+                localStorage.removeItem('user_id')
+                localStorage.removeItem('user_type')
+                window.location.href = '/login/';
+            }
+        }
+    }
+
 }
+
 
 // 初始化
 let adminConsole = null;
@@ -1349,18 +1454,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.adminConsole = adminConsole;
 });
 
-// 退出登录
-function logout() {
-    adminConsole.showConfirmDialog('退出登录', '确定要退出登录吗？', 'confirm').then((confirmed) => {
-        if (confirmed) {
-            try {
-                API.logout();
-                console.log('登出成功');
-            } catch (error) {
-                console.error('登出失败:', error);
-                localStorage.removeItem('access_token');
-            }
-            window.location.href = '/login/';
-        }
-    });
-}
+
+
+
+

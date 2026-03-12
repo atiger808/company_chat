@@ -15,6 +15,9 @@ from .models import CustomUser, Department
 from chat.models import ChatRoom
 from loguru import logger
 
+from utils.request_util import get_browser, get_request_ip, get_os, get_ip_analysis, get_request_path, save_login_log
+from utils.utils import SystemConfigManager
+
 from .serializers import (
     UserSerializer,
     UserDetailSerializer,
@@ -31,16 +34,37 @@ from .serializers import (
 )
 
 
+class IsSuperAdmin(permissions.BasePermission):
+    """
+    🔑 仅超级管理员权限
+    检查 user_type == 'super_admin'
+    """
+
+    def has_permission(self, request, view):
+        # 检查用户是否认证
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        # 检查是否为超级管理员,且用户名为superman
+        return getattr(request.user, 'user_type', '') == 'super_admin'
+
+
 class IsAdminOrSuperAdmin(permissions.BasePermission):
     """管理员或超级管理员权限"""
 
     def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.user_type in ['admin', 'super_admin']
+        # 检查用户是否认证
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        return getattr(request.user, 'user_type', '') in ['super_admin', 'admin']
+
+
 
 
 class AdminDashboardViewSet(viewsets.ViewSet):
     """管理员控制台视图集"""
-    permission_classes = [IsAdminOrSuperAdmin]
+    permission_classes = [IsSuperAdmin]
 
     @action(detail=False, methods=['get'])
     def statistics(self, request):
@@ -101,7 +125,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
     """用户管理视图集（管理员专用）"""
     queryset = CustomUser.objects.all()
     serializer_class = UserDetailSerializer
-    permission_classes = [IsAdminOrSuperAdmin]
+    permission_classes = [IsSuperAdmin]
 
     def handle_exception(self, exc):
         """统一异常处理"""
@@ -185,6 +209,9 @@ class UserAdminViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def toggle_status(self, request, pk=None):
         """启用/禁用用户"""
+        if not request.user.is_superuser:
+            return Response({'error': '无操作权限'}, status=status.HTTP_403_FORBIDDEN)
+
         user = self.get_object()
         user.is_active = not user.is_active
         user.save()
@@ -204,6 +231,10 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 {'error': '请选择要删除的用户'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        # 只有超级管理员才能批量删除用户
+        if not request.user.is_superuser:
+            return Response({'error': '无操作权限'}, status=status.HTTP_403_FORBIDDEN)
 
         # 防止删除自己
         if request.user.id in user_ids:
@@ -230,6 +261,12 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             return Response(
                 {'error': '不能删除自己'},
                 status=status.HTTP_400_BAD_REQUEST
+            )
+        # 只有超级管理员才能删除用户
+        if not request.user.is_superuser:
+            return Response(
+                {'error': '无操作权限'},
+                status=status.HTTP_403_FORBIDDEN
             )
 
         return super().destroy(request, *args, **kwargs)
@@ -395,12 +432,17 @@ class UserViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """返回当前用户可见的用户列表（通讯录）"""
+        # 🔧 关键修复1: 优化查询，使用 select_related 和 only
         # 排除当前用户自身和未激活用户
         return CustomUser.objects.filter(
             is_active=True
         ).exclude(
             id=self.request.user.id
-        ).select_related('department')
+        ).select_related('department').only(
+            'id', 'username', 'real_name', 'email', 'phone',
+            'gender', 'avatar', 'department', 'position',
+            'user_type', 'is_online', 'last_seen', 'date_joined'
+        )
 
     def get_permissions(self):
         if self.action in ['register', 'login']:
@@ -410,13 +452,39 @@ class UserViewSet(viewsets.ModelViewSet):
         elif self.action in ['list', 'retrieve', 'search_users', 'list_users', 'get_user_profile']:
             return [permissions.IsAuthenticated()]
         elif self.action in ['create', 'destroy', 'promote_user', 'demote_user']:
-            return [IsAdminOrSuperAdmin()]
+            return [IsSuperAdmin()]
 
         return super().get_permissions()
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
     def register(self, request):
         """用户注册"""
+
+        # 🔧 关键修复：从配置读取是否允许注册
+        registration_enabled = SystemConfigManager.get_config('system.user_registration_enabled', False)
+
+        if not registration_enabled:
+            return Response({
+                'error': '当前不允许新用户注册'
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        # 🔧 从配置读取密码策略
+        password_min_length = SystemConfigManager.get_config('security.password_min_length', 8)
+        password_require_special = SystemConfigManager.get_config('security.password_require_special', True)
+
+        password = request.data.get('password', '')
+        if len(password) < password_min_length:
+            return Response({
+                'error': f'密码长度至少{password_min_length}位'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if password_require_special:
+            import re
+            if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+                return Response({
+                    'error': '密码必须包含特殊字符'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
@@ -435,10 +503,27 @@ class UserViewSet(viewsets.ModelViewSet):
         """用户登录"""
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         user = serializer.validated_data['user']
+
+        # 🔧 关键修复：从配置读取登录失败锁定策略
+        login_max_attempts = SystemConfigManager.get_config('security.login_max_attempts', 5)
+        login_lockout_minutes = SystemConfigManager.get_config('security.login_lockout_minutes', 15)
+
+        # 检查账户是否被锁定
+        if hasattr(user, 'login_attempts') and user.login_attempts >= login_max_attempts:
+            from django.utils import timezone
+            from datetime import timedelta
+            if user.last_failed_login and \
+                    timezone.now() - user.last_failed_login < timedelta(minutes=login_lockout_minutes):
+                return Response({
+                    'error': f'账户已锁定，请{login_lockout_minutes}分钟后再试'
+                }, status=status.HTTP_403_FORBIDDEN)
+
         refresh = RefreshToken.for_user(user)
         logger.info(f'用户登录：{user}')
+        # 记录登录日志
+        request.user = user
+        save_login_log(request=request)
         return Response({
             'user': UserDetailSerializer(user, context={'request': request}).data,
             'refresh': str(refresh),
@@ -534,6 +619,7 @@ class UserViewSet(viewsets.ModelViewSet):
         - 按部门分组
         - 支持分页
         """
+        # 🔧 关键修复2: 优化通讯录用户列表
         # 管理员显示所有用户，普通用户只显示好友
         if request.user.user_type in ['admin', 'super_admin']:
             # 管理员可以看到所有用户
@@ -541,7 +627,9 @@ class UserViewSet(viewsets.ModelViewSet):
                 is_active=True
             ).exclude(
                 id=request.user.id
-            ).select_related('department')
+            ).select_related('department').prefetch_related(
+                'friends'  # 🔧 预加载好友关系
+            )
         else:
             # 普通用户只能看到分配的好友
             queryset = request.user.friends.filter(
@@ -618,7 +706,6 @@ class UserViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(queryset, many=True, context={'request': request})
         return Response(serializer.data)
-
 
 
 

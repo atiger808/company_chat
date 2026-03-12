@@ -5,14 +5,17 @@
 
 
 # chat/consumers.py
-import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.utils import timezone
-
+from django.contrib.auth import get_user_model
+from asgiref.sync import sync_to_async
+from django.db import connection, close_old_connections
 from accounts.models import CustomUser
 from .models import ChatRoom, Message, MessageReadStatus, ChatRoomDeleteStatus
 from django.conf import settings
+import json
+import asyncio
 import logging
 # logger = logging.getLogger(__name__)
 from loguru import logger
@@ -60,7 +63,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """建立连接"""
         try:
             logger.info(f"WebSocket connection attempt from {self.scope.get('client')}")
+
+            # 🔧 关键修复1: 清理旧连接
+            await sync_to_async(close_old_connections)()
+
             self.user = self.scope['user']
+            if not self.user or not self.user.is_authenticated:
+                logger.warning(f'未认证用户尝试连接 WebSocket: {self.scope}')
+                await self.close(code=4000)
+                return
+
             self.room_group_name = None
 
             if self.user.is_anonymous:
@@ -71,6 +83,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # 获取房间名
             self.room_name = self.scope['url_route']['kwargs']['room_name']
             self.room_group_name = f'chat_{self.room_name}'
+
+            # 🔧 关键修复：初始化任务列表
+            self.tasks = []
+            self.heartbeat_task = None
+
+
 
             # 验证用户权限
             if not await self.is_user_in_room(self.room_name):
@@ -86,28 +104,90 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.accept()
             logger.info(f"WebSocket connection accepted for user {self.user.username} in room {self.room_name}")
 
+            # 🔧 关键修复：移动端锁屏保活
+            # 启动心跳任务（每30秒发送一次）发送心跳消息防止连接断开
+            self.heartbeat_task = asyncio.create_task(self.send_heartbeat())
+            self.tasks.append(self.heartbeat_task)
+
             # 发送在线用户列表
             await self.send_online_users()
         except Exception as e:
             logger.error(f"Error during WebSocket connection: {e}")
             await self.close()
 
+    async def send_heartbeat(self):
+        """每30秒发送一次心跳，防止移动端锁屏断开连接"""
+        try:
+            while True:
+                await asyncio.sleep(30)  # 每 30 秒发送一次心跳
+                try:
+                    await self.send(text_data=json.dumps({
+                        'type': 'heartbeat',
+                        'timestamp': timezone.now().isoformat()
+                    }))
+                except Exception as e:
+                    logger.warning(f'心跳发送失败：{e}')
+                    break
+        except asyncio.CancelledError:
+            # 🔧 关键修复：正确处理任务取消
+            logger.info(f'心跳任务已取消：user={self.user.username}')
+            raise
+        except Exception as e:
+            logger.error(f'心跳任务异常：{e}', exc_info=True)
+
     # 修改 disconnect 方法
     async def disconnect(self, close_code):
-        logger.info(
-            f"WebSocket disconnected for user {getattr(self.user, 'username', 'unknown')} with code {close_code}")
-
         """断开连接"""
-        # 离开房间组
-        if self.room_group_name:
-            await self.channel_layer.group_discard(
-                self.room_group_name,
-                self.channel_name
-            )
+        try:
+            logger.info(
+                f"WebSocket disconnected for user {getattr(self.user, 'username', 'unknown')} with code {close_code}")
 
-        # 🔧 关键修复：断开时更新并广播离线状态
-        if hasattr(self, 'user') and not self.user.is_anonymous:
-            await self.update_and_broadcast_online_status(False)
+            # # 取消心跳任务
+            # if hasattr(self, 'heartbeat_task'):
+            #     self.heartbeat_task.cancel()
+
+            # # 离开房间组
+            # if self.room_group_name:
+            #     await self.channel_layer.group_discard(
+            #         self.room_group_name,
+            #         self.channel_name
+            #     )
+
+            # # 🔧 关键修复：断开时更新并广播离线状态
+            # if hasattr(self, 'user') and not self.user.is_anonymous:
+            #     await self.update_and_broadcast_online_status(False)
+
+            # 🔧 关键修复 1：取消所有后台任务
+            await self.cancel_all_tasks()
+
+            # 🔧 关键修复 2：从聊天室组移除
+            if hasattr(self, 'room_group_name'):
+                try:
+                    await self.channel_layer.group_discard(
+                        self.room_group_name,
+                        self.channel_name
+                    )
+                except Exception as e:
+                    logger.error(f'从组移除失败：{e}')
+
+            # 🔧 关键修复 3：更新用户在线状态
+            if hasattr(self, 'user') and not self.user.is_anonymous:
+                await self.update_and_broadcast_online_status(False)
+
+
+            # 🔧 关键修复 4：关闭数据库连接（如果使用同步 ORM）
+            await self.close_database_connections()
+
+        except Exception as e:
+            logger.error(f'disconnect 异常：{e}', exc_info=True)
+        finally:
+            # 🔧 关键修复 5：确保连接关闭
+            try:
+                # 🔧 关键修复6: 清理旧连接
+                await sync_to_async(close_old_connections)()
+            except Exception:
+                pass
+
 
 
 
@@ -119,6 +199,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return
 
         try:
+            # 🔧 关键修复9: 清理旧连接
+            await sync_to_async(close_old_connections)()
+
             text_data_json = json.loads(text_data)
             message_type = text_data_json.get('type', 'chat_message')
 
@@ -134,6 +217,49 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except json.JSONDecodeError:
             logger.error("Invalid JSON received")
             return
+
+
+    async def cancel_all_tasks(self):
+        """🔧 取消所有后台任务"""
+        # 取消心跳任务
+
+        if hasattr(self, 'heartbeat_task'):
+            self.heartbeat_task.cancel()
+            try:
+                await self.heartbeat_task
+            except asyncio.CancelledError:
+                pass
+
+        # if self.heartbeat_task and not self.heartbeat_task.done():
+        #     self.heartbeat_task.cancel()
+        #     try:
+        #         await self.heartbeat_task
+        #     except asyncio.CancelledError:
+        #         pass
+
+        # 取消其他任务
+        if hasattr(self, 'tasks'):
+            for task in self.tasks:
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+
+            self.tasks.clear()
+
+    async def close_database_connections(self):
+        """🔧 关键修复7: 正确关闭数据库连接（使用 sync_to_async）"""
+        try:
+            # 使用 sync_to_async 确保在正确线程中执行
+            await sync_to_async(lambda: connection.close())()
+        except Exception as e:
+            logger.warning(f'关闭数据库连接失败：{e}')
+        finally:
+            # 清理旧连接
+            await sync_to_async(close_old_connections)()
+
 
     async def send_unread_count_update(self, chat_room_id, unread_count):
         """发送未读消息数更新"""
@@ -151,6 +277,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         if self.user.is_anonymous:
             return
+
+        # 🔧 关键修复10: 清理旧连接
+        await sync_to_async(close_old_connections)()
 
         content = data.get('content', '')
         message_type = data.get('message_type', 'text')

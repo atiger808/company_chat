@@ -30,7 +30,8 @@ class DepartmentSerializer(serializers.ModelSerializer):
 
 class UserDetailSerializer(serializers.ModelSerializer):
     """用户详细信息序列化器"""
-    department_info = DepartmentSerializer(source='department', read_only=True)
+    # department_info = DepartmentSerializer(source='department', read_only=True)
+    department_info = serializers.SerializerMethodField()
     avatar_url = serializers.SerializerMethodField()
     online_status = serializers.SerializerMethodField()
 
@@ -54,6 +55,14 @@ class UserDetailSerializer(serializers.ModelSerializer):
             'is_online': obj.is_online,
             'last_seen': obj.last_seen.isoformat() if obj.last_seen else None
         }
+
+    def get_department_info(self, obj):
+        if obj.department:
+            return {
+                'id': obj.department.id,
+                'name': obj.department.name
+            }
+        return None
 
 
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
@@ -132,7 +141,7 @@ class AdminUserCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = [
-            'username', 'password', 'password_confirm', 'real_name', 'gender', 'email', 'phone',
+            'id', 'username', 'password', 'password_confirm', 'real_name', 'gender', 'email', 'phone',
             'department', 'position', 'user_type'
         ]
         extra_kwargs = {

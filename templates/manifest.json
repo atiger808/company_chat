@@ -20,6 +20,10 @@
       "purpose": "any maskable"
     }
   ],
+  // 🔧 关键修复：iOS 锁屏通知必需
+  "apple-mobile-web-app-capable": true,
+  "apple-mobile-web-app-status-bar-style": "black-translucent",
+  "apple-mobile-web-app-title": "企业聊天室",
   "shortcuts": [
     {
       "name": "新建聊天",

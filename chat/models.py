@@ -5,11 +5,10 @@ from django.utils import timezone
 from django.conf import settings
 from accounts.models import CustomUser
 import os
+import json
 import hashlib
 from loguru import logger
 
-# 引入AudioSegment， VideoFileClip
-# from moviepy.editor import AudioSegment, VideoFileClip
 
 def upload_to(instance, filename):
     """文件上传路径"""
@@ -57,6 +56,7 @@ class ChatRoom(models.Model):
             models.Index(fields=['name']),
             models.Index(fields=['room_type', 'updated_at']),
             models.Index(fields=['is_deleted', 'updated_at']),
+            models.Index(fields=['creator', '-updated_at']),
         ]
 
     def __str__(self):
@@ -281,6 +281,8 @@ class Message(models.Model):
             models.Index(fields=['chat_room', '-timestamp']),
             models.Index(fields=['sender', '-timestamp']),
             models.Index(fields=['is_deleted', '-timestamp']),
+            models.Index(fields=['is_read', 'chat_room']),
+            models.Index(fields=['message_type', '-timestamp']),
             # 🔧 新增：优化 before_id/after_id 查询
             models.Index(fields=['timestamp']),
         ]
@@ -412,4 +414,95 @@ class MessageDeleteStatus(models.Model):
         unique_together = ['message', 'user']
 
 
+# chat/models.py - 添加 SystemConfig 模型
 
+class SystemConfig(models.Model):
+    """系统配置模型 - 用于存储全局配置项"""
+
+    CONFIG_TYPES = [
+        ('string', '字符串'),
+        ('integer', '整数'),
+        ('boolean', '布尔值'),
+        ('float', '浮点数'),
+        ('json', 'JSON 对象'),
+    ]
+
+    CATEGORY_CHOICES = [
+        ('basic', '基础设置'),
+        ('chat', '聊天设置'),
+        ('file', '文件设置'),
+        ('voice', '语音设置'),
+        ('security', '安全设置'),
+        ('notification', '通知设置'),
+        ('advanced', '高级设置'),
+    ]
+
+    key = models.CharField(max_length=100, unique=True, verbose_name='配置键')
+    name = models.CharField(max_length=100, verbose_name='配置名称')
+    value = models.TextField(verbose_name='配置值')
+    value_type = models.CharField(max_length=20, choices=CONFIG_TYPES, default='string', verbose_name='值类型')
+    category = models.CharField(max_length=30, choices=CATEGORY_CHOICES, default='basic', verbose_name='分类')
+    description = models.TextField(blank=True, verbose_name='描述')
+    default_value = models.TextField(blank=True, verbose_name='默认值')
+    is_public = models.BooleanField(default=False, verbose_name='是否公开')
+
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name='最后更新人'
+    )
+
+    class Meta:
+        verbose_name = '系统配置'
+        verbose_name_plural = verbose_name
+        ordering = ['category', 'key']
+
+    def __str__(self):
+        return f'{self.name} ({self.key})'
+
+    def get_typed_value(self):
+        """获取类型化的配置值"""
+        if self.value_type == 'integer':
+            return int(self.value) if self.value.isdigit() else 0
+        elif self.value_type == 'float':
+            return float(self.value) if self.value.replace('.', '').isdigit() else 0.0
+        elif self.value_type == 'boolean':
+            return self.value.lower() in ('true', '1', 'yes')
+        elif self.value_type == 'json':
+            try:
+                return json.loads(self.value)
+            except:
+                return {}
+        return self.value
+
+    @classmethod
+    def get_config(cls, key, default=None):
+        """获取配置值的便捷方法"""
+        try:
+            config = cls.objects.get(key=key)
+            return config.get_typed_value()
+        except cls.DoesNotExist:
+            return default
+
+    @classmethod
+    def set_config(cls, key, value, name=None, description=None, value_type='string', category='basic'):
+        """设置配置值的便捷方法"""
+        config, created = cls.objects.update_or_create(
+            key=key,
+            defaults={
+                'name': name or key,
+                'value': str(value),
+                'value_type': value_type,
+                'description': description or '',
+                'category': category
+            }
+        )
+        return config
+
+    def get_category_display(self):
+        """获取分类显示名称"""
+        return dict(self.CATEGORY_CHOICES).get(self.category, '')

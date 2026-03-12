@@ -10,7 +10,7 @@ from django.db.models import Q, Count
 from django.utils import timezone
 from .models import ChatRoom, Message, FileUpload, MessageReadStatus, MessageDeleteStatus, ChatRoomDeleteStatus
 from accounts.models import CustomUser
-from accounts.serializers import UserListSerializer
+from accounts.serializers import UserListSerializer, DepartmentSerializer
 from loguru import logger
 
 
@@ -45,7 +45,6 @@ class ChatRoomSerializer(serializers.ModelSerializer):
     def get_last_message(self, obj):
         """获取最后一条消息"""
         try:
-            logger.info(f"Getting last message for room: {obj.id}")
             request = self.context.get('request')
             if not request or not hasattr(request, 'user'):
                 logger.warning("Request or user not found in context.")
@@ -63,8 +62,7 @@ class ChatRoomSerializer(serializers.ModelSerializer):
                     user=user
                 ).values_list('message_id', flat=True)  # 优化：只获取 ID 列表
             ).order_by('-timestamp').first()
-            
-            logger.info(f"Last message result: {last_msg}")
+
             if last_msg:
                 return MessageSerializer(last_msg, context=self.context).data
             return None
@@ -104,7 +102,6 @@ class ChatRoomSerializer(serializers.ModelSerializer):
             #     read_statuses__user=user
             # ).count()
 
-            logger.info(f"room: {obj.id} Unread count result: {unread}")
             return unread
         except Exception as e:
             logger.error(f"Error in get_unread_count: {e}")
@@ -248,5 +245,37 @@ class MessageSerializer(serializers.ModelSerializer):
         return message
 
 
+class MemberListSerializer(serializers.ModelSerializer):
+    """成员列表序列化器（用于聊天室历史）"""
+    avatar_url = serializers.SerializerMethodField()
+    department_info = DepartmentSerializer(source='department', read_only=True)
+    last_seen = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CustomUser
+        fields = [
+            'id', 'username', 'real_name', 'avatar_url',
+            'department_info', 'position', 'is_online', 'last_seen'
+        ]
+
+    def get_avatar_url(self, obj):
+        """安全获取头像 URL"""
+        if hasattr(obj, 'get_avatar_url') and callable(getattr(obj, 'get_avatar_url')):
+            return obj.get_avatar_url()
+        elif hasattr(obj, 'avatar_url'):
+            return obj.avatar_url
+        elif hasattr(obj, 'avatar') and obj.avatar:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.avatar.url)
+        return None
 
 
+    def get_last_seen(self, obj):
+        """安全处理 last_seen 日期"""
+        if hasattr(obj, 'last_seen') and obj.last_seen:
+            try:
+                return obj.last_seen.isoformat()
+            except (AttributeError, ValueError):
+                return None
+        return None

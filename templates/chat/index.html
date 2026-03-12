@@ -4,29 +4,38 @@
     <meta charset="UTF-8">
     <title>企业聊天室 - 公司内部通讯</title>
 
-    <!-- iOS PWA 专用设置 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="企业聊天">
     <meta name="format-detection" content="telephone=no, email=no, address=no">
 
 
     <!-- PWA Manifest -->
-    <link rel="manifest" href="/manifest.json">
-
-    <!-- iOS Safari 添加到主屏幕 -->
+    <!-- 🔧 关键修复：iOS PWA 专用设置 PWA 必需 - 支持锁屏通知 添加到主屏幕 -->
+    <link rel="manifest" href="/manifest.json?v=20260306-e8651d4">
+    <meta name="theme-color" content="#409EFF">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="企业聊天">
-    <link rel="apple-touch-icon" href="/static/icons/icon-192x192.png?v=20260305-bf3655b">
+    <meta name="apple-mobile-web-app-title" content="企业聊天室">
+    <link rel="apple-touch-icon" href="/static/icons/icon-192x192.png?v=20260310-a9487be">
+
+    <!-- Service Worker 注册（降级方案） -->
+    <script>
+        // Service Worker 降级注册（确保在 DOMContentLoaded 前注册）
+        if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/static/js/service-worker.js')
+                    .then(reg => console.log('SW registered:', reg))
+                    .catch(err => console.error('SW registration failed:', err));
+            });
+        }
+    </script>
+
 
     <!-- Windows Tiles -->
     <meta name="msapplication-TileColor" content="#409EFF">
     <meta name="msapplication-TileImage" content="/static/icons/icon-144x144.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20260305-bf3655b">-->
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260305-bf3655b">
+    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20260310-a9487be">-->
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260310-a9487be">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
 
     <!-- 🔧 iOS 专用样式修复 -->
@@ -146,7 +155,7 @@
         </div>
 
         <div class="user-profile">
-            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260305-bf3655b"
+            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260310-a9487be"
                  alt="头像" class="avatar">
             <div class="user-info">
                 <div class="username" id="currentUsername">加载中...</div>
@@ -213,7 +222,7 @@
                 </button>
                 <div class="chat-info" onclick="chatClient.showProfile(chatClient.currentRoomId)">
                     <div class="chat-avatar">
-                        <img src="/static/images/default-avatar.png?v=20260305-bf3655b"
+                        <img src="/static/images/default-avatar.png?v=20260310-a9487be"
                              alt="聊天对象" id="chatAvatar">
                     </div>
                     <div class="chat-details">
@@ -391,8 +400,7 @@
                     <i class="fas fa-pause"></i>
                 </button>
                 <div class="voice-duration">0"</div>
-                <div class="voice-progress">
-                    <div class="voice-progress-bar"></div>
+                <div class="voice-progress-bar">
                 </div>
                 <!-- 🔧 关键修复：添加移动端必需的属性 -->
                 <audio class="voice-audio"
@@ -491,7 +499,7 @@
                 </div>
                 <div class="profile-avatar-section">
                     <div class="avatar-upload-container">
-                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20260305-bf3655b"
+                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20260310-a9487be"
                              alt="头像">
                         <label class="upload-btn" for="avatarUpload">
                             <i class="fas fa-camera"></i>
@@ -611,42 +619,56 @@
 
 
 <!-- 🔧 关键修复：脚本资源直接带版本参数 -->
-<script src="/static/js/api.js?v=20260305-bf3655b"></script>
-<script src="/static/js/utils.js?v=20260305-bf3655b"></script>
-<script src="/static/js/chat.js?v=20260305-bf3655b"></script>
-<script src="/static/js/spark-md5.min.js"></script>
+<script src="/static/js/api.js?v=20260310-a9487be"></script>
+<script src="/static/js/utils.js?v=20260310-a9487be"></script>
+<script src="/static/js/chat.js?v=20260310-a9487be"></script>
+<script src="/static/js/spark-md5.min.js?v=20260310-a9487be"></script>
 
-<!-- 版本检测脚本（简化版，移除无效的 document.write） -->
+<!-- templates/chat/index.html - 替换原有的版本检测脚本 -->
+
 <script>
-    // 从构建时注入的版本号
-    const CURRENT_VERSION = '20260305-24f5887';
+    // 🔧 修复1: 从构建时注入的版本号（与后端保持一致）
+    const CURRENT_VERSION = '20260310-a9487be';
 
-    // 检查版本是否更新
-    const LAST_VERSION = sessionStorage.getItem('appVersion');
-    if (LAST_VERSION && LAST_VERSION !== CURRENT_VERSION) {
+    // 🔧 修复2: 首次访问时保存版本到 localStorage（不是 sessionStorage）
+    const LAST_VERSION = localStorage.getItem('static_version');
+
+    if (!LAST_VERSION) {
+        // 首次访问，保存当前版本
+        localStorage.setItem('static_version', CURRENT_VERSION);
+        console.log('✅ 首次访问，保存版本:', CURRENT_VERSION);
+    } else if (LAST_VERSION !== CURRENT_VERSION) {
+        // 检测到新版本
         console.log(`✅ 检测到新版本: ${LAST_VERSION} → ${CURRENT_VERSION}`);
-        sessionStorage.setItem('appVersion', CURRENT_VERSION);
 
-        // 5秒后自动提示刷新（避免打断用户操作）
-        // setTimeout(() => {
-        //
-        //     if (typeof chatClient !== 'undefined' && chatClient.showConfirmDialog) {
-        //         chatClient.showConfirmDialog('版本更新', '🎉 检测到新版本，是否立即刷新以加载最新功能？').then(
-        //             () => {
-        //                 // 清除 Service Worker 缓存
-        //                 if ('serviceWorker' in navigator) {
-        //                     navigator.serviceWorker.getRegistrations().then(registrations => {
-        //                         registrations.forEach(reg => reg.unregister());
-        //                     });
-        //                 }
-        //                 // 强制刷新
-        //                 location.reload(true);
-        //             }
-        //         );
-        //     }
-        // }, 5000);
-    } else {
-        sessionStorage.setItem('appVersion', CURRENT_VERSION);
+        // 🔧 修复3: 保存新版本（避免重复提示）
+        localStorage.setItem('static_version', CURRENT_VERSION);
+
+        // 延迟5秒提示（避免打断用户操作）
+        setTimeout(() => {
+            // 等待 ChatClient 初始化完成后再显示提示
+            const checkChatClient = setInterval(() => {
+                if (typeof chatClient !== 'undefined' && chatClient.showConfirmDialog) {
+                    clearInterval(checkChatClient);
+
+                    chatClient.showConfirmDialog(
+                        '🎉 版本更新',
+                        `发现新版本 ${CURRENT_VERSION}，建议立即刷新以获得最新功能和修复`
+                    ).then((confirmed) => {
+                        if (confirmed) {
+                            // 清除 Service Worker 缓存
+                            if ('serviceWorker' in navigator) {
+                                navigator.serviceWorker.getRegistrations().then(registrations => {
+                                    registrations.forEach(reg => reg.unregister());
+                                });
+                            }
+                            // 强制刷新（带时间戳绕过缓存）
+                            window.location.href = window.location.pathname + '?cacheBust=' + Date.now();
+                        }
+                    });
+                }
+            }, 100);
+        }, 5000);
     }
 </script>
 

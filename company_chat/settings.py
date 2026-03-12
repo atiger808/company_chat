@@ -64,6 +64,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'accounts.middleware.ApiLoggingMiddleware',
+    'chat.middleware.SystemConfigCacheMiddleware',  # 🔧 添加配置缓存中间件
 ]
 
 ROOT_URLCONF = 'company_chat.urls'
@@ -103,12 +105,16 @@ if sys.platform == 'linux':
             'PASSWORD': config('DB_PASSWORD'),
             'HOST': config('DB_HOST'),
             'PORT': config('DB_PORT'),
+            # 'CONN_MAX_AGE': config('CONN_MAX_AGE', default=7200, cast=int),
+            'CONN_MAX_AGE': 60,  # 连接最大存活时间（秒）
+            'CONN_HEALTH_CHECKS': True,  # 连接健康检查
             'OPTIONS': {
                 'connect_timeout': 15,
                 'options': '-c statement_timeout=30000',
                 'keepalives': 1,  # 启用 TCP Keepalive
                 'keepalives_idle': 30,  # 空闲 30 秒后发送探测包
-            }
+            },
+
         }
     }
 
@@ -131,8 +137,6 @@ else:
 
 # REDIS_LOCATION = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
 REDIS_LOCATION = f"redis://{REDIS_HOST}:{REDIS_PORT}"
-
-
 
 LOGGING = {
     'version': 1,
@@ -163,15 +167,96 @@ LOGGING = {
 # ASGI application
 ASGI_APPLICATION = 'company_chat.asgi.application'
 
-# Channels Layer (Redis)
+# # Channels Layer (Redis)
+# CHANNEL_LAYERS = {
+#     "default": {
+#         "BACKEND": "channels_redis.core.RedisChannelLayer",
+#         "CONFIG": {
+#             "hosts": [(REDIS_HOST, REDIS_PORT)],
+#             "capacity": 1500,  # 每个频道容量
+#             "expiry": 60,  # 消息过期时间（秒）
+#             "prefix": "asgi",  # Redis key 前缀
+#
+#         },
+#     },
+# }
+#
+# # 🔧 关键修复：缓存配置
+# CACHES = {
+#     "default": {
+#         "BACKEND": "django.core.cache.backends.redis.RedisCache",
+#         "LOCATION": REDIS_LOCATION,
+#         "OPTIONS": {
+#             "MAX_ENTRIES": 1000,
+#             "CULL_FREQUENCY": 3,
+#         }
+#     }
+# }
+
+
+# # 🔧 关键修复：缓存配置
+# CACHES = {
+#     "default": {
+#         "BACKEND": "django.core.cache.backends.redis.RedisCache",
+#         "LOCATION": f"redis://{REDIS_HOST}:{REDIS_PORT}/1",  # 数据库 1
+#         "OPTIONS": {
+#             "CONNECTION_POOL_KWARGS": {
+#                 "max_connections": 50,
+#                 "retry_on_timeout": True,
+#                 "socket_connect_timeout": 5,
+#                 "socket_timeout": 5,
+#                 "health_check_interval": 30,
+#             },
+#             "SERIALIZER": "django.core.cache.backends.redis.serializers.JSONSerializer",
+#         },
+#         "KEY_PREFIX": "company_chat",
+#         "TIMEOUT": 300,
+#     }
+# }
+
+# 安装 django-redis
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",  # ✅ 使用 django-redis
+        "LOCATION": f"redis://{REDIS_HOST}:{REDIS_PORT}/1",
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            # ✅ 连接池配置（django-redis 支持 CONNECTION_POOL_KWARGS）
+            "CONNECTION_POOL_KWARGS": {
+                "max_connections": 50,
+                "retry_on_timeout": True,
+                "socket_connect_timeout": 5,
+                "socket_timeout": 5,
+                "health_check_interval": 30,
+            },
+            # ✅ 序列化
+            "SERIALIZER": "django_redis.serializers.json.JSONSerializer",
+        },
+        "KEY_PREFIX": "company_chat",
+        "TIMEOUT": 300,
+    }
+}
+
+
+# 🔧 确保 Channels 使用独立的 Redis 数据库（避免缓存键冲突）
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [(REDIS_HOST, REDIS_PORT)],
+            # ✅ 使用数据库 2，与 CACHES 的数据库 1 分离
+            "hosts": [f"redis://{REDIS_HOST}:{REDIS_PORT}/2"],
+            "capacity": 1500,
+            "expiry": 60,
+            "prefix": "asgi",
+            # "pool_size": 20,  # ✅ 连接池大小, 报错
         },
     },
 }
+
+
+# WebSocket 超时配置
+WEBSOCKET_CONNECT_TIMEOUT = 30  # 连接超时（秒）
+WEBSOCKET_DISCONNECT_TIMEOUT = 10  # 断开超时（秒）
 
 # REST Framework配置
 REST_FRAMEWORK = {
@@ -221,7 +306,6 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
 # ================================================= #
 # ******************* 跨域的配置 ******************* #
 # ================================================= #
@@ -250,9 +334,6 @@ CSRF_TRUSTED_ORIGINS = [
 
 # 暴露自定义头,否则前端无法获取自定义头
 CORS_EXPOSE_HEADERS = ['Captcha-Key', 'Content-Disposition']
-
-
-
 
 # Internationalization
 # https://docs.djangoproject.com/en/4.2/topics/i18n/
@@ -307,15 +388,13 @@ else:
 
 BASE_URL = 'https://chat.first-iq.com/'
 
-
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20260305-3'
+STATIC_VERSION = '20260310-a9487be'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -326,3 +405,46 @@ BUILD_TIME = str(datetime.datetime.now())[:19]
 # # WhiteNoise 配置
 # WHITENOISE_MAX_AGE = 31536000  # 1年
 # WHITENOISE_IMMUTABLE_FILE_TEST = lambda path, url: re.match(r'^.+\.[0-9a-f]{12}\..+$', url)
+
+
+API_LOG_ENABLE = True
+# API_LOG_METHODS = 'ALL' # ['POST', 'DELETE']
+API_LOG_METHODS = ["POST", "UPDATE", "DELETE", "PUT", 'PATCH']  # ['POST', 'DELETE']
+API_MODEL_MAP = {
+    "/api/auth/profile/": "个人资料",
+    "/api/auth/login/": "登录",
+    "/api/auth/logout/": "登出",
+    "/api/chat/upload/": "文件管理",
+    "/api/chat/rooms/": "聊天室管理",
+    "/api/chat/messages/": "消息管理",
+    "/api/auth/admin/users/": "用户管理",
+}
+EXLUDE_API_LOG = [
+    "/api/chat/messages/mark_as_read/"  # 标记已读
+]
+API_METHOD_MAP = {
+    'GET': '查询',
+    'POST': '新建',
+    'PUT': '更新',
+    'DELETE': '删除',
+    'PATCH': '修改',
+}
+
+
+
+# ================================================= #
+# ******************* 邮箱配置 ******************* #
+# ================================================= #
+# smtp后端,默认配置
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+# 控制台后端开发时使用
+# EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
+EMAIL_HOST = config('EMAIL_HOST')
+EMAIL_PORT = config('EMAIL_PORT', default=465, cast=int)
+EMAIL_HOST_USER = DEFAULT_FROM_EMAIL = config('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD')
+EMAIL_USE_SSL = config('EMAIL_USE_SSL', default=True, cast=bool)
+# EMAIL_FROM_EMAIL = config('EMAIL_FROM_EMAIL')
+EMAIL_SUBJECT_PREFIX = config('EMAIL_SUBJECT_PREFIX')
+EMAIL_TIMEOUT = config('EMAIL_TIMEOUT', default=300, cast=int)  # 超时(5分钟)

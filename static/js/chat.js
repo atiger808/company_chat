@@ -5,6 +5,7 @@
 class VersionManager {
     constructor() {
         this.STORAGE_KEY = 'app_version_info';
+        this.STATIC_KEY = 'static_version';
         this.CHECK_INTERVAL = 5 * 60 * 1000; // 5分钟检查一次
         this.lastCheckTime = 0;
         this.isChecking = false;
@@ -26,6 +27,9 @@ class VersionManager {
     saveVersionInfo(info) {
         try {
             localStorage.setItem(this.STORAGE_KEY, JSON.stringify(info));
+            if (info?.static_version) {
+                localStorage.setItem(this.STATIC_KEY, info.static_version);
+            }
             return true;
         } catch (e) {
             console.warn('保存版本信息失败:', e);
@@ -33,10 +37,12 @@ class VersionManager {
         }
     }
 
-    // 比较版本（支持语义化版本和时间戳）
+
+    // 比较版本（支持语义化版本和时间戳-哈希格式）
     compareVersions(current, latest) {
-        // 处理时间戳格式 (20260304-1)
+        // 处理时间戳-哈希格式 (20260306-f396db6)
         if (current.includes('-') && latest.includes('-')) {
+            // 直接按字典序比较（日期部分保证单调递增）
             return latest.localeCompare(current);
         }
 
@@ -49,7 +55,7 @@ class VersionManager {
             const latestVal = latestParts[i] || 0;
 
             if (latestVal > currentVal) return 1;  // 需要更新
-            if (latestVal < currentVal) return -1; // 降级
+            if (latestVal < currentVal) return -1; // 降级（通常不应发生）
         }
 
         return 0; // 相同版本
@@ -70,11 +76,7 @@ class VersionManager {
             const response = await fetch('/api/chat/version/?t=' + Date.now(), {
                 method: 'GET',
                 cache: 'no-cache', // 强制从网络获取
-                headers: {
-                    'Cache-Control': 'no-cache, no-store, must-revalidate',
-                    'Pragma': 'no-cache',
-                    'Expires': '0'
-                }
+                headers: TokenManager.getHeaders()
             });
 
             if (!response.ok) {
@@ -84,34 +86,58 @@ class VersionManager {
             const serverVersion = await response.json();
             const localVersion = this.getStoredVersion();
 
-            // 首次访问，保存版本
+            // 🔧 修复1: 首次访问时保存版本
             if (!localVersion) {
                 this.saveVersionInfo(serverVersion);
+                console.log('✅ 首次访问，保存版本信息:', serverVersion.static_version);
                 return null;
             }
 
-            // 比较版本
-            const staticDiff = this.compareVersions(localVersion.static_version || '', serverVersion.static_version || '');
-            const appDiff = this.compareVersions(localVersion.app_version || '', serverVersion.app_version || '');
+            // 🔧 修复2: 正确比较版本（使用修复后的 compareVersions）
+            const staticDiff = this.compareVersions(
+                localVersion.static_version || '',
+                serverVersion.static_version || ''
+            );
+            const appDiff = this.compareVersions(
+                localVersion.app_version || '',
+                serverVersion.app_version || ''
+            );
 
-            // 构建更新信息
-            const updateInfo = {
-                hasUpdate: staticDiff > 0 || appDiff > 0,
-                staticUpdated: staticDiff > 0,
-                appUpdated: appDiff > 0,
-                forceUpdate: serverVersion.force_update,
-                current: localVersion,
-                latest: serverVersion,
-                updateMessage: serverVersion.update_message || '发现新版本，建议更新以获得最佳体验'
-            };
+            // 🔧 修复3: 只有版本真正更新时才触发提示
+            const hasUpdate = staticDiff > 0 || appDiff > 0;
+            console.log('🔍 版本检查结果:', {
+                currentStatic: localVersion.static_version,
+                latestStatic: serverVersion.static_version,
+                staticDiff,
+                currentApp: localVersion.app_version,
+                latestApp: serverVersion.app_version,
+                appDiff,
+                hasUpdate
+            });
 
-            // 保存最新版本信息
+            if (hasUpdate) {
+                const updateInfo = {
+                    hasUpdate: true,
+                    staticUpdated: staticDiff > 0,
+                    appUpdated: appDiff > 0,
+                    forceUpdate: serverVersion.force_update || false,
+                    current: localVersion,
+                    latest: serverVersion,
+                    updateMessage: serverVersion.update_message || '发现新版本，建议更新以获得最佳体验'
+                };
+
+                // 保存最新版本信息
+                this.saveVersionInfo(serverVersion);
+
+                return updateInfo;
+            }
+
+            // 无更新，但仍保存最新信息（用于下次比较）
             this.saveVersionInfo(serverVersion);
-
-            return updateInfo;
+            return null;
 
         } catch (error) {
-            console.warn('版本检查失败:', error);
+            console.warn('⚠️ 版本检查失败:', error);
             return null;
         } finally {
             this.isChecking = false;
@@ -148,6 +174,7 @@ class VersionManager {
                     </div>
                     ${updateInfo.latest.build_time ? `
                     <div class="update-time">
+                        <small>版本: ${updateInfo.latest.static_version}</small>
                         <small>更新时间: ${updateInfo.latest.build_time}</small>
                     </div>
                     ` : ''}
@@ -235,6 +262,7 @@ class VersionManager {
 
         // 稍后提醒：10分钟后再次检查
         if (remindLater) {
+            console.log('稍后提醒：10分钟后再次检查');
             setTimeout(() => {
                 this.checkForUpdates(true).then(updateInfo => {
                     if (updateInfo && updateInfo.hasUpdate) {
@@ -314,6 +342,9 @@ class ChatClient {
 
         this.currentSearchTab = 'chats'; // 默认搜索聊天
         this.searchResults = [];
+
+        this.heartbeatCount = 0;
+        this.lastHeartbeatTime = null;
 
         // 消息加载状态
         // 🔧 无限滚动状态
@@ -499,6 +530,8 @@ class ChatClient {
 
     async init() {
         console.log('ChatClient 初始化开始...');
+        // 🔧 关键修复1: 注册 Service Worker（锁屏通知必需）
+        this.registerServiceWorker();
 
         // 检查登录状态
         await this.checkLoginStatus();
@@ -512,17 +545,45 @@ class ChatClient {
             // 初始化角标
             this.updateAppBadge(0);
 
-            // 监听页面可见性变化，当页面获得焦点时清除角标闪烁
+            // 🔧 关键修复：监听页面可见性变化
             document.addEventListener('visibilitychange', () => {
+                console.log(`页面可见性变化: ${document.visibilityState}`);
+
+                // 页面变为可见时，清除角标闪烁
                 if (document.visibilityState === 'visible') {
                     this.stopTitleBlink();
 
                     // 更新角标（可能有新消息）
                     const totalUnread = this.chatRooms.reduce((sum, r) => sum + (r.unread_count || 0), 0);
                     this.updateAppBadge(totalUnread);
+
+                    // 页面恢复可见时，标记当前聊天室消息为已读
+                    if (this.currentRoomId) {
+                        this.markMessagesAsRead(this.currentRoomId);
+                    }
+                }
+                // 页面变为隐藏时，停止音频播放（可选优化）
+                else if (document.visibilityState === 'hidden') {
+                    // 可选：暂停所有音频播放
+                    this.voicePlayers.forEach((player) => {
+                        if (!player.paused) {
+                            player.pause();
+                        }
+                    });
                 }
             });
 
+            // 监听窗口聚焦/失焦
+            window.addEventListener('blur', () => {
+                console.log('窗口失焦');
+            });
+
+            window.addEventListener('focus', () => {
+                console.log('窗口聚焦');
+                // 恢复角标
+                const totalUnread = this.chatRooms.reduce((sum, r) => sum + (r.unread_count || 0), 0);
+                this.updateAppBadge(totalUnread);
+            });
 
             if (this.isShowingSidebar) {
                 this.hideSidebar();
@@ -537,7 +598,7 @@ class ChatClient {
             this.renderCurrentUser();
 
             // 检查是否为管理员，显示控制台按钮
-            if (this.currentUser.user_type === 'admin' || this.currentUser.user_type === 'super_admin') {
+            if (this.currentUser.user_type === 'super_admin') {
                 const adminConsoleBtn = document.getElementById('adminConsoleBtn');
                 if (adminConsoleBtn) {
                     adminConsoleBtn.style.display = 'flex';
@@ -584,14 +645,8 @@ class ChatClient {
             // 修复iOS PWA布局
             this.fixPWALayout();
 
-            // 恢复滚动位置（页面刷新后）
-            this.restoreScrollPosition();
-
-            // this.checkAppVersion()
-
             // 🔧 关键修复：初始化版本管理
             await this.initVersionManagement();
-
 
             // 设置@功能监听
             this.setupAtMentionListener();
@@ -608,6 +663,13 @@ class ChatClient {
             // 🔧 初始化语音消息功能
             this.initVoiceMessage();
 
+            this.setupVideoMessageListerners()
+
+            // 🔧 关键修复：监听页面卸载事件
+            window.addEventListener('beforeunload', () => {
+                this.beforeUnload();
+            });
+
             console.log('ChatClient 初始化完成');
         } catch
             (error) {
@@ -616,6 +678,37 @@ class ChatClient {
             localStorage.removeItem('access_token');
             window.location.href = '/login/';
         }
+    }
+
+
+    // 注册 Service Worker
+    registerServiceWorker() {
+        // 仅在支持 Service Worker 的浏览器中注册
+        if (!('serviceWorker' in navigator)) {
+            console.warn('Service Worker not supported');
+            return;
+        }
+
+        // 仅在 HTTPS 环境下注册（生产环境）
+        if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+            console.warn('Service Worker requires HTTPS');
+            return;
+        }
+
+        navigator.serviceWorker.register('/static/js/service-worker.js')
+            .then(registration => {
+                console.log('Service Worker registered with scope:', registration.scope);
+
+                // 监听来自 Service Worker 的消息
+                navigator.serviceWorker.addEventListener('message', event => {
+                    if (event.data.type === 'notification-click' && event.data.chat_room) {
+                        this.selectChatRoom(event.data.chat_room);
+                    }
+                });
+            })
+            .catch(error => {
+                console.error('Service Worker registration failed:', error);
+            });
     }
 
 
@@ -679,8 +772,18 @@ class ChatClient {
                 // 🔧 新增：处理用户在线状态变化
                 this.handleUserOnlineStatus(data);
                 break;
+            // 🔧 关键修复：添加 heartbeat 处理（保活消息，无需处理）
+            case 'heartbeat':
+                // 全局 WebSocket 心跳保活消息
+                this.heartbeatCount++;
+                this.lastHeartbeatTime = new Date();
+                // 调试模式下可显示心跳状态
+                if (localStorage.getItem('debugMode') === 'true') {
+                    console.log(`[Heartbeat] ${this.heartbeatCount} - ${this.lastHeartbeatTime.toLocaleTimeString()}`);
+                }
+                break;
             default:
-                console.log('Unknown global message type:', data.type);
+                console.log('Unknown global message type:', data.type, data);
         }
     }
 
@@ -688,7 +791,12 @@ class ChatClient {
     handleNewGlobalMessage(data) {
         console.log('Received global message:', data);
 
-        // 🔧 关键修复13: 更新聊天室列表中的未读数和最后一条消息
+        // 🔧 关键修复1: 检查页面是否可见/聚焦，决定是否显示桌面通知
+        const isPageVisible = document.visibilityState === 'visible';
+        const isPageFocused = document.hasFocus();
+        const shouldShowDesktopNotification = !isPageVisible || !isPageFocused;
+
+        // 🔧 更新聊天室列表中的未读数和最后一条消息
         const room = this.chatRooms.find(r => parseInt(r.id) === parseInt(data.chat_room));
         if (room) {
             // 更新最后一条消息
@@ -716,33 +824,83 @@ class ChatClient {
             this.loadChatRooms();
         }
 
+        // 🔧 关键修复2: 播放提示音（全局）
         if (this.shouldPlayNotificationSound()) {
             console.log('播放提示音');
             this.playNotificationSound();
         }
 
-        // 播放提示音和显示通知（仅非当前聊天室）
-        if (!this.currentRoomId || parseInt(this.currentRoomId) !== parseInt(data.chat_room)) {
-            console.log('非当前聊天室 通知: this.shouldShowDesktopNotification:', this.shouldShowDesktopNotification());
-
-            if (this.shouldShowDesktopNotification()) {
-
-                // Utils.showNotification(data.sender_name, {
-                //     body: data.content,
-                //     icon: data.sender?.avatar_url || '/static/images/default-avatar.png'
-                // });
-
-                console.log('显示通知');
-
-                this.showNotification(data.sender_name, {
-                    data: data,
-                    body: data.content,
-                    icon: data.sender?.avatar_url || '/static/images/default-avatar.png',
-                })
-
+        // 🔧 关键修复3: 页面不可见时强制显示通知（移动端增强）
+        if (shouldShowDesktopNotification) {
+            // 检查通知权限
+            if (Notification.permission === 'granted') {
+                this.showNotification(
+                    data.sender?.real_name || data.sender?.username || '新消息',
+                    {
+                        body: data.content,
+                        icon: data.sender?.avatar_url || '/static/images/default-avatar.png',
+                        data: data,
+                        // 🔧 关键修复4: 移动端锁屏通知必需参数
+                        requireInteraction: Utils.isMobile() ? false : true,
+                        silent: false,  // 强制播放系统通知声音
+                        tag: `chat-${data.chat_room}-${Date.now()}`  // 防止重复通知
+                    }
+                );
+            }
+            // 权限未请求，等待用户交互后自动请求
+            else if (Notification.permission === 'default' && !this.notificationPermissionRequested) {
+                this.requestNotificationPermission();
             }
         }
+
+
+        // 关键修复3: 非当前聊天室处理
+        if (!this.currentRoomId || parseInt(this.currentRoomId) !== parseInt(data.chat_room)) {
+            // 触发震动（移动端）
+            this.vibrateOnNewMessage();
+
+            // 更新未读数
+            const room = this.chatRooms.find(r => parseInt(r.id) === parseInt(data.chat_room));
+            if (room) {
+                // 🔧 关键修复4: 仅当不是当前聊天室时才增加未读数
+                if (!this.currentRoomId || parseInt(this.currentRoomId) !== parseInt(data.chat_room)) {
+                    room.unread_count = (room.unread_count || 0) + 1;
+                }
+                this.renderChatRooms();
+                this.renderGroups();
+
+                // 更新应用角标
+                const totalUnread = this.chatRooms.reduce((sum, r) => sum + (r.unread_count || 0), 0);
+                this.updateAppBadge(totalUnread);
+            }
+
+            // 🔧 关键修复5: 页面不可见时显示桌面通知
+            if (shouldShowDesktopNotification && this.shouldShowDesktopNotification()) {
+                console.log('页面不可见，显示桌面通知');
+                this.showNotification(
+                    data.sender?.real_name || data.sender?.username || data.sender_name || '新消息',
+                    {
+                        data: data,
+                        body: data.content,
+                        icon: data.sender?.avatar_url || '/static/images/default-avatar.png',
+                        requireInteraction: true // 保持通知直到用户交互
+                    }
+                );
+            }
+            // 页面可见但非当前聊天室，显示页面内通知
+            else if (!shouldShowDesktopNotification) {
+                this.showMessageNotification(data, {
+                    chat_room_id: data.chat_room,
+                    sender_name: data.sender?.real_name || data.sender?.username || '未知用户',
+                    avatar_url: data.sender?.avatar_url,
+                    is_current_room: false,
+                    room_type: data.room_type || 'private'
+                });
+            }
+        }
+
     }
+
 
     // 处理未读数更新
     handleUnreadCountUpdate(data) {
@@ -776,7 +934,9 @@ class ChatClient {
     connectWebSocket(roomId) {
         // 关闭旧的聊天室连接
         if (this.roomWs) {
-            this.roomWs.close();
+            // this.roomWs.close();
+            this.roomWs.close(1000, 'Switching room');
+            this.roomWs = null;
         }
 
         // 防止重复连接
@@ -788,7 +948,9 @@ class ChatClient {
 
         if (this.ws) {
             console.log('Closing existing WebSocket connection')
-            this.ws.close();
+            // this.ws.close();
+            this.ws.close(1000, 'Switching room');
+            this.ws = null;
         }
 
         this.currentRoomId = parseInt(roomId);
@@ -808,7 +970,18 @@ class ChatClient {
         try {
             this.ws = new WebSocket(wsUrl);
 
+            // 🔧 关键修复：添加连接超时
+            const connectionTimeout = setTimeout(() => {
+                if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+                    console.warn('WebSocket connection timeout');
+                    this.ws.close();
+                    this.showError('WebSocket 连接超时，请检查网络连接');
+                }
+            }, 10000); // 10 秒超时
+
+
             this.ws.onopen = () => {
+                clearTimeout(connectionTimeout);
                 console.log('WebSocket connected successfully roomId: ', roomId);
                 this.isConnected = true;
                 this.updateConnectionStatus(true);
@@ -826,6 +999,7 @@ class ChatClient {
             };
 
             this.ws.onclose = (event) => {
+                clearTimeout(connectionTimeout);
                 console.log('WebSocket disconnected. Code:', event.code, 'Reason:', event.reason);
                 this.isConnected = false;
                 this.updateConnectionStatus(false);
@@ -838,6 +1012,7 @@ class ChatClient {
             };
 
             this.ws.onerror = (error) => {
+                clearTimeout(connectionTimeout);
                 console.error('WebSocket error:', error);
                 this.isConnected = false;
                 // 不要在这里 close()，让 onclose 处理
@@ -845,6 +1020,19 @@ class ChatClient {
         } catch (error) {
             console.error('Failed to create WebSocket connection:', error);
             this.showError('WebSocket 连接失败，请检查网络连接');
+        }
+    }
+
+
+    // 🔧 关键修复：页面卸载时正确关闭 WebSocket
+    beforeUnload() {
+        if (this.ws) {
+            this.ws.close(1000, 'Page unload');
+            this.ws = null;
+        }
+        if (this.globalWs) {
+            this.globalWs.close(1000, 'Page unload');
+            this.globalWs = null;
         }
     }
 
@@ -864,8 +1052,19 @@ class ChatClient {
                 // 🔧 新增：处理用户在线状态变化
                 this.handleUserOnlineStatus(data);
                 break;
+            // 🔧 关键修复：添加 heartbeat 处理（保活消息，无需处理）
+            case 'heartbeat':
+                // 心跳保活消息，仅用于保持连接活跃，无需任何处理
+                // 后端每30秒发送一次，防止移动端锁屏断开连接
+                this.heartbeatCount++;
+                this.lastHeartbeatTime = new Date();
+                // 调试模式下可显示心跳状态
+                if (localStorage.getItem('debugMode') === 'true') {
+                    console.log(`[Heartbeat] ${this.heartbeatCount} - ${this.lastHeartbeatTime.toLocaleTimeString()}`);
+                }
+                break;
             default:
-                console.log('Unknown message type:', data.type);
+                console.log('Unknown message type:', data.type, data);
         }
     }
 
@@ -874,57 +1073,44 @@ class ChatClient {
     handleNewMessage(data) {
         console.log('Received new message:', data);
 
-        // 🔧 关键修复1: 后端发送的是扁平结构，直接使用 data 作为消息对象
-        const message = data;  // 不再使用 data.message
+        // 🔧 关键修复1: 检查页面是否可见/聚焦
+        const isPageVisible = document.visibilityState === 'visible';
+        const isPageFocused = document.hasFocus();
+        const shouldShowDesktopNotification = !isPageVisible || !isPageFocused;
 
         // 安全性检查：确保必要字段存在
-        if (!message || !message.timestamp || !message.chat_room) {
+        if (!data || !data.timestamp || !data.chat_room) {
             console.warn('Invalid message object:', data);
             return;
         }
 
         const currentRoomIdInt = parseInt(this.currentRoomId);
-        const senderId = message.sender_id ?? message.sender?.id;
-
-        // 🔧 关键修复2: 处理消息撤回事件（虽然理论上不会在这里收到，但做防御性处理）
-        if (message.type === 'message_revoked') {
-            this.handleMessageRevoked(message);
-            return;
-        }
-
-        // 🔧 关键修复7: 检查是否是自己发送的消息的确认回执（包含真实ID和temp_id）
+        const senderId = data.sender_id ?? data.sender?.id;
         const isOwnMessage = senderId === this.currentUser?.id;
 
-        if (isOwnMessage && message.temp_id) {
-            // 这是自己发送的消息的确认回执，包含后端生成的真实ID
-            // 查找并更新本地临时消息
-            const tempIndex = this.messages.findIndex(msg =>
-                msg.temp_id === message.temp_id
-            );
-
+        // 检查是否是自己发送的消息的确认回执
+        if (isOwnMessage && data.temp_id) {
+            const tempIndex = this.messages.findIndex(msg => msg.temp_id === data.temp_id);
             if (tempIndex !== -1) {
-                // 更新为真实消息（替换ID和其他字段）
+                // 更新为真实消息
                 this.messages[tempIndex] = {
-                    ...this.messages[tempIndex],  // 保留本地临时消息的所有字段（包括引用）
-                    ...message,                   // 合并后端返回的真实消息数据
-                    id: parseInt(message.message_id) || parseInt(message.id),  // 使用真实ID
-                    message_id: parseInt(message.message_id) || parseInt(message.id),
-                    sender: message.sender,
-                    sender_id: message.sender_id,
-                    sender_name: message.sender_name,
-                    content: message.content,
-                    timestamp: message.timestamp,
-                    is_read: message.is_read,
-                    message_type: message.message_type,
-                    file_info: message.file_info,
-                    chat_room: parseInt(message.chat_room),
-                    is_temp: false,    // 标记为真实消息
-                    temp_id: undefined // 清除临时ID
+                    ...this.messages[tempIndex],
+                    id: parseInt(data.message_id) || parseInt(data.id),
+                    message_id: parseInt(data.message_id) || parseInt(data.id),
+                    sender: data.sender,
+                    sender_id: data.sender_id,
+                    sender_name: data.sender_name,
+                    content: data.content,
+                    timestamp: data.timestamp,
+                    is_read: data.is_read,
+                    message_type: data.message_type,
+                    file_info: data.file_info,
+                    chat_room: parseInt(data.chat_room),
+                    is_temp: false,
+                    temp_id: undefined
                 };
-
-                //  重新渲染整个消息列表（确保UI更新）
                 this.renderChatHistory();
-                return; // 重要：处理完临时消息替换后直接返回，避免重复渲染
+                return;
             }
         }
 
@@ -933,10 +1119,10 @@ class ChatClient {
         if (lastMessage?.timestamp) {
             try {
                 const lastTime = new Date(lastMessage.timestamp);
-                const currentTime = new Date(message.timestamp);
+                const currentTime = new Date(data.timestamp);
                 const timeDiff = currentTime - lastTime;
                 if (timeDiff > 2 * 60 * 1000) {
-                    const timeElement = this.renderTimeStamp(message.timestamp);
+                    const timeElement = this.renderTimeStamp(data.timestamp);
                     const messagesList = document.getElementById('messagesList');
                     if (messagesList && timeElement) {
                         messagesList.appendChild(timeElement);
@@ -947,35 +1133,29 @@ class ChatClient {
             }
         }
 
-        // 添加到消息列表（如果不是自己发送的消息，或未被上面的逻辑处理）
-        if (!isOwnMessage || !message.temp_id) {
-            // 添加完整的消息对象
+        // 添加到消息列表
+        if (!isOwnMessage || !data.temp_id) {
             const fullMessage = {
-                id: parseInt(message.message_id) || parseInt(message.id) || Date.now(),
-                message_id: parseInt(message.message_id) || parseInt(message.id),
-                sender: message.sender,
-                sender_id: message.sender_id,
-                sender_name: message.sender_name,
-                content: message.content,
-                timestamp: message.timestamp,
-                is_read: message.is_read,
-                message_type: message.message_type,
-                file_info: message.file_info,
-                chat_room: parseInt(message.chat_room),
-                // 🔧 关键修复: 保留后端返回的引用信息
-                quote_message_id: message.quote_message_id,
-                quote_content: message.quote_content,
-                quote_sender: message.quote_sender,
-                quote_sender_id: message.quote_sender_id,
-                quote_timestamp: message.quote_timestamp,
-                quote_message_type: message.quote_message_type,
+                id: parseInt(data.message_id) || parseInt(data.id) || Date.now(),
+                message_id: parseInt(data.message_id) || parseInt(data.id),
+                sender: data.sender,
+                sender_id: data.sender_id,
+                sender_name: data.sender_name,
+                content: data.content,
+                timestamp: data.timestamp,
+                is_read: data.is_read,
+                message_type: data.message_type,
+                file_info: data.file_info,
+                chat_room: parseInt(data.chat_room),
+                quote_message_id: data.quote_message_id,
+                quote_content: data.quote_content,
+                quote_sender: data.quote_sender,
+                quote_sender_id: data.quote_sender_id,
+                quote_timestamp: data.quote_timestamp,
+                quote_message_type: data.quote_message_type,
                 is_temp: false
             };
             this.messages.push(fullMessage);
-
-            // // 渲染消息
-            // const msgType = senderId !== this.currentUser?.id ? 'received' : 'sent';
-            // this.renderMessage(fullMessage, msgType);
         }
 
         // 查找当前房间信息
@@ -991,100 +1171,88 @@ class ChatClient {
             this.updateConnectionStatus(isOnline, 'chatSubtitle');
         }
 
-        // 触发通知
-        if (this.shouldPlayNotificationSound()) {
-            console.log('播放提示音通知')
-            try {
-                this.playNotificationSound();
-            } catch (error) {
-                console.error('Failed to play notification sound:', error);
-            }
-        }
-
         // 判断是否为当前聊天室的消息
         if (senderId !== this.currentUser?.id) {
-            if (this.currentRoomId && parseInt(message.chat_room) === currentRoomIdInt) {
+            if (this.currentRoomId && parseInt(data.chat_room) === currentRoomIdInt) {
                 // 当前聊天室，标记为已读
-                message.is_read = true;
-                this.renderMessage(message, 'received');
+                data.is_read = true;
+                this.renderMessage(data, 'received');
 
-
+                // 🔧 关键修复2: 当前聊天室但页面不可见，显示桌面通知
+                if (shouldShowDesktopNotification && this.shouldShowDesktopNotification()) {
+                    console.log('当前聊天室但页面不可见，显示桌面通知');
+                    this.showNotification(
+                        '新消息',
+                        {
+                            data: data,
+                            body: data.content,
+                            icon: data.sender?.avatar_url || '/static/images/default-avatar.png',
+                            requireInteraction: false
+                        }
+                    );
+                }
             } else {
-                // 非当前聊天室，显示通知
-                this.renderMessage(message, 'received');
-
-                // 🔧 新增：触发震动提示（仅非当前聊天室）
-                console.log('触发震动提示')
+                // 非当前聊天室
+                this.renderMessage(data, 'received');
                 this.vibrateOnNewMessage();
 
-                // 🔧 新增：显示消息通知弹窗
-                this.showMessageNotification(message, {
-                    chat_room_id: message.chat_room,
-                    sender_name: message.sender?.real_name || message.sender?.username || '未知用户',
-                    avatar_url: message.sender?.avatar_url,
-                    is_current_room: false,
-                    room_type: message.room_type || 'private'
-                });
-
                 // 更新未读数
-                const room = this.chatRooms.find(r => parseInt(r.id) === parseInt(message.chat_room));
+                const room = this.chatRooms.find(r => parseInt(r.id) === parseInt(data.chat_room));
                 if (room) {
                     room.unread_count = (room.unread_count || 0) + 1;
                     this.renderChatRooms();
                     this.renderGroups();
 
-                    // 🔧 更新应用角标（累计所有未读消息）
                     const totalUnread = this.chatRooms.reduce((sum, r) => sum + (r.unread_count || 0), 0);
                     this.updateAppBadge(totalUnread);
                 }
 
-
-                // // 非当前聊天室，触发声音通知
-                // if (this.shouldPlayNotificationSound()) {
-                //     try {
-                //         this.playNotificationSound();
-                //     } catch (error) {
-                //         console.error('Failed to play notification sound:', error);
-                //     }
-                // }
-
-                if (this.shouldShowDesktopNotification()) {
-                    try {
-                        // Utils.showNotification(message.sender_name, {
-                        //     body: message.content,
-                        //     icon: message.sender?.avatar_url || '/static/images/default-avatar.png'
-                        // });
-
-                        this.showNotification(message.sender_name, {
-                            data: message,
-                            body: message.content,
-                            icon: message.sender?.avatar_url || '/static/images/default-avatar.png',
-                        })
-
-
-                    } catch (error) {
-                        console.error('Failed to show notification:', error);
-                    }
+                // 🔧 关键修复3: 非当前聊天室且页面不可见，显示桌面通知
+                if (shouldShowDesktopNotification && this.shouldShowDesktopNotification()) {
+                    console.log('非当前聊天室且页面不可见，显示桌面通知');
+                    this.showNotification(
+                        data.sender?.real_name || data.sender?.username || '新消息',
+                        {
+                            data: data,
+                            body: data.content,
+                            icon: data.sender?.avatar_url || '/static/images/default-avatar.png',
+                            requireInteraction: true
+                        }
+                    );
+                } else {
+                    // 页面可见但非当前聊天室，显示页面内通知
+                    this.showMessageNotification(data, {
+                        chat_room_id: data.chat_room,
+                        sender_name: data.sender?.real_name || data.sender?.username || '未知用户',
+                        avatar_url: data.sender?.avatar_url,
+                        is_current_room: false,
+                        room_type: data.room_type || 'private'
+                    });
                 }
-
-                // 🔧 关键修复8: 更新未读数（仅非当前聊天室）
-                this.updateChatRoomUnreadCount(message.chat_room, 1);
             }
-        } else if (!message.temp_id) {
-            // 自己发送的消息（首次接收，不是确认回执）
-            this.renderMessage(message, 'sent');
+
+            // 播放提示音
+            if (this.shouldPlayNotificationSound()) {
+                this.playNotificationSound();
+            }
+
+            // 🔧 关键修复4: 更新未读数（仅非当前聊天室）
+            if (!this.currentRoomId || parseInt(data.chat_room) !== currentRoomIdInt) {
+                this.updateChatRoomUnreadCount(data.chat_room, 1);
+            }
+        } else if (!data.temp_id) {
+            // 自己发送的消息
+            this.renderMessage(data, 'sent');
         }
 
         // 如果是当前聊天室的消息，滚动到底部
-        if (this.currentRoomId && parseInt(message.chat_room) === currentRoomIdInt) {
+        if (this.currentRoomId && parseInt(data.chat_room) === currentRoomIdInt) {
             Utils.scrollToBottom(document.getElementById('messagesList'));
-
-            // 🔧 关键修复9: 标记当前聊天室消息为已读
             this.markMessagesAsRead(this.currentRoomId);
         }
 
-        // 🔧 关键修复10: 更新聊天室最后一条消息
-        this.updateChatRoomLastMessage(message.chat_room, message.content, message.timestamp);
+        // 更新聊天室最后一条消息
+        this.updateChatRoomLastMessage(data.chat_room, data.content, data.timestamp);
     }
 
 
@@ -1146,6 +1314,17 @@ class ChatClient {
             // 方案2（可选优化）: 只更新特定聊天室的最后消息
             this.updateChatRoomLastMessageAfterRevoke(chat_room_id);
 
+        }
+    }
+
+
+    // 检测连接是否异常（连续3次未收到心跳）
+    checkConnectionHealth() {
+        const now = new Date();
+        const timeSinceLastHeartbeat = now - this.lastHeartbeatTime;
+
+        if (timeSinceLastHeartbeat > 5 * 3) { // 15秒未收到心跳
+            console.warn('WebSocket 连接可能已断开，尝试重连...');
         }
     }
 
@@ -1232,6 +1411,13 @@ class ChatClient {
 
     // 检查是否应该显示桌面通知
     shouldShowDesktopNotification() {
+        // 🔧 关键修复1: 检查通知权限
+        // if (Notification.permission !== 'granted') {
+        //     console.log('未授权通知权限');
+        //     return false;
+        // }
+
+        // 检查全局桌面通知设置
         const desktopNotifications = localStorage.getItem('desktopNotifications') !== 'false';
 
         // 检查当前聊天室是否免打扰
@@ -1242,7 +1428,104 @@ class ChatClient {
             }
         }
 
+        // 🔧 关键修复2: 移动端特殊处理 - 锁屏/后台也显示通知
+        if (Utils.isMobile()) {
+            // 页面不可见时强制显示通知
+            if (document.visibilityState !== 'visible') {
+                return desktopNotifications;
+            }
+
+            // 页面可见但失焦（如切换到其他App）也显示通知
+            if (!document.hasFocus()) {
+                return desktopNotifications;
+            }
+        }
+
+
         return desktopNotifications;
+    }
+
+    // 请求通知权限（用户首次交互后）
+    requestNotificationPermission() {
+        // 避免重复请求
+        if (this.notificationPermissionRequested || Notification.permission !== 'default') {
+            return;
+        }
+
+        this.notificationPermissionRequested = true;
+
+        // 等待用户交互后请求权限
+        const requestPermission = () => {
+            Notification.requestPermission().then(permission => {
+                console.log('Notification permission:', permission);
+
+                // 权限被拒绝时显示友好提示
+                if (permission === 'denied') {
+                    this.showNotificationPermissionHint();
+                }
+
+                // 移除事件监听（只请求一次）
+                document.removeEventListener('click', requestPermission);
+                document.removeEventListener('touchstart', requestPermission);
+            });
+        };
+
+        // 监听用户交互
+        document.addEventListener('click', requestPermission, {once: true});
+        document.addEventListener('touchstart', requestPermission, {once: true});
+
+        // 3秒后自动请求（降级方案）
+        setTimeout(() => {
+            if (Notification.permission === 'default') {
+                Notification.requestPermission();
+            }
+        }, 3000);
+    }
+
+    // 显示通知权限提示（权限被拒绝时）
+    showNotificationPermissionHint() {
+        // 检查是否已显示过提示（避免重复）
+        if (localStorage.getItem('notificationHintShown')) return;
+
+        const hint = document.createElement('div');
+        hint.className = 'notification-hint';
+        hint.innerHTML = `
+        <div class="hint-content">
+            <i class="fas fa-bell"></i>
+            <div class="hint-text">
+                <strong>开启桌面通知</strong><br>
+                不错过重要消息，即使页面在后台或手机锁屏
+            </div>
+            <button class="hint-btn" id="enableNotificationsBtn">开启</button>
+            <button class="hint-close" id="closeHintBtn">×</button>
+        </div>
+    `;
+        document.body.appendChild(hint);
+
+        // 绑定事件
+        document.getElementById('enableNotificationsBtn').onclick = () => {
+            Notification.requestPermission().then(permission => {
+                if (permission === 'granted') {
+                    hint.remove();
+                    this.showSuccess('通知已开启');
+                } else {
+                    this.showInfo('请在浏览器设置中手动开启通知权限');
+                }
+            });
+        };
+
+        document.getElementById('closeHintBtn').onclick = () => {
+            hint.remove();
+            localStorage.setItem('notificationHintShown', 'true');
+        };
+
+        // 10秒后自动隐藏
+        setTimeout(() => {
+            if (hint.parentNode) {
+                hint.remove();
+                localStorage.setItem('notificationHintShown', 'true');
+            }
+        }, 10000);
     }
 
 
@@ -1359,8 +1642,8 @@ class ChatClient {
     }
 
 
-    // 显示桌面通知（增强版）
-    async showNotification(title, options) {
+    // 增强桌面通知，添加震动反馈和声音
+    async showNotification_v1(title, options) {
         console.log('showNotification:', title, options);
         console.log('Notification.permission: ', Notification.permission)
         // 创建通知
@@ -1404,6 +1687,101 @@ class ChatClient {
     }
 
 
+    // 增强桌面通知，支持锁屏通知（移动端），添加震动反馈和声音
+    async showNotification(title, options) {
+        console.log('showNotification:', title, options);
+        console.log('Notification.permission: ', Notification.permission)
+
+        // 检查通知权限
+        if (Notification.permission !== 'granted') {
+            // 尝试请求权限（用户已交互）
+            await Notification.requestPermission();
+
+            // 仍无权限，降级为页面内通知
+            if (Notification.permission !== 'granted') {
+                console.warn('用户拒绝了通知权限, 降级为页面内通知');
+                this.showToast('未授权通知权限, 降级为页面内通知', 'error');
+                this.showMessageNotification(options.data || options, {
+                    chat_room_id: options.data?.chat_room_id || options.data?.chat_room,
+                    sender_name: options.data?.sender?.real_name || options.data?.sender?.username || '未知用户',
+                    avatar_url: options.icon,
+                    is_current_room: false
+                });
+                // return;
+            }
+
+        }
+
+        // // 🔧 关键修复1: 移动端锁屏通知必需参数
+        // const notificationOptions = {
+        //     ...options,
+        //     // iOS 16.4+ 需要这些参数才能显示锁屏通知
+        //     requireInteraction: Utils.isMobile() ? false : true,  // 移动端不强制交互
+        //     silent: false,  // 强制播放系统通知声音
+        //     tag: `chat-${options.data?.chat_room_id || options.data?.chat_room || Date.now()}`,  // 防止重复
+        //     // 🔧 关键修复2: iOS PWA 锁屏通知需要 badge
+        //     badge: '/static/images/notification-badge.png'
+        // };
+        //
+        // // 创建通知
+        // const notification = new Notification(title, notificationOptions);
+
+        // // 创建通知
+        const notification = new Notification(title, {
+            ...options,
+            icon: options.icon || '/static/images/default-avatar.png',
+            badge: '/static/images/notification-badge.png', // 小图标（Android PWA）
+            tag: `chat-${options.data?.chat_room_id || options.data?.chat_room || Date.now()}`, // 防止重复
+            renotify: true, // 允许重复通知
+            requireInteraction: Utils.isMobile() ? false : options.requireInteraction !== false, // 移动端不强制交互, 默认需要交互
+            silent: false // 播放系统通知声音
+        });
+
+
+        // 通知点击事件
+        notification.onclick = () => {
+            window.focus();
+            this.stopTitleBlink();
+            // 如果有指定的聊天室，切换到该聊天室
+            const chatRoomId = options.data?.chat_room_id || options.data?.chat_room;
+            if (chatRoomId) {
+                this.selectChatRoom(chatRoomId);
+            }
+            notification.close();
+        };
+
+        // 通知关闭后清除角标（如果所有通知都已读）
+        notification.onclose = () => {
+            const totalUnread = this.chatRooms.reduce((sum, r) => sum + (r.unread_count || 0), 0);
+            this.updateAppBadge(totalUnread);
+        };
+
+        // 🔧 关键修复3: 移动端通知同时触发震动
+        if (Utils.isMobile()) {
+            this.vibrateOnNewMessage();
+        }
+
+        // 播放提示音（降级方案，系统通知可能已有声音）
+        if (this.shouldPlayNotificationSound()) {
+            // 延迟播放避免与系统通知声音冲突
+            setTimeout(() => {
+                this.playNotificationSound();
+            }, 300);
+        }
+
+        // 🔧 关键修复4: 5秒后自动关闭（避免通知堆积）
+        setTimeout(() => {
+            try {
+                notification.close();
+            } catch (e) {
+                // 通知可能已被用户关闭
+                console.warn('通知已关闭 error: ', e);
+            }
+        }, 5000);
+
+    }
+
+
     // 添加震动方法
     vibrateOnNewMessage() {
         // 仅在移动端且支持震动API时启用
@@ -1417,11 +1795,13 @@ class ChatClient {
             return;
         }
 
-        // 短震动提示（300ms）
-        navigator.vibrate(300);
+        // 🔧 关键修复：锁屏震动模式（长-短-长）
+        // 即使锁屏也能通过震动感知新消息
+        navigator.vibrate([300, 100, 300]);
 
-        // 或者使用模式震动：短-长-短
-        // navigator.vibrate([100, 50, 200]);
+        // 短震动提示（300ms）
+        // 降级：简单震动
+        // navigator.vibrate(300);
     }
 
 
@@ -1678,6 +2058,13 @@ class ChatClient {
 
     // 修复：发送图片/文件消息（限制9个，支持视频）
     async sendImageOrFileMessage(files) {
+
+        if (!this.currentRoomId) {
+            console.error('请先选择一个聊天对象')
+            this.showError('请先选择一个聊天对象');
+            return;
+        }
+
         if (!files || files.length === 0) return;
 
         // 限制一次最多9个文件
@@ -1731,15 +2118,17 @@ class ChatClient {
 
     // 发送消息（支持文件消息）
     async sendMessage(content = null) {
+
+        if (!this.currentRoomId) {
+            console.error('请先选择一个聊天对象')
+            this.showError('请先选择一个聊天对象');
+            return;
+        }
+
         const messageInput = document.getElementById('messageInput');
         const actualContent = content || (messageInput ? messageInput.value.trim() : '');
 
         if (!actualContent && !content?.file_id) {
-            return;
-        }
-
-        if (!this.currentRoomId) {
-            this.showError('请先选择一个聊天对象');
             return;
         }
 
@@ -1935,6 +2324,13 @@ class ChatClient {
 
     // 处理粘贴事件
     handlePaste(e) {
+
+        if (!this.currentRoomId) {
+            console.error('请先选择一个聊天对象')
+            this.showError('请先选择一个聊天对象');
+            return;
+        }
+
         const clipboardData = e.clipboardData || window.clipboardData;
         if (!clipboardData) return;
 
@@ -1956,7 +2352,7 @@ class ChatClient {
         }
     }
 
-// 从剪切板发送图片
+    // 从剪切板发送图片
     async sendImageFromClipboard(blob) {
         try {
             // 创建文件对象
@@ -2192,6 +2588,28 @@ class ChatClient {
 
         // 添加滚动监听
         messagesList.addEventListener('scroll', this.infiniteScrollHandler);
+    }
+
+
+    setupVideoMessageListerners() {
+
+        document.querySelectorAll('.video-play-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const videoEl = btn.parentElement.querySelector('video');
+                if (videoEl.paused) {
+                    videoEl.play();
+                    btn.classList.add('playing');
+                    btn.innerHTML = '<i class="fas fa-pause"></i>';
+
+                } else {
+                    videoEl.pause();
+                    btn.classList.remove('playing');
+                    btn.innerHTML = '<i class="fas fa-play"></i>';
+
+                }
+            });
+        });
     }
 
 
@@ -2508,7 +2926,7 @@ class ChatClient {
                 } else {
                     roomAvatar = '/static/images/default-avatar.png';
                     username = '未知用户';
-                    isOnline = falsel;
+                    isOnline = false;
                 }
 
 
@@ -2885,10 +3303,17 @@ class ChatClient {
             messagesList.appendChild(messageElement);
         }
 
+
         // 如果是最新消息且当前在聊天界面，滚动到底部
         if (this.currentRoomId && parseInt(message.chat_room) == parseInt(this.currentRoomId)) {
             Utils.scrollToBottom(messagesList);
         }
+
+        // 绑定视频监听
+        setTimeout(() => {
+            this.setupVideoMessageListerners()
+        }, 100)
+
     }
 
 
@@ -3034,6 +3459,7 @@ class ChatClient {
                     videoContainer.appendChild(video);
                     videoContainer.appendChild(playBtn);
                     container.appendChild(videoContainer);
+
                 } else {
                     container.textContent = '[视频加载失败]';
                 }
@@ -3837,15 +4263,31 @@ class ChatClient {
         if (room) {
             let roomName, roomAvatar, is_online = false;
             if (room.room_type === 'private') {
-                roomName = room.display_name || room.members.find(m => m.id !== this.currentUser.id).real_name || room.members.find(m => m.id !== this.currentUser.id).username || '未知聊天室';
-                roomAvatar = room.avatar || room.members.find(m => m.id !== this.currentUser.id).avatar_url || '/static/images/default-avatar.png';
-                is_online = room.members.find(m => m.id !== this.currentUser.id)?.online_status?.is_online;
+                const otherMember = room.members.find(m => m.id !== this.currentUser.id);
+                if (otherMember) {
+                    roomName = otherMember.real_name || otherMember.username || '未知用户';
+                    roomAvatar = otherMember.avatar_url || '/static/images/default-avatar.png';
+                    is_online = otherMember.online_status?.is_online;
+                } else {
+                    roomName = '未知用户';
+                    roomAvatar = '/static/images/default-avatar.png';
+                }
             } else {
                 roomName = room.display_name || (room.members ? room.members.map(m => m.real_name || m.username).join(', ') : '未知群组');
                 roomName = `${roomName} (${room.members ? room.members.length : 0})`
                 roomAvatar = room.avatar || '/static/images/group-avatar.png';
-                is_online = true;
-                console.log('room.members is_online: ', is_online)
+
+                // 除自己以外如果有一个成员在线，则显示在线, 并统计在线成员人数
+                let online_count = 0
+                for (const member of room.members) {
+                    if (member.online_status?.is_online) {
+                        online_count++
+                        if (member.id !== this.currentUser.id) {
+                            is_online = true
+                        }
+                    }
+                }
+                console.log('room.members is_online: ', is_online, ' online_count: ', online_count)
             }
             this.updateConnectionStatus(is_online, 'chatSubtitle')
             console.log('roomAvatar:', roomAvatar, ' is_online: ', is_online)
@@ -4264,196 +4706,54 @@ class ChatClient {
         });
     }
 
-    // 清除所有缓存层
-    clearAllCaches() {
-        const timestamp = Date.now();
-
-        // 1. 清除 Service Worker
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.getRegistrations().then(registrations => {
-                registrations.forEach(reg => reg.unregister());
-            }).catch(console.warn);
-
-            // 清除 Cache Storage
-            if ('caches' in window) {
-                caches.keys().then(keys => {
-                    keys.forEach(key => caches.delete(key));
-                });
-            }
-        }
-
-        // 2. 清除 localStorage 中的缓存标记
-        Object.keys(localStorage).forEach(key => {
-            if (key.includes('cache') || key.includes('version') || key.includes('static')) {
-                localStorage.removeItem(key);
-            }
-        });
-
-        // 3. 清除 sessionStorage（保留必要数据）
-        const currentRoomId = sessionStorage.getItem('lastRoomId');
-        sessionStorage.clear();
-        if (currentRoomId) {
-            sessionStorage.setItem('lastRoomId', currentRoomId);
-        }
-
-        // 4. 清除 IndexedDB（如果使用）
-        if ('indexedDB' in window) {
-            indexedDB.databases().then(dbs => {
-                dbs.forEach(db => {
-                    if (db.name.includes('cache') || db.name.includes('static')) {
-                        indexedDB.deleteDatabase(db.name);
-                    }
-                });
-            }).catch(console.warn);
-        }
-
-        // 5. 清除内存缓存（通过重新请求资源）
-        const resources = [
-            '/static/css/chat.css',
-            '/static/js/chat.js',
-            '/static/js/api.js',
-            '/static/js/utils.js',
-            '/static/js/admin.js',
-            '/static/js/spark-md5.min.js'
-        ];
-
-        resources.forEach(url => {
-            // 使用 fetch 强制重新验证
-            fetch(url + `?cacheBust=${timestamp}`, {
-                method: 'GET',
-                cache: 'reload', // 强制从网络获取
-                headers: {
-                    'Cache-Control': 'no-cache, no-store, must-revalidate',
-                    'Pragma': 'no-cache',
-                    'Expires': '0'
-                }
-            }).catch(() => {
-                // 忽略错误，继续执行
-                console.warn('预热资源失败:', url);
-            });
-        });
-    }
-
-    // 强制硬刷新（绕过所有缓存）
-    forceHardReload() {
-        // 🔧 关键修复：使用 location.replace + 时间戳 + reload(true)
-        const url = new URL(window.location.href);
-        url.searchParams.set('cacheBust', Date.now());
-
-        // 保存滚动位置
-        sessionStorage.setItem('preReloadScrollY', window.scrollY.toString());
-
-        // 先 replace URL，再强制刷新
-        window.location.replace(url.toString());
-
-        // 双重保险：1秒后强制 reload(true)
-        setTimeout(() => {
-            location.reload(true); // true = 绕过缓存
-        }, 1000);
-    }
-
-    // 恢复滚动位置（在 init 方法中调用）
-    restoreScrollPosition() {
-        const scrollY = sessionStorage.getItem('preReloadScrollY');
-        if (scrollY) {
-            // 使用 requestAnimationFrame 确保在渲染后滚动
-            requestAnimationFrame(() => {
-                window.scrollTo(0, parseInt(scrollY));
-                sessionStorage.removeItem('preReloadScrollY');
-            });
-        }
-    }
-
-
-    // 检查应用版本（启动时调用）
-    async checkAppVersion() {
-        try {
-            // 从 API 获取当前版本
-            const response = await fetch('/api/chat/version/?t=' + Date.now(), {
-                cache: 'no-cache'
-            });
-
-            if (response.ok) {
-                const versionData = await response.json();
-                const serverVersion = versionData.version;
-                const clientVersion = sessionStorage.getItem('appVersion') || 'unknown';
-
-                // 版本不同且不是首次加载
-                if (clientVersion !== 'unknown' && clientVersion !== serverVersion) {
-                    console.log(`版本更新检测: ${clientVersion} → ${serverVersion}`);
-
-                    // 显示更新提示
-                    this.showVersionUpdatePrompt(serverVersion);
-                } else {
-                    sessionStorage.setItem('appVersion', serverVersion);
-                }
-            }
-        } catch (error) {
-            console.warn('版本检测失败:', error);
-        }
-    }
-
-    // 显示版本更新提示
-    showVersionUpdatePrompt(newVersion) {
-        // 创建更新提示
-        const updateBanner = document.createElement('div');
-        updateBanner.className = 'version-update-banner';
-        updateBanner.innerHTML = `
-            <div class="update-content">
-                <i class="fas fa-sync-alt"></i>
-                <span>检测到新版本 ${newVersion}，点击刷新以获取最新功能</span>
-                <button class="update-btn" id="updateNowBtn">立即更新</button>
-                <button class="update-close" id="updateLaterBtn">×</button>
-            </div>
-        `;
-
-        document.body.appendChild(updateBanner);
-
-        // 绑定事件
-        document.getElementById('updateNowBtn').onclick = () => {
-            this.clearAllCaches();
-            location.reload(true);
-        };
-
-        document.getElementById('updateLaterBtn').onclick = () => {
-            updateBanner.remove();
-        };
-
-        // 5秒后自动隐藏
-        setTimeout(() => {
-            if (updateBanner.parentNode) {
-                updateBanner.classList.add('fade-out');
-                setTimeout(() => {
-                    if (updateBanner.parentNode) {
-                        updateBanner.remove();
-                    }
-                }, 300);
-            }
-        }, 5000);
-    }
-
 
     // 初始化版本管理
     async initVersionManagement() {
+        console.log('🔍 启动版本管理系统...');
+
         // 页面加载时恢复滚动位置
         versionManager.restoreScrollPosition();
 
+        // 🔧 修复：首次检查前先保存当前版本（防止无限循环）
+        const currentStaticVersion = localStorage.getItem('static_version');
+        const injectedVersion = document.querySelector('script[data-version]')?.dataset.version ||
+            (typeof CURRENT_VERSION !== 'undefined' ? CURRENT_VERSION : null);
+
+        if (injectedVersion && (!currentStaticVersion || currentStaticVersion !== injectedVersion)) {
+            console.log('💾 保存注入的版本到 localStorage:', injectedVersion);
+            localStorage.setItem('static_version', injectedVersion);
+        }
+
         // 首次检查版本（立即执行）
-        const updateInfo = await versionManager.checkForUpdates(true);
-        if (updateInfo && updateInfo.hasUpdate) {
-            versionManager.showUpdatePrompt(updateInfo);
+        try {
+            const updateInfo = await versionManager.checkForUpdates(true);
+            if (updateInfo && updateInfo.hasUpdate) {
+                console.log('✅ 检测到新版本，显示更新提示:', updateInfo);
+                versionManager.showUpdatePrompt(updateInfo);
+            } else {
+                console.log('✅ 当前已是最新版本');
+            }
+        } catch (error) {
+            console.error('❌ 首次版本检查失败:', error);
         }
 
         // 设置定期检查（每5分钟）
+        console.log('⏱️ 设置定期版本检查（每5分钟）');
         setInterval(async () => {
-            const updateInfo = await versionManager.checkForUpdates();
-            if (updateInfo && updateInfo.hasUpdate) {
-                versionManager.showUpdatePrompt(updateInfo);
+            try {
+                const updateInfo = await versionManager.checkForUpdates();
+                if (updateInfo && updateInfo.hasUpdate) {
+                    console.log('✅ 定期检查检测到新版本:', updateInfo);
+                    versionManager.showUpdatePrompt(updateInfo);
+                }
+            } catch (error) {
+                console.warn('⚠️ 定期版本检查失败:', error);
             }
         }, versionManager.CHECK_INTERVAL);
 
-        // 监听在线状态变化，恢复连接时检查版本
+        // 监听在线状态变化
         window.addEventListener('online', async () => {
+            console.log('🌐 网络恢复，检查版本更新...');
             const updateInfo = await versionManager.checkForUpdates(true);
             if (updateInfo && updateInfo.hasUpdate) {
                 versionManager.showUpdatePrompt(updateInfo);
@@ -5330,6 +5630,16 @@ class ChatClient {
             const position = document.getElementById('settingsPosition').value;
             const avatarInput = document.getElementById('avatarUpload');
 
+            // 保存通知设置
+            const desktopNotifications = document.getElementById('desktopNotifications').checked;
+            const soundNotifications = document.getElementById('soundNotifications').checked;
+            const vibrateNotifications = document.getElementById('vibrateNotifications').checked;
+            localStorage.setItem('desktopNotifications', desktopNotifications.toString());
+            localStorage.setItem('soundNotifications', soundNotifications.toString());
+            localStorage.setItem('vibrateNotifications', vibrateNotifications.toString());
+            console.log('保存通知设置: ', desktopNotifications, soundNotifications, vibrateNotifications);
+
+
             // 验证邮箱格式
             if (email && !this.validateEmail(email)) {
                 this.showError('请输入有效的邮箱地址');
@@ -5355,7 +5665,6 @@ class ChatClient {
                 if (department !== this.currentUser.department) updateData.department = department;
                 if (position !== this.currentUser.position) updateData.position = position;
             }
-
 
             let response;
 
@@ -5390,6 +5699,7 @@ class ChatClient {
                         body: JSON.stringify(updateData)
                     });
                 } else {
+                    console.log('没有更新内容');
                     // 没有更新内容
                     this.closeModal('settingsModal');
                     this.showSuccess('设置保存成功');
@@ -5397,88 +5707,12 @@ class ChatClient {
                 }
             }
 
-
-            // // 检查用户权限 - 只有管理员以上才能修改部门和职位
-            // if (this.currentUser.user_type === 'normal') {
-            //     // 普通用户只能更新基本信息
-            //     if (avatarInput.files.length > 0) {
-            //         formData.append('avatar', avatarInput.files[0]);
-            //     }
-            //     if (real_name) formData.append('real_name', real_name);
-            //     if (phone) formData.append('phone', phone);
-            //     if (email) formData.append('email', email);
-            //
-            // } else {
-            //     // 管理员可以更新所有信息
-            //     if (avatarInput.files.length > 0) {
-            //         formData.append('avatar', avatarInput.files[0]);
-            //     }
-            //     if (real_name) formData.append('real_name', real_name);
-            //     if (phone) formData.append('phone', phone);
-            //     if (email) formData.append('email', email);
-            //     if (department) formData.append('department', department);
-            //     if (position) formData.append('position', position);
-            //
-            // }
-            //
-            // console.log('currentUser.user_type:', this.currentUser.user_type);
-            // console.log('department:', department);
-            // console.log('position:', position);
-            // console.log('real_name:', real_name);
-            // console.log('phone:', phone);
-            // console.log('email:', email);
-            //
-            // let response;
-            // if (formData.has('avatar') || (this.currentUser.user_type !== 'normal' && (department || position || real_name || phone || email))) {
-            //     console.log('有文件上传或管理员修改部门/职位，使用 multipart/form-data');
-            //     // 有文件上传或管理员修改部门/职位，使用 multipart/form-data
-            //     response = await fetch('/api/auth/profile/', {
-            //         method: 'PUT',
-            //         headers: {
-            //             'Authorization': `Bearer ${localStorage.getItem('access_token')}`
-            //         },
-            //         body: formData
-            //     });
-            // } else {
-            //     console.log('没有文件上传或管理员修改部门/职位，使用 JSON');
-            //     // 只更新基本信息，使用 JSON
-            //     const userData = {};
-            //     if (department && this.currentUser.user_type !== 'normal') userData.department = department;
-            //     if (position && this.currentUser.user_type !== 'normal') userData.position = position;
-            //     if (real_name) userData.real_name = real_name;
-            //     if (phone) userData.phone = phone;
-            //     if (email) userData.email = email;
-            //
-            //     console.log('userData:', userData);
-            //
-            //     response = await fetch('/api/auth/profile/', {
-            //         method: 'PUT',
-            //         headers: {
-            //             'Content-Type': 'application/json',
-            //             'Authorization': `Bearer ${localStorage.getItem('access_token')}`
-            //         },
-            //         body: JSON.stringify(userData)
-            //     });
-            // }
-
             console.log('response:', response)
 
             if (response.ok) {
                 const updatedUser = await response.json();
                 this.currentUser = updatedUser;
                 this.renderCurrentUser();
-
-
-                // 保存通知设置
-                const desktopNotifications = document.getElementById('desktopNotifications').checked;
-                const soundNotifications = document.getElementById('soundNotifications').checked;
-                const vibrateNotifications = document.getElementById('vibrateNotifications').checked;
-                localStorage.setItem('desktopNotifications', desktopNotifications.toString());
-                localStorage.setItem('soundNotifications', soundNotifications.toString());
-                localStorage.setItem('vibrateNotifications', vibrateNotifications.toString());
-
-                console.log('保存通知设置: ', desktopNotifications, soundNotifications, vibrateNotifications);
-
 
                 this.closeModal('settingsModal');
                 this.showSuccess('设置保存成功');
@@ -5742,7 +5976,14 @@ class ChatClient {
 
     // 发送表情包
     async sendEmoji(emojiHtml) {
-        if (!emojiHtml || !this.currentRoomId) {
+        if (!emojiHtml) {
+            console.error('请选择表情包');
+            this.showError('请选择表情包');
+            return;
+        }
+        if (!this.currentRoomId) {
+            console.error('请先选择一个聊天对象')
+            this.showError('请先选择一个聊天对象');
             return;
         }
 
@@ -7107,7 +7348,7 @@ class ChatClient {
         }, 10);
     }
 
-// 示例：替换 logout 方法
+    // 示例：替换 logout 方法
     async logout() {
         const confirmed = await this.showConfirmDialog('退出登录', '确定要退出登录吗？', 'confirm');
         if (confirmed) {
@@ -7115,12 +7356,16 @@ class ChatClient {
                 await API.logout();
             } catch (error) {
                 console.error('登出失败:', error);
+            } finally {
                 localStorage.removeItem('access_token');
+                localStorage.removeItem('user_id')
+                localStorage.removeItem('user_type')
+                if (this.ws) {
+                    this.ws.close();
+                }
+                window.location.href = '/login/';
             }
-            if (this.ws) {
-                this.ws.close();
-            }
-            window.location.href = '/login/';
+
         }
     }
 
@@ -8035,6 +8280,13 @@ class ChatClient {
 
     // 发送语音消息（添加 iOS 兼容标记）
     async sendVoiceMessage() {
+
+        if (!this.currentRoomId) {
+            console.error('请先选择一个聊天对象')
+            this.showError('请先选择一个聊天对象');
+            return;
+        }
+
         if (this.audioChunks.length === 0) {
             console.error('录音内容为空');
             this.showError('录音内容为空');
@@ -8183,11 +8435,12 @@ class ChatClient {
         // 🔧 关键修复：智能选择音频源（优先 iOS 兼容格式）
         const audioElement = voiceElement.querySelector('.voice-audio');
         if (message.file_info?.url) {
+            let audioUrl = message.file_info.url;
+
             // 检测设备类型
             const isIOS = Utils.isIOS();
             const isMobible = Utils.isMobile();
             const isAndroid = Utils.isAndroid();
-            let audioUrl = message.file_info.url;
 
             // OS 设备优先使用 MP3 格式（如果后端已提供）
             if (isIOS && message.file_info?.mp3_url) {
@@ -8273,6 +8526,51 @@ class ChatClient {
                 audioElement.setAttribute('webkit-playsinline', 'webkit-playsinline');
             }
 
+            // 🔧 关键修复：监听音频事件更新 UI
+            audioElement.addEventListener('play', () => {
+                const playBtn = voiceElement.querySelector('.voice-play-btn');
+                if (playBtn) {
+                    playBtn.classList.add('playing');
+                    playBtn.innerHTML = '<i class="fas fa-pause"></i>';
+                    playBtn.title = '点击暂停';
+                }
+            });
+
+            audioElement.addEventListener('pause', () => {
+                const playBtn = voiceElement.querySelector('.voice-play-btn');
+                if (playBtn) {
+                    playBtn.classList.remove('playing');
+                    playBtn.innerHTML = '<i class="fas fa-play"></i>';
+                    playBtn.title = '点击播放';
+                }
+            });
+
+            audioElement.addEventListener('ended', () => {
+                // 播放结束自动重置
+                const playBtn = voiceElement.querySelector('.voice-play-btn');
+                const progressBar = voiceElement.querySelector('.voice-progress-bar');
+                if (playBtn) {
+                    playBtn.classList.remove('playing');
+                    playBtn.innerHTML = '<i class="fas fa-play"></i>';
+                    playBtn.title = '点击播放';
+                }
+                if (progressBar) {
+                    progressBar.style.width = '0%';
+                }
+                audioElement.currentTime = 0;
+            });
+
+            // 更新进度条
+            audioElement.addEventListener('timeupdate', () => {
+                if (audioElement.duration) {
+                    const progress = (audioElement.currentTime / audioElement.duration) * 100;
+                    const progressBar = voiceElement.querySelector('.voice-progress-bar');
+                    if (progressBar) {
+                        progressBar.style.width = `${Math.min(progress, 100)}%`;
+                    }
+                }
+            });
+
             // 🔧 关键修复3: 添加 canplaythrough 事件确保音频可播放
             audioElement.addEventListener('canplaythrough', () => {
                 console.log('音频已准备好');
@@ -8338,39 +8636,50 @@ class ChatClient {
             }
         }
 
+
         // 播放按钮事件
         const playBtn = voiceElement.querySelector('.voice-play-btn');
-        playBtn.onclick = (e) => {
-            e.stopPropagation();
-            this.toggleVoicePlay(voiceElement, audioElement, playBtn, message);
-        };
+        if (playBtn) {
+            playBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.toggleVoicePlay(voiceElement, audioElement, playBtn, message);
+            };
 
-        // 进度和结束事件...
-        audioElement.ontimeupdate = () => {
-            if (audioElement.duration) {
-                const progress = (audioElement.currentTime / audioElement.duration) * 100;
-                const progressBar = voiceElement.querySelector('.voice-progress-bar');
-                if (progressBar) {
-                    progressBar.style.width = `${progress}%`;
-                }
-            }
-        };
+            // 添加点击反馈动画
+            playBtn.addEventListener('touchstart', () => {
+                playBtn.style.transform = 'scale(0.95)';
+            });
+            playBtn.addEventListener('touchend', () => {
+                playBtn.style.transform = '';
+            });
+        }
 
-        // 播放结束
-        audioElement.onended = () => {
-            playBtn.classList.remove('playing');
-            const progressBar = voiceElement.querySelector('.voice-progress-bar');
-            if (progressBar) {
-                progressBar.style.width = '0%';
-            }
-        };
+        // // 进度和结束事件...
+        // audioElement.ontimeupdate = () => {
+        //     if (audioElement.duration) {
+        //         const progress = (audioElement.currentTime / audioElement.duration) * 100;
+        //         const progressBar = voiceElement.querySelector('.voice-progress-bar');
+        //         if (progressBar) {
+        //             progressBar.style.width = `${progress}%`;
+        //         }
+        //     }
+        // };
+        //
+        // // 播放结束
+        // audioElement.onended = () => {
+        //     playBtn.classList.remove('playing');
+        //     const progressBar = voiceElement.querySelector('.voice-progress-bar');
+        //     if (progressBar) {
+        //         progressBar.style.width = '0%';
+        //     }
+        // };
 
         container.appendChild(voiceElement);
     }
 
 
     // 切换语音播放（增强错误处理）
-    toggleVoicePlay(voiceElement, audioElement, playBtn, message) {
+    toggleVoicePlay_v1(voiceElement, audioElement, playBtn, message) {
         // 暂停其他正在播放的语音
         this.voicePlayers.forEach((player, key) => {
             if (player !== audioElement && !player.paused) {
@@ -8448,6 +8757,88 @@ class ChatClient {
         this.voicePlayers.set(messageId, audioElement);
 
 
+    }
+
+    // 🔧 修复：切换语音播放/暂停（支持点击切换）
+    toggleVoicePlay(voiceElement, audioElement, playBtn, message) {
+        const messageId = voiceElement.dataset.messageId;
+
+        // 🔧 关键修复1: 如果当前音频正在播放，则暂停
+        if (!audioElement.paused) {
+            audioElement.pause();
+            // 状态会在 pause 事件中自动更新
+            return;
+        }
+
+        // 🔧 关键修复2: 暂停其他所有正在播放的语音
+        this.voicePlayers.forEach((player, key) => {
+            if (player !== audioElement && !player.paused) {
+                player.pause();
+                // 更新其他语音的按钮状态
+                const otherVoiceEl = document.querySelector(`.message-voice[data-message-id="${key}"]`);
+                if (otherVoiceEl) {
+                    const otherBtn = otherVoiceEl.querySelector('.voice-play-btn');
+                    const otherProgress = otherVoiceEl.querySelector('.voice-progress-bar');
+                    if (otherBtn) {
+                        otherBtn.classList.remove('playing');
+                        otherBtn.innerHTML = '<i class="fas fa-play"></i>';
+                        otherBtn.title = '点击播放';
+                    }
+                    if (otherProgress) {
+                        otherProgress.style.width = '0%';
+                    }
+                }
+            }
+        });
+
+        // 🔧 关键修复3: 确保音频已加载元数据后再播放
+        const attemptPlay = () => {
+            // 移动端确保音频上下文已恢复
+            if (Utils.isMobile() && this.audioContextForMobile) {
+                if (this.audioContextForMobile.state === 'suspended') {
+                    this.audioContextForMobile.resume().catch(console.warn);
+                }
+            }
+
+            audioElement.play().then(() => {
+                // 播放成功，状态会在 play 事件中更新
+                // 保存当前播放的音频引用
+                this.voicePlayers.set(messageId, audioElement);
+            }).catch(err => {
+                console.error('播放失败:', err);
+
+                // 根据错误类型给出友好提示
+                if (err.name === 'NotAllowedError') {
+                    this.showToast('请先与页面交互后再试', 'error');
+                } else if (err.name === 'NotSupportedError') {
+                    this.showToast('您的设备不支持此音频格式', 'error');
+                    this.offerAudioDownload(message);
+                } else {
+                    // 尝试重新加载后播放
+                    audioElement.load();
+                    setTimeout(() => {
+                        audioElement.play().catch(e => {
+                            console.error('重试播放失败:', e);
+                            this.showToast('播放失败，请检查网络', 'error');
+                        });
+                    }, 500);
+                }
+            });
+        };
+
+        // 智能加载策略
+        if (audioElement.readyState >= HTMLMediaElement.HAVE_METADATA) {
+            attemptPlay();
+        } else {
+            audioElement.addEventListener('loadedmetadata', attemptPlay, {once: true});
+            audioElement.load();
+
+            // 超时处理
+            setTimeout(() => {
+                audioElement.removeEventListener('loadedmetadata', attemptPlay);
+                attemptPlay();
+            }, 3000);
+        }
     }
 
 
