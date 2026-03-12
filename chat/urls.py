@@ -65,26 +65,4 @@ urlpatterns = [
     # 🔧 新增：音频格式路由
     path('audio/<int:file_id>/format/', AudioFormatView.as_view(), name='audio-format'),
 
-    # # 🔑 管理控制台 - 聊天室管理（仅超级管理员）
-    # path('admin/chat-rooms/', ChatRoomAdminViewSet.as_view({'get': 'list'}), name='admin-chat-rooms-list'),
-    # path('admin/chat-rooms/<int:pk>/', ChatRoomAdminViewSet.as_view({'get': 'retrieve', 'delete': 'destroy'}),
-    #      name='admin-chat-room-detail'),
-
-    # path('admin/chat-rooms/messages/history/', ChatRoomAdminViewSet.as_view({'get': 'get_room_history'}),
-    #      name='admin-chat-room-messages-history'),
-
-    # path('admin/chat-rooms/<int:pk>/export-history/', ChatRoomAdminViewSet.as_view({'get': 'export_history'}),
-    #      name='admin-chat-room-export-history'),
-    # path('admin/chat-rooms/<int:pk>/force-delete/', ChatRoomAdminViewSet.as_view({'post': 'force_delete'}),
-    #      name='admin-chat-room-force-delete'),
-    # path('admin/chat-rooms/statistics/', ChatRoomAdminViewSet.as_view({'get': 'statistics'}),
-    #      name='admin-chat-room-statistics'),
-    # path('admin/chat-rooms/search/', ChatRoomAdminViewSet.as_view({'get': 'search_chats'}),
-    #      name='admin-chat-room-search'),
-
-
-    # 系统设置
-    # path('admin/settings/list_configs/', SystemSettingsViewSet.as_view({'get': 'list_configs'}), name='admin-settings-list-configs'),
-    # path('admin/settings/export_configs/', SystemSettingsViewSet.as_view({'get': 'export_configs'}), name='admin-settings-export-configs'),
-
 ]
