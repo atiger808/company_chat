@@ -147,6 +147,10 @@ class Utils {
         if (type.includes('text') || ext === 'txt') {
             return 'fas fa-file-alt';
         }
+        // PowerPoint
+        if (type.includes('powerpoint') || type.includes('presentation') || ['ppt', 'pptx'].includes(ext)) {
+            return 'fas fa-file-powerpoint';
+        }
 
         return 'fas fa-file';
     }
@@ -404,3 +408,208 @@ class Utils {
         }
     }
 }
+
+
+
+// static/js/utils.js - 添加 FrontendConfigManager 类
+
+/**
+ * 前端配置管理器
+ * 在应用初始化时从后端获取系统配置，缓存在 localStorage 中
+ */
+class FrontendConfigManager {
+    constructor() {
+        this.STORAGE_KEY = 'system_configs';
+        this.configs = {};
+        this.isLoaded = false;
+        this.loadPromise = null;
+    }
+
+    /**
+     * 从后端加载配置
+     * @returns {Promise<Object>} 配置对象
+     */
+    async loadConfigs() {
+        // 如果已经在加载中，返回同一个 Promise
+        if (this.loadPromise) {
+            return this.loadPromise;
+        }
+
+        this.loadPromise = (async () => {
+            try {
+                // 尝试从 localStorage 读取缓存的配置（5 分钟内有效）
+                const cached = localStorage.getItem(this.STORAGE_KEY);
+                if (cached) {
+                    const { configs, timestamp } = JSON.parse(cached);
+                    // 5 分钟内使用缓存
+                    if (Date.now() - timestamp < 5 * 60 * 1000) {
+                        this.configs = configs;
+                        this.isLoaded = true;
+                        console.log('✅ 使用缓存的系统配置');
+                        return this.configs;
+                    }
+                }
+
+                // 从后端 API 获取最新配置
+                const response = await fetch('/api/chat/admin/settings/list_configs/', {
+                    headers: TokenManager.getHeaders()
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    this.configs = {};
+
+                    // 将配置转换为键值对
+                    (data.configs || []).forEach(config => {
+                        this.configs[config.key] = config.value;
+                    });
+
+                    // 缓存到 localStorage
+                    localStorage.setItem(this.STORAGE_KEY, JSON.stringify({
+                        configs: this.configs,
+                        timestamp: Date.now()
+                    }));
+
+                    this.isLoaded = true;
+                    console.log('✅ 系统配置加载成功');
+                    return this.configs;
+                }
+            } catch (error) {
+                console.warn('⚠️ 加载系统配置失败，使用默认值:', error);
+            }
+
+            // 加载失败，使用默认配置
+            this.configs = this.getDefaultConfigs();
+            this.isLoaded = true;
+            return this.configs;
+        })();
+
+        return this.loadPromise;
+    }
+
+    /**
+     * 获取配置值
+     * @param {string} key - 配置键
+     * @param {*} defaultValue - 默认值
+     * @returns {*} 配置值
+     */
+    get(key, defaultValue = null) {
+        const value = this.configs[key];
+        if (value === undefined || value === null) {
+            return defaultValue;
+        }
+
+        // 类型转换
+        const configType = this.getConfigType(key);
+        switch (configType) {
+            case 'integer':
+                return parseInt(value) || defaultValue;
+            case 'float':
+                return parseFloat(value) || defaultValue;
+            case 'boolean':
+                return value === true || value === 'true' || value === '1';
+            case 'json':
+                try {
+                    return JSON.parse(value);
+                } catch {
+                    return defaultValue;
+                }
+            default:
+                return value;
+        }
+    }
+
+    /**
+     * 获取配置类型
+     * @param {string} key - 配置键
+     * @returns {string} 配置类型
+     */
+    getConfigType(key) {
+        const typeMap = {
+            'file.max_upload_size_mb': 'integer',
+            'file.image_max_size_mb': 'integer',
+            'file.video_max_size_mb': 'integer',
+            'file.audio_max_size_mb': 'integer',
+            'voice.max_duration_seconds': 'integer',
+            'voice.min_duration_seconds': 'integer',
+            'chat.max_message_length': 'integer',
+            'chat.message_retention_days': 'integer',
+            'chat.typing_timeout': 'integer',
+            'security.login_max_attempts': 'integer',
+            'security.login_lockout_minutes': 'integer',
+            'security.session_timeout_hours': 'integer',
+            'security.password_min_length': 'integer',
+            'advanced.cache_ttl_seconds': 'integer',
+            'advanced.api_rate_limit': 'integer',
+            'system.user_registration_enabled': 'boolean',
+            'system.maintenance_mode': 'boolean',
+            'notification.desktop_enabled': 'boolean',
+            'notification.sound_enabled': 'boolean',
+            'notification.vibrate_enabled': 'boolean',
+            'file.allowed_types': 'json',
+            'file.image_formats': 'json',
+            'file.video_formats': 'json',
+            'voice.allowed_formats': 'json',
+            'security.sensitive_words': 'json'
+        };
+        return typeMap[key] || 'string';
+    }
+
+    /**
+     * 获取默认配置
+     * @returns {Object} 默认配置对象
+     */
+    getDefaultConfigs() {
+        return {
+            'file.max_upload_size_mb': 50,
+            'file.image_max_size_mb': 20,
+            'file.video_max_size_mb': 100,
+            'file.audio_max_size_mb': 30,
+            'voice.max_duration_seconds': 60,
+            'voice.min_duration_seconds': 1,
+            'chat.max_message_length': 2000,
+            'chat.message_retention_days': 365,
+            'chat.typing_timeout': 5,
+            'security.login_max_attempts': 5,
+            'security.login_lockout_minutes': 15,
+            'security.session_timeout_hours': 24,
+            'security.password_min_length': 8,
+            'advanced.cache_ttl_seconds': 300,
+            'advanced.api_rate_limit': 100,
+            'system.user_registration_enabled': false,
+            'system.maintenance_mode': false,
+            'notification.desktop_enabled': true,
+            'notification.sound_enabled': true,
+            'notification.vibrate_enabled': true,
+            'file.allowed_types': ['image', 'video', 'audio', 'file'],
+            'file.image_formats': ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+            'file.video_formats': ['mp4', 'webm', 'mov'],
+            'voice.allowed_formats': ['webm', 'mp3', 'm4a', 'ogg']
+        };
+    }
+
+    /**
+     * 清除配置缓存
+     */
+    clearCache() {
+        localStorage.removeItem(this.STORAGE_KEY);
+        this.configs = {};
+        this.isLoaded = false;
+        this.loadPromise = null;
+    }
+
+    /**
+     * 强制刷新配置
+     * @returns {Promise<Object>} 配置对象
+     */
+    async refreshConfigs() {
+        this.clearCache();
+        return await this.loadConfigs();
+    }
+}
+
+// 全局配置管理器实例
+const frontendConfig = new FrontendConfigManager();
+
+// 导出到全局
+window.frontendConfig = frontendConfig;

@@ -13,8 +13,22 @@ class AdminConsole {
         this.currentPage = 1;
         this.pageSize = 20;
         this.pendingRequests = new Set(); // 跟踪请求状态
-
         this.sidebarCollapsed = false; // 侧边栏状态
+
+        // 🔧 新增：权限标识
+        this.isSuperAdmin = false;
+        this.selectedUsers = new Set();  // 🔧 批量操作选择
+
+
+        // 🔧 新增：模块懒加载缓存
+        this.modules = {
+            statistics: null,    // AdminStatisticsClient
+            settings: null,      // AdminSettingsClient
+            chatRooms: null      // AdminChatRoomsClient
+        };
+
+        // 🔧 新增：当前激活的 tab
+        this.currentTab = 'users';
 
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', () => this.init());
@@ -28,37 +42,60 @@ class AdminConsole {
             // 检查登录状态
             const token = localStorage.getItem('access_token');
             if (!token) {
+                // 保存当前页面链接，登录后跳转到该页面
+                localStorage.setItem('redirect_url', window.location.href);
                 window.location.href = '/login/';
                 return;
             }
 
             // 检查管理员权限
             this.currentUser = await API.getCurrentUser();
-            if (this.currentUser.user_type !== 'super_admin' || this.currentUser.user_type === 'normal' || this.currentUser.user_type === 'visitor') {
-                // 替换原生 alert 为优雅的提示框
-                this.showAlert('权限不足', '您没有管理员权限').then(() => {
-                    window.location.href = '/chat/';
-                });
-                return;
+            this.isSuperAdmin = this.currentUser?.is_superuser ||
+                this.currentUser?.user_type === 'super_admin';
 
-            }
+            console.log('🔧 当前用户权限:', {
+                username: this.currentUser?.username,
+                isSuperAdmin: this.isSuperAdmin,
+                userType: this.currentUser?.user_type,
+                department: this.currentUser?.department_info?.name
+            });
+
             if (this.currentUser?.id) {
                 localStorage.setItem('user_id', this.currentUser.id);
                 localStorage.setItem('user_type', this.currentUser?.user_type);
             }
 
 
-            // 渲染管理员信息
-            this.renderAdminInfo();
+            if (this.currentUser.user_type === 'normal' || this.currentUser.user_type === 'visitor') {
+                // 替换原生 alert 为优雅的提示框
+                this.showAlert('权限不足', '您没有管理员权限').then(() => {
+                    window.location.href = '/chat/';
+                });
+                return;
+            }
 
-            // 加载用户列表
-            await this.loadUsers();
+
+            //  🔧 根据权限初始化界面
+            this.renderAdminInfo();
+            this.setupPermissionUI();
+
+            // 🔧 关键修复：根据用户类型加载默认标签页
+            if (this.isSuperAdmin) {
+                // 超级管理员默认打开数据统计
+                await this.switchTab('stats');
+            } else {
+                // 普通管理员默认打开用户管理
+                await this.switchTab('users');
+            }
+
+            // // 🔧 普通管理员默认加载用户管理
+            // if (!this.isSuperAdmin) {
+            //     await this.loadUsers();
+            // }
 
             // 设置事件监听
             this.setupEventListeners();
-
-            this.initSidebar();
-
+            this.setupSidebar();
             this.initTableScroll();
 
             // 添加跳转到聊天室按钮事件
@@ -69,21 +106,508 @@ class AdminConsole {
                 });
             }
 
-            // 🔑 初始化聊天室管理（仅超级管理员）
-            this.initChatRoomManagement();
+
+            // 🔧 关键修复：按需初始化聊天室管理（仅超级管理员）
+            if (this.isSuperAdmin) {
+                this.initChatRoomManagement();
+            }
 
             console.log('AdminConsole 初始化完成');
 
 
         } catch (error) {
             console.error('初始化失败:', error);
-            localStorage.removeItem('access_token');
-            localStorage.removeItem('user_id');
-            localStorage.removeItem('user_type');
             this.showError('初始化失败', error.message);
-            setTimeout(() => {
-                window.location.href = '/login/';
-            }, 1500);
+            this.handleAuthError()
+        }
+    }
+
+
+    // ==================== 模块懒加载 ====================
+
+    /**
+     * 🔧 动态加载模块（懒加载核心方法）
+     * @param {string} moduleName - 模块名称：'statistics' | 'settings' | 'chatRooms'
+     * @param {Function} ModuleClass - 模块构造函数（从 window 获取）
+     */
+    async loadModule(moduleName, ModuleClass) {
+        // 如果已加载，直接返回缓存实例
+        if (this.modules[moduleName]) {
+            console.log(`✅ 模块 ${moduleName} 已缓存，直接使用`);
+            return this.modules[moduleName];
+        }
+
+        // 检查模块类是否存在
+        if (typeof ModuleClass !== 'function') {
+            console.warn(`⚠️ 模块 ${moduleName} 未定义，无法加载`);
+            return null;
+        }
+
+        try {
+            console.log(`🔧 正在加载模块 ${moduleName}...`);
+
+            // 实例化模块
+            const instance = new ModuleClass();
+
+            // 如果有 init 方法，调用初始化
+            if (typeof instance.init === 'function') {
+                await instance.init();
+            }
+
+            // 缓存实例
+            this.modules[moduleName] = instance;
+
+            // 挂载到 window（兼容子模块内部代码）
+            const windowName = `admin${moduleName.charAt(0).toUpperCase() + moduleName.slice(1)}`;
+            window[windowName] = instance;
+
+            console.log(`✅ 模块 ${moduleName} 加载完成`);
+            return instance;
+
+        } catch (error) {
+            console.error(`❌ 加载模块 ${moduleName} 失败:`, error);
+            this.showError('模块加载失败', `${moduleName} 初始化失败`);
+            return null;
+        }
+    }
+
+    /**
+     * 🔧 根据 tab 切换动态加载对应模块
+     * @param {string} tabName - 标签名称
+     */
+    async switchTabWithModule(tabName) {
+        // 权限检查：普通管理员只能访问用户管理
+        if (!this.isSuperAdmin && tabName !== 'users') {
+            this.showError('权限不足', '您无权访问此功能');
+            // 强制切回用户管理
+            this.switchTab('users');
+            return;
+        }
+
+        // 隐藏所有标签页
+        document.querySelectorAll('.admin-tab').forEach(tab => {
+            tab.classList.remove('active');
+        });
+
+        // 显示目标标签页
+        const targetTab = document.getElementById(tabName + 'Tab');
+        if (targetTab) {
+            targetTab.classList.add('active');
+        }
+
+        // 更新当前激活的 tab
+        this.currentTab = tabName;
+
+        // 🔧 根据 tab 名称懒加载对应模块
+        switch (tabName) {
+            case 'stats':
+                // 加载数据统计模块
+                await this.loadModule('statistics', window.AdminStatisticsClient);
+                // 刷新统计数据
+                if (this.modules.statistics?.refreshAll) {
+                    await this.modules.statistics.refreshAll();
+                }
+                break;
+
+            case 'settings':
+                // 加载系统设置模块
+                await this.loadModule('settings', window.AdminSettingsClient);
+                // 刷新配置列表
+                if (this.modules.settings?.renderConfigList) {
+                    this.modules.settings.renderConfigList(this.modules.settings.currentCategory);
+                }
+                break;
+
+            case 'rooms':
+                // 加载聊天室管理模块
+                await this.loadModule('chatRooms', window.AdminChatRoomsClient);
+                // 加载聊天室列表
+                if (this.modules.chatRooms?.loadChatRooms) {
+                    await this.modules.chatRooms.loadChatRooms();
+                }
+                break;
+
+            case 'users':
+            default:
+                // 用户管理：直接加载数据
+                await this.loadUsers();
+                break;
+        }
+    }
+
+
+    /**
+     * 🔧 切换标签页（公共方法）
+     */
+    async switchTab_v1(tabName) {
+        // 更新导航激活状态
+        document.querySelectorAll('.admin-nav .nav-item').forEach(item => {
+            item.classList.toggle('active', item.dataset.tab === tabName);
+        });
+
+        // 更新页面标题
+        const titles = {
+            'users': '用户管理',
+            'stats': '数据统计',
+            'rooms': '聊天室管理',
+            'settings': '系统设置'
+        };
+        document.getElementById('pageTitle').textContent = titles[tabName] || '管理控制台';
+
+        // 加载对应模块
+        await this.switchTabWithModule(tabName);
+    }
+
+    // admin.js - 修改 switchTab 方法
+
+    /**
+     * 🔧 切换标签页（支持权限控制）
+     */
+    async switchTab(tabName) {
+        // 🔧 权限检查：普通管理员只能访问用户管理
+        if (!this.isSuperAdmin && tabName !== 'users') {
+            this.showError('权限不足', '您无权访问此功能');
+            // 强制切回用户管理
+            tabName = 'users';
+        }
+
+        // 隐藏所有标签页
+        document.querySelectorAll('.admin-tab').forEach(tab => {
+            tab.classList.remove('active');
+        });
+
+        // 显示目标标签页
+        const targetTab = document.getElementById(tabName + 'Tab');
+        if (targetTab) {
+            targetTab.classList.add('active');
+        }
+
+        // 更新导航激活状态
+        document.querySelectorAll('.admin-nav .nav-item').forEach(item => {
+            item.classList.toggle('active', item.dataset.tab === tabName);
+        });
+
+        // 更新页面标题
+        const titles = {
+            'users': '用户管理',
+            'stats': '数据统计',
+            'rooms': '聊天室管理',
+            'settings': '系统设置'
+        };
+        document.getElementById('pageTitle').textContent = titles[tabName] || '管理控制台';
+
+        // 🔧 加载对应模块数据
+        switch (tabName) {
+            case 'users':
+                await this.loadUsers();
+                break;
+            case 'stats':
+                if (this.isSuperAdmin && window.adminStatistics) {
+                    // 懒加载统计模块
+                    if (!window.adminStatistics.isInitialized) {
+                        await window.adminStatistics.init();
+                    } else {
+                        await window.adminStatistics.refreshAll();
+                    }
+                }
+                break;
+            case 'rooms':
+                if (this.isSuperAdmin && window.adminChatRoomsClient) {
+                    await window.adminChatRoomsClient.loadChatRooms();
+                }
+                break;
+            case 'settings':
+                if (this.isSuperAdmin && window.adminSettings) {
+                    // 懒加载设置模块
+                    if (!window.adminSettings.isInitialized) {
+                        await window.adminSettings.init();
+                    }
+                }
+                break;
+        }
+    }
+
+
+    // ==================== 权限控制 ====================
+
+    /**
+     * 🔧 根据权限设置界面显示
+     */
+    setupPermissionUI() {
+        // 🔧 隐藏/显示超级管理员专属菜单项
+        const superAdminItems = document.querySelectorAll('.nav-item[data-tab]:not([data-tab="users"])');
+        superAdminItems.forEach(item => {
+            item.style.display = this.isSuperAdmin ? '' : 'none';
+        });
+
+        // 🔧 隐藏/显示超级管理员专属内容区域
+        const superAdminTabs = document.querySelectorAll('.admin-tab:not(#usersTab)');
+        superAdminTabs.forEach(tab => {
+            tab.style.display = this.isSuperAdmin ? '' : 'none';
+        });
+
+        // 🔧 如果普通管理员，确保只显示用户管理
+        if (!this.isSuperAdmin) {
+            // 移除其他标签页的激活状态
+            document.querySelectorAll('.admin-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // 激活用户管理标签页
+            const usersTab = document.getElementById('usersTab');
+            if (usersTab) {
+                usersTab.classList.add('active');
+            }
+
+            // 更新导航激活状态
+            document.querySelectorAll('.admin-nav .nav-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            const usersNavItem = document.querySelector('[data-tab="users"]');
+            if (usersNavItem) {
+                usersNavItem.classList.add('active');
+            }
+
+            // 更新页面标题
+            document.getElementById('pageTitle').textContent = '用户管理';
+        }
+
+
+        // 🔧 隐藏/显示部门字段（普通管理员）
+        const createDeptGroup = document.getElementById('createDepartmentGroup');
+        const editDeptGroup = document.getElementById('editDepartmentGroup');
+        const createDeptHint = document.getElementById('createDepartmentHint');
+        const editDeptHint = document.getElementById('editDepartmentHint');
+
+        // 🔧 隐藏/显示用户类型字段（普通管理员）
+        const createUserTypeGroup = document.getElementById('createUserTypeGroup');
+        const editUserTypeGroup = document.getElementById('editUserTypeGroup');
+        const createUserTypeHint = document.getElementById('createUserTypeHint');
+        const editUserTypeHint = document.getElementById('editUserTypeHint');
+
+        if (!this.isSuperAdmin) {
+            // 🔧 普通管理员：部门字段设为只读，默认自己的部门
+            if (createDeptGroup) {
+                const deptSelect = document.getElementById('newDepartment');
+                if (deptSelect) {
+                    deptSelect.disabled = true;
+                    // 默认设置为当前管理员的部门
+                    if (this.currentUser?.department_info?.id) {
+                        deptSelect.value = this.currentUser.department_info.id;
+                    }
+                }
+                if (createDeptHint) createDeptHint.style.display = 'block';
+            }
+
+            if (editDeptGroup) {
+                const deptSelect = document.getElementById('editDepartment');
+                if (deptSelect) {
+                    deptSelect.disabled = true;
+                }
+                if (editDeptHint) editDeptHint.style.display = 'block';
+            }
+
+            // 🔧 普通管理员：用户类型字段设为只读，只能是普通用户
+            if (createUserTypeGroup) {
+                const userTypeSelect = document.getElementById('newUserType');
+                if (userTypeSelect) {
+                    userTypeSelect.value = 'user';
+                    userTypeSelect.disabled = true;
+                }
+                if (createUserTypeHint) createUserTypeHint.style.display = 'block';
+            }
+
+            if (editUserTypeGroup) {
+                const userTypeSelect = document.getElementById('editUserType');
+                if (userTypeSelect) {
+                    userTypeSelect.disabled = true;
+                }
+                if (editUserTypeHint) editUserTypeHint.style.display = 'block';
+            }
+        } else {
+            // 🔧 超级管理员：所有字段可编辑
+            if (createDeptGroup) {
+                const deptSelect = document.getElementById('newDepartment');
+                if (deptSelect) deptSelect.disabled = false;
+                if (createDeptHint) createDeptHint.style.display = 'none';
+            }
+
+            if (editDeptGroup) {
+                const deptSelect = document.getElementById('editDepartment');
+                if (deptSelect) deptSelect.disabled = false;
+                if (editDeptHint) editDeptHint.style.display = 'none';
+            }
+
+            if (createUserTypeGroup) {
+                const userTypeSelect = document.getElementById('newUserType');
+                if (userTypeSelect) userTypeSelect.disabled = false;
+                if (createUserTypeHint) createUserTypeHint.style.display = 'none';
+            }
+
+            if (editUserTypeGroup) {
+                const userTypeSelect = document.getElementById('editUserType');
+                if (userTypeSelect) userTypeSelect.disabled = false;
+                if (editUserTypeHint) editUserTypeHint.style.display = 'none';
+            }
+        }
+
+
+    }
+
+
+    // ==================== 部门加载 ====================
+
+    /**
+     * 🔧 关键修复：加载部门列表（根据权限）
+     */
+    async loadDepartments(selectId, selectedId = null) {
+        try {
+            const response = await fetch(`${API_ADMIN_URL}/admin/departments/`, {
+                headers: TokenManager.getHeaders()
+            });
+
+
+            if (!response.ok) {
+                console.warn('加载部门列表失败');
+                return;
+            }
+
+            const departments = await response.json();
+            const select = document.getElementById(selectId);
+
+            if (!select) return;
+
+            // 保留第一个选项（请选择部门）
+            const firstOption = select.querySelector('option[value=""]');
+            select.innerHTML = '';
+            if (firstOption) {
+                select.appendChild(firstOption);
+            }
+
+            // 🔧 普通管理员只能看到自己的部门
+            if (!this.isSuperAdmin && this.currentUser?.department_info) {
+                // 只添加当前管理员的部门
+                const option = document.createElement('option');
+                option.value = this.currentUser.department_info.name;
+                option.setAttribute('data-id', this.currentUser.department_info.id)
+                option.textContent = this.currentUser.department_info.name;
+                if (selectedId === this.currentUser.department_info.id) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            } else {
+                // 🔧 超级管理员可以看到所有部门
+                departments.forEach(dept => {
+                    const option = document.createElement('option');
+                    option.value = dept.name;
+                    option.setAttribute('data-id', dept.id)
+                    option.textContent = dept.name;
+                    if (selectedId === dept.id) {
+                        option.selected = true;
+                    }
+                    select.appendChild(option);
+                });
+            }
+
+        } catch (error) {
+            console.error('加载部门失败:', error);
+        }
+    }
+
+
+    renderAdminInfo() {
+        const usernameEl = document.getElementById('adminUsername');
+        const avatarEl = document.getElementById('adminAvatar');
+
+        if (usernameEl && this.currentUser) {
+            const roleText = this.isSuperAdmin ? '（超级管理员）' : '（管理员）';
+            usernameEl.textContent = `${this.currentUser.username}${roleText}`;
+        }
+
+        if (avatarEl && this.currentUser?.avatar_url) {
+            avatarEl.src = this.currentUser.avatar_url || '/static/images/default-avatar.png';
+        }
+    }
+
+    // ==================== 批量操作 ====================
+
+    /**
+     * 🔧 更新批量操作按钮显示
+     */
+    updateBatchActions() {
+        const batchActions = document.getElementById('batchActions');
+        const selectedCount = document.getElementById('selectedCount');
+
+        if (batchActions && selectedCount) {
+            const count = this.selectedUsers.size;
+            if (count > 0) {
+                batchActions.style.display = 'flex';
+                selectedCount.textContent = `已选 ${count} 项`;
+            } else {
+                selectedCount.textContent = '';
+                batchActions.style.display = 'none';
+            }
+        }
+    }
+
+    /**
+     * 🔧 切换用户选择状态
+     */
+    toggleUserSelection(userId, checked) {
+        if (checked) {
+            this.selectedUsers.add(userId);
+        } else {
+            this.selectedUsers.delete(userId);
+        }
+        this.updateBatchActions();
+    }
+
+    /**
+     * 🔧 批量删除用户
+     */
+    async batchDeleteUsers() {
+        if (this.selectedUsers.size === 0) {
+            this.showError('操作失败', '请先选择要删除的用户');
+            return;
+        }
+
+        const confirmed = await this.showConfirmDialog(
+            '批量删除',
+            `确定要删除选中的 <span class="highlight">${this.selectedUsers.size}</span> 个用户吗？<br><small style="color: var(--text-light);">此操作不可恢复！</small>`,
+            'danger'
+        );
+
+        if (!confirmed) return;
+
+        try {
+            this.showLoading();
+
+            const response = await fetch(`${API_ADMIN_URL}/admin/users/batch_delete/`, {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify({user_ids: Array.from(this.selectedUsers)})
+            });
+
+            if (!response.ok) {
+                const errorData = await this.parseErrorResponse(response);
+                throw new Error(errorData.message || '批量删除失败');
+            }
+
+            const data = await response.json();
+            this.showSuccess('删除成功', `成功删除 ${data.deleted_count} 个用户`);
+
+            // 清空选择
+            this.selectedUsers.clear();
+            this.updateBatchActions();
+
+            // 刷新列表
+            await this.loadUsers();
+
+        } catch (error) {
+            console.error('批量删除失败:', error);
+            this.showError('删除失败', error.message);
+        } finally {
+            this.hideLoading();
         }
     }
 
@@ -133,90 +657,92 @@ class AdminConsole {
     }
 
 
-    // 修改 admin.js 中的 initSidebar 方法
-    // ==================== 侧边栏伸缩功能 ====================
-    initSidebar() {
-        const sidebarToggleBtn = document.getElementById('sidebarToggleBtn');
-        const sidebarCloseBtn = document.getElementById('sidebarCloseBtn');
-        const adminSidebar = document.getElementById('adminSidebar');
-        const adminMain = document.querySelector('.admin-main');
 
-        // 侧边栏伸缩按钮 - 统一切换逻辑
-        if (sidebarToggleBtn && adminSidebar) {
-            sidebarToggleBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.toggleSidebar();
-            });
+    // ==================== 侧边栏管理 ====================
+    setupSidebar() {
+        const toggleBtn = document.getElementById('sidebarToggleBtn');
+        const closeBtn = document.getElementById('sidebarCloseBtn');
+        const overlay = document.getElementById('sidebarOverlay');
+
+        // 切换
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', () => this.toggleSidebar());
         }
 
-        // 侧边栏关闭按钮（移动端）
-        if (sidebarCloseBtn && adminSidebar) {
-            sidebarCloseBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                adminSidebar.classList.remove('open');
-            });
+        // 关闭
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => this.closeSidebar());
         }
 
-        // 点击侧边栏外部关闭（移动端）
-        document.addEventListener('click', (e) => {
-            if (window.innerWidth <= 768 &&
-                adminSidebar.classList.contains('open') &&
-                !adminSidebar.contains(e.target) &&
-                !sidebarToggleBtn.contains(e.target)) {
-                adminSidebar.classList.remove('open');
-            }
-        });
+        // 遮罩层
+        if (overlay) {
+            overlay.addEventListener('click', () => this.closeSidebar());
+        }
 
-        // 窗口大小变化时调整侧边栏
-        window.addEventListener('resize', () => {
-            if (window.innerWidth > 768) {
-                adminSidebar.classList.remove('open');
-            }
-        });
     }
 
     toggleSidebar() {
-        const adminSidebar = document.getElementById('adminSidebar');
+        const sidebar = document.getElementById('adminSidebar');
+        const overlay = document.getElementById('sidebarOverlay');
         const adminMain = document.querySelector('.admin-main');
 
-        if (!adminSidebar || !adminMain) return;
-
-        // 移动端处理（768px以下）
-        if (window.innerWidth <= 768) {
-            // 切换 open 类
-            adminSidebar.classList.toggle('open');
-            return;
+        if (sidebar && overlay) {
+            sidebar.classList.toggle('open');
+            overlay.classList.toggle('show');
+            this.sidebarOpen = sidebar.classList.contains('open');
         }
 
-        // 桌面端处理
-        if (this.sidebarCollapsed) {
-            // 展开侧边栏
-            adminSidebar.classList.remove('collapsed');
-            adminMain.classList.remove('full-width');
-            this.sidebarCollapsed = false;
 
-            // 更新按钮图标（可选）
-            const toggleBtnIcon = document.querySelector('#sidebarToggleBtn i');
-            if (toggleBtnIcon) {
-                toggleBtnIcon.className = 'fas fa-bars';
-            }
-        } else {
-            // 折叠侧边栏
-            adminSidebar.classList.add('collapsed');
-            adminMain.classList.add('full-width');
-            this.sidebarCollapsed = true;
-
-            // 更新按钮图标（可选）
-            const toggleBtnIcon = document.querySelector('#sidebarToggleBtn i');
-            if (toggleBtnIcon) {
-                toggleBtnIcon.className = 'fas fa-indent';
-            }
-        }
+        // if (sidebar && overlay) {
+        //     sidebar.classList.toggle('open');
+        //     overlay.classList.toggle('show');
+        //     this.sidebarOpen = sidebar.classList.contains('open');
+        // }
+        //
+        // // 移动端处理（768px以下）
+        // if (window.innerWidth <= 768) {
+        //     // 切换 open 类
+        //     sidebar.classList.toggle('open');
+        //     return;
+        // }
+        //
+        // // 桌面端处理
+        // if (this.sidebarCollapsed) {
+        //     // 展开侧边栏
+        //     sidebar.classList.remove('collapsed');
+        //     adminMain.classList.remove('full-width');
+        //     this.sidebarCollapsed = false;
+        //
+        //     // 更新按钮图标（可选）
+        //     const toggleBtnIcon = document.querySelector('#sidebarToggleBtn i');
+        //     if (toggleBtnIcon) {
+        //         toggleBtnIcon.className = 'fas fa-bars';
+        //     }
+        // } else {
+        //     // 折叠侧边栏
+        //     sidebar.classList.add('collapsed');
+        //     adminMain.classList.add('full-width');
+        //     this.sidebarCollapsed = true;
+        //
+        //     // 更新按钮图标（可选）
+        //     const toggleBtnIcon = document.querySelector('#sidebarToggleBtn i');
+        //     if (toggleBtnIcon) {
+        //         toggleBtnIcon.className = 'fas fa-indent';
+        //     }
+        // }
     }
 
-    renderAdminInfo() {
-        document.getElementById('adminUsername').textContent = this.currentUser.username;
-        document.getElementById('adminAvatar').src = this.currentUser.avatar_url || '/static/images/default-avatar.png';
+
+
+    closeSidebar() {
+        const sidebar = document.getElementById('adminSidebar');
+        const overlay = document.getElementById('sidebarOverlay');
+
+        if (sidebar && overlay) {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('show');
+            this.sidebarOpen = false;
+        }
     }
 
     // ==================== 刷新用户列表 ====================
@@ -237,7 +763,15 @@ class AdminConsole {
             if (refreshBtn) {
                 refreshBtn.classList.remove('btn-refreshing');
                 refreshBtn.disabled = false;
+                // 清空选择
+                this.selectedUsers.clear();
+                this.updateBatchActions();
+                const selectAll = document.getElementById('selectAll');
+                if (selectAll) {
+                    selectAll.checked = false;
+                }
             }
+
         }
     }
 
@@ -267,7 +801,7 @@ class AdminConsole {
     }
 
 
-    renderUsersTable() {
+    renderUsersTable_v1() {
         const tbody = document.getElementById('usersTableBody');
         if (!tbody) return;
 
@@ -327,6 +861,117 @@ class AdminConsole {
         }, 100);
     }
 
+
+    // ==================== 用户列表渲染 ====================
+
+    /**
+     * 🔧 渲染用户表格（添加权限控制）
+     */
+    renderUsersTable(users=[]) {
+        const tbody = document.getElementById('usersTableBody');
+        if (!tbody) return;
+
+        // 如果不是超级管理员，过滤掉普通管理员用户
+        let allUsers = [];
+        if (!this.isSuperAdmin) {
+            allUsers = users.length > 0 ? users.filter(user => user.user_type === 'normal') : this.users.filter(user => user.user_type === 'normal')
+        } else {
+            allUsers = users.length > 0 ? users : this.users;
+        }
+
+        let html = '';
+        allUsers.forEach(user => {
+            // 🔧 关键修复：普通管理员不能操作超级管理员
+            const canOperate = this.isSuperAdmin || user.user_type !== 'super_admin';
+
+            html += `
+                <tr class="${!user.is_active ? 'user-disabled-row' : ''}">
+                    <td>
+                        ${canOperate && this.isSuperAdmin ? `
+                            <input type="checkbox" 
+                                   class="user-checkbox" 
+                                   data-user-id="${user.id}"
+                                   onchange="adminConsole.toggleUserSelection(${user.id}, this.checked)">
+                        ` : ''}
+                    </td>
+                    <td>${user.id}</td>
+                    <td><img src="${user.avatar_url || '/static/images/default-avatar.png'}" alt="头像"></td>
+                    <td>${user.username}</td>
+                    <td>${user.real_name || '-'}</td>
+                    <td>${user.department_info?.name || user.department || '-'}</td>
+                    <td>${user.position || '-'}</td>
+                    <td><span class="user-type-badge user-type-${user.user_type}">${this.getUserTypeText(user.user_type)}</span></td>
+                    <td>
+                        <span class="user-status ${user.is_online ? 'online' : 'offline'}">
+                            <i class="fas fa-${user.is_online ? 'circle' : 'circle'}"></i>
+                            ${user.is_online ? '在线' : '离线'}
+                        </span>
+                    </td>
+                    <td>
+                        ${canOperate ? `
+                            <div class="toggle-btn-container" onclick="event.stopPropagation()">
+                                <label class="toggle-switch">
+                                    <input type="checkbox"
+                                           onchange="adminConsole.toggleUserStatus(${user.id}, this.checked, '${user.username}')"
+                                           ${user.is_active ? 'checked' : ''}>
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <span>${user.is_active ? '启用' : '禁用'}</span>
+                            </div>
+                        ` : `<span class="badge ${user.is_active ? 'badge-success' : 'badge-danger'}">${user.is_active ? '启用' : '禁用'}</span>`}
+                    </td>
+                    <td>
+                        ${canOperate ? `
+                            <div class="action-buttons">
+                                <button class="action-btn" onclick="adminConsole.openEditUserModal(${user.id})" title="编辑">
+                                    <i class="fas fa-edit"></i>
+                                </button>
+                                <button class="action-btn" onclick="adminConsole.resetPassword(${user.id}, '${user.username}')" title="重置密码">
+                                    <i class="fas fa-key"></i>
+                                </button>
+                                ${this.isSuperAdmin ? `
+                                    <button class="action-btn delete" onclick="adminConsole.confirmDeleteUser(${user.id}, '${user.username}')" title="删除">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                ` : ''}
+                            </div>
+                        ` : '<span class="text-muted">-</span>'}
+                    </td>
+                </tr>
+            `;
+        });
+
+        tbody.innerHTML = html || '<tr><td colspan="11" style="text-align: center; padding: 40px;">暂无用户</td></tr>';
+
+        // 🔧 重新绑定全选事件
+        this.bindSelectAllEvent();
+    }
+
+    /**
+     * 🔧 绑定全选事件
+     */
+    bindSelectAllEvent() {
+        const selectAll = document.getElementById('selectAll');
+        if (selectAll) {
+            selectAll.onchange = (e) => {
+                const checked = e.target.checked;
+                document.querySelectorAll('.user-checkbox').forEach(cb => {
+                    cb.checked = checked;
+                    const userId = cb.dataset.userId;
+                    if (checked) {
+                        if (userId) {
+                            this.selectedUsers.add(userId);
+                        }
+                    } else {
+                        this.selectedUsers.delete(userId);
+                    }
+                });
+                this.updateBatchActions();
+            };
+        }
+    }
+
+
     getUserTypeText(type) {
         const map = {
             'normal': '普通用户',
@@ -337,13 +982,22 @@ class AdminConsole {
     }
 
     // ==================== 禁用/启用用户 ====================
+    /**
+     * 🔧 切换用户状态（添加权限检查）
+     */
     async toggleUserStatus(userId, newStatus, username) {
-        // 阻止默认行为
+        // 🔧 权限检查
+        // if (!this.isSuperAdmin) {
+        //     this.showError('权限不足', '仅超级管理员可操作用户状态');
+        //     // 恢复开关状态
+        //     const checkbox = event.target;
+        //     checkbox.checked = !newStatus;
+        //     return;
+        // }
+
         event.stopPropagation();
 
         const action = newStatus ? '启用' : '禁用';
-
-        // 显示确认对话框
         const confirmed = await this.showConfirmDialog(
             `${action}用户`,
             `确定要${action}用户 "<span class="highlight">${username}</span>" 吗？`,
@@ -351,7 +1005,6 @@ class AdminConsole {
         );
 
         if (!confirmed) {
-            // 恢复开关状态
             const checkbox = event.target;
             checkbox.checked = !newStatus;
             return;
@@ -359,7 +1012,6 @@ class AdminConsole {
 
         try {
             this.showLoading();
-
             const response = await fetch(`${API_ADMIN_URL}/admin/users/${userId}/toggle-status/`, {
                 method: 'POST',
                 headers: TokenManager.getHeaders()
@@ -372,14 +1024,11 @@ class AdminConsole {
 
             const data = await response.json();
             this.showSuccess(`${action}成功`, data.message);
-
-            // 重新加载用户列表
             await this.loadUsers();
 
         } catch (error) {
             console.error(`${action}用户失败:`, error);
             this.showError(`${action}失败`, error.message);
-            // 恢复开关状态
             const checkbox = event.target;
             checkbox.checked = !newStatus;
         } finally {
@@ -387,10 +1036,41 @@ class AdminConsole {
         }
     }
 
+
     // ==================== 创建用户 ====================
     async openCreateUserModal() {
         // 重置表单
         document.getElementById('createUserForm').reset();
+
+
+        // 🔧 关键修复：根据权限设置用户类型
+        const userTypeSelect = document.getElementById('newUserType');
+        if (userTypeSelect) {
+            if (this.isSuperAdmin) {
+                userTypeSelect.value = 'user';
+                userTypeSelect.disabled = false;
+            } else {
+                userTypeSelect.value = 'user';
+                userTypeSelect.disabled = true;
+            }
+        }
+
+        // 🔧 关键修复：根据权限设置部门
+        const deptSelect = document.getElementById('newDepartment');
+        if (deptSelect) {
+            if (this.isSuperAdmin) {
+                deptSelect.disabled = false;
+                await this.loadDepartments('newDepartment');
+            } else {
+                deptSelect.disabled = true;
+                // 默认设置为当前管理员的部门
+                if (this.currentUser?.department_info?.id) {
+                    deptSelect.value = this.currentUser.department_info.id;
+                }
+                await this.loadDepartments('newDepartment');
+            }
+        }
+
 
         // 加载所有用户用于好友分配
         await this.loadAllUsersForFriends();
@@ -437,14 +1117,23 @@ class AdminConsole {
                 email: email || null,
                 phone: phone || null,
                 position: position || null,
-                user_type: userType
+                // 🔧 关键修复：普通管理员强制设置为普通用户
+                user_type: this.isSuperAdmin ? userType : 'normal'
             };
 
-            // 处理部门：先查询，如果不存在再创建
-            if (departmentName) {
-                let departmentId = await this.getOrCreateDepartment(departmentName);
-                if (departmentId) {
-                    requestData.department = departmentId;
+            // 🔧 关键修复：处理部门
+            if (this.isSuperAdmin) {
+                // 超级管理员可以设置任意部门
+                if (departmentName) {
+                    let departmentId = await this.getOrCreateDepartment(departmentName);
+                    if (departmentId) {
+                        requestData.department = departmentId;
+                    }
+                }
+            } else {
+                // 🔧 普通管理员强制设置为自己的部门
+                if (this.currentUser?.department_info?.id) {
+                    requestData.department = this.currentUser.department_info.id;
                 }
             }
 
@@ -467,7 +1156,10 @@ class AdminConsole {
             const selectedFriends = Array.from(document.querySelectorAll('#friendGridCreate .member-grid-item.selected'))
                 .map(item => parseInt(item.dataset.userId));
 
-            await this.assignFriends(newUser.id, selectedFriends)
+            if (selectedFriends.length > 0) {
+                await this.assignFriends(newUser.id, selectedFriends)
+            }
+
 
             this.showSuccess('创建成功', '用户创建成功');
             this.closeModal('createUserModal');
@@ -503,23 +1195,31 @@ class AdminConsole {
                 email: email || null,
                 phone: phone || null,
                 position: position || null,
-                user_type: userType
+                // 🔧 关键修复：普通管理员不能修改用户类型
+                user_type: this.isSuperAdmin ? userType : 'normal'
             };
-            if (password) requestData.password = password;
-
-            // 处理部门：先查询，如果不存在再创建
-            if (departmentName) {
-                let departmentId = await this.getOrCreateDepartment(departmentName);
-                if (departmentId) {
-                    requestData.department = departmentId;
-                }
-            } else {
-                requestData.department = null;
-            }
 
             // 如果密码不为空，添加到请求中
-            if (password) {
-                requestData.password = password;
+            if (password) requestData.password = password;
+
+
+            // 🔧 关键修复：处理部门
+            if (this.isSuperAdmin) {
+                // 超级管理员可以修改部门
+                if (departmentName) {
+                    let departmentId = await this.getOrCreateDepartment(departmentName);
+                    if (departmentId) {
+                        requestData.department = departmentId;
+                    }
+                } else {
+                    requestData.department = null;
+                }
+            } else {
+                // 🔧 普通管理员不能修改部门，保持原部门
+                const user = this.users.find(u => u.id === userId);
+                if (user?.department_info?.id) {
+                    requestData.department = user.department_info.id;
+                }
             }
 
             const response = await fetch(`${API_ADMIN_URL}/admin/users/${userId}/`, {
@@ -804,6 +1504,15 @@ class AdminConsole {
                 return;
             }
 
+
+            // 🔧 权限检查：普通管理员不能编辑非普通用户
+            if (!this.isSuperAdmin && user.user_type !== 'normal') {
+                this.showError('权限不足', '普通管理员只能编辑普通用户');
+                return;
+            }
+
+            // 渲染当前编辑的用户
+            document.getElementById('editCurrentUser').textContent = `${user.username}（${user.real_name || '-'}）`;
             // 填充表单
             document.getElementById('editUserId').value = user.id;
             document.getElementById('editUsername').value = user.username;
@@ -814,6 +1523,23 @@ class AdminConsole {
             document.getElementById('editDepartment').value = user.department_info?.name || user.department || '';
             document.getElementById('editPosition').value = user.position || '';
             document.getElementById('editUserType').value = user.user_type;
+
+            // 🔧 关键修复：根据权限设置字段状态
+            const userTypeSelect = document.getElementById('editUserType');
+            const deptSelect = document.getElementById('editDepartment');
+
+            if (!this.isSuperAdmin) {
+                // 普通管理员：用户类型和部门不可编辑
+                if (userTypeSelect) userTypeSelect.disabled = true;
+                if (deptSelect) deptSelect.disabled = true;
+            } else {
+                // 超级管理员：可编辑
+                if (userTypeSelect) userTypeSelect.disabled = false;
+                if (deptSelect) {
+                    deptSelect.disabled = false;
+                    await this.loadDepartments('editDepartment', user.department_info?.id);
+                }
+            }
 
             // 加载所有用户用于好友分配
             await this.loadAllUsersForFriends();
@@ -829,8 +1555,18 @@ class AdminConsole {
     }
 
 
-    // ==================== 删除用户 ====================
+    // ==================== 权限控制的操作方法 ====================
+
+    /**
+     * 🔧 确认删除用户（添加权限检查）
+     */
     async confirmDeleteUser(userId, username) {
+        // 🔧 权限检查
+        if (!this.isSuperAdmin) {
+            this.showError('权限不足', '仅超级管理员可删除用户');
+            return;
+        }
+
         const confirmed = await this.showConfirmDialog(
             '删除用户',
             `确定要删除用户 "<span class="highlight">${username}</span>" 吗？<br><small style="color: var(--text-light);">此操作不可恢复！</small>`,
@@ -868,19 +1604,38 @@ class AdminConsole {
         }
     }
 
-    // ==================== 重置密码 ====================
-    async resetPassword(userId, username) {
-        const newPassword = prompt(`请输入 "${username}" 的新密码：`);
 
+    /**
+     * 🔧 优雅的重置密码入口
+     */
+    async resetPassword(userId, username) {
+        // 保存当前操作的用户信息
+        this.currentResetUserId = userId;
+
+        // 填充模态框
+        document.getElementById('resetPasswordUsername').textContent = username;
+        document.getElementById('resetPasswordInput').value = '123456';
+
+        // 打开模态框
+        this.openModal('resetPasswordModal');
+    }
+
+    /**
+     * 🔧 确认重置密码
+     */
+    async confirmResetPassword() {
+        const newPassword = document.getElementById('resetPasswordInput').value.trim();
+
+        // 验证密码
         if (!newPassword || newPassword.length < 6) {
-            this.showError('验证失败', '密码不能为空且至少6位');
+            this.showError('验证失败', '密码不能为空且至少 6 位');
             return;
         }
 
         try {
             this.showLoading();
 
-            const response = await fetch(`${API_ADMIN_URL}/admin/users/${userId}/reset-password/`, {
+            const response = await fetch(`${API_ADMIN_URL}/admin/users/${this.currentResetUserId}/reset-password/`, {
                 method: 'POST',
                 headers: TokenManager.getHeaders(),
                 body: JSON.stringify({password: newPassword})
@@ -894,6 +1649,8 @@ class AdminConsole {
             const data = await response.json();
             this.showSuccess('重置成功', `密码已重置为：${data.default_password}`);
 
+            this.closeModal('resetPasswordModal');
+
         } catch (error) {
             console.error('重置密码失败:', error);
             this.showError('重置失败', error.message);
@@ -901,6 +1658,7 @@ class AdminConsole {
             this.hideLoading();
         }
     }
+
 
     // ==================== 批量删除 ====================
     async batchDelete(users) {
@@ -979,7 +1737,10 @@ class AdminConsole {
     }
 
     // ==================== 搜索用户 ====================
-    searchUsers_v1(keyword) {
+    /**
+     * 🔧 搜索用户（前端过滤）
+     */
+    searchUsers_frontend(keyword) {
         if (!keyword.trim()) {
             this.renderUsersTable();
             return;
@@ -1040,19 +1801,23 @@ class AdminConsole {
         tbody.innerHTML = html || '<tr><td colspan="10" style="text-align: center; padding: 40px;">未找到相关用户</td></tr>';
     }
 
-    // 修改 admin.js 中的 searchUsers 方法
+
+    // ==================== 搜索功能 ====================
+
+    /**
+     * 🔧 搜索用户（调用后端接口）
+     */
     searchUsers(keyword) {
-        // 如果关键词为空，重新加载所有用户
         if (!keyword.trim()) {
             this.loadUsers();
             return;
         }
-
-        // 调用后端搜索接口
         this.searchUsersFromBackend(keyword);
     }
 
-    // 新增：从后端搜索用户
+    /**
+     * 🔧 从后端搜索用户
+     */
     async searchUsersFromBackend(keyword) {
         try {
             this.showLoading();
@@ -1067,8 +1832,9 @@ class AdminConsole {
             }
 
             const data = await response.json();
-            this.users = Array.isArray(data) ? data : (data.results || []);
-            this.renderUsersTable();
+            const users = Array.isArray(data) ? data : (data.results || []);
+
+            this.renderUsersTable(users);
 
         } catch (error) {
             console.error('搜索用户失败:', error);
@@ -1078,22 +1844,102 @@ class AdminConsole {
         }
     }
 
+
     // ==================== 事件监听 ====================
+
+    /**
+     * 🔧 设置事件监听（添加权限检查）
+     */
     setupEventListeners() {
         // 标签切换
         document.querySelectorAll('.nav-item').forEach(item => {
             item.addEventListener('click', (e) => {
                 e.preventDefault();
+
+                // 🔧 权限检查：普通管理员不能访问超级管理员菜单
+                if (item.classList.contains('super-admin-only') && !this.isSuperAdmin) {
+                    this.showError('权限不足', '您无权访问此功能');
+                    return;
+                }
+
+                // 更新激活状态
                 document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
                 item.classList.add('active');
 
                 const tabName = item.dataset.tab;
-                document.querySelectorAll('.admin-tab').forEach(tab => tab.classList.remove('active'));
-                document.getElementById(tabName + 'Tab').classList.add('active');
 
+                // 切换标签页
+                document.querySelectorAll('.admin-tab').forEach(tab => tab.classList.remove('active'));
+                const targetTab = document.getElementById(tabName + 'Tab');
+                if (targetTab) {
+                    targetTab.classList.add('active');
+                }
+
+                // 移动端自动关闭侧边栏
+                if (window.innerWidth <= 768) {
+                    this.closeSidebar();
+                }
+
+
+                // 更新页面标题
                 document.getElementById('pageTitle').textContent = item.textContent.trim();
+
+                // 🔧 加载对应模块数据
+                switch (tabName) {
+                    case 'users':
+                        this.loadUsers();
+                        break;
+                    case 'stats':
+                        if (this.isSuperAdmin && window.adminStatistics) {
+                            // 懒加载统计模块
+                            if (!window.adminStatistics.isInitialized) {
+                                window.adminStatistics.init();
+                            } else {
+                                window.adminStatistics.refreshAll();
+                            }
+                        }
+                        break;
+                    case 'rooms':
+                        if (this.isSuperAdmin && window.adminChatRoomsClient) {
+                            window.adminChatRoomsClient.loadChatRooms();
+                        }
+                        break;
+                    case 'settings':
+                        if (this.isSuperAdmin && window.adminSettings) {
+                            // 懒加载设置模块
+                            if (!window.adminSettings.isInitialized) {
+                                window.adminSettings.init();
+                            }
+                        }
+                        break;
+                }
+
+
             });
         });
+
+
+        // 🔧 重置密码模态框关闭
+        const resetPasswordModal = document.getElementById('resetPasswordModal');
+        if (resetPasswordModal) {
+            resetPasswordModal.querySelector('.close-btn')?.addEventListener('click', () => {
+                this.closeModal('resetPasswordModal');
+            });
+            resetPasswordModal.addEventListener('click', (e) => {
+                if (e.target === resetPasswordModal) {
+                    this.closeModal('resetPasswordModal');
+                }
+            });
+        }
+
+
+        // 搜索框
+        const userSearch = document.getElementById('userSearch');
+        if (userSearch) {
+            userSearch.addEventListener('input', (e) => {
+                this.searchUsers(e.target.value);
+            });
+        }
 
         // 模态框关闭
         document.querySelectorAll('.close-btn').forEach(btn => {
@@ -1113,17 +1959,8 @@ class AdminConsole {
                 }
             });
         });
-
-        // 监听搜索框输入
-
-        const userSearch = document.getElementById('userSearch');
-        if (userSearch) {
-            userSearch.addEventListener('input', (e) => {
-                this.searchUsers_v1(e.target.value);
-            });
-        }
-
     }
+
 
     // ==================== 模态框操作 ====================
     openModal(modalId) {
@@ -1424,6 +2261,15 @@ class AdminConsole {
                 }
             });
         }
+    }
+
+
+    handleAuthError() {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('user_id');
+        localStorage.removeItem('user_type');
+        localStorage.setItem('redirect_url', window.location.href);
+        window.location.href = '/login/';
     }
 
     // 退出登录

@@ -21,8 +21,9 @@ from .views import (
 router = DefaultRouter()
 router.register(r'rooms', ChatRoomViewSet, basename='chatroom')
 router.register(r'messages', MessageViewSet, basename='message')
-router.register(r'admin/chat-rooms', ChatRoomAdminViewSet, basename='admin-chat-room')  # 🔑 关键：注册管理路由
 
+
+router.register(r'admin/chat-rooms', ChatRoomAdminViewSet, basename='admin-chat-room')  # 🔑 关键：注册管理路由
 # 🔧 关键：注册统计视图集（basename 决定 URL 前缀）
 router.register(r'admin/statistics', AdminStatisticsViewSet, basename='admin-statistics')
 

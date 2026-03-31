@@ -84,6 +84,8 @@ class ChatRoomSerializer(serializers.ModelSerializer):
                 chat_room=obj,  # 修复：使用 obj 而不是 self
                 is_deleted=False,
             ).exclude(
+                sender=user  # 🔧 关键优化：排除用户自己发送的消息
+            ).exclude(
                 id__in=MessageDeleteStatus.objects.filter(
                     is_deleted=True,
                     user=user
@@ -93,14 +95,6 @@ class ChatRoomSerializer(serializers.ModelSerializer):
                     user=user
                 ).values_list('message_id', flat=True)
             ).count()
-
-            # unread = Message.objects.filter(
-            #     chat_room=obj,
-            #     chat_room__members=user,
-            #     is_deleted=False
-            # ).exclude(
-            #     read_statuses__user=user
-            # ).count()
 
             return unread
         except Exception as e:

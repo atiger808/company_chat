@@ -2,760 +2,705 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>微信聊天框 - 响应式布局</title>
+    <title>企业聊天室 - 公司内部通讯</title>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="format-detection" content="telephone=no, email=no, address=no">
+
+
+    <!-- PWA Manifest -->
+    <!-- 🔧 关键修复：iOS PWA 专用设置 PWA 必需 - 支持锁屏通知 添加到主屏幕 -->
+    <link rel="manifest" href="/manifest.json?v=20260306-e8651d4">
+    <meta name="theme-color" content="#409EFF">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="企业聊天室">
+    <link rel="apple-touch-icon" href="/static/icons/icon-128x128.png?v=20260328-c05be02">
+
+    <!-- Service Worker 注册（降级方案） -->
+    <script>
+        // Service Worker 降级注册（确保在 DOMContentLoaded 前注册）
+        if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/static/js/service-worker.js')
+                    .then(reg => console.log('SW registered:', reg))
+                    .catch(err => console.error('SW registration failed:', err));
+            });
+        }
+    </script>
+
+
+    <!-- Windows Tiles -->
+    <meta name="msapplication-TileColor" content="#409EFF">
+    <meta name="msapplication-TileImage" content="/static/icons/icon-144x144.png">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20260328-c05be02">-->
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260328-c05be02">
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
+
+    <!-- 🔧 iOS 专用样式修复 -->
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-        }
-
-        body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-        }
-
-        /* ==================== 电脑端布局 ==================== */
-        .wechat-desktop {
-            display: none;
-            width: 100%;
-            max-width: 1200px;
-            height: 800px;
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
-            overflow: hidden;
-            position: relative;
-        }
-
-        /* 左侧联系人列表 */
-        .desktop-sidebar {
-            width: 300px;
-            height: 100%;
-            background: #f6f6f6;
-            border-right: 1px solid #e7e7e7;
-            position: absolute;
-            left: 0;
-            top: 0;
-            bottom: 0;
-            overflow-y: auto;
-        }
-
-        .desktop-sidebar-header {
-            height: 60px;
-            padding: 0 20px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            border-bottom: 1px solid #e7e7e7;
-            background: white;
-        }
-
-        .desktop-sidebar-header h2 {
-            font-size: 18px;
-            font-weight: 500;
-            color: #333;
-        }
-
-        .desktop-sidebar-header .new-chat {
-            color: #07c160;
-            font-size: 20px;
-            cursor: pointer;
-        }
-
-        .desktop-contact-list {
-            padding: 10px 0;
-        }
-
-        .contact-item {
-            padding: 12px 20px;
-            display: flex;
-            align-items: center;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-
-        .contact-item:hover {
-            background: #f0f0f0;
-        }
-
-        .contact-item.active {
-            background: #e6f7e9;
-        }
-
-        .contact-avatar {
-            width: 45px;
-            height: 45px;
-            border-radius: 50%;
-            background: #07c160;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: bold;
-            font-size: 18px;
-            margin-right: 12px;
-            flex-shrink: 0;
-        }
-
-        .contact-info {
-            flex: 1;
-            min-width: 0;
-        }
-
-        .contact-name {
-            font-size: 15px;
-            font-weight: 500;
-            color: #333;
-            margin-bottom: 4px;
-        }
-
-        .contact-last-message {
-            font-size: 13px;
-            color: #888;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 180px;
-        }
-
-        .contact-time {
-            font-size: 12px;
-            color: #999;
-            margin-left: 10px;
-        }
-
-        .contact-unread {
-            width: 20px;
-            height: 20px;
-            background: #ff4d4f;
-            color: white;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 12px;
-            margin-left: 8px;
-        }
-
-        /* 右侧聊天区域 */
-        .desktop-chat-area {
-            position: absolute;
-            left: 300px;
-            right: 0;
-            top: 0;
-            bottom: 0;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .desktop-chat-header {
-            height: 60px;
-            padding: 0 20px;
-            display: flex;
-            align-items: center;
-            border-bottom: 1px solid #e7e7e7;
-            background: white;
-        }
-
-        .desktop-chat-header .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: #07c160;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: bold;
-            margin-right: 15px;
-        }
-
-        .desktop-chat-header .name {
-            font-size: 16px;
-            font-weight: 500;
-            color: #333;
-        }
-
-        .desktop-chat-header .tools {
-            margin-left: auto;
-            display: flex;
-            gap: 20px;
-        }
-
-        .desktop-chat-header .tool {
-            font-size: 18px;
-            color: #666;
-            cursor: pointer;
-            transition: color 0.2s;
-        }
-
-        .desktop-chat-header .tool:hover {
-            color: #07c160;
-        }
-
-        .desktop-messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px;
-            background: #f6f6f6;
-        }
-
-        .desktop-input-area {
-            height: 80px;
-            padding: 15px 20px;
-            background: white;
-            border-top: 1px solid #e7e7e7;
-            display: flex;
-            align-items: center;
-        }
-
-        .desktop-input-wrapper {
-            flex: 1;
-            position: relative;
-        }
-
-        .desktop-input {
-            width: 100%;
-            height: 40px;
-            padding: 10px 15px 10px 45px;
-            border: 1px solid #e7e7e7;
-            border-radius: 20px;
-            font-size: 14px;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-
-        .desktop-input:focus {
-            border-color: #07c160;
-        }
-
-        .desktop-input-icon {
-            position: absolute;
-            left: 15px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: #999;
-            font-size: 18px;
-        }
-
-        .desktop-send-btn {
-            margin-left: 15px;
-            width: 80px;
-            height: 40px;
-            background: #07c160;
-            color: white;
-            border: none;
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-
-        .desktop-send-btn:hover {
-            background: #06a852;
-        }
-
-        .desktop-send-btn:disabled {
-            background: #999;
-            cursor: not-allowed;
-        }
-
-        /* ==================== 手机端布局 ==================== */
-        .wechat-mobile {
-            display: block;
-            width: 100%;
-            max-width: 375px;
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
-            overflow: hidden;
-        }
-
-        .mobile-header {
-            height: 50px;
-            background: #07c160;
-            color: white;
-            display: flex;
-            align-items: center;
-            padding: 0 15px;
-            position: relative;
-        }
-
-        .mobile-header .back {
-            font-size: 20px;
-            margin-right: 10px;
-        }
-
-        .mobile-header .title {
-            font-size: 17px;
-            font-weight: 500;
-        }
-
-        .mobile-header .menu {
-            position: absolute;
-            right: 15px;
-            font-size: 20px;
-        }
-
-        .mobile-messages {
-            height: calc(100vh - 150px);
-            max-height: 600px;
-            overflow-y: auto;
-            padding: 15px;
-            background: #f5f5f5;
-        }
-
-        .mobile-input-area {
-            height: 60px;
-            padding: 10px 15px;
-            background: white;
-            border-top: 1px solid #e7e7e7;
-            display: flex;
-            align-items: center;
-        }
-
-        .mobile-input {
-            flex: 1;
-            height: 38px;
-            padding: 0 15px;
-            border: 1px solid #e7e7e7;
-            border-radius: 20px;
-            font-size: 15px;
-            outline: none;
-        }
-
-        .mobile-send-btn {
-            margin-left: 10px;
-            color: #07c160;
-            font-size: 16px;
-            font-weight: 500;
-            cursor: pointer;
-        }
-
-        /* ==================== 公共样式 - 修复头像位置 ==================== */
-        .message-time {
-            text-align: center;
-            color: #999;
-            font-size: 12px;
-            margin: 15px 0;
-            position: relative;
-        }
-
-        .message-time::before {
-            content: '';
-            position: absolute;
-            left: 0;
-            right: 0;
-            top: 50%;
-            height: 1px;
-            background: #e5e5e5;
-            z-index: 0;
-        }
-
-        .message-time span {
-            background: #f5f5f5;
-            padding: 0 10px;
-            position: relative;
-            z-index: 1;
-        }
-
-        /* 左侧消息（对方）- 头像在左，消息在右 */
-        .message-left-wrapper {
-            display: flex;
-            align-items: flex-start;
-            margin-bottom: 15px;
-        }
-
-        /* 右侧消息（自己）- 消息在左，头像在右，整体右对齐 */
-        .message-right-wrapper {
-            display: flex;
-            align-items: flex-start;
-            margin-bottom: 15px;
-            justify-content: flex-end;
-        }
-
-        .message-avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: #07c160;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: bold;
-            flex-shrink: 0;
-        }
-
-        .message-left-wrapper .message-avatar {
-            margin-right: 10px;
-        }
-
-        .message-right-wrapper .message-avatar {
-            margin-left: 10px;
-            background: #1aad19;
-        }
-
-        .message-content {
-            max-width: 70%;
-            padding: 10px 15px;
-            border-radius: 18px;
-            position: relative;
-            line-height: 1.5;
-            font-size: 15px;
-            word-wrap: break-word;
-            white-space: pre-wrap;
-        }
-
-        .message-left {
-            background: white;
-            border-radius: 18px 18px 18px 5px;
-        }
-
-        .message-left::before {
-            content: '';
-            position: absolute;
-            left: -8px;
-            top: 10px;
-            width: 0;
-            height: 0;
-            border-top: 6px solid transparent;
-            border-bottom: 6px solid transparent;
-            border-right: 8px solid white;
-        }
-
-        .message-right {
-            background: #9eea6a;
-            border-radius: 18px 18px 5px 18px;
-        }
-
-        .message-right::before {
-            content: '';
-            position: absolute;
-            right: -8px;
-            top: 10px;
-            width: 0;
-            height: 0;
-            border-top: 6px solid transparent;
-            border-bottom: 6px solid transparent;
-            border-left: 8px solid #9eea6a;
-        }
-
-        /* ==================== 响应式断点 ==================== */
-        @media (min-width: 768px) {
-            .wechat-mobile {
-                display: none;
+        /* 修复 iOS Safari 软键盘弹出时的布局问题 */
+        @media screen and (max-width: 768px) {
+            /* 禁止 iOS 自动放大表单元素 */
+            input, textarea, select, button {
+                font-size: 16px !important;
+                -webkit-text-size-adjust: 100% !important;
             }
 
-            .wechat-desktop {
-                display: block;
+            /* 修复软键盘弹出时输入框被遮挡 */
+            .chat-container.ios-fix {
+                height: 100vh !important;
+                min-height: 100vh !important;
+                position: fixed !important;
+                top: 0 !important;
+                left: 0 !important;
+                right: 0 !important;
+                bottom: 0 !important;
+                overflow: hidden !important;
             }
-        }
 
-        @media (max-width: 767px) {
-            .wechat-desktop {
-                display: none;
+            /* 输入框聚焦时确保可见 */
+            .chat-input-area:focus-within {
+                position: fixed !important;
+                bottom: 0 !important;
+                left: 0 !important;
+                right: 0 !important;
+                z-index: 1000 !important;
+                background: var(--bg-primary) !important;
+                box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1) !important;
             }
-
-            .wechat-mobile {
-                display: block;
-            }
-        }
-
-        /* 滚动条样式 */
-        ::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: #f1f1f1;
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: #c1c1c1;
-            border-radius: 3px;
-        }
-
-        ::-webkit-scrollbar-thumb:hover {
-            background: #999;
-        }
-
-        /* 动画效果 */
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .message-left-wrapper,
-        .message-right-wrapper {
-            animation: fadeIn 0.3s ease-out;
         }
     </style>
+
+
+    <!-- iOS PWA 专用样式 -->
+    <style>
+        /* 修复 iOS PWA 安全区域 */
+        @supports (-webkit-touch-callout: none) {
+            /* iPhone X 及以上 */
+            @media (min-aspect-ratio: 4/3) {
+                body {
+                    padding-top: env(safe-area-inset-top);
+                    padding-bottom: env(safe-area-inset-bottom);
+                }
+
+                .sidebar-header {
+                    padding-top: calc(16px + env(safe-area-inset-top));
+                }
+
+                .chat-header {
+                    padding-top: calc(16px + env(safe-area-inset-top));
+                }
+
+                .chat-input-area {
+                    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+                }
+            }
+        }
+
+        /* 通用安全区域适配 */
+        .sidebar-header {
+            padding-top: max(16px, env(safe-area-inset-top));
+        }
+
+        .chat-header {
+            padding-top: max(16px, env(safe-area-inset-top));
+        }
+
+        .chat-input-area {
+            padding-bottom: max(8px, env(safe-area-inset-bottom));
+        }
+
+        /* 检测是否为standalone模式 */
+        @media all and (display-mode: standalone) {
+            .sidebar-header,
+            .chat-header {
+                padding-top: max(20px, env(safe-area-inset-top));
+            }
+        }
+    </style>
+
 </head>
 <body>
-    <!-- 电脑端布局 -->
-    <div class="wechat-desktop">
-        <div class="desktop-sidebar">
-            <div class="desktop-sidebar-header">
-                <h2>微信</h2>
-                <span class="new-chat">✚</span>
+<div class="chat-container">
+    <!-- 侧边栏 -->
+    <div class="sidebar show">
+        <div class="sidebar-header">
+            <div class="logo">
+                <i class="fas fa-comments"></i>
+                <span>企业聊天室</span>
             </div>
-            <div class="desktop-contact-list">
-                <div class="contact-item active">
-                    <div class="contact-avatar">张</div>
-                    <div class="contact-info">
-                        <div class="contact-name">张三</div>
-                        <div class="contact-last-message">好的，周末见！</div>
-                    </div>
-                    <div class="contact-time">10:40</div>
-                    <div class="contact-unread">2</div>
-                </div>
-                <div class="contact-item">
-                    <div class="contact-avatar" style="background: #1aad19;">李</div>
-                    <div class="contact-info">
-                        <div class="contact-name">李四</div>
-                        <div class="contact-last-message">项目进度怎么样了？</div>
-                    </div>
-                    <div class="contact-time">昨天</div>
-                </div>
-                <div class="contact-item">
-                    <div class="contact-avatar" style="background: #f4511e;">王</div>
-                    <div class="contact-info">
-                        <div class="contact-name">王五</div>
-                        <div class="contact-last-message">收到，谢谢！</div>
-                    </div>
-                    <div class="contact-time">周一</div>
-                </div>
-                <div class="contact-item">
-                    <div class="contact-avatar" style="background: #5e35b1;">赵</div>
-                    <div class="contact-info">
-                        <div class="contact-name">赵六</div>
-                        <div class="contact-last-message">在吗？有事找你</div>
-                    </div>
-                    <div class="contact-time">12/15</div>
-                </div>
-                <div class="contact-item">
-                    <div class="contact-avatar" style="background: #0288d1;">孙</div>
-                    <div class="contact-info">
-                        <div class="contact-name">孙七</div>
-                        <div class="contact-last-message">好的，没问题</div>
-                    </div>
-                    <div class="contact-time">12/10</div>
+            <div class="user-actions">
+                <!-- 管理员控制台按钮（默认隐藏） -->
+                <button class="btn-icon" id="adminConsoleBtn" style="display: none;" title="管理员控制台">
+                    <i class="fas fa-shield-alt"></i>
+                </button>
+
+                <button class="btn-icon" id="settingsBtn" title="个人设置">
+                    <i class="fas fa-cog"></i>
+                </button>
+
+                <button class="btn-icon" title="退出">
+                    <i class="fas fa-sign-out-alt"></i>
+                </button>
+
+                <button class="btn-icon" id="cloudBtn" style="display: none;" title="企业网盘">
+                    <i class="fas fa-cloud"></i>
+                </button>
+
+                <!-- 清除缓存按钮 -->
+                <button id="clearCacheBtn" class="btn-clear-cache" title="清除缓存">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
+
+
+            </div>
+        </div>
+
+        <div class="user-profile">
+            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260328-c05be02"
+                 alt="头像" class="avatar">
+            <div class="user-info">
+                <div class="username" id="currentUsername">加载中...</div>
+                <div class="status" id="userStatus">
+                    <span class="status-dot"></span>
+                    <span class="status-text">在线</span>
                 </div>
             </div>
         </div>
 
-        <div class="desktop-chat-area">
-            <div class="desktop-chat-header">
-                <div class="avatar">张</div>
-                <div class="name">张三</div>
-                <div class="tools">
-                    <span class="tool">☎</span>
-                    <span class="tool">📹</span>
-                    <span class="tool">⋮</span>
-                </div>
+
+        <!-- 搜索区域 -->
+        <div class="search-container">
+            <div class="search-tabs">
+                <button class="search-tab active" data-tab="chats">
+                    <i class="fas fa-comments"></i>
+                    <span>聊天</span>
+                </button>
+                <button class="search-tab" data-tab="contacts">
+                    <i class="fas fa-users"></i>
+                    <span>通讯录</span>
+                </button>
+                <button class="search-tab" data-tab="groups">
+                    <i class="fas fa-user-friends"></i>
+                    <span>群组</span>
+                </button>
             </div>
-
-            <div class="desktop-messages">
-                <div class="message-time"><span>今天 10:30</span></div>
-
-                <!-- 左侧消息（对方） -->
-                <div class="message-left-wrapper">
-                    <div class="message-avatar">张</div>
-                    <div class="message-content message-left">你好，最近怎么样？</div>
-                </div>
-
-                <!-- 右侧消息（自己）- 头像在右边 -->
-                <div class="message-right-wrapper">
-                    <div class="message-content message-right">挺好的，最近在学习前端开发，感觉很有意思！</div>
-                    <div class="message-avatar">我</div>
-                </div>
-
-                <div class="message-time"><span>今天 10:35</span></div>
-
-                <div class="message-left-wrapper">
-                    <div class="message-avatar">张</div>
-                    <div class="message-content message-left">前端开发确实很有趣，有什么推荐的学习资源吗？</div>
-                </div>
-
-                <div class="message-right-wrapper">
-                    <div class="message-content message-right">我推荐MDN文档和freeCodeCamp，都是很好的学习资源。</div>
-                    <div class="message-avatar">我</div>
-                </div>
-
-                <div class="message-time"><span>今天 10:40</span></div>
-
-                <div class="message-left-wrapper">
-                    <div class="message-avatar">张</div>
-                    <div class="message-content message-left">谢谢推荐！我这就去看看。对了，周末有空吗？一起吃饭？</div>
-                </div>
-
-                <div class="message-right-wrapper">
-                    <div class="message-content message-right">周末有空啊，周六晚上怎么样？</div>
-                    <div class="message-avatar">我</div>
-                </div>
-
-                <div class="message-left-wrapper">
-                    <div class="message-avatar">张</div>
-                    <div class="message-content message-left">周六晚上可以，那我们定在老地方见？</div>
-                </div>
-
-                <div class="message-right-wrapper">
-                    <div class="message-content message-right">好的，没问题！到时候见！</div>
-                    <div class="message-avatar">我</div>
-                </div>
+            <div class="search-input-wrapper">
+                <i class="fas fa-search"></i>
+                <input type="text" id="searchInput" placeholder="搜索聊天、联系人或群组">
+                <button class="search-clear" id="searchClearBtn" style="display: none;">
+                    <i class="fas fa-times"></i>
+                </button>
             </div>
-
-            <div class="desktop-input-area">
-                <div class="desktop-input-wrapper">
-                    <span class="desktop-input-icon">💬</span>
-                    <input type="text" class="desktop-input" placeholder="输入消息..." id="desktopInput">
-                </div>
-                <button class="desktop-send-btn" id="desktopSendBtn">发送</button>
+            <div class="search-results" id="searchResults">
+                <!-- 搜索结果动态生成 -->
             </div>
+        </div>
+
+
+        <div class="chat-list" id="chatList">
+            <!-- 聊天列表将通过JS动态生成 -->
+            <div class="empty-state">
+                <i class="fas fa-inbox"></i>
+                <p>暂无聊天记录</p>
+            </div>
+        </div>
+
+        <div class="contacts-list hidden" id="contactsList">
+            <!-- 通讯录列表将通过JS动态生成 -->
+        </div>
+
+        <div class="groups-list hidden" id="groupsList">
+            <!-- 群组列表将通过JS动态生成 -->
         </div>
     </div>
 
-    <!-- 手机端布局 -->
-    <div class="wechat-mobile">
-        <div class="mobile-header">
-            <span class="back">←</span>
-            <span class="title">张三</span>
-            <span class="menu">⋮</span>
-        </div>
-
-        <div class="mobile-messages">
-            <div class="message-time"><span>今天 10:30</span></div>
-
-            <!-- 左侧消息（对方） -->
-            <div class="message-left-wrapper">
-                <div class="message-avatar">张</div>
-                <div class="message-content message-left">你好，最近怎么样？</div>
+    <!-- 主聊天区域 -->
+    <div class="chat-main">
+        <div class="chat-header">
+            <div class="header-left">
+                <button class="back-btn" id="backBtn">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <div class="chat-info" onclick="chatClient.showProfile(chatClient.currentRoomId)">
+                    <div class="chat-avatar">
+                        <img src="/static/images/default-avatar.png?v=20260328-c05be02"
+                             alt="聊天对象" id="chatAvatar">
+                    </div>
+                    <div class="chat-details">
+                        <div class="chat-title" id="chatTitle">选择聊天</div>
+                        <div class="status offline" id="chatSubtitle">
+                            <span class="status-dot"></span>
+                            <span class="status-text" id="chatStatus">未连接</span>
+                        </div>
+                    </div>
+                </div>
             </div>
-
-            <!-- 右侧消息（自己）- 头像在右边 -->
-            <div class="message-right-wrapper">
-                <div class="message-content message-right">挺好的，最近在学习前端开发，感觉很有意思！</div>
-                <div class="message-avatar">我</div>
-            </div>
-
-            <div class="message-time"><span>今天 10:35</span></div>
-
-            <div class="message-left-wrapper">
-                <div class="message-avatar">张</div>
-                <div class="message-content message-left">前端开发确实很有趣，有什么推荐的学习资源吗？</div>
-            </div>
-
-            <div class="message-right-wrapper">
-                <div class="message-content message-right">我推荐MDN文档和freeCodeCamp，都是很好的学习资源。</div>
-                <div class="message-avatar">我</div>
-            </div>
-
-            <div class="message-time"><span>今天 10:40</span></div>
-
-            <div class="message-left-wrapper">
-                <div class="message-avatar">张</div>
-                <div class="message-content message-left">谢谢推荐！我这就去看看。对了，周末有空吗？一起吃饭？</div>
-            </div>
-
-            <div class="message-right-wrapper">
-                <div class="message-content message-right">周末有空啊，周六晚上怎么样？</div>
-                <div class="message-avatar">我</div>
-            </div>
-
-            <div class="message-left-wrapper">
-                <div class="message-avatar">张</div>
-                <div class="message-content message-left">周六晚上可以，那我们定在老地方见？</div>
-            </div>
-
-            <div class="message-right-wrapper">
-                <div class="message-content message-right">好的，没问题！到时候见！</div>
-                <div class="message-avatar">我</div>
+            <div class="header-right">
+                <button class="btn-icon" title="语音通话">
+                    <i class="fas fa-phone"></i>
+                </button>
+                <button class="btn-icon" title="视频通话">
+                    <i class="fas fa-video"></i>
+                </button>
+                <button class="btn-icon" title="更多操作">
+                    <i class="fas fa-ellipsis-v"></i>
+                </button>
             </div>
         </div>
 
-        <div class="mobile-input-area">
-            <input type="text" class="mobile-input" placeholder="输入消息..." id="mobileInput">
-            <span class="mobile-send-btn" id="mobileSendBtn">发送</span>
+        <div class="messages-container" id="messagesContainer">
+            <div class="messages-empty" id="messagesEmpty">
+                <i class="fas fa-comments"></i>
+                <p>选择聊天对象开始对话</p>
+                <button class="btn btn-primary" onclick="chatClient.openNewChatModal()">
+                    <i class="fas fa-plus"></i>
+                    新建聊天
+                </button>
+            </div>
+            <div class="messages-list" id="messagesList" style="display: none;">
+                <!-- 消息列表将通过JS动态生成 -->
+            </div>
+
+
+            <!-- 🔧 关键修复1: 按钮和徽章分离，徽章在按钮外部右上角 -->
+            <div id="scrollToBottomContainer" class="scroll-to-bottom-container">
+                <div id="scrollToBottomBtn" class="scroll-to-bottom-btn" style="display: none;">
+                    <div class="scroll-to-bottom-icon">
+                        <i class="fas fa-arrow-down"></i>
+                    </div>
+                </div>
+                <div class="scroll-to-bottom-count" id="unreadCountBadge" style="display: none;">0</div>
+            </div>
+
+
+            <!-- 引用预览区域（动态显示） -->
+            <div id="quotePreview" class="quote-preview" style="display: none;">
+                <div class="quote-preview-header">
+                    <span><i class="fas fa-quote-left"></i> 引用消息</span>
+                    <button class="quote-close" onclick="chatClient.clearQuoteMessage()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="quote-preview-content">
+                    <div class="quote-preview-sender" id="quoteSender">发送者</div>
+                    <div class="quote-preview-text" id="quoteContent">引用内容</div>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="chat-input-area">
+            <div class="input-actions">
+
+                <!-- 语音消息按钮（优化版） -->
+                <button class="action-btn voice-btn" id="voiceBtn" title="按住 说话">
+                    <i class="fas fa-microphone"></i>
+                    <span class="voice-btn-text">按住 说话</span>
+                    <span class="voice-btn-recording-text" style="display: none;">松开 结束</span>
+                </button>
+                <span id="voiceNotSupportedTip" class="voice-not-supported-tip" style="display: none;"
+                      title="语音消息功能不可用">
+                    <i class="fas fa-exclamation-circle"></i>
+                </span>
+
+                <button class="action-btn" id="imageBtn" title="图片/视频">
+                    <i class="fas fa-image"></i>
+                    <input type="file" id="imageInput" accept="image/*,video/*" multiple style="display:none;">
+                </button>
+
+                <button class="action-btn" id="fileBtn" title="文件">
+                    <i class="fas fa-paperclip"></i>
+                    <input type="file" id="fileInput" multiple style="display:none;">
+                </button>
+
+
+                <button class="btn-icon" title="表情" id="emojiBtn">
+                    <i class="far fa-smile"></i>
+                </button>
+            </div>
+
+            <!-- 表情包面板（隐藏默认） -->
+            <div class="emoji-panel" id="emojiPanel" style="display: none;">
+                <div class="emoji-grid">
+                    <!-- 常用表情 -->
+                    <span class="emoji-item" data-emoji="😊">😊</span>
+                    <span class="emoji-item" data-emoji="😂">😂</span>
+                    <span class="emoji-item" data-emoji="😄">😄</span>
+                    <span class=" emoji-item" data-emoji="😍">😍</span>
+                    <span class="emoji-item" data-emoji="😅">😅</span>
+                    <span class="emoji-item" data-emoji="🤣">🤣</span>
+                    <span class="emoji-item" data-emoji="😇">😇</span>
+                    <span class="emoji-item" data-emoji="🙂">🙂</span>
+                    <span class="emoji-item" data-emoji="🙃">🙃</span>
+                    <span class="emoji-item" data-emoji="😉">😉</span>
+                    <span class="emoji-item" data-emoji="🥰">🥰</span>
+                    <span class="emoji-item" data-emoji="😘">😘</span>
+                    <span class="emoji-item" data-emoji="😗">😗</span>
+                    <span class="emoji-item" data-emoji="😚">😚</span>
+                    <span class="emoji-item" data-emoji="😋">😋</span>
+                    <span class="emoji-item" data-emoji="😝">😝</span>
+                    <span class="emoji-item" data-emoji="🤪">🤪</span>
+                    <span class="emoji-item" data-emoji="🧐">🧐</span>
+                    <span class="emoji-item" data-emoji="😎">😎</span>
+                    <span class="emoji-item" data-emoji="👋">👋</span>
+                    <span class="emoji-item" data-emoji="👌">👌</span>
+                    <span class="emoji-item" data-emoji="👍">👍</span>
+                    <span class="emoji-item" data-emoji="❤️">❤️</span>
+                    <span class="emoji-item" data-emoji="🎉">🎉</span>
+                    <span class="emoji-item" data-emoji="👏">👏</span>
+                    <span class="emoji-item" data-emoji="🙏">🙏</span>
+                    <span class="emoji-item" data-emoji="💪">💪</span>
+                    <span class="emoji-item" data-emoji="🔥">🔥</span>
+                    <span class="emoji-item" data-emoji="💯">💯</span>
+                    <span class="emoji-item" data-emoji="🏆">🏆</span>
+                    <span class="emoji-item" data-emoji="👎">👎</span>
+                    <span class="emoji-item" data-emoji="🙌">🙌</span>
+
+
+                    <!-- 更多表情可以继续添加 -->
+                </div>
+            </div>
+
+
+            <!--
+
+
+
+            -->
+
+
+            <div id="atPanel"></div>
+
+            <div class="input-wrapper">
+                <textarea id="messageInput" placeholder="输入消息..." rows="1"></textarea>
+                <div class="typing-indicator" id="typingIndicator" style="display: none;">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                </div>
+            </div>
+            <button class="send-btn" id="sendBtn">发送</button>
+
+
+            <!-- 语音录音覆盖层（移动端优化版） -->
+            <div id="voiceRecorderOverlay" class="voice-recorder-overlay" style="display: none;">
+                <div class="voice-recorder-backdrop"></div>
+                <div class="voice-recorder-panel">
+                    <div class="voice-recorder-cancel-area">
+                        <i class="fas fa-times-circle"></i>
+                        <span>松开手指 取消发送</span>
+                    </div>
+                    <div class="voice-recorder-wave-container">
+                        <div class="voice-recorder-wave">
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                            <div class="wave-bar"></div>
+                        </div>
+                    </div>
+                    <div class="voice-recorder-time" id="voiceRecorderTime">00:00</div>
+                    <div class="voice-recorder-hint">
+                        <i class="fas fa-microphone"></i>
+                        <span>手指上滑 取消发送</span>
+                    </div>
+                    <!-- 🔧 移动端专用：发送按钮（松开发送） -->
+                    <div class="voice-recorder-send-hint">
+                        <i class="fas fa-arrow-up"></i>
+                        <span>松开 结束</span>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- 语音消息模板（移动端优化） -->
+        <template id="voiceMessageTemplate">
+            <div class="message-voice">
+                <button class="voice-play-btn" aria-label="播放语音">
+                    <i class="fas fa-play"></i>
+                    <i class="fas fa-pause"></i>
+                </button>
+                <div class="voice-duration">0"</div>
+                <div class="voice-progress-bar">
+                </div>
+                <!-- 🔧 关键修复：添加移动端必需的属性 -->
+                <audio class="voice-audio"
+                       preload="metadata"
+                       playsinline
+                       webkit-playsinline
+                       crossOrigin="anonymous"></audio>
+            </div>
+        </template>
+
+    </div>
+</div>
+
+<!-- 消息模板 -->
+<template id="messageTemplate">
+    <div class="message-wrapper">
+        <!-- 动态添加 message-left-wrapper 或 message-right-wrapper -->
+    </div>
+</template>
+
+<!-- 时间戳模板 -->
+<template id="timeStampTemplate">
+    <div class="message-time">
+        <span></span>
+    </div>
+</template>
+
+
+<!-- 新建聊天模态框 -->
+<div class="modal" id="newChatModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>新建聊天</h3>
+            <button class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="chat-type-tabs">
+                <button class="tab-btn active" data-target="new-private-chat">私聊</button>
+                <button class="tab-btn" data-target="new-group-chat">群聊</button>
+            </div>
+
+            <!-- 私聊表单 -->
+            <div class="chat-form active" id="new-private-chat">
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="searchUserInput" placeholder="搜索用户...">
+                </div>
+                <div class="user-results" id="userResults">
+                    <!-- 用户列表将通过JS动态生成 -->
+                </div>
+            </div>
+
+            <!-- 群聊表单 -->
+            <div class="chat-form" id="new-group-chat">
+                <div class="form-group">
+                    <label>群组名称 <span class="required">*</span></label>
+                    <input type="text" id="groupNameInput" placeholder="请输入群组名称" maxlength="20">
+                </div>
+                <div class="selected-members" id="selectedMembers">
+                    <div class="selected-member">
+                        <span class="member-name">你</span>
+                        <span class="member-tag">创建者</span>
+                    </div>
+                </div>
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="addGroupMemberInput" placeholder="搜索成员...">
+                </div>
+                <div class="member-results" id="groupMemberResults">
+                    <!-- 成员列表将通过JS动态生成 -->
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary close-btn">取消</button>
+            <button class="btn btn-primary">创建</button>
+        </div>
+    </div>
+</div>
+
+<!-- 设置模态框 -->
+<div class="modal" id="settingsModal">
+
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3><i class="fas fa-user-cog"></i> 个人资料设置</h3>
+            <button class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="profile-section">
+                <div class="profile-section-header">
+                    <div class="grid-item-icon">
+                        <i class="fas fa-image"></i>
+                    </div>
+                    <div class="profile-section-title">头像设置</div>
+                </div>
+                <div class="profile-avatar-section">
+                    <div class="avatar-upload-container">
+                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20260328-c05be02"
+                             alt="头像">
+                        <label class="upload-btn" for="avatarUpload">
+                            <i class="fas fa-camera"></i>
+                        </label>
+                        <input type="file" id="avatarUpload" accept="image/*" style="display:none;">
+                    </div>
+                    <small class="form-hint">点击头像上传新照片，支持JPG、PNG格式，最大2MB</small>
+                </div>
+            </div>
+
+            <div class="profile-section">
+                <div class="profile-section-header">
+                    <div class="grid-item-icon">
+                        <i class="fas fa-id-card"></i>
+                    </div>
+                    <div class="profile-section-title">基本信息</div>
+                </div>
+                <div class="profile-info-grid">
+                    <div class="profile-info-item">
+                        <label>用户名</label>
+                        <span id="settingsUsernameDisplay"></span>
+                    </div>
+                    <div class="profile-info-item">
+                        <label>真实姓名</label>
+                        <input type="text" id="settingsRealName" placeholder="请输入真实姓名">
+                    </div>
+                    <div class="profile-info-item">
+                        <label>性别</label>
+                        <select id="settingsGender" class="form-select">
+                            <option value="">请选择</option>
+                            <option value="male">男</option>
+                            <option value="female">女</option>
+                            <option value="other">其他</option>
+                        </select>
+                    </div>
+                    <div class="profile-info-item">
+                        <label>邮箱</label>
+                        <input type="email" id="settingsEmail" placeholder="请输入邮箱">
+                    </div>
+                    <div class="profile-info-item">
+                        <label>手机号</label>
+                        <input type="tel" id="settingsPhone" placeholder="请输入手机号">
+                    </div>
+                </div>
+            </div>
+
+            <div class="profile-section">
+                <div class="profile-section-header">
+                    <div class="grid-item-icon">
+                        <i class="fas fa-briefcase"></i>
+                    </div>
+                    <div class="profile-section-title">工作信息</div>
+                </div>
+                <div class="profile-info-grid">
+                    <div class="profile-info-item">
+                        <label>部门</label>
+                        <input type="text" id="settingsDepartment" placeholder="请输入部门">
+                    </div>
+                    <div class="profile-info-item">
+                        <label>职位</label>
+                        <input type="text" id="settingsPosition" placeholder="请输入职位">
+                    </div>
+                </div>
+            </div>
+
+            <div class="profile-section">
+                <div class="profile-section-header">
+                    <div class="grid-item-icon">
+                        <i class="fas fa-bell"></i>
+                    </div>
+                    <div class="profile-section-title">通知设置</div>
+                </div>
+                <div class="notification-grid">
+                    <div class="notification-item">
+                        <label>
+                            <i class="fas fa-bell"></i>
+                            桌面通知
+                        </label>
+                        <label class="switch">
+                            <input type="checkbox" id="desktopNotifications">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="notification-item">
+                        <label>
+                            <i class="fas fa-volume-up"></i>
+                            声音提醒
+                        </label>
+                        <label class="switch">
+                            <input type="checkbox" id="soundNotifications">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="notification-item">
+                        <label>
+                            <i class="fas fa-mobile-alt"></i>
+                            震动提醒
+                        </label>
+                        <label class="switch">
+                            <input type="checkbox" id="vibrateNotifications">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="chatClient.closeModal('settingsModal')">取消</button>
+            <button class="btn btn-primary" onclick="chatClient.saveSettings()">保存设置</button>
         </div>
     </div>
 
-    <script>
-        // 电脑端发送消息
-        const desktopInput = document.getElementById('desktopInput');
-        const desktopSendBtn = document.getElementById('desktopSendBtn');
-        const desktopMessages = document.querySelector('.desktop-messages');
+</div>
 
-        desktopSendBtn.addEventListener('click', sendMessage);
-        desktopInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') sendMessage();
-        });
+<div id="notificationContainer"></div>
+<div id="toastContainer"></div>
 
-        function sendMessage() {
-            const message = desktopInput.value.trim();
-            if (message) {
-                const messageWrapper = document.createElement('div');
-                messageWrapper.className = 'message-right-wrapper';
-                messageWrapper.innerHTML = `
-                    <div class="message-content message-right">${message}</div>
-                    <div class="message-avatar">我</div>
-                `;
 
-                desktopMessages.appendChild(messageWrapper);
-                desktopMessages.scrollTop = desktopMessages.scrollHeight;
+<!-- 🔧 关键修复：脚本资源直接带版本参数 -->
+<script src="/static/js/api.js?v=20260328-c05be02"></script>
+<script src="/static/js/utils.js?v=20260328-c05be02"></script>
+<script src="/static/js/chat.js?v=20260328-c05be02"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260328-c05be02"></script>
 
-                desktopInput.value = '';
-                desktopSendBtn.disabled = true;
-            }
-        }
+<!-- templates/chat/index.html - 替换原有的版本检测脚本 -->
 
-        desktopInput.addEventListener('input', () => {
-            desktopSendBtn.disabled = desktopInput.value.trim() === '';
-        });
+<script>
+    // 🔧 修复1: 从构建时注入的版本号（与后端保持一致）
+    const CURRENT_VERSION = '20260328-c05be02';
 
-        // 手机端发送消息
-        const mobileInput = document.getElementById('mobileInput');
-        const mobileSendBtn = document.getElementById('mobileSendBtn');
-        const mobileMessages = document.querySelector('.mobile-messages');
+    // 🔧 修复2: 首次访问时保存版本到 localStorage（不是 sessionStorage）
+    const LAST_VERSION = localStorage.getItem('static_version');
 
-        mobileSendBtn.addEventListener('click', sendMobileMessage);
-        mobileInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') sendMobileMessage();
-        });
+    if (!LAST_VERSION) {
+        // 首次访问，保存当前版本
+        localStorage.setItem('static_version', CURRENT_VERSION);
+        console.log('✅ 首次访问，保存版本:', CURRENT_VERSION);
+    } else if (LAST_VERSION !== CURRENT_VERSION) {
+        // 检测到新版本
+        console.log(`✅ 检测到新版本: ${LAST_VERSION} → ${CURRENT_VERSION}`);
 
-        function sendMobileMessage() {
-            const message = mobileInput.value.trim();
-            if (message) {
-                const messageWrapper = document.createElement('div');
-                messageWrapper.className = 'message-right-wrapper';
-                messageWrapper.innerHTML = `
-                    <div class="message-content message-right">${message}</div>
-                    <div class="message-avatar">我</div>
-                `;
+        // // 🔧 修复3: 保存新版本（避免重复提示）
+        // localStorage.setItem('static_version', CURRENT_VERSION);
+        //
+        // // 延迟5秒提示（避免打断用户操作）
+        // setTimeout(() => {
+        //     // 等待 ChatClient 初始化完成后再显示提示
+        //     const checkChatClient = setInterval(() => {
+        //         if (typeof chatClient !== 'undefined' && chatClient.showConfirmDialog) {
+        //             clearInterval(checkChatClient);
+        //
+        //             chatClient.showConfirmDialog(
+        //                 '🎉 版本更新',
+        //                 `发现新版本 ${CURRENT_VERSION}，建议立即刷新以获得最新功能和修复`
+        //             ).then((confirmed) => {
+        //                 if (confirmed) {
+        //                     // 清除 Service Worker 缓存
+        //                     if ('serviceWorker' in navigator) {
+        //                         navigator.serviceWorker.getRegistrations().then(registrations => {
+        //                             registrations.forEach(reg => reg.unregister());
+        //                         });
+        //                     }
+        //                     // 强制刷新（带时间戳绕过缓存）
+        //                     window.location.href = window.location.pathname + '?cacheBust=' + Date.now();
+        //                 }
+        //             });
+        //         }
+        //     }, 100);
+        // }, 5000);
+    }
+</script>
 
-                mobileMessages.appendChild(messageWrapper);
-                mobileMessages.scrollTop = mobileMessages.scrollHeight;
-
-                mobileInput.value = '';
-            }
-        }
-
-        // 联系人切换（电脑端）
-        const contactItems = document.querySelectorAll('.contact-item');
-        contactItems.forEach(item => {
-            item.addEventListener('click', () => {
-                contactItems.forEach(i => i.classList.remove('active'));
-                item.classList.add('active');
-            });
-        });
-    </script>
 </body>
 </html>

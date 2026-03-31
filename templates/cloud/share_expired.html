@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>分享已过期</title>
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
+    <link rel="stylesheet" href="/static/css/chat.css">
+    <link rel="stylesheet" href="/static/css/cloud.css">
+    <style>
+        .share-page {
+            min-height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .share-container {
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            max-width: 400px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+        }
+
+        .share-container i {
+            font-size: 64px;
+            color: #f56c6c;
+            margin-bottom: 20px;
+        }
+
+        .share-container h1 {
+            font-size: 24px;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .share-container p {
+            color: #666;
+            margin-bottom: 20px;
+        }
+
+        .btn-home {
+            /*display: inline-block;*/
+            padding: 12px 30px;
+            background: #409EFF;
+            color: white;
+            border-radius: 6px;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+<div class="share-page">
+    <div class="share-container">
+        <i class="fas fa-exclamation-triangle"></i>
+        <h1>分享已过期</h1>
+        <p>该分享链接已过期或达到下载次数上限</p>
+        <a href="/cloud/" class="btn-home">
+            <i class="fas fa-home"></i> 返回首页
+        </a>
+    </div>
+</div>
+</body>
+</html>

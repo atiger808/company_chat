@@ -7,6 +7,7 @@
 日志 django中间件
 """
 import json
+from django.db import close_old_connections
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
 from django.http import HttpResponse, HttpResponseServerError
@@ -170,10 +171,13 @@ class ApiLoggingMiddleware(MiddlewareMixin):
         :param response:
         :return:
         """
+
         if self.enable:
             if self.methods == 'ALL' or request.method in self.methods:
                 if '/query' not in request.request_path:
                     if request.request_path in settings.EXLUDE_API_LOG:
+                        close_old_connections()
                         return response
                     self.__handle_response(request, response)
+        close_old_connections()
         return response

@@ -32,6 +32,7 @@ class CustomUser(AbstractUser):
         ('super_admin', '超级管理员'),
         ('admin', '管理员'),
         ('normal', '普通用户'),
+        # ('user', '普通用户'),
     )
 
     GENDER_CHOICES = (

@@ -12,11 +12,13 @@ from django.contrib.auth import get_user_model
 from asgiref.sync import sync_to_async
 from django.db import connection, close_old_connections
 from accounts.models import CustomUser
-from .models import ChatRoom, Message, MessageReadStatus, ChatRoomDeleteStatus
+from chat.models import ChatRoom, Message, FileUpload, MessageReadStatus, MessageDeleteStatus, ChatRoomDeleteStatus, UserOnlineStatus
+from cloud.models import CloudFile, FileCollaboration
+
 from django.conf import settings
 import json
 import asyncio
-import logging
+# import logging
 # logger = logging.getLogger(__name__)
 from loguru import logger
 
@@ -26,7 +28,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     # 在 ChatConsumer 类中添加
     async def update_and_broadcast_online_status(self, is_online):
-        """更新用户在线状态并广播给相关用户"""
+        """更新用户在线状态并广播（优化版）"""
+        if not hasattr(self, 'user') or self.user.is_anonymous:
+            return
+
+
         # 更新数据库状态
         await self.update_user_online_status(is_online)
 
@@ -278,13 +284,36 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if self.user.is_anonymous:
             return
 
-        # 🔧 关键修复10: 清理旧连接
+        # 🔧 关键修复 1: 清理旧连接
         await sync_to_async(close_old_connections)()
+
 
         content = data.get('content', '')
         message_type = data.get('message_type', 'text')
         file_id = data.get('file_id', None)
         temp_id = data.get('temp_id')
+
+        # 🔧 关键修复 2: 获取 chat_room 参数（前端传递的目标聊天室）
+        target_room_id = data.get('chat_room')
+
+        # 🔧 关键修复 3: 验证 chat_room 参数
+        if target_room_id:
+            # 验证用户是否有权限发送到该聊天室
+            if not await self.is_user_in_room(str(target_room_id)):
+                logger.warning(f"User {self.user.username} not authorized to send to room {target_room_id}")
+                await self.send(text_data=json.dumps({
+                    'type': 'error',
+                    'message': '没有权限发送到该聊天室'
+                }))
+                return
+            # 使用目标聊天室的 room_name
+            room_name = str(target_room_id)
+            room_group_name = f'chat_{room_name}'
+        else:
+            # 默认使用当前连接的聊天室
+            room_name = self.room_name
+            room_group_name = self.room_group_name
+
         # 🔧 新增：获取引用字段
         quote_message_id = data.get('quote_message_id')
         quote_content = data.get('quote_content')
@@ -293,11 +322,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
         quote_timestamp = data.get('quote_timestamp')
         quote_message_type = data.get('quote_message_type')
 
-        # 保存消息到数据库
+        # 🔧 关键修复 4: 保存消息时使用正确的 room_name
         message = await self.save_message(
             content,
             message_type,
             file_id=file_id,
+            room_name=room_name,  # 🔧 传递正确的 room_name
             quote_message_id=quote_message_id,
             quote_content=quote_content,
             quote_sender=quote_sender,
@@ -306,7 +336,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             quote_message_type=quote_message_type
         )
         logger.info(
-            f'user: {self.user} file_id: {file_id} message_type: {message_type} content: {content} temp_id: {temp_id}')
+            f'user: {self.user} file_id: {file_id} message_type: {message_type} '
+            f'content: {content} temp_id: {temp_id} target_room: {room_name}'
+        )
 
         sender = {
             'id': self.user.id,
@@ -318,9 +350,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'is_online': self.user.is_online,
         }
 
-        # 🔧 关键修复：广播消息时必须包含完整的引用字段,包含精确语音时长
+        # 🔧 关键修复 5: 广播消息到正确的聊天室组
         await self.channel_layer.group_send(
-            self.room_group_name,
+            room_group_name,  # 🔧 使用目标聊天室的组名
             {
                 'type': 'chat_message',
                 'chat_room': message.chat_room.id,
@@ -346,10 +378,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             }
         )
 
-        # 同时发送全局通知（给聊天室所有成员）
+        # 🔧 关键修复 6: 发送全局通知时使用正确的 chat_room
         await self.send_global_notification({
             'type': 'new_message',
-            'chat_room': message.chat_room.id,
+            'chat_room': message.chat_room.id,  # 🔧 使用消息实际的聊天室 ID
             'content': content,
             'sender': sender,
             'sender_name': self.user.username,
@@ -369,50 +401,57 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'voice_duration': message.voice_duration if hasattr(message, 'voice_duration') else None,
         })
 
-        # 🔧 关键修复：发送未读数更新给接收方（如果不是自己）
-        # 获取聊天室所有成员（排除发送者）
-        chat_room = await database_sync_to_async(lambda: message.chat_room)()
-        members = await database_sync_to_async(
-            lambda: list(chat_room.members.exclude(id=self.user.id).values_list('id', flat=True))
-        )()
+        unread_count = await self.get_unread_count(message.chat_room.id, self.user.id)
+        # 发送未读数更新
+        await self.send_unread_count_update(message.chat_room.id, unread_count)
 
-        for member_id in members:
-            # 获取该成员的未读消息数
-            unread_count = await self.get_unread_count(chat_room.id, member_id)
-
-            # 发送未读数更新
-            await self.send_unread_count_update(message.chat_room.id, unread_count)
-
+        # #  🔧 关键修复 7: 发送未读数更新给接收方
+        # # 获取聊天室所有成员（排除发送者）
+        # chat_room = await database_sync_to_async(lambda: message.chat_room)()
+        # members = await database_sync_to_async(
+        #     lambda: list(chat_room.members.exclude(id=self.user.id).values_list('id', flat=True))
+        # )()
+        #
+        # for member_id in members:
+        #     # 获取该成员的未读消息数
+        #     unread_count = await self.get_unread_count(chat_room.id, member_id)
+        #     # 发送未读数更新
+        #     await self.send_unread_count_update(message.chat_room.id, unread_count)
 
 
     @database_sync_to_async
     def get_unread_count(self, chat_room_id, user_id):
-        """获取指定聊天室的未读消息数"""
-        from chat.models import Message, MessageReadStatus, ChatRoom
-        from django.db.models import Q
-
+        """获取指定聊天室的未读消息数（排除自己发送的消息）"""
+        logger.info(f"获取用户 {user_id} 在聊天室 {chat_room_id} 的未读消息数")
         try:
             # 验证聊天室是否存在且用户是成员
             chat_room = ChatRoom.objects.get(id=chat_room_id, members__id=user_id)
 
             # 获取未读消息数
-            # 未读消息 = 未删除的消息 - 已读消息
-            unread_count = Message.objects.filter(
+            unread_count = Message.objects.select_related('sender', 'file').filter(
                 chat_room=chat_room,
-                chat_room__members__id=user_id,
-                is_deleted=False
+                is_deleted=False,
             ).exclude(
-                read_statuses__user__id=user_id
+                sender__id=user_id  # 🔧 关键优化：排除用户自己发送的消息
+            ).exclude(
+                id__in=MessageDeleteStatus.objects.filter(
+                    is_deleted=True,
+                    user__id=user_id
+                ).values_list('message_id', flat=True)  # 优化：只获取 ID 列表
+            ).exclude(
+                id__in=MessageReadStatus.objects.filter(
+                    user__id=user_id
+                ).values_list('message_id', flat=True)
             ).count()
 
-            logger.info(f"用户 {user_id} 在聊天室 {chat_room_id} 的未读消息数: {unread_count}")
+            logger.info(f"用户 {user_id} 在聊天室 {chat_room_id} 的未读消息数：{unread_count}")
             return unread_count
 
         except ChatRoom.DoesNotExist:
             logger.warning(f"聊天室 {chat_room_id} 不存在或用户 {user_id} 不是成员")
             return 0
         except Exception as e:
-            logger.error(f"获取未读消息数失败: {e}")
+            logger.error(f"获取未读消息数失败：{e}")
             return 0
 
 
@@ -433,6 +472,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'user_id': str(self.user.id),
                 'user_name': self.user.username,
                 'is_typing': is_typing,
+                'chat_room_id': self.room_name,
             }
         )
 
@@ -487,11 +527,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def user_typing(self, event):
         """接收用户输入状态事件"""
+        logger.info(f"用户 {event['user_id']} 输入状态: {event['is_typing']} room_name: {self.room_name} 在聊天室 {event}")
         await self.send(text_data=json.dumps({
             'type': 'typing',
             'user_id': event['user_id'],
             'user_name': event['user_name'],
             'is_typing': event['is_typing'],
+            'chat_room_id': event.get('chat_room_id') or self.room_name,
         }))
 
     async def user_joined(self, event):
@@ -512,16 +554,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def save_message(self, content, message_type, file_id=None,
+                     room_name=None,  # 🔧 新增参数
                      quote_message_id=None, quote_content=None,
                      quote_sender=None, quote_sender_id=None,
                      quote_timestamp=None, quote_message_type=None):
-        from chat.models import ChatRoom, Message, FileUpload
-        logger.info(f'room_name: {self.room_name} file_id: {file_id} content: {content}')
-        chat_room = ChatRoom.objects.get(id=self.room_name)
 
-        # 批量恢复ChatRoomDeleteStatus聊天室删除状态以标记为删除的聊天室恢复到正常状态
+        # 🔧 关键修复：使用传入的 room_name 或默认的 self.room_name
+        target_room_name = room_name if room_name else self.room_name
+        logger.info(f'room_name: {target_room_name} file_id: {file_id} content: {content}')
+
+        chat_room = ChatRoom.objects.get(id=target_room_name)
+
+        # 批量恢复聊天室删除状态
         try:
-            ChatRoomDeleteStatus.objects.filter(chat_room_id=self.room_name, is_deleted=True).update(is_deleted=False)
+            ChatRoomDeleteStatus.objects.filter(
+                chat_room_id=target_room_name,
+                is_deleted=True
+            ).update(is_deleted=False)
         except Exception as e:
             logger.error(f"Error restoring ChatRoomDeleteStatus: {e}")
 
@@ -579,11 +628,42 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def is_user_in_room(self, room_id):
-        """验证用户是否在房间中"""
+        """验证用户是否在房间中（支持转发验证）"""
         try:
             chat_room = ChatRoom.objects.get(id=room_id)
+            # 🔧 关键修复：验证用户是否是聊天室成员
             return chat_room.members.filter(id=self.user.id).exists()
         except ChatRoom.DoesNotExist:
+            logger.warning(f"ChatRoom {room_id} does not exist")
+            return False
+        except Exception as e:
+            logger.error(f"Error checking room membership: {e}")
+            return False
+
+    @database_sync_to_async
+    def can_send_to_room(self, room_id):
+        """
+        🔧 新增：验证用户是否有权限发送到指定聊天室
+        支持：文件所有者、协作者、聊天室成员
+        """
+        try:
+            # 1. 检查是否是聊天室成员
+            chat_room = ChatRoom.objects.get(id=room_id)
+            if chat_room.members.filter(id=self.user.id).exists():
+                return True
+
+            # 2. 检查是否是文件协作者（用于文件转发场景）
+            # 注意：这里需要根据业务逻辑调整
+            # if FileCollaboration.objects.filter(
+            #     file_id=file_id,
+            #     user=self.user,
+            #     is_active=True
+            # ).exists():
+            #     return True
+
+            return False
+        except Exception as e:
+            logger.error(f"Error checking send permission: {e}")
             return False
 
     @database_sync_to_async
@@ -625,23 +705,35 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         return users_data
 
+
     async def send_global_notification(self, notification_data):
         """发送全局通知给聊天室所有成员"""
-        chat_room = await database_sync_to_async(ChatRoom.objects.get)(id=self.room_name)
+        # 🔧 关键修复：从 notification_data 获取正确的 chat_room
+        chat_room_id = notification_data.get('chat_room')
+        if not chat_room_id:
+            logger.warning("send_global_notification: chat_room not found in notification_data")
+            return
 
-        # 获取聊天室所有成员
-        members = await database_sync_to_async(list)(chat_room.members.all())
+        try:
+            chat_room = await database_sync_to_async(ChatRoom.objects.get)(id=chat_room_id)
 
-        for member in members:
-            if member.id == self.user.id:
-                continue  # 跳过发送者
+            # 获取聊天室所有成员
+            members = await database_sync_to_async(list)(chat_room.members.all())
 
-            # 发送通知到用户的全局通知组
-            group_name = f'user_{member.id}_notifications'
-            await self.channel_layer.group_send(
-                group_name,
-                notification_data
-            )
+            for member in members:
+                if member.id == self.user.id:
+                    continue  # 跳过发送者
+
+                # 发送通知到用户的全局通知组
+                group_name = f'user_{member.id}_notifications'
+                await self.channel_layer.group_send(
+                    group_name,
+                    notification_data
+                )
+        except ChatRoom.DoesNotExist:
+            logger.warning(f"ChatRoom {chat_room_id} not found for global notification")
+        except Exception as e:
+            logger.error(f"Error sending global notification: {e}")
 
 
 class NotificationConsumer(AsyncWebsocketConsumer):

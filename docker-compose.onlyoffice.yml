@@ -1,0 +1,48 @@
+# docker-compose.onlyoffice.yml
+version: '3'
+services:
+  onlyoffice-document-server:
+    image: onlyoffice/document-server:latest
+    container_name: onlyoffice-document-server
+    restart: always
+    networks:
+      - onlyoffice-network
+    ports:
+      - "8080:80"
+    volumes:
+      - onlyoffice_data:/var/www/onlyoffice/Data
+      - onlyoffice_logs:/var/log/onlyoffice
+      - onlyoffice_db:/var/lib/postgresql
+    environment:
+      - JWT_ENABLED=true
+      - JWT_SECRET=your-secret-key-here-change-in-production
+      - JWT_HEADER=Authorization
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # 可选：PostgreSQL 数据库（OnlyOffice 内置，可外部化）
+  onlyoffice-postgresql:
+    image: postgres:13
+    container_name: onlyoffice-postgresql
+    restart: always
+    networks:
+      - onlyoffice-network
+    volumes:
+      - onlyoffice_pg_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=onlyoffice
+      - POSTGRES_USER=onlyoffice
+      - POSTGRES_PASSWORD=onlyoffice_password
+
+volumes:
+  onlyoffice_data:
+  onlyoffice_logs:
+  onlyoffice_db:
+  onlyoffice_pg_data:
+
+networks:
+  onlyoffice-network:
+    driver: bridge

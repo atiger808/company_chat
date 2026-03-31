@@ -1,6 +1,8 @@
 // static/js/admin_chat_rooms.js
 class AdminChatRoomsClient {
     constructor() {
+
+        this.isInitialized = false;
         this.currentRoomId = null;
         this.currentRoom = null;
         this.roomMessages = [];
@@ -27,11 +29,17 @@ class AdminChatRoomsClient {
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', () => this.init());
         } else {
-            this.init();
+            console.log('AdminChatRoomsClient DOMContentLoaded');
+            // this.init();
         }
     }
 
     init() {
+        // 🔧 防止重复初始化
+        if (this.isInitialized) {
+            console.log('AdminChatRoomsClient 已初始化，跳过');
+            return;
+        }
         console.log('AdminChatRoomsClient 初始化开始...');
 
         // 🔧 移动端禁止缩放
@@ -49,6 +57,8 @@ class AdminChatRoomsClient {
 
         // 设置聊天室列表无限滚动 (如果需要)
         this.setupChatRoomsInfiniteScroll();
+
+        this.isInitialized = true;
     }
 
     // 🔧 新增：移动端禁止缩放
@@ -312,7 +322,7 @@ class AdminChatRoomsClient {
                     </td>
                     <td>
                         <div class="last-message">
-                            <span class="message-content">${this.escapeHtml(room.last_message?.content || '暂无消息')}</span>
+                            <div class="last-message-content">${this.escapeHtml(room.last_message?.content || '暂无消息')}</div>
                         </div>
                     </td>
                     <td>

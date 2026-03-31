@@ -382,6 +382,20 @@ class ChatClient {
         this.isCancelling = false;
         this.voicePlayers = new Map(); // 存储音频播放器实例
 
+        // 🔧 关键修复：使用前端配置管理器（替代 SystemConfigManager）
+        this.fileMaxSizeMB = 50;
+        this.imageMaxSizeMB = 20;
+        this.videoMaxSizeMB = 100;
+        this.audioMaxSizeMB = 30;
+        this.voiceMaxDuration = 60;
+        this.voiceMinDuration = 1;
+        this.maxMessageLength = 2000;
+
+
+        this.inputDrafts = new Map(); // roomId -> {content, cursorPosition, quoteMessage}
+        this.forwardMessage = null;   // 当前待转发的消息
+        this.selectedForwardTargets = new Set(); // 选中的转发目标
+
 
         // 等待 DOM 加载完成后再初始化
         if (document.readyState === 'loading') {
@@ -527,16 +541,70 @@ class ChatClient {
         }
     }
 
+    // 🔧 新增：保存当前聊天室的输入草稿
+    saveInputDraft(roomId) {
+        if (!roomId) return;
+        const messageInput = document.getElementById('messageInput');
+        if (!messageInput) return;
+
+        this.inputDrafts.set(roomId, {
+            content: messageInput.value,
+            cursorPosition: messageInput.selectionStart,
+            quoteMessage: this.currentQuoteMessage ? {...this.currentQuoteMessage} : null,
+            timestamp: Date.now()
+        });
+    }
+
+    // 🔧 新增：恢复指定聊天室的输入草稿
+    restoreInputDraft(roomId) {
+        const messageInput = document.getElementById('messageInput');
+        if (!messageInput) return;
+
+        const draft = this.inputDrafts.get(roomId);
+
+        if (draft) {
+            messageInput.value = draft.content || '';
+            this.adjustTextareaHeight(messageInput);
+
+            // 恢复光标位置
+            if (draft.cursorPosition !== undefined) {
+                setTimeout(() => {
+                    messageInput.setSelectionRange(
+                        draft.cursorPosition,
+                        draft.cursorPosition
+                    );
+                }, 10);
+            }
+
+            // 恢复引用消息
+            if (draft.quoteMessage) {
+                this.setQuoteMessage(draft.quoteMessage);
+            }
+
+            console.log('恢复草稿 roomId:', roomId);
+
+        } else {
+            // 新聊天室，清空输入框
+            messageInput.value = '';
+            this.adjustTextareaHeight(messageInput);
+            this.clearQuoteMessage();
+        }
+    }
+
 
     async init() {
         console.log('ChatClient 初始化开始...');
         // 🔧 关键修复1: 注册 Service Worker（锁屏通知必需）
         this.registerServiceWorker();
 
-        // 检查登录状态
-        await this.checkLoginStatus();
 
         try {
+
+            // 检查登录状态
+            await this.checkLoginStatus();
+
+            // 🔧 关键修复：加载系统配置（使用 FrontendConfigManager）
+            await this.loadSystemConfigs();
 
             // 初始化通知系统（用户交互后）
             this.initNotificationSystem();
@@ -598,7 +666,7 @@ class ChatClient {
             this.renderCurrentUser();
 
             // 检查是否为管理员，显示控制台按钮
-            if (this.currentUser.user_type === 'super_admin') {
+            if (this.currentUser.user_type === 'super_admin' || this.currentUser.user_type === 'admin') {
                 const adminConsoleBtn = document.getElementById('adminConsoleBtn');
                 if (adminConsoleBtn) {
                     adminConsoleBtn.style.display = 'flex';
@@ -609,6 +677,19 @@ class ChatClient {
                         // window.open('/control/', '_blank');
                     });
                 }
+
+
+                const cloudBtn = document.getElementById('cloudBtn');
+                if (cloudBtn) {
+                    cloudBtn.style.display = 'flex';
+                    cloudBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        window.location.href = '/cloud/';
+                        // 以新页面形式打开
+                        // window.open('/control/', '_blank');
+                    });
+                }
+
             }
 
             // 连接全局 WebSocket
@@ -671,13 +752,54 @@ class ChatClient {
             });
 
             console.log('ChatClient 初始化完成');
-        } catch
-            (error) {
+        } catch (error) {
             console.error('初始化失败:', error);
             this.showError('初始化失败，请重新登录: ' + error);
             localStorage.removeItem('access_token');
+            localStorage.removeItem('user_id');
+            localStorage.removeItem('user_type');
             window.location.href = '/login/';
         }
+    }
+
+
+    // 🔧 新增：加载系统配置（使用 FrontendConfigManager）
+    async loadSystemConfigs() {
+        try {
+            // 等待配置加载完成
+            await frontendConfig.loadConfigs();
+
+            // 应用配置
+            this.applySystemConfigs();
+
+            console.log('✅ 系统配置已应用');
+        } catch (error) {
+            console.warn('⚠️ 加载系统配置失败，使用默认值:', error);
+            this.applySystemConfigs();
+        }
+    }
+
+    // 🔧 新增：应用系统配置
+    applySystemConfigs() {
+        // 文件上传大小限制
+        this.fileMaxSizeMB = frontendConfig.get('file.max_upload_size_mb', 50);
+        this.imageMaxSizeMB = frontendConfig.get('file.image_max_size_mb', 20);
+        this.videoMaxSizeMB = frontendConfig.get('file.video_max_size_mb', 100);
+        this.audioMaxSizeMB = frontendConfig.get('file.audio_max_size_mb', 30);
+
+        // 语音消息时长限制
+        this.voiceMaxDuration = frontendConfig.get('voice.max_duration_seconds', 60);
+        this.voiceMinDuration = frontendConfig.get('voice.min_duration_seconds', 1);
+
+        // 消息长度限制
+        this.maxMessageLength = frontendConfig.get('chat.max_message_length', 2000);
+
+        console.log('📋 系统配置已应用:', {
+            fileMaxSizeMB: this.fileMaxSizeMB,
+            voiceMinDuration: this.voiceMinDuration,
+            voiceMaxDuration: this.voiceMaxDuration,
+            maxMessageLength: this.maxMessageLength
+        });
     }
 
 
@@ -932,6 +1054,8 @@ class ChatClient {
 
     // 连接 WebSocket
     connectWebSocket(roomId) {
+        console.log('连接 WebSocket roomId:', roomId);
+
         // 关闭旧的聊天室连接
         if (this.roomWs) {
             // this.roomWs.close();
@@ -939,19 +1063,18 @@ class ChatClient {
             this.roomWs = null;
         }
 
-        // 防止重复连接
-        if (parseInt(this.currentRoomId) === parseInt(roomId) && this.ws && this.ws.readyState === WebSocket.OPEN) {
-            console.log('WebSocket already connected to room:', roomId);
-            return;
-        }
-
-
         if (this.ws) {
-            console.log('Closing existing WebSocket connection')
-            // this.ws.close();
+            console.log('关闭旧 WebSocket 连接');
             this.ws.close(1000, 'Switching room');
             this.ws = null;
         }
+
+        // 防止重复连接
+        if (parseInt(this.currentRoomId) === parseInt(roomId) && this.ws && this.ws.readyState === WebSocket.OPEN) {
+            console.log('WebSocket 已连接到该聊天室:', roomId);
+            return;
+        }
+
 
         this.currentRoomId = parseInt(roomId);
         this.isConnected = false;
@@ -1073,6 +1196,12 @@ class ChatClient {
     handleNewMessage(data) {
         console.log('Received new message:', data);
 
+        // 🔧 关键修复：收到对方消息时，隐藏输入指示器
+        const senderId = data.sender_id ?? data.sender?.id;
+        if (senderId !== this.currentUser?.id) {
+            this.hideAllTypingIndicators();
+        }
+
         // 🔧 关键修复1: 检查页面是否可见/聚焦
         const isPageVisible = document.visibilityState === 'visible';
         const isPageFocused = document.hasFocus();
@@ -1085,7 +1214,6 @@ class ChatClient {
         }
 
         const currentRoomIdInt = parseInt(this.currentRoomId);
-        const senderId = data.sender_id ?? data.sender?.id;
         const isOwnMessage = senderId === this.currentUser?.id;
 
         // 检查是否是自己发送的消息的确认回执
@@ -1965,20 +2093,73 @@ class ChatClient {
 
     // 处理输入状态指示器
     handleTypingIndicator(data) {
-        const typingIndicator = document.getElementById('typingIndicator');
-        if (!typingIndicator) return;
+        console.log('typing data: ', data)
+        const {user_id, is_typing, chat_room_id} = data;
+        console.log(`user_id: ${user_id} is_typing: ${is_typing} chat_room_id: ${chat_room_id}`)
 
-        if (data.is_typing && data.user_id !== this.currentUser.id) {
-            typingIndicator.style.display = 'flex';
-        } else {
-            typingIndicator.style.display = 'none';
+        // 🔧 关键修复 1: 只处理私聊场景
+        const room = this.chatRooms.find(r => parseInt(r.id) === parseInt(chat_room_id));
+        if (!room || room.room_type !== 'private') {
+            // 群聊不显示头像区域输入提示，保持原有底部提示
+            const typingIndicator = document.getElementById('typingIndicator');
+            if (typingIndicator) {
+                typingIndicator.style.display = is_typing && parseInt(user_id) !== this.currentUser.id ? 'flex' : 'none';
+            }
+            return;
         }
+
+
+        // 🔧 关键修复 2: 确认是对方在输入（不是自己）
+        if (user_id &&  parseInt(user_id) === this.currentUser.id) {
+            this.hideAllTypingIndicators();
+            return;
+        }
+
+        // 🔧 关键修复 3: 显示/隐藏输入指示器
+        if (is_typing && parseInt(user_id) !== this.currentUser.id) {
+            // 显示聊天列表中的指示器
+            const listIndicator = document.getElementById(`typingIndicator-${chat_room_id}`);
+            if (listIndicator) {
+                listIndicator.classList.add('show');
+            }
+
+            // 如果是当前聊天室，显示聊天头部的指示器
+            if (this.currentRoomId === parseInt(chat_room_id)) {
+                const headerIndicator = document.getElementById('chatHeaderTypingIndicator');
+                if (headerIndicator) {
+                    headerIndicator.classList.add('show');
+                }
+                // 🔧 可选：隐藏底部的旧指示器，避免重复
+                const oldIndicator = document.getElementById('typingIndicator');
+                if (oldIndicator) {
+                    oldIndicator.style.display = 'none';
+                }
+            }
+        } else {
+            // 隐藏所有指示器
+            this.hideAllTypingIndicators();
+        }
+
     }
 
     // 处理用户在线状态变化
     handleUserOnlineStatus(data) {
         const {user_id, is_online, chat_room_id} = data;
         console.log('handleUserOnlineStatus', data)
+
+        // 🔧 关键修复：用户离线时，隐藏输入指示器
+        if (!is_online) {
+            const listIndicator = document.getElementById(`typingIndicator-${chat_room_id}`);
+            if (listIndicator) {
+                listIndicator.classList.remove('show');
+            }
+            if (this.currentRoomId === parseInt(chat_room_id)) {
+                const headerIndicator = document.getElementById('chatHeaderTypingIndicator');
+                if (headerIndicator) {
+                    headerIndicator.classList.remove('show');
+                }
+            }
+        }
 
         // 1. 更新聊天列表中的在线状态
         this.updateChatListUserStatus(user_id, is_online);
@@ -2024,7 +2205,7 @@ class ChatClient {
         }
     }
 
-// 更新当前聊天头部状态
+    // 更新当前聊天头部状态
     updateCurrentChatStatus(userId, isOnline) {
         const chatSubtitle = document.getElementById('chatSubtitle');
         if (chatSubtitle) {
@@ -2040,7 +2221,7 @@ class ChatClient {
         }
     }
 
-// 更新通讯录中的用户状态
+    // 更新通讯录中的用户状态
     updateContactsUserStatus(userId, isOnline) {
         const contactItems = document.querySelectorAll(`.user-list-item[data-user-id="${userId}"]`);
         contactItems.forEach(item => {
@@ -2058,9 +2239,11 @@ class ChatClient {
 
     // 修复：发送图片/文件消息（限制9个，支持视频）
     async sendImageOrFileMessage(files) {
+        // 🔧 关键修复 1: 保存发送时的 roomId
+        const sendRoomId = this.currentRoomId;
 
-        if (!this.currentRoomId) {
-            console.error('请先选择一个聊天对象')
+        if (!sendRoomId) {
+            console.error('请先选择一个聊天对象');
             this.showError('请先选择一个聊天对象');
             return;
         }
@@ -2086,10 +2269,10 @@ class ChatClient {
                 continue;
             }
 
-            // 限制文件大小（50MB）
-            const maxSizeMB = 50 * 1024 * 1024
-            if (file.size > maxSizeMB) {
-                this.showToast(`${file.name} 超过${maxSizeMB}MB，无法发送`, 'error');
+            // 🔧 关键修复：使用实例变量验证文件大小
+            const maxSizeBytes = this.fileMaxSizeMB * 1024 * 1024
+            if (file.size > maxSizeBytes) {
+                this.showToast(`${file.name} 超过${this.fileMaxSizeMB}MB，无法发送`, 'error');
                 continue;
             }
 
@@ -2104,10 +2287,11 @@ class ChatClient {
             return;
         }
 
-        // 逐个上传文件
+        // 🔧 关键修复 2: 逐个上传文件，每个都使用保存的 roomId
         for (const file of validFiles) {
             try {
-                this.sendFile(file);
+                // 🔧 传递保存的 roomId
+                this.sendFile(file, sendRoomId);
 
             } catch (error) {
                 console.error('发送文件失败:', error);
@@ -2116,14 +2300,16 @@ class ChatClient {
         }
     }
 
-    // 发送消息（支持文件消息）
-    async sendMessage(content = null) {
+    // 发送文本消息
+    async sendMessage(content = null, targetRoomId = null) {
+        // 🔧 关键修复 1: 使用传入的 roomId 或当前的 currentRoomId
+        const roomId = parseInt(targetRoomId || this.currentRoomId);
 
-        if (!this.currentRoomId) {
-            console.error('请先选择一个聊天对象')
+        if (!roomId) {
             this.showError('请先选择一个聊天对象');
             return;
         }
+
 
         const messageInput = document.getElementById('messageInput');
         const actualContent = content || (messageInput ? messageInput.value.trim() : '');
@@ -2131,6 +2317,8 @@ class ChatClient {
         if (!actualContent && !content?.file_id) {
             return;
         }
+
+        console.log('content: ', content)
 
         // 清空输入框
         if (messageInput) {
@@ -2142,7 +2330,7 @@ class ChatClient {
         // 停止输入状态
         this.stopTyping();
 
-        // 🔧 关键修复1: 创建临时消息对象，使用虚拟ID并保存映射
+        // 🔧 关键修复 2: 创建临时消息对象，使用虚拟 ID
         const tempMessageId = Date.now();
         // 构建消息数据（包含引用信息）
         const messageData = {
@@ -2156,11 +2344,12 @@ class ChatClient {
             is_read: true,
             message_type: actualContent?.message_type || 'text',
             file_id: actualContent?.file_id,
-            chat_room: parseInt(this.currentRoomId),
+            file_info: actualContent?.file_info,
+            chat_room: parseInt(roomId),  // 🔧 使用正确的 roomId
             is_temp: true
         };
 
-        // 🔧 关键修复2: 如果有引用消息，添加完整的引用信息
+        // 添加引用信息
         if (this.currentQuoteMessage) {
             messageData.quote_message_id = this.currentQuoteMessage.id || this.currentQuoteMessage.message_id;
             messageData.quote_content = this.currentQuoteMessage.content;
@@ -2173,21 +2362,23 @@ class ChatClient {
             messageData.quote_message_type = this.currentQuoteMessage.message_type || 'text';
         }
 
-        // 🔧 关键修复3: 保存到本地消息列表
+        // 保存到本地消息列表
         this.messages.push(messageData);
 
         // 渲染并滚动到底部
         this.renderMessage(messageData, 'sent');
         Utils.scrollToBottom(document.getElementById('messagesList'));
 
-        // 🔧 关键修复3: 通过 WebSocket 发送（传递临时ID）
+        // 🔧 关键修复 3: 通过 WebSocket 发送（传递临时 ID 和正确的 roomId）
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             const wsMessage = {
                 type: 'chat_message',
                 content: messageData.content,
                 message_type: messageData.message_type,
                 file_id: messageData.file_id,
-                temp_id: tempMessageId
+                file_info: messageData.file_info,
+                temp_id: tempMessageId,
+                chat_room: parseInt(roomId)  // 🔧 确保携带正确的聊天室 ID
             };
 
             // 传递引用信息给后端
@@ -2199,15 +2390,16 @@ class ChatClient {
                 wsMessage.quote_timestamp = messageData.quote_timestamp;
                 wsMessage.quote_message_type = messageData.quote_message_type;
             }
-
+            console.log('通过 WebSocket 发送消息:', wsMessage);
             this.ws.send(JSON.stringify(wsMessage));
         } else {
             // WebSocket 不可用时加入队列（同样包含引用信息）
             const queueMessage = {
-                chat_room: parseInt(this.currentRoomId),
+                chat_room: parseInt(roomId),  // 🔧 使用正确的 roomId
                 content: messageData.content,
                 message_type: messageData.message_type,
                 file_id: messageData.file_id,
+                file_info: messageData.file_info,
                 temp_id: tempMessageId
             };
 
@@ -2224,12 +2416,16 @@ class ChatClient {
             this.showError('网络连接不稳定，消息将在连接恢复后发送');
         }
 
-        // 🔧 关键修复5: 本地预更新聊天室最后一条消息
-        this.updateChatRoomLastMessage(this.currentRoomId, messageData.content, messageData.timestamp);
-        this.updateChatRoomUnreadCount(this.currentRoomId, 0);
+        // 本地预更新聊天室最后一条消息
+        this.updateChatRoomLastMessage(roomId, messageData.content, messageData.timestamp);
 
         // 发送成功后清除引用（避免影响下一条消息）
         this.clearQuoteMessage();
+
+        // 清空当前聊天室的草稿
+        if (this.currentRoomId === roomId) {
+            this.inputDrafts.delete(roomId);
+        }
 
         // this.loadChatRooms();
     }
@@ -2264,7 +2460,11 @@ class ChatClient {
     updateChatRoomUnreadCount(roomId, increment) {
         const room = this.chatRooms.find(r => parseInt(r.id) === parseInt(roomId));
         if (room) {
+            console.log('更新聊天室未读数 room:', roomId, room);
+            console.log('更新聊天室未读数 increment:', roomId, increment);
+            console.log('更新聊天室未读数 unread_count:', roomId, room.unread_count);
             room.unread_count = Math.max(0, (room.unread_count || 0) + increment);
+            console.log('更新聊天室未读数 unread_count:', roomId, room.unread_count);
             // 重新渲染聊天室列表
             this.renderChatRooms();
             this.renderGroups();
@@ -2947,6 +3147,16 @@ class ChatClient {
                 console.log('lastMessageText: ', lastMessageText);
             }
 
+
+            // 🔧 关键修复：为私聊头像添加包装器和输入指示器
+            const avatarHtml = room.room_type === 'private'
+                ? `<div class="chat-item-avatar-wrapper">
+                    <img src="${roomAvatar}" alt="${roomName}" class="chat-item-avatar" title="${username}">
+                    <span class="chat-item-typing-indicator" id="typingIndicator-${room.id}">正在输入...</span>
+                </div>`
+                : `<img src="${roomAvatar}" alt="${roomName}" class="chat-item-avatar" title="${username}">`;
+
+
             // 🔧 关键修复：为私聊添加 data-user-id 属性，群聊不添加
             const dataUserIdAttr = room.room_type === 'private' && otherUserId ? `data-user-id="${otherUserId}"` : '';
 
@@ -2956,8 +3166,7 @@ class ChatClient {
                  ${dataUserIdAttr}
                  >
                 <div class="chat-item-avatar">
-                    <img src="${roomAvatar}" alt="${roomName}" class="chat-item-avatar" title="${username}">
-                  
+                    ${avatarHtml}
                 </div>
                 <div class="chat-item-info">
                     <div class="chat-item-title">
@@ -3184,6 +3393,16 @@ class ChatClient {
             messageWrapper = document.createElement('div');
             messageWrapper.className = 'message-right-wrapper';
 
+            // 引用
+            const quoteBtn = document.createElement('button');
+            quoteBtn.className = 'message-quote-btn';
+            quoteBtn.innerHTML = '<i class="fas fa-quote-left"></i>';
+            quoteBtn.title = '引用';
+            quoteBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.setQuoteMessage(message);
+            };
+
             // 创建消息头部元素（只有时间，因为是自己）
             const headerElement = document.createElement('div');
             headerElement.className = 'message-header';
@@ -3228,24 +3447,12 @@ class ChatClient {
             });
             avatarElement.style.cursor = 'pointer';
 
-            // 添加到 wrapper（头部 -> 内容 -> 头像）
+            // 添加到 wrapper（引用 -> 头部 -> 内容 -> 头像）
+            messageWrapper.appendChild(quoteBtn);
             messageWrapper.appendChild(headerElement);
             messageWrapper.appendChild(contentElement);
             headerElementContainer.appendChild(avatarElement);
         }
-
-
-        // // 在消息内容后添加操作按钮（仅在发送的消息上显示）
-        // if (canRevoke && type === 'sent') {
-        //     // 在消息渲染后添加撤销按钮（通过CSS定位）
-        //     setTimeout(() => {
-        //         const messageElement = document.querySelector(`[data-message-id="${message.id}"]`);
-        //         if (messageElement) {
-        //             // 添加撤销按钮的逻辑
-        //             this.addRevokeButton(messageElement, message.id);
-        //         }
-        //     }, 100);
-        // }
 
         // 在发送的消息上直接渲染撤销按钮（10分钟内）
         if (type === 'sent' && !message.is_deleted) {
@@ -3267,22 +3474,48 @@ class ChatClient {
             }
         }
 
-        if (type === 'sent') {
-            messageWrapper.appendChild(headerElementContainer);
+
+        // 为接收的消息添加引用按钮（非撤回消息）
+        // 🔧 新增：为消息添加转发按钮（非撤回消息）
+        if (!message.is_deleted && message.content && message.content !== '[消息已撤销]') {
+            // 引用按钮（原有的）
+            if (type === 'received') {
+                const quoteBtn = document.createElement('button');
+                quoteBtn.className = 'message-quote-btn';
+                quoteBtn.innerHTML = '<i class="fas fa-quote-left"></i>';
+                quoteBtn.title = '引用';
+                quoteBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    this.setQuoteMessage(message);
+                };
+                messageWrapper.appendChild(quoteBtn);
+            }
+
+
+            const actionBtnForward = document.createElement('div');
+            actionBtnForward.className = 'message-actions';
+
+            // 🔧 新增：转发按钮
+            const forwardBtn = document.createElement('button');
+            forwardBtn.className = 'message-forward-btn';
+            forwardBtn.innerHTML = '<i class="fas fa-share"></i>';
+            forwardBtn.title = '转发';
+            forwardBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.showForwardModal(message);
+            };
+            actionBtnForward.appendChild(forwardBtn);
+
+            if (type === 'sent') {
+                headerElementContainer.appendChild(actionBtnForward)
+            } else {
+                messageWrapper.appendChild(forwardBtn);
+            }
         }
 
 
-        // 为接收的消息添加引用按钮（非撤回消息）
-        if (type === 'received' && !message.is_deleted && message.content && message.content !== '[消息已撤销]') {
-            const quoteBtn = document.createElement('button');
-            quoteBtn.className = 'message-quote-btn';
-            quoteBtn.innerHTML = '<i class="fas fa-quote-left"></i>';
-            quoteBtn.title = '引用';
-            quoteBtn.onclick = (e) => {
-                e.stopPropagation();
-                this.setQuoteMessage(message);
-            };
-            messageWrapper.appendChild(quoteBtn);
+        if (type === 'sent') {
+            messageWrapper.appendChild(headerElementContainer);
         }
 
 
@@ -3314,6 +3547,334 @@ class ChatClient {
             this.setupVideoMessageListerners()
         }, 100)
 
+    }
+
+
+    // 🔧 新增：显示转发模态框
+    showForwardModal(message) {
+        console.log('forward message: ', message)
+        // 关闭可能存在的其他模态框
+        this.closeAllModals();
+
+        const modal = document.createElement('div');
+        modal.className = 'forward-modal show';
+        modal.id = 'forwardModal';
+
+        // 清除之前该模态框
+        this.clearModal(modal.id);
+
+        // 构建预览内容
+        let previewContent = '';
+        if (message.message_type === 'text') {
+            previewContent = this.escapeHtml(message.content || '');
+        } else if (message.message_type === 'image') {
+            previewContent = '[图片]';
+        } else if (message.message_type === 'file') {
+            previewContent = `[文件] ${message.file_info?.name || ''}`;
+        } else {
+            previewContent = this.escapeHtml(message.content || '[未知类型]');
+        }
+
+        modal.innerHTML = `
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-share"></i> 转发消息</h3>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- 预览转发的消息 -->
+                <div class="forward-preview">
+                    <div class="preview-content">${previewContent}</div>
+                    ${message.file_info ? `
+                        <div class="preview-file">
+                            <i class="${Utils.getFileIconClass(message.file_info.mime_type)}"></i>
+                            <span>${message.file_info?.url ? this.escapeHtml(message.file_info.name) : ''}</span>
+                        </div>
+                    ` : ''}
+                </div>
+                
+                <!-- 搜索聊天对象 -->
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="forwardSearch" placeholder="搜索聊天对象...">
+                </div>
+                
+                <!-- 聊天对象列表 -->
+                <div class="forward-list" id="forwardList">
+                    <!-- 动态生成 -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="chatClient.closeModal('forwardModal')">取消</button>
+                <button class="btn btn-primary" id="forwardConfirmBtn" disabled>转发</button>
+            </div>
+        </div>
+    `;
+
+        document.body.appendChild(modal);
+
+        // 绑定关闭事件
+        const closeBtn = modal.querySelector('.close-btn');
+        if (closeBtn) {
+            closeBtn.onclick = () => this.closeModal('forwardModal');
+        }
+
+        modal.onclick = (e) => {
+            if (e.target === modal) this.closeModal('forwardModal');
+        };
+
+        // 加载可转发的聊天对象
+        this.loadForwardTargets(message);
+
+        // 绑定搜索事件
+        const forwardSearch = document.getElementById('forwardSearch');
+        if (forwardSearch) {
+            forwardSearch.addEventListener('input', (e) => {
+                this.filterForwardTargets(e.target.value);
+            });
+        }
+
+        // 绑定确认按钮
+        const confirmBtn = document.getElementById('forwardConfirmBtn');
+        if (confirmBtn) {
+            confirmBtn.onclick = () => this.executeForward();
+        }
+    }
+
+    // 🔧 新增：加载可转发的聊天对象
+    loadForwardTargets(message) {
+        const container = document.getElementById('forwardList');
+        if (!container) return;
+
+        // 过滤掉当前聊天室和已删除的聊天室
+        const targets = this.chatRooms.filter(room => {
+            return room.id !== this.currentRoomId && !room.is_deleted;
+        });
+
+        let html = '';
+        targets.forEach(room => {
+            const roomName = room.display_name ||
+                (room.room_type === 'private'
+                    ? room.members?.find(m => m.id !== this.currentUser.id)?.real_name || '未知用户'
+                    : '未知群组');
+            const avatar = room.room_type === 'private'
+                ? room.members?.find(m => m.id !== this.currentUser.id)?.avatar_url || '/static/images/default-avatar.png'
+                : room.avatar || '/static/images/group-avatar.png';
+
+            html += `
+            <div class="forward-item" data-room-id="${room.id}" onclick="chatClient.toggleForwardTarget(${room.id})">
+                <div class="forward-avatar">
+                    <img src="${avatar}" alt="${roomName}">
+                </div>
+                <div class="forward-info">
+                    <div class="forward-name">${this.escapeHtml(roomName)}</div>
+                    <div class="forward-subtitle">${room.room_type === 'private' ? '私聊' : '群聊'}</div>
+                </div>
+                <div class="forward-checkbox">
+                    <input type="checkbox" class="target-checkbox" data-room-id="${room.id}">
+                </div>
+            </div>
+        `;
+        });
+
+        container.innerHTML = html || '<div class="empty-state"><p>暂无可转发的聊天对象</p></div>';
+
+        // 保存消息引用
+        this.forwardMessage = message;
+        this.selectedForwardTargets = new Set();
+    }
+
+    // 🔧 新增：切换转发目标
+    toggleForwardTarget(roomId) {
+        const checkbox = document.querySelector(`.target-checkbox[data-room-id="${roomId}"]`);
+        if (checkbox) {
+            checkbox.checked = !checkbox.checked;
+
+            if (checkbox.checked) {
+                this.selectedForwardTargets.add(roomId);
+            } else {
+                this.selectedForwardTargets.delete(roomId);
+            }
+
+            // 更新确认按钮状态
+            const confirmBtn = document.getElementById('forwardConfirmBtn');
+            if (confirmBtn) {
+                confirmBtn.disabled = this.selectedForwardTargets.size === 0;
+            }
+        }
+    }
+
+
+    // chat.js - ChatClient 类中的 executeForward 方法
+
+// 🔧 新增：执行转发（使用 WebSocket）
+    async executeForward() {
+        if (!this.forwardMessage || this.selectedForwardTargets.size === 0) {
+            this.showError('请选择转发的聊天对象');
+            return;
+        }
+
+        const message = this.forwardMessage;
+        const targets = Array.from(this.selectedForwardTargets);
+
+        try {
+            // 🔧 关键修复：不切换聊天室，直接使用当前 WebSocket 发送
+            // 后端会根据 chat_room 参数路由到正确的聊天室
+            for (const roomId of targets) {
+                await this.forwardMessageViaWebSocket(roomId, message);
+            }
+
+            this.closeModal('forwardModal');
+            this.showSuccess(`已成功转发到 ${targets.length} 个聊天`);
+
+        } catch (error) {
+            console.error('转发失败:', error);
+            this.showError('转发失败: ' + (error.message || '未知错误'));
+        }
+    }
+
+
+    // 🔧 关键修复：通过 WebSocket 转发消息（不切换聊天室）
+    async forwardMessageViaWebSocket(roomId, originalMessage) {
+        return new Promise((resolve, reject) => {
+            // 构建转发消息内容
+            const forwardContent = this.buildForwardContent(originalMessage);
+
+            // 🔧 关键修复：不切换聊天室，直接使用当前 WebSocket 发送
+            // 后端会根据 chat_room 参数路由到正确的聊天室
+            console.log(`📤 转发消息到聊天室 ${roomId}（不切换聊天室）`);
+
+            // 构建完整的消息数据
+            const tempMessageId = Date.now();
+
+            const messageData = {
+                id: tempMessageId,
+                temp_id: tempMessageId,
+                sender_id: this.currentUser.id,
+                sender_name: this.currentUser.username,
+                sender: this.currentUser,
+                content: forwardContent.content,
+                timestamp: new Date().toISOString(),
+                is_read: true,
+                message_type: forwardContent.message_type,
+                file_id: forwardContent.file_id,
+                file_info: forwardContent.file_info,
+                chat_room: parseInt(roomId),  // 🔧 确保携带正确的聊天室 ID
+                is_temp: true,
+                is_forwarded: true
+            };
+
+            // 通过当前 WebSocket 发送
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                const wsMessage = {
+                    type: 'chat_message',
+                    content: messageData.content,
+                    message_type: messageData.message_type,
+                    file_id: messageData.file_id,
+                    file_info: messageData.file_info,
+                    temp_id: tempMessageId,
+                    chat_room: parseInt(roomId)  // 🔧 确保携带正确的聊天室 ID
+                };
+
+                console.log('通过 WebSocket 发送转发消息:', wsMessage);
+                this.ws.send(JSON.stringify(wsMessage));
+
+                // 保存到本地消息列表（仅当前聊天室）
+                if (parseInt(roomId) === parseInt(this.currentRoomId)) {
+                    this.messages.push(messageData);
+                    this.renderMessage(messageData, 'sent');
+                    Utils.scrollToBottom(document.getElementById('messagesList'));
+                }
+
+                resolve();
+
+            } else {
+                // WebSocket 不可用时加入队列
+                this.messageQueue.push({
+                    chat_room: parseInt(roomId),
+                    content: messageData.content,
+                    message_type: messageData.message_type,
+                    file_id: messageData.file_id,
+                    file_info: messageData.file_info,
+                    temp_id: tempMessageId
+                });
+                resolve();
+            }
+            // 更新聊天室最后一条消息
+            this.updateChatRoomLastMessage(parseInt(roomId), messageData.content, messageData.timestamp);
+
+        });
+    }
+
+
+    // 🔧 新增：构建转发消息内容
+    buildForwardContent(originalMessage) {
+        const sender = originalMessage.sender?.real_name ||
+            originalMessage.sender?.username ||
+            originalMessage.sender_name || '未知用户';
+
+        // 🔧 关键修复：根据消息类型构建不同的内容
+        switch (originalMessage.message_type) {
+            case 'text':
+                return {
+                    content: `「转发消息」\n${sender}: ${originalMessage.content}`,
+                    message_type: 'text'
+                };
+
+            case 'image':
+                return {
+                    content: `「转发图片」\n${sender} 发送的图片`,
+                    message_type: 'image',
+                    file_info: originalMessage.file_info,  // 🔧 保留文件信息
+                    file_id: originalMessage.file_info?.file_id || originalMessage.file_info?.id
+                };
+
+            case 'file':
+                return {
+                    content: `「转发文件」\n${sender} 发送的文件: ${originalMessage.file_info?.name || ''}`,
+                    message_type: 'file',
+                    file_info: originalMessage.file_info,  // 🔧 保留文件信息
+                    file_id: originalMessage.file_info?.file_id || originalMessage.file_info?.id
+                };
+
+            case 'video':
+                return {
+                    content: `「转发视频」\n${sender} 发送的视频`,
+                    message_type: 'video',
+                    file_info: originalMessage.file_info,
+                    file_id: originalMessage.file_info?.file_id || originalMessage.file_info?.id
+                };
+
+            case 'voice':
+                return {
+                    content: `「转发语音」\n${sender} 发送的语音`,
+                    message_type: 'voice',
+                    file_info: originalMessage.file_info,
+                    file_id: originalMessage.file_info?.file_id || originalMessage.file_info?.id
+                };
+
+            case 'emoji':
+                return {
+                    content: `「转发表情」\n${sender}: ${originalMessage.content}`,
+                    message_type: 'emoji'
+                };
+
+            default:
+                return {
+                    content: `「转发消息」\n${sender}: ${originalMessage.content || '[未知类型]'}`,
+                    message_type: 'text'
+                };
+        }
+    }
+
+    // 🔧 新增：过滤转发目标
+    filterForwardTargets(keyword) {
+        const items = document.querySelectorAll('.forward-item');
+        items.forEach(item => {
+            const name = item.querySelector('.forward-name').textContent.toLowerCase();
+            const match = name.includes(keyword.toLowerCase());
+            item.style.display = match ? 'flex' : 'none';
+        });
     }
 
 
@@ -3385,7 +3946,7 @@ class ChatClient {
     }
 
     // 渲染不同类型的消息内容
-    renderMessageContent(message, container) {
+    renderMessageContent_v1(message, container) {
         container.innerHTML = '';
 
         if (message?.uploading_id) {
@@ -3548,6 +4109,156 @@ class ChatClient {
 
 
     }
+
+
+    // chat.js - ChatClient 类中的 renderMessageContent 方法
+
+    // 🔧 修复：渲染不同类型的消息内容
+    renderMessageContent(message, container) {
+        container.innerHTML = '';
+
+        if (message?.uploading_id) {
+            // 添加属性
+            container.setAttribute('uploading_id', message.uploading_id);
+            container.title = message?.content || '正在上传文件';
+        }
+
+        // 🔧 关键修复 1: 处理已撤销消息
+        if (message.is_deleted && message.content === '[消息已撤销]') {
+            container.innerHTML = '<span class="revoked-message">[消息已撤销]</span>';
+            container.classList.add('message-revoked');
+            return;
+        }
+
+        // 🔧 关键修复 2: 处理转发消息标记
+        if (message.is_forwarded) {
+            const forwardMark = document.createElement('div');
+            forwardMark.className = 'message-forward-mark';
+            forwardMark.innerHTML = '<i class="fas fa-share"></i> 转发';
+            container.appendChild(forwardMark);
+        }
+
+        // 🔧 关键修复 3: 根据消息类型渲染
+        switch (message.message_type) {
+            case 'text':
+                // 🔧 保留 HTML 内容（支持转发标记）
+                container.innerHTML += message.content || '';
+                break;
+
+            case 'image':
+                if (message.file_info?.url) {
+                    const img = document.createElement('img');
+                    img.src = message.file_info.url;
+                    img.className = 'message-image';
+                    img.onclick = () => this.previewImage(message.file_info.url);
+                    container.appendChild(img);
+                } else {
+                    container.textContent = '[图片加载失败]';
+                }
+                break;
+
+            case 'file':
+                if (message.file_info?.url) {
+                    const fileLink = document.createElement('div');
+                    fileLink.className = 'message-file';
+                    const iconClass = Utils.getFileIconClass(message.file_info.mime_type, message.file_info.name);
+                    fileLink.innerHTML = `
+                    <i class="${iconClass}"></i>
+                    <span>${message.file_info.name}</span>
+                    <span>(${Utils.formatFileSize(message.file_info.size)})</span>
+                `;
+                    fileLink.onclick = () => window.open(message.file_info.url, '_blank');
+                    container.appendChild(fileLink);
+                } else {
+                    container.textContent = '[文件信息缺失]';
+                }
+                break;
+
+            case 'video':
+                if (message.file_info?.url) {
+                    const videoContainer = document.createElement('div');
+                    videoContainer.className = 'message-video-container';
+                    const video = document.createElement('video');
+                    video.src = message.file_info.url;
+                    video.controls = true;
+                    video.className = 'message-video';
+                    const playBtn = document.createElement('div');
+                    playBtn.className = 'video-play-btn';
+                    playBtn.innerHTML = '<i class="fas fa-play"></i>';
+                    playBtn.onclick = () => {
+                        video.play();
+                        playBtn.style.display = 'none';
+                    };
+                    videoContainer.appendChild(video);
+                    videoContainer.appendChild(playBtn);
+                    container.appendChild(videoContainer);
+                } else {
+                    container.textContent = '[视频加载失败]';
+                }
+                break;
+
+            case 'voice':
+                this.renderVoiceMessage(message, container);
+                break;
+
+            case 'audio':
+                if (message.file_info?.url) {
+                    const audio = document.createElement('audio');
+                    audio.src = message.file_info.url;
+                    audio.controls = true;
+                    audio.className = 'message-audio';
+                    container.appendChild(audio);
+                } else {
+                    container.textContent = '[语音加载失败]';
+                }
+                break;
+
+            case 'location':
+                if (message.file_info?.url) {
+                    const locationLink = document.createElement('div');
+                    locationLink.className = 'message-location';
+                    locationLink.innerHTML = `
+                    <i class="fas fa-map-marker-alt"></i>
+                    <span>${message.file_info.name}</span>
+                `;
+                    locationLink.onclick = () => window.open(message.file_info.url);
+                    container.appendChild(locationLink);
+                } else {
+                    container.textContent = '[位置信息缺失]';
+                }
+                break;
+
+            case 'emoji':
+                container.innerHTML = message.content;
+                break;
+
+            default:
+                container.innerHTML += message.content || '[未知消息类型]';
+        }
+
+        // 🔧 关键修复 4: 渲染引用消息（必须在内容之后）
+        if (message.quote_message_id || message.quote_content) {
+            const quoteElement = document.createElement('div');
+            quoteElement.className = 'message-quote';
+            // 引用头部
+            const quoteHeader = document.createElement('div');
+            quoteHeader.className = 'quote-header';
+            quoteHeader.innerHTML = `
+            <i class="fas fa-quote-left"></i>
+            <span class="quote-sender">${this.escapeHtml(message.quote_sender || '引用')}：</span>
+        `;
+            // 引用内容
+            const quoteContent = document.createElement('div');
+            quoteContent.className = 'quote-text';
+            quoteContent.innerHTML = this.escapeHtml(message.quote_content || '[引用内容]');
+            // 添加到引用容器
+            quoteElement.appendChild(quoteHeader);
+            quoteElement.appendChild(quoteContent);
+            // 添加到消息容器
+            container.appendChild(quoteElement);
+        }
+    }
+
 
     // 显示用户详细信息
     async showUserProfile(userId) {
@@ -4026,10 +4737,14 @@ class ChatClient {
                     lastMessageText = lastMessage.content || '暂无消息';
                 }
 
+                // 🔧 关键修复：群聊头像不添加输入指示器
+                const avatarHtml = `<img src="${group.avatar || '/static/images/group-avatar.png'}" alt="${group.display_name}">`;
+
+
                 html += `
                 <div class="group-item" data-room-id="${group.id}" onclick="chatClient.selectChatRoom('${group.id}')">
                     <div class="group-avatar">
-                        <img src="${group.avatar || '/static/images/group-avatar.png'}" alt="${group.display_name}">
+                         ${avatarHtml}
                     </div>
                     <div class="group-info">
                         <div class="group-title">${group.display_name}</div>
@@ -4157,9 +4872,58 @@ class ChatClient {
         }
     }
 
+    // 🔧 新增：隐藏所有输入指示器
+    hideAllTypingIndicators() {
+        // 隐藏聊天列表中的指示器
+        document.querySelectorAll('.chat-item-typing-indicator').forEach(el => {
+            el.classList.remove('show');
+        });
+
+        // 隐藏聊天头部的指示器
+        const headerIndicator = document.getElementById('chatHeaderTypingIndicator');
+        if (headerIndicator) {
+            headerIndicator.classList.remove('show');
+        }
+    }
+
+    // 🔧 新增：初始化聊天头部的输入指示器
+    initChatHeaderTypingIndicator() {
+        const chatAvatar = document.getElementById('chatStatus');
+        if (!chatAvatar) return;
+
+        // 检查是否已有指示器
+        if (document.getElementById('chatHeaderTypingIndicator')) return;
+
+        // 创建包装器和指示器
+        const wrapper = document.createElement('div');
+        wrapper.className = 'chat-header-avatar-wrapper';
+        wrapper.id = 'chatHeaderAvatarWrapper';
+
+        // 移动头像到包装器内
+        chatAvatar.parentNode.insertBefore(wrapper, chatAvatar);
+        wrapper.appendChild(chatAvatar);
+
+        // 添加输入指示器
+        const indicator = document.createElement('span');
+        indicator.id = 'chatHeaderTypingIndicator';
+        indicator.className = 'chat-header-typing-indicator';
+        indicator.textContent = '对方正在输入...';
+        wrapper.appendChild(indicator);
+    }
+
+
     // 选择聊天室
     selectChatRoom(roomId) {
         console.log('选择聊天室:', roomId);
+
+        // 🔧 关键修复 1: 保存当前聊天室的草稿
+        if (this.currentRoomId) {
+            this.saveInputDraft(this.currentRoomId);
+        }
+
+        // 🔧 关键修复 2: 清除所有输入指示器
+        this.hideAllTypingIndicators();
+
         // 清除引用
         this.clearQuoteMessage();
 
@@ -4169,11 +4933,17 @@ class ChatClient {
         }
 
 
-        // 连接 WebSocket
+        // 连接新的 WebSocket（这会关闭旧的连接）
         this.connectWebSocket(roomId);
 
 
-        this.currentRoomId = roomId ? parseInt(roomId) : roomId;
+        // this.currentRoomId = roomId ? parseInt(roomId) : roomId;
+
+        // 🔧 关键修复 3: 初始化聊天头部的输入指示器
+        this.initChatHeaderTypingIndicator();
+
+        // 🔧 关键修复 3: 恢复新聊天室的草稿
+        this.restoreInputDraft(roomId);
 
         // 更新聊天室选中状态
         document.querySelectorAll('.chat-item').forEach(item => {
@@ -4185,7 +4955,7 @@ class ChatClient {
             currentChatItem.classList.add('active');
         }
 
-        // 🔧 关键修复1: 重置无限滚动状态
+        // 重置无限滚动状态
         this.isInitialLoad = true;
         this.isLoadingMore = false;
         this.hasMoreMessages = true;
@@ -4193,11 +4963,11 @@ class ChatClient {
         this.newestMessageId = null;
         this.messages = []; // 清空当前消息列表
 
-        // 🔧 关键修复2: 移除旧的滚动监听器（防止重复绑定）
+        //  移除旧的滚动监听器（防止重复绑定）
         this.removeInfiniteScrollListener();
 
 
-        // 🔧 关键修复3: 加载聊天历史（支持分页）
+        // 加载聊天历史（支持分页）
         this.loadChatHistory(roomId, {
             page_size: 50,
             append: false
@@ -4217,17 +4987,16 @@ class ChatClient {
                 console.error('标记消息为已读失败:', error);
             });
 
-            // 🔧 关键修复4: 设置滚动监听器（无限滚动）
+            // 设置滚动监听器（无限滚动）
             this.setupInfiniteScroll();
 
-            // 🔧 新增: 滚动到底部并标记已读
+            // 滚动到底部并标记已读
             this.scrollToBottomAndMarkRead();
 
-
-            // 🔧 关键修复8: 初始化直达底部按钮（初始隐藏）
+            // 初始化直达底部按钮（初始隐藏）
             this.initScrollToBottomButton();
 
-            // 🔧 关键修复：初始化时更新未读徽章
+            // 初始化时更新未读徽章
             this.updateUnreadBadge();
 
         }).catch(error => {
@@ -5813,8 +6582,18 @@ class ChatClient {
     sentFileHashes = new Set();
 
     // 发送文件（支持MD5去重）
-    async sendFile(file) {
+    async sendFile(file, targetRoomId = null) {
         if (!file) return;
+
+        // 🔧 关键修复 1: 使用传入的 roomId 或当前的 currentRoomId
+        const roomId = parseInt(targetRoomId || this.currentRoomId)
+
+        if (!roomId) {
+            this.showError('请先选择一个聊天对象');
+            return;
+        }
+
+        console.log('发送文件到聊天室:', roomId);
 
         // 验证文件类型
         if (!Utils.isValidFileType(file)) {
@@ -5824,10 +6603,11 @@ class ChatClient {
         }
         console.log('文件类型: ', file.type);
 
-        // 文件大小限制（50MB）
-        if (file.size > 50 * 1024 * 1024) {
-            console.log('文件大小不能超过50MB, size: ', parseInt(file.size / 1024 / 1024));
-            this.showError('文件大小不能超过50MB');
+        // 🔧 关键修复：使用实例变量验证文件大小
+        const maxSizeBytes = this.fileMaxSizeMB * 1024 * 1024;
+        if (file.size > maxSizeBytes) {
+            console.log(`文件大小不能超过${this.fileMaxSizeMB}MB, size: `, parseInt(file.size / 1024 / 1024));
+            this.showError(`文件大小不能超过${this.fileMaxSizeMB}MB`);
             return;
         }
 
@@ -5845,7 +6625,7 @@ class ChatClient {
                 content: `正在上传文件: ${file.name}`,
                 timestamp: new Date().toISOString(),
                 is_read: true,
-                chat_room: parseInt(this.currentRoomId),
+                chat_room: parseInt(roomId),  // 🔧 使用保存的 roomId
                 message_type: this.getFileMessageType(file.type),
                 file_info: {
                     name: file.name,
@@ -5882,7 +6662,7 @@ class ChatClient {
                 file_id: uploadResult?.file_id || uploadResult?.id,
                 timestamp: new Date().toISOString(),
                 is_read: true,
-                chat_room: parseInt(this.currentRoomId),
+                chat_room: parseInt(roomId),  // 🔧 使用保存的 roomId
                 message_type: message_type,
                 file_info: {
                     id: uploadResult?.file_id || uploadResult?.id,
@@ -5903,7 +6683,7 @@ class ChatClient {
             // this.renderMessage(finalMessage, 'sent');
 
 
-            // 🔧 关键修复4: 替换上传中消息为最终消息（仍在本地，等待后端确认）
+            // 替换上传中消息为最终消息（仍在本地，等待后端确认）
             const tempIndex = this.messages.findIndex(msg => msg.temp_id === tempMessageId);
             if (tempIndex !== -1) {
                 this.messages[tempIndex] = finalMessage;
@@ -5912,21 +6692,26 @@ class ChatClient {
             }
 
 
-            // 🔧 关键修复5: 通过 WebSocket 发送文件消息（携带temp_id）
+            // 🔧 关键修复 3: 通过 WebSocket 发送文件消息（携带 temp_id 和正确的 roomId）
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                this.ws.send(JSON.stringify({
+                const wsMessage = {
                     type: 'chat_message',
                     content: content,
                     file_id: uploadResult?.file_id || uploadResult?.id,
                     message_type: message_type,
                     file_info: finalMessage.file_info,
-                    temp_id: tempMessageId  // 传递临时ID，方便后端返回时匹配
-                }));
+                    temp_id: tempMessageId,
+                    chat_room: parseInt(roomId)  // 🔧 确保携带正确的聊天室 ID
+                };
+
+                console.log('通过 WebSocket 发送文件消息:', wsMessage);
+                this.ws.send(JSON.stringify(wsMessage));
+
                 this.showSuccess(uploadResult.exists ? '文件发送成功（已存在）' : '文件发送成功');
             } else {
                 // WebSocket 不可用时加入队列
                 this.messageQueue.push({
-                    chat_room: parseInt(this.currentRoomId),
+                    chat_room: parseInt(roomId),  // 🔧 使用保存的 roomId
                     content: content,
                     file_id: uploadResult?.file_id || uploadResult?.id,
                     message_type: message_type,
@@ -5939,8 +6724,8 @@ class ChatClient {
             // // 滚动到底部
             // Utils.scrollToBottom(document.getElementById('messagesList'));
 
-            // 🔧 关键修复6: 本地预更新聊天室最后一条消息
-            this.updateChatRoomLastMessage(this.currentRoomId, content, finalMessage.timestamp);
+            // 🔧本地预更新聊天室最后一条消息
+            this.updateChatRoomLastMessage(parseInt(roomId), content, finalMessage.timestamp);
 
         } catch (error) {
             console.error('文件发送失败:', error);
@@ -5952,7 +6737,7 @@ class ChatClient {
             //     uploadingElement.parentElement.remove();
             // }
 
-            // 🔧 关键修复7: 从本地消息列表中移除上传失败的消息
+            // 从本地消息列表中移除上传失败的消息
             this.messages = this.messages.filter(msg => msg.temp_id !== tempMessageId);
             this.renderChatHistory();
 
@@ -5975,13 +6760,14 @@ class ChatClient {
     }
 
     // 发送表情包
-    async sendEmoji(emojiHtml) {
+    async sendEmoji(emojiHtml, targetRoomId = null) {
+        const roomId = parseInt(targetRoomId || this.currentRoomId)
         if (!emojiHtml) {
             console.error('请选择表情包');
             this.showError('请选择表情包');
             return;
         }
-        if (!this.currentRoomId) {
+        if (!roomId) {
             console.error('请先选择一个聊天对象')
             this.showError('请先选择一个聊天对象');
             return;
@@ -5999,7 +6785,7 @@ class ChatClient {
                 content: emojiHtml,
                 timestamp: new Date().toISOString(),
                 is_read: true,
-                chat_room: parseInt(this.currentRoomId),
+                chat_room: parseInt(roomId),
                 message_type: 'emoji',
                 is_temp: true  // 标记为临时消息
             };
@@ -6017,15 +6803,17 @@ class ChatClient {
                     type: 'chat_message',
                     content: emojiHtml,
                     message_type: 'emoji',
+                    chat_room: parseInt(roomId),
                     temp_id: tempMessageId  // 传递临时ID，方便后端返回时匹配
                 }));
             } else {
                 // WebSocket 不可用时使用 HTTP
                 console.log('WebSocket is not open. Using HTTP.');
                 await API.sendMessage({
-                    chat_room: parseInt(this.currentRoomId),
                     content: emojiHtml,
-                    message_type: 'emoji'
+                    chat_room: parseInt(roomId),
+                    message_type: 'emoji',
+                    temp_id: tempMessageId  // 传递临时ID，方便后端返回时匹配
                 });
                 // HTTP方式不支持temp_id匹配，直接视为已发送（降级处理）
                 const msgIndex = this.messages.findIndex(msg => msg.temp_id === tempMessageId);
@@ -6036,7 +6824,7 @@ class ChatClient {
             }
 
             // 🔧 关键修复4: 本地预更新聊天室最后一条消息
-            this.updateChatRoomLastMessage(this.currentRoomId, emojiHtml, message.timestamp);
+            this.updateChatRoomLastMessage(parseInt(roomId), emojiHtml, message.timestamp);
 
         } catch (error) {
             console.error('表情发送失败:', error);
@@ -6066,12 +6854,12 @@ class ChatClient {
     }
 
 
-// 置顶聊天
-    async pinChat(roomId) {
+    // 置顶聊天
+    async pinChat(targetRoomId) {
         try {
-            roomId = roomId || this.currentRoomId;
+            const roomId = parseInt(targetRoomId || this.currentRoomId)
             console.log('置顶聊天 roomId: ', roomId, ' type: ', typeof roomId);
-            console.log('置顶聊天 currentRoomId: ', this.currentRoomId);
+
 
             const data = await API.togglePinChat(roomId);
 
@@ -6092,11 +6880,10 @@ class ChatClient {
     }
 
 // 消息免打扰
-    async muteChat(roomId) {
+    async muteChat(targetRoomId) {
         try {
-            roomId = roomId || this.currentRoomId;
+            const roomId = parseInt(targetRoomId || this.currentRoomId)
             console.log('消息免打扰 roomId: ', roomId, ' type: ', typeof roomId);
-            console.log('消息免打扰 currentRoomId: ', this.currentRoomId);
 
             const data = await API.toggleMuteChat(roomId);
 
@@ -6233,8 +7020,8 @@ class ChatClient {
     }
 
 
-// 清空聊天记录
-    async clearChatHistory(roomId) {
+    // 清空聊天记录
+    async clearChatHistory(targetRoomId) {
         const confirmed = await this.showConfirmDialog(
             '清空聊天记录',
             '确定要清空所有聊天记录吗？<br><small style="color: var(--text-light);">此操作不可恢复！</small>',
@@ -6242,10 +7029,8 @@ class ChatClient {
         );
         if (!confirmed) return;
 
-        roomId = roomId || this.currentRoomId;
+        const roomId = parseInt(targetRoomId || this.currentRoomId)
         console.log('清空聊天记录 roomId: ', roomId, ' type: ', typeof roomId);
-        console.log('清空聊天记录 currentRoomId: ', this.currentRoomId);
-
 
         try {
             await API.toggleClearChatHistory(roomId);
@@ -6696,9 +7481,7 @@ class ChatClient {
     }
 
 
-// 在 ChatClient 类中添加以下方法
-
-// 软删除聊天室
+    // 软删除聊天室
     async softDeleteChatRoom(roomId) {
         const confirmed = await this.showConfirmDialog(
             '删除聊天',
@@ -7380,7 +8163,7 @@ class ChatClient {
         this.showAlert('功能提示', '视频通话功能开发中...');
     }
 
-// 显示错误
+    // 显示错误
     showError(message) {
         console.error('显示错误:', message);
         const errorDiv = document.createElement('div');
@@ -7395,7 +8178,7 @@ class ChatClient {
         }, 3000);
     }
 
-// 显示成功
+    // 显示成功
     showSuccess(message) {
         console.log('显示成功:', message);
         const successDiv = document.createElement('div');
@@ -8104,12 +8887,12 @@ class ChatClient {
             // 更新录音时间
             this.updateRecordingTime();
 
-            // 60秒后自动停止
+            // 🔧 关键修复：使用实例变量设置最大录音时间
             setTimeout(() => {
                 if (this.isRecording) {
                     this.stopRecording();
                 }
-            }, this.maxRecordingTime);
+            }, this.voiceMaxDuration * 1000);
 
         } catch (error) {
             console.error('录音失败:', error);
@@ -8208,9 +8991,9 @@ class ChatClient {
 
         // 检查录音时长（至少1秒）
         const recordingDuration = Date.now() - this.recordingStartTime;
-        if (recordingDuration < 1000) {
-            console.log('录音时间太短, 请至少录制1秒')
-            this.showError('录音时间太短，请至少录制1秒');
+        if (recordingDuration < this.voiceMinDuration * 1000) {
+            console.log(`录音时间太短，请至少录制${this.voiceMinDuration}秒`);
+            this.showError(`录音时间太短，请至少录制${this.voiceMinDuration}秒`);
             this.audioChunks = [];
             return;
         }
@@ -8279,9 +9062,10 @@ class ChatClient {
     }
 
     // 发送语音消息（添加 iOS 兼容标记）
-    async sendVoiceMessage() {
+    async sendVoiceMessage(targetRoomId = null) {
+        const roomId = parseInt(targetRoomId || this.currentRoomId)
 
-        if (!this.currentRoomId) {
+        if (!roomId) {
             console.error('请先选择一个聊天对象')
             this.showError('请先选择一个聊天对象');
             return;
@@ -8328,7 +9112,7 @@ class ChatClient {
             content: '正在上传语音...',
             timestamp: new Date().toISOString(),
             is_read: true,
-            chat_room: parseInt(this.currentRoomId),
+            chat_room: parseInt(roomId),
             message_type: 'voice',
             file_info: {
                 name: audioFile.name,
@@ -8355,6 +9139,7 @@ class ChatClient {
                     type: 'chat_message',
                     content: '[语音]',
                     message_type: 'voice',
+                    chat_room: parseInt(roomId),
                     file_id: uploadResult?.file_id || uploadResult?.id,
                     temp_id: tempMessageId,
                     // 🔧 传递设备信息以便后端转码
@@ -8370,9 +9155,9 @@ class ChatClient {
             } else {
                 // WebSocket 不可用时加入队列
                 this.messageQueue.push({
-                    chat_room: parseInt(this.currentRoomId),
                     content: '[语音]',
                     message_type: 'voice',
+                    chat_room: parseInt(roomId),
                     file_id: uploadResult?.file_id || uploadResult?.id,
                     temp_id: tempMessageId,
                     device_info: {
@@ -8385,7 +9170,7 @@ class ChatClient {
             }
 
             // 本地预更新聊天室最后一条消息
-            this.updateChatRoomLastMessage(this.currentRoomId, '[语音消息]', uploadingMessage.timestamp);
+            this.updateChatRoomLastMessage(parseInt(roomId), '[语音消息]', uploadingMessage.timestamp);
 
         } catch (error) {
             console.error('发送语音消息失败:', error);

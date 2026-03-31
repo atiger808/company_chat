@@ -24,18 +24,40 @@ import sys
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+
+    # 🔧 认证相关
     path('api/auth/', include('accounts.urls')),
+
+    # 🔧 聊天相关
     path('api/chat/', include('chat.urls')),
-    path('chat/', TemplateView.as_view(template_name='chat/index.html'), name='chat'),
+
+    # 🔧 聊天页面路由
+    path('chat/', TemplateView.as_view(template_name='chat/chat.html'), name='chat'),
     path('login/', TemplateView.as_view(template_name='chat/login.html'), name='login'),
-    path('register/', TemplateView.as_view(template_name='chat/register.html'), name='login'),
-    path('control/', TemplateView.as_view(template_name='chat/admin.html'), name='login'),
+    path('register/', TemplateView.as_view(template_name='chat/register.html'), name='register'),
+    path('control/', TemplateView.as_view(template_name='chat/admin.html'), name='admin-control'),
     path('manifest.json', TemplateView.as_view(template_name='manifest.json',content_type='application/json'), name='manifest'),
+
+
+    # 网盘相关路由
+    # 🔧 1. 企业网盘主页 (SPA 入口)
+    path('cloud/', TemplateView.as_view(template_name='cloud/cloud.html'), name='cloud-home'),
+
+    # 🔧 2. 【关键】文档编辑器页面路由（必须在 api/cloud/ 之前）
+    path('cloud/editor/', TemplateView.as_view(template_name='cloud/cloud_editor.html'), name='cloud-editor'),
+
+
+    # 🔧 3. 企业网盘 API（包含所有文档编辑相关接口）
+    path('api/cloud/', include('cloud.urls')),
+
+    # 🔧 4. 短链接分享路由
+    # 所有以 /s/ 开头的请求都将交给 cloud.share_urls 处理
+    path('s/', include('cloud.share_urls')),
+
 ]
 
 if sys.platform != 'linux' and settings.DEBUG:
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
-    # urlpatterns.append(path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}))
-    # urlpatterns.append(path(r'^static/(?P<path>.*)$', serve, {'document_root': settings.STATIC_ROOT}))
+

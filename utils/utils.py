@@ -6,6 +6,12 @@
 
 # 系统配置工具类
 
+# utils/utils.py 中添加以下装饰器
+
+from functools import wraps
+from rest_framework.response import Response
+from rest_framework import status
+
 from django.core.cache import cache
 from chat.models import SystemConfig
 # import logging
@@ -108,3 +114,64 @@ class SystemConfigManager:
                 logger.warning(f'批量清除缓存失败：{e}')
                 # 降级方案：清除所有缓存
                 cache.clear()
+
+
+
+
+def require_super_admin(message=None):
+    """
+    🛡️ 超级管理员权限装饰器
+
+    用法:
+        @require_super_admin()
+        def my_function(request, ...):
+            ...
+
+        @require_super_admin('自定义错误消息')
+        def my_function(request, ...):
+            ...
+    """
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, request, *args, **kwargs):
+            if not request.user.is_authenticated or not request.user.is_superuser:
+                error_msg = message or '无权限操作，仅限超级管理员'
+                return Response({'error': error_msg}, status=status.HTTP_403_FORBIDDEN)
+            return func(self, request, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+def require_admin_or_super_admin(message=None):
+    """
+    🛡️ 管理员或超级管理员权限装饰器
+
+    用法:
+        @require_admin_or_super_admin()
+        def my_function(request, ...):
+            ...
+    """
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, request, *args, **kwargs):
+            if not request.user.is_authenticated:
+                return Response({'error': '请先登录'}, status=status.HTTP_401_UNAUTHORIZED)
+
+            is_admin = (
+                    request.user.is_superuser or
+                    getattr(request.user, 'user_type', None) in ['admin', 'super_admin']
+            )
+
+            if not is_admin:
+                error_msg = message or '无权限操作，需要管理员权限'
+                return Response({'error': error_msg}, status=status.HTTP_403_FORBIDDEN)
+
+            return func(self, request, *args, **kwargs)
+
+        return wrapper
+
+    return decorator

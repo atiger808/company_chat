@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     # Local apps - accounts 必须在 chat 之前
     'accounts',  # 自定义用户模型应用
     'chat',
+    'cloud',
 ]
 
 MIDDLEWARE = [
@@ -62,10 +63,11 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    # 'cloud.middleware.OnlyOfficeMiddleware',  # 🔧 添加这行
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'accounts.middleware.ApiLoggingMiddleware',
-    'chat.middleware.SystemConfigCacheMiddleware',  # 🔧 添加配置缓存中间件
+    # 'chat.middleware.SystemConfigCacheMiddleware',  # 🔧 添加配置缓存中间件
 ]
 
 ROOT_URLCONF = 'company_chat.urls'
@@ -105,8 +107,8 @@ if sys.platform == 'linux':
             'PASSWORD': config('DB_PASSWORD'),
             'HOST': config('DB_HOST'),
             'PORT': config('DB_PORT'),
-            # 'CONN_MAX_AGE': config('CONN_MAX_AGE', default=7200, cast=int),
-            'CONN_MAX_AGE': 60,  # 连接最大存活时间（秒）
+            'CONN_MAX_AGE': config('CONN_MAX_AGE', default=7200, cast=int),
+            # 'CONN_MAX_AGE': 60,  # 连接最大存活时间（秒）
             'CONN_HEALTH_CHECKS': True,  # 连接健康检查
             'OPTIONS': {
                 'connect_timeout': 15,
@@ -223,7 +225,7 @@ CACHES = {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
             # ✅ 连接池配置（django-redis 支持 CONNECTION_POOL_KWARGS）
             "CONNECTION_POOL_KWARGS": {
-                "max_connections": 50,
+                "max_connections": 100,
                 "retry_on_timeout": True,
                 "socket_connect_timeout": 5,
                 "socket_timeout": 5,
@@ -237,7 +239,6 @@ CACHES = {
     }
 }
 
-
 # 🔧 确保 Channels 使用独立的 Redis 数据库（避免缓存键冲突）
 CHANNEL_LAYERS = {
     "default": {
@@ -245,14 +246,14 @@ CHANNEL_LAYERS = {
         "CONFIG": {
             # ✅ 使用数据库 2，与 CACHES 的数据库 1 分离
             "hosts": [f"redis://{REDIS_HOST}:{REDIS_PORT}/2"],
-            "capacity": 1500,
-            "expiry": 60,
+            "capacity": 1500,  # 默认 100
+            "expiry": 10,  # 默认 60 秒
             "prefix": "asgi",
+            # "close_timeout": 10,  # 增加到 10 秒
             # "pool_size": 20,  # ✅ 连接池大小, 报错
         },
     },
 }
-
 
 # WebSocket 超时配置
 WEBSOCKET_CONNECT_TIMEOUT = 30  # 连接超时（秒）
@@ -320,6 +321,12 @@ CORS_ALLOWED_ORIGINS = [
     "http://chat.first-iq.com:10900",  # 前端地址
     "http://chat.first-iq.com:10901",  # 前端地址
     "https://chat.first-iq.com",  # 前端地址
+    "http://onlyoffice.first-iq.com",  # OnlyOffice 域名
+    "http://onlyoffice.first-iq.com:12280",  # OnlyOffice 域名
+    "http://192.168.1.122",  # OnlyOffice 可选，直接 IP 访问
+    "http://192.168.1.122:8000",  # OnlyOffice
+    "http://192.168.1.130",  # Django
+    "http://192.168.1.130:10900",  # Django
 ]
 
 # 指定允许的后端地址（推荐用于生产环境）
@@ -329,6 +336,8 @@ CSRF_TRUSTED_ORIGINS = [
     "http://chat.first-iq.com:10900",
     "http://chat.first-iq.com:10901",  # 前端地址
     "https://chat.first-iq.com",  # 前端地址
+    "http://onlyoffice.first-iq.com",  # OnlyOffice 域名
+    "http://onlyoffice.first-iq.com:12280",  # OnlyOffice 域名
     # Add other trusted origins if needed
 ]
 
@@ -394,7 +403,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20260310-a9487be'
+STATIC_VERSION = '20260326-375c51a'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -426,11 +435,12 @@ API_METHOD_MAP = {
     'GET': '查询',
     'POST': '新建',
     'PUT': '更新',
+    'OPTIONS': '查询',
+    'HEAD': '查询',
+    'UPDATE': '修改',
     'DELETE': '删除',
     'PATCH': '修改',
 }
-
-
 
 # ================================================= #
 # ******************* 邮箱配置 ******************* #
@@ -448,3 +458,72 @@ EMAIL_USE_SSL = config('EMAIL_USE_SSL', default=True, cast=bool)
 # EMAIL_FROM_EMAIL = config('EMAIL_FROM_EMAIL')
 EMAIL_SUBJECT_PREFIX = config('EMAIL_SUBJECT_PREFIX')
 EMAIL_TIMEOUT = config('EMAIL_TIMEOUT', default=300, cast=int)  # 超时(5分钟)
+
+# LOGGING = {
+#     'version': 1,
+#     'disable_existing_loggers': False,
+#     'handlers': {
+#         'console': {
+#             'class': 'logging.StreamHandler',
+#         },
+#         'file': {
+#             'class': 'logging.FileHandler',
+#             'filename': '/www/yue/company_chat/logs/onlyoffice.log',
+#         },
+#     },
+#     'loggers': {
+#         'cloud.views': {
+#             'handlers': ['console', 'file'],
+#             'level': 'DEBUG',
+#             'propagate': False,
+#         },
+#     },
+# }
+
+
+# # 🔧 OnlyOffice 配置
+# ONLYOFFICE_URL = 'http://localhost:8080'  # OnlyOffice Document Server 地址
+# ONLYOFFICE_SECRET = 'your-secret-key'  # JWT 密钥
+# ONLYOFFICE_SERVER_URL = 'https://chat.first-iq.com/cloud/'  # 企业网盘地址
+#
+# # 文档版本保留策略
+# DOCUMENT_VERSION_KEEP_COUNT = 10  # 保留最近 10 个版本
+# DOCUMENT_VERSION_KEEP_DAYS = 30  # 保留 30 天
+#
+# # 编辑锁过期时间（分钟）
+# DOCUMENT_EDIT_LOCK_EXPIRE_MINUTES = 30
+
+# 🔧 OnlyOffice 配置
+ONLYOFFICE = {
+    # 🔧 Document Server 地址（服务器 2）
+    # 'DOCUMENT_SERVER_URL': 'http://192.168.1.122:8000',
+    # 'DOCUMENT_SERVER_URL': 'http://onlyoffice.first-iq.com:12280',
+    'DOCUMENT_SERVER_URL': 'https://chat.first-iq.com/onlyoffice',
+
+    # 🔧 企业网盘地址（服务器 1，OnlyOffice 会回调这个地址）
+    # 必须是 OnlyOffice 服务器能访问的地址
+    # 'SERVER_URL': 'http://192.168.1.130:10900',
+    'SERVER_URL': 'https://chat.first-iq.com',
+
+    # 🔧 JWT 密钥（必须与服务器 2 的 JWT_SECRET 完全一致）
+    'JWT_SECRET': config('JWT_SECRET'),
+
+    # 是否启用 JWT
+    'JWT_ENABLED': True,
+
+    # JWT Header
+    'JWT_HEADER': 'Authorization',
+
+    # 支持的文件格式
+    'WORD_FORMATS': ['.doc', '.docx', '.docm', '.dot', '.dotx', '.dotm', '.odt', '.ott', '.rtf', '.txt'],
+    'EXCEL_FORMATS': ['.xls', '.xlsx', '.xlsm', '.xlt', '.xltx', '.xltm', '.ods', '.ots', '.csv'],
+    'PPT_FORMATS': ['.pps', '.ppsx', '.ppsm', '.ppt', '.pptx', '.pptm', '.pot', '.potx', '.potm', '.odp', '.otp'],
+    'PDF_FORMATS': ['.pdf'],
+
+    # 🔧 新增：文档版本和编辑锁配置
+    'VERSION_KEEP_COUNT': 10,  # 保留最近 10 个版本
+    'VERSION_KEEP_DAYS': 30,  # 保留 30 天
+    'EDIT_LOCK_EXPIRE_MINUTES': 30,  # 编辑锁过期时间（分钟）
+}
+
+# CORS_ALLOW_CREDENTIALS = True

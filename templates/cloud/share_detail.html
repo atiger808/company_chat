@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文件分享 - 企业网盘</title>
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
+    <link rel="stylesheet" href="/static/css/chat.css">
+    <link rel="stylesheet" href="/static/css/cloud.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .share-page {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .share-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px 30px;
+            text-align: center;
+        }
+
+        .share-header i {
+            font-size: 64px;
+            margin-bottom: 20px;
+            opacity: 0.9;
+        }
+
+        .share-header h1 {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .share-header p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .share-body {
+            padding: 40px 30px;
+        }
+
+        .error-message {
+            text-align: center;
+            padding: 40px 20px;
+            color: #f56c6c;
+        }
+
+        .error-message i {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+
+        .error-message p {
+            font-size: 16px;
+            margin-bottom: 20px;
+        }
+
+        .file-info-card {
+            background: #f5f7fa;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .file-icon {
+            font-size: 64px;
+            color: #409EFF;
+            margin-bottom: 20px;
+        }
+
+        .file-icon.folder {
+            color: #E6A23C;
+        }
+
+        .file-name {
+            font-size: 20px;
+            font-weight: 600;
+            color: #303133;
+            margin-bottom: 15px;
+            word-break: break-all;
+        }
+
+        .file-meta {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+
+        .file-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 14px;
+            color: #606266;
+        }
+
+        .file-meta-item i {
+            color: #909399;
+        }
+
+        .share-actions {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 30px;
+        }
+
+        .btn {
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            border: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s;
+            text-decoration: none;
+        }
+
+        .btn-primary {
+            background: #409EFF;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #337ECC;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(64, 158, 255, 0.3);
+        }
+
+        .btn-success {
+            background: #67C23A;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #529B2E;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(103, 194, 58, 0.3);
+        }
+
+        .share-link-section {
+            background: #f5f7fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 30px;
+        }
+
+        .share-link-section label {
+            display: block;
+            font-size: 14px;
+            color: #606266;
+            margin-bottom: 10px;
+        }
+
+        .share-link-input {
+            display: flex;
+            gap: 10px;
+        }
+
+        .share-link-input input {
+            flex: 1;
+            padding: 10px 15px;
+            border: 1px solid #dcdfe6;
+            border-radius: 6px;
+            font-size: 14px;
+            background: white;
+        }
+
+        .btn-copy {
+            padding: 10px 20px;
+            background: #409EFF;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .btn-copy:hover {
+            background: #337ECC;
+        }
+
+        .owner-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 20px;
+            background: #f5f7fa;
+            border-radius: 8px;
+            margin-top: 30px;
+        }
+
+        .owner-avatar {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            object-fit: cover;
+        }
+
+        .owner-info-text h4 {
+            font-size: 16px;
+            color: #303133;
+            margin-bottom: 5px;
+        }
+
+        .owner-info-text p {
+            font-size: 13px;
+            color: #909399;
+        }
+
+        .expire-info {
+            text-align: center;
+            padding: 15px;
+            color: #909399;
+            font-size: 13px;
+            margin-top: 20px;
+        }
+
+        .expire-info i {
+            margin-right: 5px;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .badge-success {
+            background: #f0f9eb;
+            color: #67C23A;
+        }
+
+        .badge-danger {
+            background: #fef0f0;
+            color: #f56c6c;
+        }
+
+        /* 移动端适配 */
+        @media (max-width: 768px) {
+            body {
+                padding: 10px;
+            }
+
+            .share-header {
+                padding: 30px 20px;
+            }
+
+            .share-header i {
+                font-size: 48px;
+            }
+
+            .share-body {
+                padding: 30px 20px;
+            }
+
+            .file-info-card {
+                padding: 20px;
+            }
+
+            .file-icon {
+                font-size: 48px;
+            }
+
+            .file-name {
+                font-size: 18px;
+            }
+
+            .share-actions {
+                flex-direction: column;
+            }
+
+            .btn {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="share-page">
+    <div class="share-header">
+        <i class="fas fa-cloud"></i>
+        <h1>企业网盘文件分享</h1>
+        <p>安全 · 便捷 · 高效</p>
+    </div>
+
+    <div class="share-body">
+        {% if error %}
+        <!-- 错误状态 -->
+        <div class="error-message">
+            <i class="fas fa-exclamation-circle"></i>
+            <p>{{ error }}</p>
+            <a href="/cloud/" class="btn btn-primary">
+                <i class="fas fa-home"></i> 返回首页
+            </a>
+        </div>
+        {% else %}
+
+        {% if file %}
+        <!-- 文件分享 -->
+        <div class="file-info-card">
+            <div class="file-icon">
+                <i class="fas {{ file.icon_class|default:'fa-file' }}"></i>
+            </div>
+            <div class="file-name">{{ file.name }}</div>
+            <div class="file-meta">
+                <div class="file-meta-item">
+                    <i class="fas fa-hdd"></i>
+                    <span>{{ file.size_formatted }}</span>
+                </div>
+                <div class="file-meta-item">
+                    <i class="fas fa-calendar"></i>
+                    <span>{{ created_at|date:"Y-m-d H:i" }}</span>
+                </div>
+                {% if share.is_expired %}
+                <div class="file-meta-item">
+                    <span class="badge badge-danger">已过期</span>
+                </div>
+                {% else %}
+                <div class="file-meta-item">
+                    <span class="badge badge-success">有效</span>
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="share-actions">
+                <a href="/s/{{ share_code }}/download/" class="btn btn-primary">
+                    <i class="fas fa-download"></i> 立即下载
+                </a>
+                <button class="btn btn-success" onclick="saveToCloud('{{ share.id }}', 'saveBtnFile')" id="saveBtnFile">
+                    <i class="fas fa-cloud-upload-alt"></i> 保存到我的网盘
+                </button>
+            </div>
+        </div>
+
+        {% elif folder %}
+        <!-- 文件夹分享 -->
+        <div class="file-info-card">
+            <div class="file-icon folder">
+                <i class="fas fa-folder"></i>
+            </div>
+            <div class="file-name">{{ folder.name }}</div>
+            <div class="file-meta">
+                <div class="file-meta-item">
+                    <i class="fas fa-folder-open"></i>
+                    <span>{{ folder.file_count }} 个文件</span>
+                </div>
+                <div class="file-meta-item">
+                    <i class="fas fa-calendar"></i>
+                    <span>{{ created_at|date:"Y-m-d H:i" }}</span>
+                </div>
+                {% if share.is_expired %}
+                <div class="file-meta-item">
+                    <span class="badge badge-danger">已过期</span>
+                </div>
+                {% else %}
+                <div class="file-meta-item">
+                    <span class="badge badge-success">有效</span>
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="share-actions">
+                <a href="/s/{{ share_code }}/download/" class="btn btn-primary">
+                    <i class="fas fa-download"></i> 下载文件夹
+                </a>
+                <button class="btn btn-success" onclick="saveToCloud('{{ share.id }}', 'saveBtnFolder')"
+                        id="saveBtnFolder">
+                    <i class="fas fa-cloud-upload-alt"></i> 保存到我的网盘
+                </button>
+                <a href="/cloud/" class="btn-home">
+                    <i class="fas fa-home"></i> 返回首页
+                </a>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- 分享链接 -->
+        <div class="share-link-section">
+            <label>分享链接</label>
+            <div class="share-link-input">
+                <input type="text" id="shareLinkInput"
+                       value="{{ request.scheme }}://{{ request.get_host }}/s/{{ share_code }}/?提取码={{ code }}"
+                       readonly>
+                <button class="btn-copy" onclick="copyShareLink()">
+                    <i class="fas fa-copy"></i> 复制
+                </button>
+            </div>
+        </div>
+
+        <!-- 分享者信息 -->
+        <div class="owner-info">
+            <img src="{{ owner.avatar_url|default:'/static/images/default-avatar.png' }}" alt="{{ owner.username }}"
+                 class="owner-avatar">
+            <div class="owner-info-text">
+                <h4>{{ owner.username }}</h4>
+                <p>分享者</p>
+            </div>
+        </div>
+
+        <!-- 过期信息 -->
+        {% if expires_at %}
+        <div class="expire-info">
+            <i class="fas fa-clock"></i>
+            有效期至：{{ expires_at|date:"Y-m-d H:i" }}
+            {% if max_downloads %}
+            <br>
+            <i class="fas fa-download"></i>
+            下载次数：{{ download_count }}/{{ max_downloads }}
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% endif %}
+    </div>
+</div>
+
+<script>
+    // 复制分享链接
+    async function copyShareLink() {
+        const input = document.getElementById('shareLinkInput');
+        try {
+            await navigator.clipboard.writeText(input.value);
+            showToast('复制成功', '分享链接已复制');
+        } catch (error) {
+            input.select();
+            document.execCommand('copy');
+            showToast('复制成功', '分享链接已复制');
+        }
+    }
+
+    // 保存到网盘
+    async function saveToCloudV2() {
+        const shareCode = '{{ share_code }}';
+        try {
+            const response = await fetch(`/api/cloud/shares/verify/?code=${shareCode}`, {
+                headers: {
+                    'Authorization': 'Bearer ' + (localStorage.getItem('access_token') || '')
+                }
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                if (response.status === 401) {
+                    showToast('提示', '请先登录', 'warning');
+                    setTimeout(() => {
+                        localStorage.setItem('redirect_url', window.location.href);
+                        window.location.href = '/login/';
+                    }, 1500);
+                    return;
+                }
+                throw new Error(error.error || '验证失败');
+            }
+
+            const data = await response.json();
+            const shareId = data.id;
+
+            const saveResponse = await fetch(`/api/cloud/shares/${shareId}/save/`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + (localStorage.getItem('access_token') || '')
+                }
+            });
+
+            if (!saveResponse.ok) {
+                const error = await saveResponse.json();
+                throw new Error(error.error || '保存失败');
+            }
+
+            showToast('成功', '文件已保存到我的网盘');
+
+        } catch (error) {
+            console.error('保存失败:', error);
+            showToast('失败', error.message, 'error');
+        }
+    }
+
+
+    // 🔧 获取 Token 的辅助函数 (需根据实际项目调整)
+    function getToken() {
+        return localStorage.getItem('access_token') || document.cookie.split('; ').find(row => row.startsWith('access_token='))?.split('=')[1];
+    }
+
+    // 🔧 保存到我的网盘逻辑
+    async function saveToCloud(shareId, btnId) {
+        const btn = document.getElementById(btnId);
+        const originalText = btn.innerHTML;
+
+        // 防止重复点击
+        if (btn.disabled) return;
+
+        // 检查登录状态
+        const token = getToken();
+        if (!token) {
+            // 保存当前页面链接，登录后跳转到该页面
+            localStorage.setItem('redirect_url', window.location.href);
+            showToast('请先登录', 'error');
+            setTimeout(() => window.location.href = '/login/', 1500);
+            return;
+        }
+
+        try {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 保存中...';
+
+            const response = await fetch(`/api/cloud/shares/${shareId}/save_to_cloud/`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                showToast('保存成功！文件已添加到您的网盘', 'success');
+                btn.innerHTML = '<i class="fas fa-check"></i> 已保存';
+                btn.style.background = '#909399';
+            } else {
+                throw new Error(data.error || '保存失败');
+            }
+        } catch (error) {
+            console.error(error);
+            showToast(error.message, 'error');
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
+    }
+
+
+    // 显示提示
+    function showToast(title, message, type = 'success') {
+        const toast = document.createElement('div');
+        toast.style.cssText = `
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 12px 24px;
+            background: ${type === 'error' ? '#f56c6c' : type === 'warning' ? '#E6A23C' : '#67C23A'};
+            color: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 9999;
+            animation: slideDown 0.3s ease;
+        `;
+        toast.innerHTML = `<strong>${title}</strong><br>${message}`;
+        document.body.appendChild(toast);
+
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
+    }
+
+    // 添加动画
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes slideDown {
+            from {
+                transform: translateX(-50%) translateY(-100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(-50%) translateY(0);
+                opacity: 1;
+            }
+        }
+    `;
+    document.head.appendChild(style);
+</script>
+</body>
+</html>

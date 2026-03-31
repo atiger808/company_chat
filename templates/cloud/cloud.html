@@ -1,0 +1,725 @@
+<!-- templates/cloud/cloud.html -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>企业网盘 - 企业聊天室</title>
+    <link rel="stylesheet" href="/static/css/cloud.css?v=20260328-c05be02">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
+    <!-- 🔧 添加二维码库 -->
+    <!--    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>-->
+    <script src="/static/js/dist/qrcode.min.js?v=20260328-c05be02"></script>
+</head>
+<body>
+<div class="cloud-layout">
+
+    <!-- 遮罩层（移动端侧边栏） -->
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <!-- 左侧垂直导航 -->
+    <aside class="sidebar" id="cloudSidebar">
+        <div class="sidebar-header">
+            <div class="logo">
+                <i class="fas fa-cloud"></i>
+                <span>企业网盘</span>
+            </div>
+            <button class="sidebar-close-btn" id="sidebarCloseBtn">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+
+        <nav class="nav-menu">
+            <a href="#" class="nav-item active" data-view="files" data-folder-id="">
+                <i class="fas fa-folder"></i> 全部文件
+            </a>
+            <a href="#" class="nav-item" data-view="starred" style="display:none;">
+                <i class="fas fa-star"></i> 星标文件
+            </a>
+            <a href="#" class="nav-item" data-view="shared">
+                <i class="fas fa-share-alt"></i> 我的分享
+            </a>
+            <a href="#" class="nav-item" data-view="shared-with-me" style="display:none;">
+                <i class="fas fa-users"></i> 分享给我
+            </a>
+
+            <!-- 🔧 新增：协作文档 -->
+            <a href="#" class="nav-item" data-view="collaborations">
+                <i class="fas fa-file-alt"></i> 协作文档
+            </a>
+
+            <a href="#" class="nav-item" data-view="trash">
+                <i class="fas fa-trash"></i> 回收站
+            </a>
+            <a href="#" class="nav-item" data-view="dashboard">
+                <i class="fas fa-chart-pie"></i> 数据统计
+            </a>
+        </nav>
+
+        <div class="storage-status">
+            <div class="progress-bar">
+                <div class="progress" id="storageUsed" style="width: 0%"></div>
+            </div>
+            <small id="storageText">0 GB / 10 GB</small>
+        </div>
+
+        <div class="sidebar-footer">
+            <a href="/chat/" class="btn-back-chat">
+                <i class="fas fa-comments"></i> 返回聊天室
+            </a>
+            <a class="btn-logout" onclick="cloudApp.logout()">
+                <i class="fas fa-sign-out-alt"></i> 退出登录
+            </a>
+        </div>
+    </aside>
+
+    <!-- 主内容区 -->
+    <main class="main-content">
+        <!-- 顶部工具栏 -->
+        <header class="top-bar">
+            <div class="toolbar-actions">
+                <button class="btn-menu" id="sidebarToggleBtn" style="display:none;">
+                    <i class="fas fa-indent"></i>
+                </button>
+                <div class="view-switcher">
+                    <button class="btn-icon active" data-view-mode="grid" title="卡片视图">
+                        <i class="fas fa-th-large"></i>
+                    </button>
+                    <button class="btn-icon" data-view-mode="list" title="列表视图">
+                        <i class="fas fa-list"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="admin-header-right">
+                <span id="adminUsername"></span>
+                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260328-c05be02" alt="头像">
+            </div>
+        </header>
+
+        <!-- 🔧 内容区域 (视图切换) -->
+        <div class="cloud-content">
+
+            <!-- 1. 文件列表视图 (默认) -->
+            <div class="view-section active" id="filesView">
+
+                <div class="view-header">
+                    <h3><i class="fas fa-folder"></i> 全部文件</h3>
+
+                    <div class="search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" id="fileSearch" placeholder="搜索文件...">
+                    </div>
+
+                    <div class="admin-header-right">
+                        <button class="btn btn-primary" id="uploadBtn">
+                            <i class="fas fa-upload"></i> <span class="btn-text">上传</span>
+                        </button>
+                        <button class="btn btn-secondary" id="newFolderBtn">
+                            <i class="fas fa-folder-plus"></i> <span class="btn-text">新建</span>
+                        </button>
+
+                        <button class="btn btn-secondary" onclick="cloudApp.loadFiles(cloudApp.currentFolderId)">
+                            <i class="fas fa-sync"></i> <span class="btn-text">刷新</span>
+                        </button>
+                    </div>
+
+                </div>
+                <header class="top-bar">
+                    <div class="breadcrumb-container">
+                        <button class="btn-back" id="btnBack" style="display:none;">
+                            <i class="fas fa-arrow-left"></i>
+                        </button>
+                        <div class="breadcrumb" id="breadcrumb">
+                            <span class="crumb-item active" data-folder-id="">全部文件</span>
+                        </div>
+                    </div>
+                </header>
+
+                <!-- 🔧 批量操作栏（默认隐藏） -->
+                <div class="batch-operation-bar" id="batchOperationBar" style="display: none;">
+                    <div class="batch-left">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="selectAllCheckbox">
+                            <span>全选</span>
+                        </label>
+                        <span id="batchSelectedCount" class="batch-count">已选择 0 项</span>
+                        <button class="btn btn-link btn-sm" id="cancelSelectBtn">取消选择</button>
+                    </div>
+
+                    <div class="batch-right">
+                        <button class="btn btn-danger btn-sm" id="batchDeleteBtn">
+                            <i class="fas fa-trash"></i> 批量删除
+                        </button>
+                        <button class="btn btn-secondary btn-sm" id="batchMoveBtn">
+                            <i class="fas fa-cut"></i> 批量移动
+                        </button>
+                        <button class="btn btn-primary btn-sm" id="batchShareBtn">
+                            <i class="fas fa-share-alt"></i> 批量分享
+                        </button>
+                    </div>
+                </div>
+                <!-- 文件列表容器 -->
+                <div class="file-list-container">
+
+                    <!-- 列表视图内容 -->
+                    <div class="file-list view-list" id="fileListView">
+                        <!-- 列表视图表头 -->
+                        <div class="file-list-header">
+
+                            <!-- 🔧 表头添加全选复选框 -->
+                            <div class="file-col name">
+                                <input type="checkbox" id="selectAllCheckboxHeader" class="select-all-checkbox">
+                                <span>名称</span>
+                            </div>
+                            <div class="file-col size">大小</div>
+                            <div class="file-col date">修改时间</div>
+                            <div class="file-col actions">操作</div>
+
+                        </div>
+
+                        <div class="file-list-body" id="fileListBody">
+                            <!-- 动态生成 -->
+                        </div>
+                    </div>
+
+                    <!-- 网格视图内容 -->
+                    <div class="file-list view-grid active" id="fileGridView">
+                        <div class="file-grid-body" id="fileGridBody">
+                            <!-- 动态生成 -->
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- 🔧 2. 我的分享视图 -->
+            <div class="view-section" id="sharedView">
+                <div class="view-header">
+                    <h3><i class="fas fa-share-alt"></i> 我的分享</h3>
+                    <button class="btn btn-secondary" onclick="cloudApp.loadMyShares()">
+                        <i class="fas fa-sync"></i> 刷新
+                    </button>
+                </div>
+                <div class="share-list-container" id="mySharesList">
+                    <!-- 动态生成 -->
+                </div>
+            </div>
+
+            <!-- 🔧 3. 分享给我视图 -->
+            <div class="view-section" id="sharedWithMeView">
+                <div class="view-header">
+                    <h3><i class="fas fa-users"></i> 分享给我</h3>
+                    <button class="btn btn-secondary" onclick="cloudApp.loadSharedWithMe()">
+                        <i class="fas fa-sync"></i> 刷新
+                    </button>
+                </div>
+                <div class="share-list-container" id="sharedWithMeList">
+                    <!-- 动态生成 -->
+                </div>
+            </div>
+
+
+            <!-- 协作文档视图 -->
+            <div class="view-section" id="collaborationsView">
+                <div class="view-header">
+                    <h3><i class="fas fa-file-alt"></i> 协作文档</h3>
+
+                    <div class="search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" id="collabSearch" placeholder="搜索协作文档...">
+                    </div>
+
+                    <div class="admin-header-right">
+                        <button class="btn btn-primary" id="newCollabDocBtn">
+                            <i class="fas fa-plus"></i> <span class="btn-text">新建协作文档</span>
+                        </button>
+                        <button class="btn btn-secondary" onclick="cloudApp.loadCollaborations()">
+                            <i class="fas fa-sync"></i> <span class="btn-text">刷新</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 协作文档列表容器 -->
+                <div class="file-list-container">
+                    <!-- 列表视图 -->
+                    <div class="file-list view-list" id="collabListView">
+                        <div class="file-list-header">
+                            <div class="file-col name">
+                                <input type="checkbox" id="selectAllCollab" class="select-all-checkbox">
+                                <span>文档名称</span>
+                            </div>
+                            <div class="file-col type">类型</div>
+                            <div class="file-col collaborators">协作者</div>
+                            <div class="file-col date">更新时间</div>
+                            <div class="file-col actions">操作</div>
+                        </div>
+                        <div class="file-list-body" id="collabListBody">
+                            <!-- 动态生成 -->
+                        </div>
+                    </div>
+
+                    <!-- 网格视图 -->
+                    <div class="file-list view-grid active" id="collabGridView">
+                        <div class="file-grid-body" id="collabGridBody">
+                            <!-- 动态生成 -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+
+            <!-- 🔧 4. 回收站视图 -->
+            <div class="view-section" id="trashView">
+                <div class="view-header">
+                    <h3><i class="fas fa-trash"></i> 回收站</h3>
+                    <div class="trash-actions">
+                        <!-- 🔧 新增：批量操作按钮 -->
+                        <button class="btn btn-secondary" id="batchRestoreBtn" style="display:none;">
+                            <i class="fas fa-undo"></i> 批量恢复
+                        </button>
+                        <button class="btn btn-danger" id="batchDeleteTrashBtn" style="display:none;">
+                            <i class="fas fa-trash-alt"></i> 批量删除
+                        </button>
+                        <button class="btn btn-primary" onclick="cloudApp.emptyTrash()">
+                            <i class="fas fa-trash-alt"></i> 清空回收站
+                        </button>
+                    </div>
+
+                </div>
+
+
+                <div class="file-list-container">
+                    <!-- 列表视图 -->
+                    <div class="file-list view-list" id="trashListView">
+                        <div class="file-list-header">
+                            <div class="file-col name">
+                                <input type="checkbox" id="selectAllTrash">
+                                <span>名称</span>
+                            </div>
+                            <div class="file-col size">大小</div>
+                            <div class="file-col date">删除时间</div>
+                            <div class="file-col actions">操作</div>
+                        </div>
+                        <div class="file-list-body" id="trashListBody">
+                            <!-- 动态生成 -->
+                        </div>
+                    </div>
+
+                    <!-- 🔧 网格视图 -->
+                    <div class="file-list view-grid active" id="trashGridView">
+                        <div class="file-grid-body" id="trashGridBody">
+                            <!-- 动态生成 -->
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- 🔧 5. 数据统计视图 -->
+            <div class="view-section" id="dashboardView">
+                <div class="view-header">
+                    <h3><i class="fas fa-chart-pie"></i> 网盘统计</h3>
+                    <button class="btn btn-secondary" onclick="cloudApp.loadDashboardStats()">
+                        <i class="fas fa-sync"></i> 刷新
+                    </button>
+                </div>
+                <div class="dashboard-stats-container" id="dashboardStatsContent">
+                    <!-- 动态生成 -->
+                </div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<!-- 右键菜单 -->
+<div id="contextMenu" class="context-menu">
+    <div class="menu-item" onclick="cloudApp.openSelectedItem()"><i class="fas fa-folder-open"></i> 打开</div>
+    <div class="menu-item" onclick="cloudApp.renameSelectedItem()"><i class="fas fa-edit"></i> 重命名</div>
+    <div class="menu-item" onclick="cloudApp.moveSelectedItem()"><i class="fas fa-cut"></i> 移动</div>
+    <div class="menu-divider"></div>
+    <div class="menu-item danger" onclick="cloudApp.deleteSelectedItem()"><i class="fas fa-trash"></i> 删除</div>
+</div>
+
+<!-- 上传模态框 -->
+<div class="modal" id="uploadModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>上传文件</h3>
+            <button class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="upload-area" id="uploadArea">
+                <i class="fas fa-cloud-upload-alt"></i>
+                <p>拖拽文件到此处，或点击选择文件</p>
+                <input type="file" id="fileInput" multiple style="display:none;">
+            </div>
+            <div class="upload-progress" id="uploadProgress" style="display:none;"></div>
+            <!-- 🔧 上传进度容器 -->
+            <div id="uploadProgressContainer"></div>
+        </div>
+    </div>
+</div>
+
+<!-- 新建文件夹模态框 -->
+<div class="modal" id="newFolderModal">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3>新建文件夹</h3>
+            <button class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>文件夹名称</label>
+                <input type="text" id="newFolderName" placeholder="请输入文件夹名称">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="cloudApp.closeModal('newFolderModal')">取消</button>
+            <button class="btn btn-primary" onclick="cloudApp.createFolder()">创建</button>
+        </div>
+    </div>
+</div>
+
+
+<!-- 分享模态框（完善版） -->
+<div class="modal" id="shareModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>分享文件</h3>
+            <button class="close-btn" onclick="cloudApp.closeModal('shareModal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>分享类型</label>
+                <select id="shareType">
+                    <option value="public">公开链接（任何人可访问）</option>
+                    <option value="password">密码保护</option>
+                    <option value="private">指定用户</option>
+                    <option value="department">指定部门</option>
+                </select>
+            </div>
+
+            <!-- 🔧 密码设置区域 -->
+            <div class="form-group" id="passwordGroup" style="display:none;">
+                <label>提取码设置</label>
+                <div class="password-input-group">
+                    <input type="text" id="sharePassword" placeholder="留空自动生成" maxlength="5">
+                    <button class="btn-generate" onclick="cloudApp.generatePassword()" title="生成随机密码">
+                        <i class="fas fa-sync"></i>
+                    </button>
+                </div>
+                <small class="form-hint">最多 5 个字符，留空将自动生成</small>
+            </div>
+
+            <div class="form-group" id="expiresGroup">
+                <label>过期时间</label>
+                <input type="datetime-local" id="shareExpires">
+            </div>
+            <div class="form-group" id="downloadsGroup">
+                <label>最大下载次数</label>
+                <input type="number" id="shareMaxDownloads" placeholder="留空表示不限制">
+            </div>
+
+            <!-- 🔧 分享方式选择 -->
+            <div class="form-group">
+                <label>分享方式</label>
+                <div class="share-method-group">
+                    <label class="radio-label">
+                        <input type="radio" name="shareMethod" value="link" checked>
+                        <i class="fas fa-link"></i> 链接
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="shareMethod" value="qrcode">
+                        <i class="fas fa-qrcode"></i> 二维码
+                    </label>
+                </div>
+            </div>
+
+            <div class="share-link" id="shareLink" style="display:none;">
+                <label>分享链接</label>
+                <div class="share-link-input">
+                    <input type="text" id="shareLinkInput" readonly>
+                    <button class="btn-copy" onclick="cloudApp.copyShareLink()">
+                        <i class="fas fa-copy"></i> 复制
+                    </button>
+                </div>
+            </div>
+
+            <!-- 🔧 二维码区域 -->
+            <div class="share-qrcode" id="shareQrcode" style="display:none;">
+                <label>分享二维码</label>
+                <div id="qrcodeContainer" style="text-align:center;padding:20px;"></div>
+                <button class="btn-download-qrcode" onclick="cloudApp.downloadQrcode()">
+                    <i class="fas fa-download"></i> 下载二维码
+                </button>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="cloudApp.closeModal('shareModal')">关闭</button>
+            <button class="btn btn-primary" id="createShareBtn" onclick="cloudApp.createShare()">创建分享</button>
+        </div>
+    </div>
+</div>
+
+<!-- 重命名模态框 -->
+<div class="modal" id="renameModal">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 id="renameModalTitle">重命名</h3>
+            <button class="close-btn" onclick="cloudApp.closeModal('renameModal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>新名称</label>
+                <input type="text" id="renameInput" placeholder="请输入新名称">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="cloudApp.closeModal('renameModal')">取消</button>
+            <button class="btn btn-primary" onclick="cloudApp.confirmRename()">确定</button>
+        </div>
+    </div>
+</div>
+
+<!-- 移动模态框 -->
+<div class="modal" id="moveModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>移动到</h3>
+            <button class="close-btn" onclick="cloudApp.closeModal('moveModal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="folder-tree" id="folderTree">
+                <!-- 文件夹树 -->
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="cloudApp.closeModal('moveModal')">取消</button>
+            <button class="btn btn-primary" onclick="cloudApp.confirmMove()">确定</button>
+        </div>
+    </div>
+</div>
+
+
+<!-- 🔧 新增：批量移动模态框 -->
+<div class="modal" id="batchMoveModal">
+    <div class="modal-content modal-lg">
+        <div class="modal-header">
+            <h3><i class="fas fa-folder-open"></i> 批量移动</h3>
+            <button class="close-btn" onclick="cloudApp.closeModal('batchMoveModal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <!-- 🔧 选中项目提示 -->
+            <div class="batch-move-info">
+                <i class="fas fa-info-circle"></i>
+                <span>已选择 <strong id="batchMoveCount">0</strong> 个项目</span>
+            </div>
+
+            <!-- 🔧 文件夹树容器 -->
+            <div class="folder-tree-container" id="batchFolderTree">
+                <div class="loading-small">
+                    <i class="fas fa-spinner fa-spin"></i> 加载文件夹...
+                </div>
+            </div>
+
+            <!-- 🔧 目标文件夹提示 -->
+            <div class="move-target-info" id="batchMoveTargetInfo" style="display:none;">
+                <i class="fas fa-check-circle"></i>
+                <span>目标文件夹：<strong id="batchTargetFolderName"></strong></span>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="cloudApp.closeModal('batchMoveModal')">取消</button>
+            <button class="btn btn-primary" id="batchMoveConfirmBtn" onclick="cloudApp.confirmBatchMove()" disabled>
+                <i class="fas fa-folder-open"></i> 确认移动
+            </button>
+        </div>
+    </div>
+</div>
+
+
+<!-- 🔧 新建协作文档模态框 -->
+<div class="modal" id="createCollabDocModal">
+    <div class="modal-content" style="max-width: 600px;">
+        <div class="modal-header">
+            <h3 class="modal-title">创建协作文档</h3>
+            <button class="close-btn" onclick="cloudApp.closeCreateCollabDocModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <!-- 搜索协作用户 -->
+            <div class="form-group">
+                <label>添加协作者</label>
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text"
+                           id="collabUserSearch"
+                           placeholder="搜索用户..."
+                           oninput="cloudApp.searchCollabUsers(this.value)">
+                </div>
+                <div class="search-results" id="collabUserResults"></div>
+            </div>
+
+            <!-- 已选协作者列表 -->
+            <div class="form-group">
+                <label>已选协作者</label>
+                <div class="selected-collabs" id="selectedCollabs">
+                    <small class="text-muted">暂无选中的协作者</small>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="cloudApp.closeCreateCollabDocModal()">取消</button>
+            <button class="btn btn-primary" onclick="cloudApp.confirmCreateCollabDoc()">创建并协作</button>
+        </div>
+    </div>
+</div>
+<!-- 🔧 协作文档管理模态框 -->
+<div class="modal" id="collabDocManageModal">
+    <div class="modal-content modal-lg">
+        <div class="modal-header">
+            <h3><i class="fas fa-cog"></i> 协作文档管理</h3>
+            <button class="close-btn" onclick="cloudApp.closeCollabManageModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <!-- 文档基本信息 -->
+            <div class="collab-doc-info">
+                <i class="fas fa-file-word fa-2x" id="manageDocIcon"></i>
+                <div class="collab-doc-details">
+                    <h4 id="manageDocName"></h4>
+                    <small id="manageDocPath" class="text-muted"></small>
+                </div>
+            </div>
+
+            <!-- Tab 切换 -->
+            <div class="collab-manage-tabs">
+                <button class="tab-btn active" data-tab="collabs">协作者管理</button>
+                <button class="tab-btn" data-tab="settings">文档设置</button>
+                <button class="tab-btn" data-tab="versions">版本历史</button>
+            </div>
+
+            <!-- 协作者管理面板 -->
+            <div class="tab-panel active" id="tab-collabs">
+                <div class="collab-manage-header">
+                    <button class="btn btn-sm btn-primary" onclick="cloudApp.openAddCollabModal()">
+                        <i class="fas fa-user-plus"></i> 添加协作者
+                    </button>
+                    <div class="search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" id="collabManageSearch" placeholder="搜索协作者...">
+                    </div>
+                </div>
+                <div class="collab-manage-list" id="collabManageList">
+                    <!-- 动态生成 -->
+                </div>
+            </div>
+
+            <!-- 文档设置面板 -->
+            <div class="tab-panel" id="tab-settings">
+                <div class="form-group">
+                    <label>文档名称</label>
+                    <input type="text" id="manageDocNameInput">
+                </div>
+                <div class="form-group">
+                    <label>文档描述</label>
+                    <textarea id="manageDocDescInput" rows="3"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="manageDocPublic">
+                        允许公开链接访问
+                    </label>
+                </div>
+                <button class="btn btn-primary" onclick="cloudApp.saveCollabDocSettings()">保存设置</button>
+            </div>
+
+            <!-- 版本历史面板 -->
+            <div class="tab-panel" id="tab-versions">
+                <div id="collabVersionsList">
+                    <!-- 动态生成 -->
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-danger" onclick="cloudApp.deleteCollabDocument()">
+                <i class="fas fa-trash"></i> 删除文档
+            </button>
+            <button class="btn btn-secondary" onclick="cloudApp.closeCollabManageModal()">关闭</button>
+        </div>
+    </div>
+</div>
+
+
+<!-- 文件评论模态框 -->
+<div class="modal" id="commentModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>文件评论</h3>
+            <button class="close-btn" onclick="cloudApp.closeModal('commentModal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="comment-list" id="commentList">
+                <!-- 评论列表 -->
+            </div>
+            <div class="comment-input">
+                <textarea id="commentInput" placeholder="输入评论..."></textarea>
+                <button onclick="cloudApp.submitComment()">发表评论</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 网盘仪表盘模态框 (备用) -->
+<div class="modal" id="dashboardModal">
+    <div class="modal-content modal-lg">
+        <div class="modal-header">
+            <h3>网盘统计</h3>
+            <button class="close-btn" onclick="cloudApp.closeModal('dashboardModal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="dashboard-stats" id="dashboardStats">
+                <!-- 统计信息 -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 脚本引入 -->
+<!--<script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>-->
+<script src="/static/js/dist/spark-md5.min.js?v=20260328-c05be02"></script>
+<script src="/static/js/utils.js?v=20260328-c05be02"></script>
+<script src="/static/js/api.js?v=20260328-c05be02"></script>
+<script src="/static/js/cloud.js?v=20260328-c05be02"></script>
+
+<script>
+    // 🔧 初始化侧边栏按钮显示状态
+    document.addEventListener('DOMContentLoaded', () => {
+        const toggleBtn = document.getElementById('sidebarToggleBtn');
+        if (toggleBtn && window.innerWidth <= 768) {
+            toggleBtn.style.display = 'block';
+        }
+
+        // 窗口大小变化时更新按钮显示
+        window.addEventListener('resize', () => {
+            if (toggleBtn) {
+                toggleBtn.style.display = window.innerWidth <= 768 ? 'block' : 'none';
+            }
+        });
+
+        // 监听选中状态变化
+        setInterval(() => {
+            const batchRestoreBtn = document.getElementById('batchRestoreBtn');
+            const batchDeleteTrashBtn = document.getElementById('batchDeleteTrashBtn');
+
+            if (batchRestoreBtn && batchDeleteTrashBtn) {
+                const hasSelection = cloudApp?.selectedFiles?.size > 0;
+                batchRestoreBtn.style.display = hasSelection ? 'inline-block' : 'none';
+                batchDeleteTrashBtn.style.display = hasSelection ? 'inline-block' : 'none';
+            }
+        }, 500);
+
+
+    });
+</script>
+</body>
+</html>

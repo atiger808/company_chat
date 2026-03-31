@@ -12,12 +12,15 @@ from .views import (
     DepartmentViewSet,
     AdminDashboardViewSet,
     UserAdminViewSet,
+    DepartmentListViewSet,
 )
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet, basename='user')
 router.register(r'departments', DepartmentViewSet, basename='department')
 router.register(r'admin/users', UserAdminViewSet, basename='admin-users')
+router.register(r'admin/departments', DepartmentListViewSet, basename='admin-department')
+
 
 
 urlpatterns = [
@@ -53,7 +56,6 @@ urlpatterns = [
     path('profile/', UserViewSet.as_view({'put': 'update_profile', 'patch': 'update_profile'}), name='user-profile'),
     path('change-password/', UserViewSet.as_view({'post': 'change_password'}), name='user-change-password'),
     path('upload-avatar/', UserViewSet.as_view({'post': 'upload_avatar'}), name='user-upload-avatar'),
-    path('list/', UserViewSet.as_view({'get': 'list_users'}), name='user-list'),
     path('search_users/', UserViewSet.as_view({'get': 'search_users'}), name='user-search'),
     path('online/', UserViewSet.as_view({'get': 'online_users'}), name='user-online'),
     path('<int:pk>/profile/', UserViewSet.as_view({'get': 'get_user_profile'}), name='user-profile-detail'),
@@ -62,4 +64,5 @@ urlpatterns = [
     path('list/', UserViewSet.as_view({'get': 'list_users'}), name='user-list'),
     # 获取好友列表
     path('friends/', UserViewSet.as_view({'get': 'get_friends'}), name='user-friends'),
+    path('friends/', DepartmentListViewSet.as_view({'get': 'get_friends'}), name='user-friends'),
 ]

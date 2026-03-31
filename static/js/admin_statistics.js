@@ -31,28 +31,39 @@ let adminStatistics = null;
 
 class AdminStatisticsClient {
     constructor() {
+
+        this.isInitialized = false;  // 🔧 添加初始化标志
         this.timeRange = 7; // 默认 7 天
         this.charts = {}; // 存储图表实例
         this.currentUser = null;
         this.isLoading = false;
         this.chartJSLoaded = typeof Chart !== 'undefined'; // 🔧 检查 Chart.js 是否可用
-         this.refreshDebounceTimer = null; // 🔧 防抖定时器
+        this.refreshDebounceTimer = null; // 🔧 防抖定时器
 
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', () => this.init());
         } else {
-            this.init();
+            console.log('AdminStatisticsClient DOMContentLoaded 事件已触发');
+            // this.init();
         }
     }
 
     // ==================== 初始化逻辑 ====================
     async init() {
+        // 🔧 防止重复初始化
+        if (this.isInitialized) {
+            console.log('AdminStatisticsClient 已初始化，跳过');
+            return;
+        }
+
         console.log('AdminStatisticsClient 初始化开始...');
 
         try {
             // 检查登录状态和权限
             const token = localStorage.getItem('access_token');
             if (!token) {
+                // 保存当前页面链接，登录后跳转到该页面
+                localStorage.setItem('redirect_url', window.location.href);
                 window.location.href = '/login/';
                 return;
             }
@@ -81,6 +92,9 @@ class AdminStatisticsClient {
             this.setupEventListeners();
             // 设置自动刷新（每 5 分钟）
             this.startAutoRefresh();
+
+
+            this.isInitialized = true;  // 🔧 添加初始化标志
 
             console.log('AdminStatisticsClient 初始化完成');
 
@@ -523,7 +537,7 @@ class AdminStatisticsClient {
                 plugins: {
                     legend: {
                         position: 'top',
-                        labels: { usePointStyle: true, padding: 20 }
+                        labels: {usePointStyle: true, padding: 20}
                     },
                     tooltip: {
                         mode: 'index',
@@ -533,11 +547,11 @@ class AdminStatisticsClient {
                 scales: {
                     y: {
                         beginAtZero: true,
-                        grid: { color: '#f0f0f0' },
-                        ticks: { stepSize: 1 }
+                        grid: {color: '#f0f0f0'},
+                        ticks: {stepSize: 1}
                     },
                     x: {
-                        grid: { display: false }
+                        grid: {display: false}
                     }
                 },
                 interaction: {
@@ -581,11 +595,11 @@ class AdminStatisticsClient {
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                animation: { duration: 300 },
+                animation: {duration: 300},
                 plugins: {
                     legend: {
                         position: 'right',
-                        labels: { usePointStyle: true, boxWidth: 10 }
+                        labels: {usePointStyle: true, boxWidth: 10}
                     }
                 },
                 cutout: '60%'
@@ -629,9 +643,9 @@ class AdminStatisticsClient {
                 indexAxis: 'y',
                 responsive: true,
                 maintainAspectRatio: false,
-                animation: { duration: 300 },
+                animation: {duration: 300},
                 plugins: {
-                    legend: { display: false },
+                    legend: {display: false},
                     tooltip: {
                         callbacks: {
                             title: (context) => `${context[0].label} - ${context[0].raw} 条消息`
@@ -639,12 +653,13 @@ class AdminStatisticsClient {
                     }
                 },
                 scales: {
-                    x: { grid: { color: '#f0f0f0' } },
-                    y: { grid: { display: false } }
+                    x: {grid: {color: '#f0f0f0'}},
+                    y: {grid: {display: false}}
                 }
             }
         });
     }
+
     // 渲染水平柱状图（部门统计）
     renderHorizontalBarChart(data, canvasId, config) {
         const canvas = document.getElementById(canvasId);
@@ -672,16 +687,16 @@ class AdminStatisticsClient {
                 indexAxis: 'y',
                 responsive: true,
                 maintainAspectRatio: false,
-                animation: { duration: 300 },
+                animation: {duration: 300},
                 plugins: {
                     legend: {
                         position: 'top',
-                        labels: { usePointStyle: true }
+                        labels: {usePointStyle: true}
                     }
                 },
                 scales: {
-                    x: { beginAtZero: true, grid: { color: '#f0f0f0' } },
-                    y: { grid: { display: false } }
+                    x: {beginAtZero: true, grid: {color: '#f0f0f0'}},
+                    y: {grid: {display: false}}
                 }
             }
         });

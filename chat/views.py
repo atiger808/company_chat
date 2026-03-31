@@ -37,8 +37,10 @@ from accounts.models import CustomUser, Department
 from .models import ChatRoom, Message, MessageReadStatus, MessageDeleteStatus, ChatRoomDeleteStatus, FileUpload, SystemConfig
 from .serializers import ChatRoomSerializer, MessageSerializer, MemberListSerializer
 from .pagination import ChatRoomPagination, MessageHistoryPagination, MessagePagination
-from accounts.views import IsAdminOrSuperAdmin, IsSuperAdmin
-from utils.utils import SystemConfigManager
+
+from accounts.permissions import IsSuperAdmin, IsAdminOrSuperAdmin, IsAdminUserManagement
+
+from utils.utils import SystemConfigManager, require_super_admin, require_admin_or_super_admin
 
 
 
@@ -64,8 +66,6 @@ class VersionView(APIView):
             with open(update_msg_file, 'r', encoding='utf-8') as f:
                 update_message = f.read().strip()
 
-        logger.info(
-            f"get_version: app_version={app_version}, static_version={static_version}, build_time={build_time}, force_update={force_update}, update_message={update_message}")
         return JsonResponse({
             'app_version': app_version,
             'static_version': static_version,
@@ -736,7 +736,7 @@ class MessageViewSet(viewsets.ModelViewSet):
         return Response({'chat_room_id': chat_room_id, 'unread_count': count})
 
     @action(detail=False, methods=['post'])
-    def mark_as_read(self, request):
+    def mark_as_read_v1(self, request):
         """批量标记消息为已读"""
         message_ids = request.data.get('message_ids', [])
         chat_room_id = request.data.get('chat_room_id')
@@ -762,6 +762,30 @@ class MessageViewSet(viewsets.ModelViewSet):
             except Message.DoesNotExist:
                 logger.info(f"message {msg_id} 不存在")
                 continue
+        return Response({'status': 'success'})
+
+    @action(detail=False, methods=['post'])
+    def mark_as_read(self, request):
+        message_ids = request.data.get('message_ids', [])
+        chat_room_id = request.data.get('chat_room_id')
+        if not chat_room_id:
+            return Response({'error': '缺少 chat_room_id'}, status=400)
+        try:
+            chat_room = ChatRoom.objects.get(id=chat_room_id, members=request.user)
+        except ChatRoom.DoesNotExist:
+            return Response({'error': '聊天室不存在'}, status=404)
+
+        # 批量创建或忽略已存在的记录
+        existing = MessageReadStatus.objects.filter(
+            message_id__in=message_ids,
+            user=request.user
+        ).values_list('message_id', flat=True)
+        new_records = [
+            MessageReadStatus(message_id=mid, user=request.user)
+            for mid in message_ids if mid not in existing
+        ]
+        MessageReadStatus.objects.bulk_create(new_records, ignore_conflicts=True)
+
         return Response({'status': 'success'})
 
     @action(detail=False, methods=['post'])
@@ -1558,7 +1582,7 @@ class ChatRoomAdminViewSet(viewsets.ModelViewSet):
     """聊天室管理视图集（管理员专用）"""
     queryset = ChatRoom.objects.select_related('creator')
     serializer_class = ChatRoomSerializer
-    permission_classes = [IsSuperAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsSuperAdmin]
     pagination_class = ChatRoomPagination  # 🔑 关键修复：添加分页支持
 
     def get_queryset(self):
@@ -1866,12 +1890,13 @@ class ChatRoomAdminViewSet(viewsets.ModelViewSet):
 
 class AdminStatisticsViewSet(viewsets.ViewSet):
     """管理控制台 - 数据统计视图集"""
-    permission_classes = [IsSuperAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsSuperAdmin]
 
     @action(detail=False, methods=['get'])
     def overview(self, request):
         """📊 概览统计（今日/昨日/本周/本月）"""
-        now = timezone.now()
+        # now = timezone.now()
+        now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         yesterday_start = today_start - timedelta(days=1)
         week_start = today_start - timedelta(days=now.weekday())
@@ -1951,7 +1976,7 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
     def user_trends(self, request):
         """📈 用户趋势统计（近 30 天）"""
         days = int(request.query_params.get('days', 30))
-        end_date = timezone.now().date()
+        end_date = datetime.now().date()
         start_date = end_date - timedelta(days=days)
 
         trends = []
@@ -1985,7 +2010,7 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
     def message_trends(self, request):
         """💬 消息趋势统计（近 30 天）"""
         days = int(request.query_params.get('days', 30))
-        end_date = timezone.now().date()
+        end_date = datetime.now().date()
         start_date = end_date - timedelta(days=days)
 
         trends = []
@@ -2022,10 +2047,6 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def department_stats(self, request):
         """🏢 部门统计"""
-        from django.db.models import Count, Q
-        from accounts.models import CustomUser, Department
-        from chat.models import Message
-
         # 获取所有部门
         departments = Department.objects.all().order_by('-id')
 
@@ -2066,7 +2087,7 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
         """🏆 活跃用户排行榜（修复外键名称）"""
         limit = int(request.query_params.get('limit', 10))
         days = int(request.query_params.get('days', 7))
-        start_date = timezone.now() - timedelta(days=days)
+        start_date = datetime.now() - timedelta(days=days)
 
         # 🔧 关键修复：使用正确的外键名称 'chat_rooms' 而不是 'chatroom_members'
         # 同时使用 'sent_messages' 而不是 'messages'
@@ -2100,7 +2121,7 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
         """👥 热门聊天室排行榜"""
         limit = int(request.query_params.get('limit', 10))
         days = int(request.query_params.get('days', 7))
-        start_date = timezone.now() - timedelta(days=days)
+        start_date = datetime.now() - timedelta(days=days)
 
         # ✅ 这里使用 'messages' 是正确的，因为 ChatRoom.messages 是正确的外键
         rooms = ChatRoom.objects.annotate(
@@ -2127,7 +2148,7 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
     def message_type_distribution(self, request):
         """📊 消息类型分布"""
         days = int(request.query_params.get('days', 30))
-        start_date = timezone.now() - timedelta(days=days)
+        start_date = datetime.now() - timedelta(days=days)
 
         distribution = Message.objects.filter(
             timestamp__gte=start_date
@@ -2155,7 +2176,7 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
     def peak_hours(self, request):
         """⏰ 活跃时段分析"""
         days = int(request.query_params.get('days', 7))
-        start_date = timezone.now() - timedelta(days=days)
+        start_date = datetime.now() - timedelta(days=days)
 
         # 按小时统计消息数
         from django.db.models.functions import ExtractHour
@@ -2187,7 +2208,7 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
         report_type = request.query_params.get('type', 'overview')
         response = HttpResponse(content_type='text/csv')
         response[
-            'Content-Disposition'] = f'attachment; filename="statistics_{report_type}_{timezone.now().strftime("%Y%m%d")}.csv"'
+            'Content-Disposition'] = f'attachment; filename="statistics_{report_type}_{datetime.now().strftime("%Y%m%d")}.csv"'
 
         writer = csv.writer(response)
 
@@ -2195,11 +2216,11 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
             writer.writerow(['统计类型', '数值', '单位'])
             writer.writerow(['总用户数', CustomUser.objects.count(), '人'])
             writer.writerow(['今日活跃用户', CustomUser.objects.filter(
-                last_login__gte=timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)).count(), '人'])
+                last_login__gte=datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)).count(), '人'])
             writer.writerow(['在线用户', CustomUser.objects.filter(is_online=True).count(), '人'])
             writer.writerow(['总聊天室', ChatRoom.objects.count(), '个'])
             writer.writerow(['今日消息数', Message.objects.filter(
-                timestamp__gte=timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)).count(), '条'])
+                timestamp__gte=datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)).count(), '条'])
 
         elif report_type == 'users':
             writer.writerow(['用户 ID', '用户名', '真实姓名', '部门', '消息数', '最后登录'])
@@ -2232,7 +2253,7 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
 
 class SystemSettingsViewSet(viewsets.ViewSet):
     """🔧 系统设置视图集（企业级配置管理）"""
-    permission_classes = [IsSuperAdmin]
+    permission_classes = [permissions.IsAuthenticated]
 
     CACHE_PREFIX = 'company_chat:config:'  # ✅ 添加前缀避免冲突
 
@@ -2646,6 +2667,7 @@ class SystemSettingsViewSet(viewsets.ViewSet):
             return Response({'error': '配置项不存在'}, status=status.HTTP_404_NOT_FOUND)
 
     @action(detail=False, methods=['get'])
+    @require_super_admin()
     def export_configs(self, request):
         """📤 导出系统配置（修复版）"""
 
@@ -2684,14 +2706,14 @@ class SystemSettingsViewSet(viewsets.ViewSet):
                 json.dumps(configs, ensure_ascii=False, indent=2),
                 content_type='application/json; charset=utf-8'
             )
-            filename = f'system_configs_{timezone.now().strftime("%Y%m%d_%H%M%S")}.json'
+            filename = f'system_configs_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
             response['Content-Disposition'] = f'attachment; filename="{filename}"'
             return response
 
         else:
             # CSV 格式导出（默认）
             response = HttpResponse(content_type='text/csv; charset=utf-8')
-            filename = f'system_configs_{timezone.now().strftime("%Y%m%d_%H%M%S")}.csv'
+            filename = f'system_configs_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
             response['Content-Disposition'] = f'attachment; filename="{filename}"'
 
             # 🔧 关键修复：添加 BOM 头，确保 Excel 正确显示中文
@@ -2722,7 +2744,9 @@ class SystemSettingsViewSet(viewsets.ViewSet):
             return response
 
 
+
     @action(detail=False, methods=['post'])
+    @require_super_admin()
     def update_config(self, request):
         """✏️ 更新单个配置项"""
         
@@ -2801,6 +2825,7 @@ class SystemSettingsViewSet(viewsets.ViewSet):
         })
 
     @action(detail=False, methods=['post'])
+    @require_super_admin()
     def batch_update(self, request):
         """📦 批量更新配置"""
         
@@ -2865,6 +2890,7 @@ class SystemSettingsViewSet(viewsets.ViewSet):
         })
 
     @action(detail=False, methods=['post'])
+    @require_super_admin()
     def reset_to_default(self, request):
         """🔄 重置配置为默认值"""
         
@@ -2969,6 +2995,7 @@ class SystemSettingsViewSet(viewsets.ViewSet):
         })
 
     @action(detail=False, methods=['post'])
+    @require_super_admin()
     def clear_cache(self, request):
         """🗑️ 清除系统缓存"""
         cache_type = request.data.get('type', 'all')

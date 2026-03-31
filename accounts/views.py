@@ -32,34 +32,7 @@ from .serializers import (
     UserListSerializer,
     AvatarUploadSerializer
 )
-
-
-class IsSuperAdmin(permissions.BasePermission):
-    """
-    🔑 仅超级管理员权限
-    检查 user_type == 'super_admin'
-    """
-
-    def has_permission(self, request, view):
-        # 检查用户是否认证
-        if not request.user or not request.user.is_authenticated:
-            return False
-
-        # 检查是否为超级管理员,且用户名为superman
-        return getattr(request.user, 'user_type', '') == 'super_admin'
-
-
-class IsAdminOrSuperAdmin(permissions.BasePermission):
-    """管理员或超级管理员权限"""
-
-    def has_permission(self, request, view):
-        # 检查用户是否认证
-        if not request.user or not request.user.is_authenticated:
-            return False
-
-        return getattr(request.user, 'user_type', '') in ['super_admin', 'admin']
-
-
+from .permissions import IsSuperAdmin, IsAdminOrSuperAdmin, IsAdminUserManagement
 
 
 class AdminDashboardViewSet(viewsets.ViewSet):
@@ -121,11 +94,128 @@ class AdminDashboardViewSet(viewsets.ViewSet):
         return Response(data)
 
 
+# accounts/views.py - 添加新的视图集
+
+class AdminStatsViewSet(viewsets.ViewSet):
+    """
+    🔧 管理员数据统计视图集
+    - 仅超级管理员可访问
+    """
+    permission_classes = [permissions.IsAuthenticated, IsSuperAdmin]
+
+    @action(detail=False, methods=['get'])
+    def overview(self, request):
+        """📊 统计概览"""
+        from django.db.models import Count, Q
+        from chat.models import ChatRoom, Message
+
+        # 用户统计
+        user_stats = CustomUser.objects.aggregate(
+            total=Count('id'),
+            active=Count('id', filter=Q(is_active=True)),
+            super_admin=Count('id', filter=Q(user_type='super_admin')),
+            admin=Count('id', filter=Q(user_type='admin')),
+            user=Count('id', filter=Q(user_type='user'))
+        )
+
+        # 部门统计
+        dept_stats = Department.objects.annotate(
+            user_count=Count('customuser')
+        ).values('name', 'user_count').order_by('-user_count')[:10]
+
+        # 聊天室统计
+        room_stats = ChatRoom.objects.aggregate(
+            total=Count('id'),
+            active=Count('id', filter=Q(is_active=True))
+        )
+
+        # 消息统计（最近 7 天）
+        from django.utils import timezone
+        from datetime import timedelta
+        week_ago = timezone.now() - timedelta(days=7)
+        message_stats = Message.objects.filter(
+            timestamp__gte=week_ago
+        ).aggregate(
+            total=Count('id'),
+            daily=Count('id', filter=Q(timestamp__date=timezone.now().date()))
+        )
+
+        return Response({
+            'users': user_stats,
+            'departments': list(dept_stats),
+            'chat_rooms': room_stats,
+            'messages': message_stats,
+            'last_updated': timezone.now().isoformat()
+        })
+
+    @action(detail=False, methods=['get'])
+    def user_trend(self, request):
+        """📈 用户增长趋势"""
+        from django.db.models import Count
+        from django.db.models.functions import TruncDate
+        from django.utils import timezone
+        from datetime import timedelta
+
+        days = int(request.query_params.get('days', 30))
+        start_date = timezone.now().date() - timedelta(days=days)
+
+        trend = CustomUser.objects.filter(
+            date_joined__date__gte=start_date
+        ).annotate(
+            date=TruncDate('date_joined')
+        ).values('date').annotate(
+            count=Count('id')
+        ).order_by('date')
+
+        return Response({
+            'trend': list(trend),
+            'period': f'{days}天'
+        })
+
+    @action(detail=False, methods=['get'])
+    def activity_ranking(self, request):
+        """🏆 活跃用户排行"""
+        from chat.models import Message
+        from django.db.models import Count
+        from django.utils import timezone
+        from datetime import timedelta
+
+        days = int(request.query_params.get('days', 7))
+        start_time = timezone.now() - timedelta(days=days)
+
+        ranking = Message.objects.filter(
+            timestamp__gte=start_time
+        ).values('sender').annotate(
+            message_count=Count('id')
+        ).order_by('-message_count')[:20]
+
+        # 关联用户信息
+        user_ids = [item['sender'] for item in ranking]
+        users = CustomUser.objects.filter(id__in=user_ids).values('id', 'username', 'real_name', 'avatar')
+        user_map = {u['id']: u for u in users}
+
+        result = []
+        for item in ranking:
+            user = user_map.get(item['sender'], {})
+            result.append({
+                'user_id': item['sender'],
+                'username': user.get('username', ''),
+                'real_name': user.get('real_name', ''),
+                'avatar': user.get('avatar', ''),
+                'message_count': item['message_count']
+            })
+
+        return Response({
+            'ranking': result,
+            'period': f'{days}天'
+        })
+
+
+
 class UserAdminViewSet(viewsets.ModelViewSet):
     """用户管理视图集（管理员专用）"""
     queryset = CustomUser.objects.all()
-    serializer_class = UserDetailSerializer
-    permission_classes = [IsSuperAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsAdminUserManagement]
 
     def handle_exception(self, exc):
         """统一异常处理"""
@@ -156,15 +246,38 @@ class UserAdminViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         """根据不同操作返回不同的序列化器"""
         if self.action == 'create':
-            # 创建用户时使用 AdminUserCreateSerializer
             return AdminUserCreateSerializer
         elif self.action in ['update', 'partial_update']:
-            # 更新用户时使用 AdminProfileUpdateSerializer
             return AdminProfileUpdateSerializer
-        return super().get_serializer_class()
+        return UserDetailSerializer
 
     def get_queryset(self):
+        """
+        🔧 权限过滤：普通管理员只能看到同部门用户
+        """
         queryset = super().get_queryset()
+        user = self.request.user
+
+        # 🔧 普通管理员只能看到同部门的普通用户
+        if not user.is_superuser:
+            queryset = queryset.filter(
+                user_type__in=['user', 'normal', 'admin']
+            )
+            # 无部门的管理员只能管理无部门的普通用户
+            # if user.department:
+            #     queryset = queryset.filter(
+            #         department=user.department,
+            #         user_type__in=['user', 'normal', 'admin']  # 只能看到普通用户
+            #     )
+            # else:
+            #     # 无部门的管理员只能管理无部门的普通用户
+            #     queryset = queryset.filter(
+            #         department__isnull=True,
+            #         user_type__in=['user', 'normal', 'admin']
+            #     )
+        # else:
+            # 超级管理员排除自己
+            # queryset = queryset.exclude(id=user.id)
 
         # 支持搜索
         search = self.request.query_params.get('search', '')
@@ -178,28 +291,108 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 Q(position__icontains=search)
             )
 
-        # 支持按用户类型过滤
-        user_type = self.request.query_params.get('user_type', '')
-        if user_type:
-            queryset = queryset.filter(user_type=user_type)
+        # 按用户类型过滤（仅超级管理员可用）
+        if user.is_superuser:
+            user_type = self.request.query_params.get('user_type', '')
+            if user_type:
+                queryset = queryset.filter(user_type=user_type)
 
-        # 支持按部门过滤
-        department = self.request.query_params.get('department', '')
-        if department:
-            queryset = queryset.filter(department_id=department)
+            # 按部门过滤（仅超级管理员可用）
+            department = self.request.query_params.get('department', '')
+            if department:
+                queryset = queryset.filter(department_id=department)
 
         return queryset.order_by('-date_joined')
 
+    def create(self, request, *args, **kwargs):
+        """
+        🔧 关键修复：创建用户时的权限控制
+        """
+        user = request.user
 
+        # 🔧 普通管理员不能创建超级管理员或管理员
+        if not user.is_superuser:
+            request_data = request.data.copy()
+
+            # 强制设置为普通用户
+            request_data['user_type'] = 'normal'
+
+            # 强制设置为当前管理员的部门
+            if user.department:
+                request_data['department'] = user.department.id
+            else:
+                request_data['department'] = None
+
+            # 更新请求数据
+            request._full_data = request_data
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def update(self, request, *args, **kwargs):
+        """
+        🔧 关键修复：更新用户时的权限控制
+        """
+        user = request.user
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+
+        # 🔧 普通管理员不能修改用户类型和部门
+        if not user.is_superuser:
+            request_data = request.data.copy()
+
+            # 移除用户类型和部门字段（防止被修改）
+            request_data.pop('user_type', None)
+            request_data.pop('department', None)
+
+            # 确保不能设置为超级管理员或管理员
+            if instance.user_type != 'normal':
+                return Response(
+                    {'error': '普通管理员只能管理普通用户'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            # 更新请求数据
+            request._full_data = request_data
+
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        return Response(serializer.data)
 
     @action(detail=True, methods=['post'])
     def reset_password(self, request, pk=None):
-        """重置用户密码"""
-        user = self.get_object()
+        """
+        🔧 重置密码时的权限控制
+        """
+        user = request.user
+        target_user = self.get_object()
+
+        # 🔧 普通管理员不能重置超级管理员或管理员的密码
+        if not user.is_superuser and target_user.user_type != 'normal':
+            return Response(
+                {'error': '普通管理员只能重置普通用户的密码'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         new_password = request.data.get('password', '123456')
 
-        user.set_password(new_password)
-        user.save()
+        # 密码强度验证
+        if len(new_password) < 6:
+            return Response(
+                {'error': '密码长度不能少于 6 位'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        target_user.set_password(new_password)
+        target_user.save()
+
+        logger.info(f'{user} 重置了用户 {target_user.username} 的密码')
 
         return Response({
             'message': '密码已重置',
@@ -208,22 +401,35 @@ class UserAdminViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def toggle_status(self, request, pk=None):
-        """启用/禁用用户"""
-        if not request.user.is_superuser:
-            return Response({'error': '无操作权限'}, status=status.HTTP_403_FORBIDDEN)
+        """
+        🔧 切换用户状态时的权限控制
+        """
+        user = request.user
+        target_user = self.get_object()
 
-        user = self.get_object()
-        user.is_active = not user.is_active
-        user.save()
+        # 🔧 普通管理员不能操作超级管理员或管理员
+        if not user.is_superuser and target_user.user_type != 'normal':
+            return Response(
+                {'error': '普通管理员只能操作普通用户'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        target_user.is_active = not target_user.is_active
+        target_user.save()
+
+        logger.info(f'{user} {"启用" if target_user.is_active else "禁用"}了用户 {target_user.username}')
 
         return Response({
-            'message': f'用户已{"启用" if user.is_active else "禁用"}',
-            'is_active': user.is_active
+            'message': f'用户已{"启用" if target_user.is_active else "禁用"}',
+            'is_active': target_user.is_active
         })
 
     @action(detail=False, methods=['post'])
     def batch_delete(self, request):
-        """批量删除用户"""
+        """
+        🔧 批量删除时的权限控制
+        """
+        user = request.user
         user_ids = request.data.get('user_ids', [])
 
         if not user_ids:
@@ -232,41 +438,62 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 只有超级管理员才能批量删除用户
-        if not request.user.is_superuser:
-            return Response({'error': '无操作权限'}, status=status.HTTP_403_FORBIDDEN)
-
         # 防止删除自己
-        if request.user.id in user_ids:
+        if user.id in user_ids:
             return Response(
                 {'error': '不能删除自己'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        deleted_count = CustomUser.objects.filter(id__in=user_ids).delete()[0]
+        # 🔧 普通管理员只能批量删除普通用户
+        if not user.is_superuser:
+            # 检查是否有非普通用户
+            non_user_users = CustomUser.objects.filter(
+                id__in=user_ids,
+                user_type__in=['super_admin', 'admin']
+            )
+            if non_user_users.exists():
+                return Response(
+                    {'error': '普通管理员只能删除普通用户'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            # 确保只能删除同部门用户
+            if user.department:
+                allowed_ids = CustomUser.objects.filter(
+                    id__in=user_ids,
+                    department=user.department
+                ).values_list('id', flat=True)
+                user_ids = list(allowed_ids)
+
+        deleted_count, _ = CustomUser.objects.filter(id__in=user_ids).delete()
+
+        logger.info(f'{user} 批量删除了 {deleted_count} 个用户')
 
         return Response({
             'message': f'成功删除 {deleted_count} 个用户',
             'deleted_count': deleted_count
         })
 
-
-    # 删除操作，如果是管理员，则允许删除，不能删除自己
     def destroy(self, request, *args, **kwargs):
-        """删除用户"""
-        logger.info(f'{request.user} 删除了用户 {self.get_object()}')
+        """
+        🔧 删除用户时的权限控制
+        """
+        user = request.user
+        instance = self.get_object()
 
-        user = self.get_object()
-        if user.id == request.user.id:
+        # 🔧 普通管理员不能删除超级管理员或管理员
+        if not user.is_superuser and instance.user_type != 'normal':
+            return Response(
+                {'error': '普通管理员只能删除普通用户'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # 不能删除自己
+        if instance.id == user.id:
             return Response(
                 {'error': '不能删除自己'},
                 status=status.HTTP_400_BAD_REQUEST
-            )
-        # 只有超级管理员才能删除用户
-        if not request.user.is_superuser:
-            return Response(
-                {'error': '无操作权限'},
-                status=status.HTTP_403_FORBIDDEN
             )
 
         return super().destroy(request, *args, **kwargs)
@@ -274,7 +501,16 @@ class UserAdminViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'])
     def friends(self, request, pk=None):
         """获取用户的好友列表"""
-        user = self.get_object()
+        logger.info(f'{request.user} 好友列表 pk: {pk}')
+
+        try:
+            user = CustomUser.objects.get(id=pk)
+        except CustomUser.DoesNotExist:
+            return Response(
+                {'error': '用户不存在'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
         friends = user.friends.all().select_related('department')
         serializer = UserListSerializer(friends, many=True, context={'request': request})
         return Response(serializer.data)
@@ -304,34 +540,59 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             'friend_count': len(friend_ids)
         })
 
+    @action(detail=False, methods=['get'])
+    def departments(self, request):
+        """🔧 获取部门列表（用于筛选）"""
+        departments = Department.objects.all().order_by('name')
+        data = [{'id': d.id, 'name': d.name} for d in departments]
+        return Response(data)
 
     @action(detail=False, methods=['get'])
     def export(self, request):
-        """导出用户数据"""
-        from django.http import HttpResponse
-        import csv
+        """🔧 导出用户数据（仅超级管理员可用）"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': '仅超级管理员可执行此操作'},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="users.csv"'
+        try:
+            from django.http import HttpResponse
+            import csv
 
-        writer = csv.writer(response)
-        writer.writerow(['ID', '用户名', '真实姓名', '邮箱', '手机号', '部门', '职位', '用户类型', '注册时间'])
+            response = HttpResponse(content_type='text/csv')
+            response['Content-Disposition'] = 'attachment; filename="users.csv"'
 
-        users = self.get_queryset()
-        for user in users:
+            writer = csv.writer(response)
             writer.writerow([
-                user.id,
-                user.username,
-                user.real_name or '',
-                user.email,
-                user.phone or '',
-                user.department.name if user.department else '',
-                user.position or '',
-                user.user_type,
-                user.date_joined.strftime('%Y-%m-%d %H:%M:%S')
+                'ID', '用户名', '真实姓名', '邮箱', '手机号',
+                '部门', '职位', '用户类型', '状态', '注册时间'
             ])
 
-        return response
+            users = self.get_queryset()
+            for user in users:
+                writer.writerow([
+                    user.id,
+                    user.username,
+                    user.real_name or '',
+                    user.email,
+                    user.phone or '',
+                    user.department.name if user.department else '',
+                    user.position or '',
+                    user.user_type,
+                    '启用' if user.is_active else '禁用',
+                    user.date_joined.strftime('%Y-%m-%d %H:%M:%S')
+                ])
+
+            logger.info(f'{request.user} 导出了用户数据')
+            return response
+
+        except Exception as e:
+            logger.error(f'导出失败：{e}')
+            return Response(
+                {'error': '导出失败'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class DepartmentViewSet(viewsets.ModelViewSet):
@@ -377,6 +638,48 @@ class DepartmentViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(page, many=True)
         return self.get_paginated_response(serializer.data)
 
+
+# accounts/views.py - 添加新的 ViewSet
+
+class DepartmentListViewSet(viewsets.ViewSet):
+    """
+    🔧 部门列表视图集（权限控制）
+    - 超级管理员：可查看所有部门
+    - 普通管理员：只能查看自己的部门
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    # 🔧 关键修复：直接覆盖 list 方法，不使用@action 装饰器
+    def list(self, request):
+        """获取部门列表"""
+        user = request.user
+
+        if user.is_superuser:
+            # 超级管理员查看所有部门
+            departments = Department.objects.all().order_by('name')
+        else:
+            # 普通管理员只查看自己的部门
+            if user.department:
+                departments = Department.objects.filter(id=user.department.id)
+            else:
+                departments = Department.objects.none()
+
+        serializer = DepartmentSerializer(departments, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def my_department(self, request):
+        """获取当前用户所在部门"""
+        user = request.user
+
+        if user.department:
+            serializer = DepartmentSerializer(user.department)
+            return Response(serializer.data)
+        else:
+            return Response(
+                {'message': '用户未分配部门'},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -531,17 +834,44 @@ class UserViewSet(viewsets.ModelViewSet):
             'message': '登录成功'
         })
 
+
+
     @action(detail=False, methods=['post'])
     def logout(self, request):
         """用户登出"""
-        # 更新在线状态
-        logger.info(f'登出用户：{request.user}')
-        request.user.update_online_status(False)
-        # Django logout
-        logout(request)
-        return Response({
-            'message': '登出成功'
-        })
+        # 🔒 验证用户是否已认证
+        if not request.user.is_authenticated:
+            return Response({'error': '用户未登录'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        try:
+            logger.info(f'登出用户：{request.user.username} (ID: {request.user.id})')
+
+            # 🔧 更新在线状态（带异常处理）
+            request.user.update_online_status(False)
+
+            # Django logout
+            logout(request)
+
+            logger.info(f'用户 {request.user.username} 登出成功')
+
+            return Response({
+                'message': '登出成功'
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            # ✅ 记录错误但不影响登出流程
+            logger.error(f'用户 {request.user.username} 登出过程中发生错误：{e}', exc_info=True)
+
+            # 🔧 关键：即使出错也要执行 Django logout
+            try:
+                logout(request)
+            except:
+                pass
+
+            return Response({
+                'error': '登出过程中发生错误，但您已退出登录',
+                'detail': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=['get'])
     def me(self, request):
@@ -728,162 +1058,4 @@ class UserViewSet(viewsets.ModelViewSet):
         user.save()
         return Response({'message': '用户权限已降级'})
 
-# class UserViewSet(viewsets.ModelViewSet):
-#     """用户视图集"""
-#
-#     queryset = CustomUser.objects.all()
-#     serializer_class = UserSerializer
-#
-#     # 默认权限：只有登录用户才能访问（除特殊操作外）
-#     permission_classes = [permissions.IsAuthenticated]
-#
-#     def get_permissions(self):
-#         """
-#         为不同操作设置不同权限
-#         """
-#         if self.action in ['register', 'login']:
-#             # 注册和登录不需要认证
-#             return [permissions.AllowAny()]
-#         elif self.action in ['me', 'update_profile', 'change_password', 'logout']:
-#             # 这些操作需要认证
-#             return [permissions.IsAuthenticated()]
-#         return super().get_permissions()
-#
-#     def get_serializer_class(self):
-#         """根据不同的action返回不同的序列化器"""
-#         if self.action == 'register':
-#             return RegisterSerializer
-#         elif self.action == 'login':
-#             return LoginSerializer
-#         elif self.action == 'change_password':
-#             return ChangePasswordSerializer
-#         elif self.action in ['update_profile', 'partial_update']:
-#             return UserProfileUpdateSerializer
-#         elif self.action == 'upload_avatar':
-#             return AvatarUploadSerializer
-#         elif self.action == 'list_users':
-#             return UserListSerializer
-#         return UserSerializer
-#
-#     @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
-#     def register(self, request):
-#         """用户注册"""
-#         serializer = self.get_serializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-#         user = serializer.save()
-#
-#         refresh = RefreshToken.for_user(user)
-#
-#         return Response({
-#             'user': UserSerializer(user, context={'request': request}).data,
-#             'refresh': str(refresh),
-#             'access': str(refresh.access_token),
-#             'message': '注册成功'
-#         }, status=status.HTTP_201_CREATED)
-#
-#     @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
-#     def login(self, request):
-#         """用户登录"""
-#         serializer = self.get_serializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-#
-#         user = serializer.validated_data['user']
-#         refresh = RefreshToken.for_user(user)
-#
-#         return Response({
-#             'user': UserSerializer(user, context={'request': request}).data,
-#             'refresh': str(refresh),
-#             'access': str(refresh.access_token),
-#             'message': '登录成功'
-#         })
-#
-#     @action(detail=False, methods=['post'])
-#     def logout(self, request):
-#         """用户登出"""
-#         # 更新在线状态
-#         request.user.update_online_status(False)
-#
-#         # Django logout
-#         logout(request)
-#
-#         return Response({
-#             'message': '登出成功'
-#         })
-#
-#     @action(detail=False, methods=['get'])
-#     def me(self, request):
-#         """获取当前用户信息"""
-#         serializer = self.get_serializer(request.user)
-#         return Response(serializer.data)
-#
-#     @action(detail=False, methods=['put', 'patch'])
-#     def update_profile(self, request):
-#         """更新用户资料"""
-#         serializer = self.get_serializer(
-#             request.user,
-#             data=request.data,
-#             partial=True
-#         )
-#         serializer.is_valid(raise_exception=True)
-#         serializer.save()
-#
-#         return Response({
-#             'user': UserSerializer(request.user, context={'request': request}).data,
-#             'message': '资料更新成功'
-#         })
-#
-#     @action(detail=False, methods=['post'])
-#     def change_password(self, request):
-#         """修改密码"""
-#         serializer = self.get_serializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-#         serializer.save()
-#
-#         return Response({
-#             'message': '密码修改成功，请重新登录'
-#         })
-#
-#     @action(detail=False, methods=['post'])
-#     def upload_avatar(self, request):
-#         """上传头像"""
-#         serializer = self.get_serializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-#         user = serializer.save()
-#
-#         return Response({
-#             'avatar_url': request.build_absolute_uri(user.avatar.url),
-#             'message': '头像上传成功'
-#         })
-#
-#     @action(detail=False, methods=['get'])
-#     def list_users(self, request):
-#         """获取用户列表（通讯录）"""
-#         queryset = self.filter_queryset(self.get_queryset())
-#
-#         # 支持搜索
-#         search_query = request.query_params.get('search', '')
-#         if search_query:
-#             queryset = queryset.filter(
-#                 models.Q(username__icontains=search_query) |
-#                 models.Q(email__icontains=search_query) |
-#                 models.Q(department__icontains=search_query) |
-#                 models.Q(position__icontains=search_query)
-#             )
-#
-#         # 排序：在线用户在前
-#         queryset = queryset.order_by('-is_online', '-last_login')
-#
-#         page = self.paginate_queryset(queryset)
-#         if page is not None:
-#             serializer = self.get_serializer(page, many=True, context={'request': request})
-#             return self.get_paginated_response(serializer.data)
-#
-#         serializer = self.get_serializer(queryset, many=True, context={'request': request})
-#         return Response(serializer.data)
-#
-#     @action(detail=False, methods=['get'])
-#     def online_users(self, request):
-#         """获取在线用户"""
-#         online_users = CustomUser.objects.filter(is_online=True)
-#         serializer = UserListSerializer(online_users, many=True, context={'request': request})
-#         return Response(serializer.data)
+

@@ -46,6 +46,12 @@ if [ -f "templates/chat/index.html" ]; then
     echo "✓ 更新 index.html: CURRENT_VERSION=${VERSION}"
 fi
 
+# 3. 更新 JS 中的 CURRENT_VERSION（用于版本检测）
+if [ -f "templates/chat/chat.html" ]; then
+    sed -i "s/const CURRENT_VERSION = '[^']*'/const CURRENT_VERSION = '${VERSION}'/" templates/chat/chat.html
+    echo "✓ 更新 chat.html: CURRENT_VERSION=${VERSION}"
+fi
+
 # 4. 收集静态文件
 echo "📦 收集静态文件..."
 CONDA_ENV_PATH=$(conda info --base)/envs/companychat
@@ -56,8 +62,14 @@ fi
 
 # 使用绝对路径运行 Python
 $CONDA_ENV_PATH/bin/python manage.py collectstatic --noinput
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/chat.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/index.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/admin.html" ${VERSION}
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/cloud.html" ${VERSION}
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/share_detail.html" ${VERSION}
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/share_expired.html" ${VERSION}
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/share_not_found.html" ${VERSION}
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/share_password.html" ${VERSION}
 
 
 # 5. 重启服务

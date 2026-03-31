@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文件分享 - 企业网盘</title>
+    <link rel="stylesheet" href="/static/css/chat.css">
+    <link rel="stylesheet" href="/static/css/cloud.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+<div class="share-page">
+    <div class="share-container">
+        <div class="share-header">
+            <i class="fas fa-cloud"></i>
+            <h1>企业网盘文件分享</h1>
+        </div>
+
+        <div class="share-content" id="shareContent">
+            <div class="loading">
+                <i class="fas fa-spinner fa-spin"></i>
+                <p>加载中...</p>
+            </div>
+        </div>
+
+        <!-- 密码输入模态框 -->
+        <div class="modal" id="passwordModal">
+            <div class="modal-content modal-sm">
+                <div class="modal-header">
+                    <h3>输入访问密码</h3>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>密码</label>
+                        <input type="password" id="sharePassword" placeholder="请输入访问密码">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-primary" onclick="verifyPassword()">验证</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const shareCode = window.location.pathname.split('/').filter(Boolean).pop();
+let shareData = null;
+
+async function loadShare() {
+    try {
+        const response = await fetch(`/api/cloud/share/${shareCode}/`);
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || '加载失败');
+        }
+
+        shareData = data;
+        renderShare(data);
+
+    } catch (error) {
+        document.getElementById('shareContent').innerHTML = `
+            <div class="error">
+                <i class="fas fa-exclamation-circle"></i>
+                <p>${error.message}</p>
+            </div>
+        `;
+    }
+}
+
+function renderShare(data) {
+    const container = document.getElementById('shareContent');
+
+    if (data.share_type === 'password' && !data.validated) {
+        document.getElementById('passwordModal').classList.add('show');
+        return;
+    }
+
+    const file = data.file;
+    const folder = data.folder;
+
+    let html = '';
+
+    if (file) {
+        html = `
+            <div class="file-info">
+                <i class="fas ${file.icon_class || 'fa-file'}"></i>
+                <div class="file-details">
+                    <h2>${file.name}</h2>
+                    <p>大小：${file.size_formatted}</p>
+                    <p>类型：${file.mime_type}</p>
+                    <p>分享者：${data.share_info.owner}</p>
+                    <p>分享时间：${new Date(data.share_info.created_at).toLocaleString('zh-CN')}</p>
+                </div>
+            </div>
+            <a href="/api/cloud/share/${shareCode}/download/" class="btn-download">
+                <i class="fas fa-download"></i> 下载文件
+            </a>
+        `;
+    } else if (folder) {
+        html = `
+            <div class="folder-info">
+                <i class="fas fa-folder"></i>
+                <div class="folder-details">
+                    <h2>${folder.name}</h2>
+                    <p>分享者：${data.share_info.owner}</p>
+                </div>
+            </div>
+            <p>文件夹浏览功能开发中...</p>
+        `;
+    }
+
+    container.innerHTML = html;
+}
+
+async function verifyPassword() {
+    const password = document.getElementById('sharePassword').value;
+
+    try {
+        const response = await fetch(`/api/cloud/share/${shareCode}/`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({password: password})
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || '密码错误');
+        }
+
+        document.getElementById('passwordModal').classList.remove('show');
+        shareData.validated = true;
+        renderShare(shareData);
+
+    } catch (error) {
+        alert(error.message);
+    }
+}
+
+// 页面加载
+loadShare();
+</script>
+</body>
+</html>

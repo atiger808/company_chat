@@ -10,6 +10,8 @@ let adminSettings = null;
 
 class AdminSettingsClient {
     constructor() {
+
+        this.isInitialized = false;
         this.categories = [];
         this.configs = {};
         this.currentCategory = 'basic';
@@ -20,17 +22,25 @@ class AdminSettingsClient {
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', () => this.init());
         } else {
-            this.init();
+            console.log('AdminSettingsClient DOMContentLoaded');
+            // this.init();
         }
     }
 
     async init() {
+        // 🔧 防止重复初始化
+        if (this.isInitialized) {
+            console.log('AdminSettingsClient 已初始化，跳过');
+            return;
+        }
         console.log('AdminSettingsClient 初始化开始...');
 
         try {
             // 权限检查
             const token = localStorage.getItem('access_token');
             if (!token) {
+                // 保存当前页面链接，登录后跳转到该页面
+                localStorage.setItem('redirect_url', window.location.href);
                 window.location.href = '/login/';
                 return;
             }
@@ -54,6 +64,9 @@ class AdminSettingsClient {
 
             // 渲染初始界面
             this.renderConfigList(this.currentCategory);
+
+
+            this.isInitialized = true;
 
             console.log('AdminSettingsClient 初始化完成');
 
@@ -135,6 +148,7 @@ class AdminSettingsClient {
             `;
         });
         container.innerHTML = html;
+
     }
 
     renderConfigList(category) {
@@ -452,6 +466,12 @@ class AdminSettingsClient {
         document.querySelectorAll('#settingsCategoryTabs .tab-btn').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.category === category);
         });
+
+        const settingsCategoryTitle = document.getElementById('settingsCategoryTitle');
+        if (settingsCategoryTitle) {
+            const currentCategory = this.categories.find(cat => cat.key === category);
+            settingsCategoryTitle.textContent = currentCategory ? currentCategory.name : '基本设置';
+        }
 
         // 渲染配置列表
         this.renderConfigList(category);
