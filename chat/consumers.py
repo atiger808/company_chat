@@ -818,3 +818,8 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             'last_seen': event.get('last_seen'),
             'chat_room_id': event.get('chat_room_id')  # 可用于更新特定聊天室的状态
         }))
+
+
+
+
+

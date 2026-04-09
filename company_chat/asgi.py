@@ -23,6 +23,7 @@ from channels.auth import AuthMiddlewareStack
 from channels.db import database_sync_to_async
 from chat.middleware import TokenAuthMiddleware  # 导入自定义中间件
 import chat.routing
+import cloud.routing  # 🔧 新增：导入 cloud 路由
 
 
 # application = ProtocolTypeRouter({
@@ -49,6 +50,14 @@ class TimeoutMiddleware:
         return await self.app(scope, receive, send)
 
 
+
+# 🔧 合并两个应用的路由
+websocket_urlpatterns = [
+    *chat.routing.websocket_urlpatterns,   # chat 应用路由
+    *cloud.routing.websocket_urlpatterns,  # 🔧 cloud 应用路由
+]
+
+
 # 🔧 关键修复 2: 正确的中间件顺序
 application = ProtocolTypeRouter({
     # HTTP 请求
@@ -58,9 +67,7 @@ application = ProtocolTypeRouter({
     "websocket": TimeoutMiddleware(  # 最外层：超时控制
         AllowedHostsOriginValidator(  # 安全验证：允许的主机
             TokenAuthMiddleware(  # 自定义 Token 认证中间件
-                URLRouter(  # URL 路由
-                    chat.routing.websocket_urlpatterns
-                )
+                URLRouter(websocket_urlpatterns)  # 🔧 使用合并后的路由
             )
         )
     ),

@@ -192,6 +192,9 @@ class CloudFile(models.Model):
         verbose_name='当前编辑用户'
     )
 
+    # 🔧 新增：引用计数（同一物理文件被多少用户记录引用）
+    reference_count = models.PositiveIntegerField(default=1, editable=False, verbose_name='引用计数')
+
     class Meta:
         verbose_name = '云文件'
         verbose_name_plural = verbose_name
@@ -201,7 +204,7 @@ class CloudFile(models.Model):
             models.Index(fields=['owner', 'deleted_at']),
             models.Index(fields=['folder', 'deleted_at']),
             models.Index(fields=['owner', 'deleted_at', 'permanently_deleted']),
-            # models.Index(fields=['is_document', 'document_type']),
+            models.Index(fields=['is_document', 'document_type']),
         ]
 
     def __str__(self):
@@ -250,9 +253,6 @@ class CloudFile(models.Model):
         """是否为音频"""
         return self.get_extension() in ['.mp3', '.wav', '.ogg', '.m4a']
 
-    # def is_document(self):
-    #     """是否为文档"""
-    #     return self.get_extension() in self.all_doc_formats()
 
     @property
     def supported_formats(self):
@@ -644,7 +644,7 @@ class DocumentVersion(models.Model):
     class Meta:
         verbose_name = '文档版本'
         verbose_name_plural = verbose_name
-        ordering = ['-version_number']
+        ordering = ['-version_number', '-created_at']
         indexes = [
             models.Index(fields=['file', '-version_number']),
             models.Index(fields=['file', 'is_current']),
@@ -807,3 +807,44 @@ class DocumentCollaboration(models.Model):
             status='editing',
             last_activity__lt=cutoff
         ).update(status='closed', left_at=timezone.now())
+
+
+# cloud/models.py
+
+class DocumentChatMessage(models.Model):
+    """文档协同聊天消息"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    file = models.ForeignKey(
+        'CloudFile',
+        on_delete=models.CASCADE,
+        related_name='chat_messages',
+        verbose_name='文档'
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='doc_chat_messages',
+        verbose_name='发送者'
+    )
+    content = models.TextField(verbose_name='消息内容')
+    reply_to = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='replies',
+        verbose_name='回复的消息'
+    )
+    mentions = models.JSONField(default=list, blank=True, verbose_name='@提及的用户')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='发送时间')
+
+    class Meta:
+        verbose_name = '文档聊天消息'
+        verbose_name_plural = verbose_name
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['file', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.user.username}: {self.content[:50]}'

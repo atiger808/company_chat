@@ -66,6 +66,7 @@ $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/chat.html" 
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/index.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/admin.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/cloud.html" ${VERSION}
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/cloud_editor.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/share_detail.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/share_expired.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/share_not_found.html" ${VERSION}

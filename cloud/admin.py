@@ -16,7 +16,7 @@ class FolderAdmin(admin.ModelAdmin):
 @admin.register(CloudFile)
 class CloudFileAdmin(admin.ModelAdmin):
     """云文件管理"""
-    list_display = ('id', 'name', 'original_name', 'folder', 'owner', 'current_version', 'deleted_at', 'description', 'tags', 'is_starred', 'download_count', 'deleted_at', 'created_at', 'updated_at')
+    list_display = ('id', 'name', 'original_name', 'is_document', 'owner', 'reference_count', 'current_version', 'deleted_at', 'description', 'tags', 'is_starred', 'download_count', 'deleted_at', 'created_at', 'updated_at')
     list_filter = ('owner', 'folder', 'tags')
     search_fields = ('name', 'original_name', 'id', 'md5')
     list_per_page = 20

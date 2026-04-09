@@ -119,3 +119,28 @@
     1：文档编辑页面cloud_editor.html里协同编辑侧边栏增加可复制的当前协作文档的链接方便发送给协作者， 修改协作者也像添加协作者那样以模态框的形式打开，进而对协作者权限的修改以及是否有效的修改；
     2：企业网盘主页cloud.html页面增加协作文档项，实现对协作文档的增删改查等管理操作，满足企业文档协作的基本需求；
     以下粘贴的代码是当前文档编辑主页cloud_editor.html文件，和企业网盘主页cloud.html文件，以及cloud.html页面引入的cloud.js文件；请严格在此提供的代码基础上完善和修复以上以上2条功能
+
+
+    3/31
+    以下是云文件视图，其中里面文件上传create方法出现以下问题需要修复：
+    就是用户A上传文件f,当时文件f已经存在且在用户B的m文件夹下面，用户A上传同一个文件f,虽然返回上传成功，但是无法再用户A的当前文件夹下面看到文件f,如何保证用户A能在自己上传的文件夹下面能看到文件f,且保证文件的唯一性
+
+
+    43/01
+    以下是当前文档编辑页面cloud_editor.html，请在此基础上修复和完善保证协同编辑实时性，以及显示实时编辑提示功能，以及word文档可编辑功能，对onlyoffice自带的聊天功能协作用户无法收到对方的聊天消息进行修复：
+
+    以下是当前文档编辑器应用类DocumentEditorApp，完善该类下面缺失的下面方法：updateRemoteSelection，handleUserJoined，handleUserLeft，handleChatMessage;
+    另外this.currentUser是在哪里赋值的完善下，总之完善和优化DocumentEditorApp类里面缺失的功能以及后端对应的功能：
+
+
+    04/2
+    以下是前端cloud/cloud_editor.html内容和后端cloud/consumers.py内容，在此代码基础上补全前端缺失的toggleEditActivity，另外根据前端cloud_editor.html里面DocumentEditorApp里面的handleCollabMessage方法修复和完善后端consumers.py里面对应的功能
+
+
+
+
+    以下是当前cloud_editor.js代码内容，根据刚才提供以及修复后后端代码：cloud/consumers.py，# cloud/websocket_utils.py， cloud/views.py - DocumentEditorViewSet 完整修复版，在此基础上完善和修复以下前端cloud_editor.js代码，尤其是handleCollabMessage方法：
+
+
+
+    请严格按照以上handleCollabMessage方法消息类型，以及对应的处理消息逻辑修复以下后端cloud/consumers.py， cloud/websocket_utils.py，和update_collaboration_status函数代码逻辑，保证前后端代码逻辑对齐：

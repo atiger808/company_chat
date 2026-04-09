@@ -163,9 +163,14 @@ class AdminChatRoomsClient {
     // ==================== 聊天室列表功能 ====================
 
     // 加载聊天室列表（支持分页）
-    async loadChatRooms(append = false) {
+    async loadChatRooms(append = false, currentPage=null) {
         if (this.chatRoomsLoading) return;
         this.chatRoomsLoading = true;
+
+        console.log('currentPage: ', currentPage)
+        console.log('this.chatRoomsPage: ', this.chatRoomsPage)
+
+        currentPage = currentPage || this.chatRoomsPage;
 
         try {
             if (!append) {
@@ -176,11 +181,11 @@ class AdminChatRoomsClient {
                     this.lastScrollRoomId = firstVisibleRow.dataset.roomId;
                 }
             } else {
-                this.chatRoomsPage += 1;
+                currentPage += 1;
             }
 
             const params = new URLSearchParams({
-                page: this.chatRoomsPage.toString(),
+                page: currentPage.toString(),
                 page_size: this.chatRoomsPageSize.toString()
             });
 

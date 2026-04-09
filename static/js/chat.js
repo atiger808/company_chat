@@ -1731,6 +1731,7 @@ class ChatClient {
             return;
         }
 
+
         try {
             // 使用 Web Audio API 播放提示音
             if (this.audioContext) {

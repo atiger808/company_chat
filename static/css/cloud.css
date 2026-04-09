@@ -623,7 +623,7 @@ body {
 
 .file-grid-item .file-actions {
     display: none;
-    gap: 5px;
+    /*gap: 5px;*/
     justify-content: center;
     margin-top: 10px;
     padding-top: 10px;
@@ -1856,7 +1856,7 @@ body {
 .file-list-header,
 .file-item {
     display: grid;
-    grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) 100px 150px 120px;
+    grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) 100px minmax(200px, 1fr) 120px;
     gap: 10px;
     padding: 12px 20px;
     align-items: center;
@@ -1891,7 +1891,7 @@ body {
 @media (max-width: 768px) {
     .file-list-header,
     .file-item {
-        grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) 80px 60px;
+        grid-template-columns: minmax(150px, 1fr) minmax(200px, 1fr) minmax(150px, 1fr) 60px;
         padding: 10px 15px;
     }
 
@@ -2668,7 +2668,7 @@ body {
 }
 
 .collab-card-footer {
-    display: flex;
+    display: block;
     justify-content: space-between;
     align-items: center;
     margin-top: 8px;
@@ -2695,7 +2695,7 @@ body {
     /*right: 8px;*/
     display: flex;
     gap: 4px;
-    opacity: 0;
+    opacity: 1;
     transition: opacity 0.2s;
     justify-content: center;
     align-items: center;

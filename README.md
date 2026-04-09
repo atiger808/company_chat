@@ -120,3 +120,19 @@ sudo systemctl restart company_chat
 sudo systemctl status company_chat
 ```
 
+
+
+
+
+### onlyoffice安装与配置
+
+
+
+##### 启动onlyoffice相关服务
+
+```
+systemctl status ds-docservice ds-converter ds-metrics
+
+systemctl restart ds-docservice ds-converter ds-metrics
+```
+

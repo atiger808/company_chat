@@ -221,9 +221,12 @@ class AdminConsole {
             case 'rooms':
                 // 加载聊天室管理模块
                 await this.loadModule('chatRooms', window.AdminChatRoomsClient);
+
                 // 加载聊天室列表
                 if (this.modules.chatRooms?.loadChatRooms) {
-                    await this.modules.chatRooms.loadChatRooms();
+                    console.log('加载聊天室列表...');
+                    this.modules.chatRooms.chatRoomsPage = 1;
+                    await this.modules.chatRooms.loadChatRooms(false, 1);
                 }
                 break;
 
@@ -313,6 +316,8 @@ class AdminConsole {
                 break;
             case 'rooms':
                 if (this.isSuperAdmin && window.adminChatRoomsClient) {
+                    console.log('切换聊天室列表...');
+                    window.adminChatRoomsClient.chatRoomsPage = 1;
                     await window.adminChatRoomsClient.loadChatRooms();
                 }
                 break;
@@ -1901,6 +1906,8 @@ class AdminConsole {
                         break;
                     case 'rooms':
                         if (this.isSuperAdmin && window.adminChatRoomsClient) {
+                            console.log('监听加载聊天室列表...');
+                            window.adminChatRoomsClient.chatRoomsPage = 1;
                             window.adminChatRoomsClient.loadChatRooms();
                         }
                         break;
@@ -2207,6 +2214,8 @@ class AdminConsole {
         if (refreshRoomsBtn) {
             refreshRoomsBtn.addEventListener('click', () => {
                 if (window.adminChatRoomsClient) {
+                    console.log('刷新聊天室列表...')
+                    window.adminChatRoomsClient.chatRoomsPage = 1;
                     window.adminChatRoomsClient.loadChatRooms();
                 }
             });

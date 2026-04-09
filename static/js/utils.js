@@ -407,8 +407,120 @@ class Utils {
             document.body.removeChild(textArea);
         }
     }
-}
 
+
+    /**
+     * 计算文件 MD5（分块读取版 - 企业级推荐）
+     * @param {File} file - 文件对象
+     * @param {number} chunkSize - 分块大小（字节），默认 2MB
+     * @param {function} onProgress - 进度回调函数 (currentChunk, totalChunks, percent)
+     * @returns {Promise<string>} MD5 字符串（32位小写十六进制）
+     */
+    async computeFileMd5(file, chunkSize = 2 * 1024 * 1024, onProgress = null) {
+        return new Promise((resolve, reject) => {
+            // 参数校验
+            if (!file || !(file instanceof File)) {
+                reject(new Error('无效的文件对象'));
+                return;
+            }
+
+            const spark = new SparkMD5.ArrayBuffer();
+            const fileSize = file.size;
+            const totalChunks = Math.ceil(fileSize / chunkSize);
+            let currentChunk = 0;
+
+            // 空文件处理
+            if (fileSize === 0) {
+                resolve(SparkMD5.hash(''));
+                return;
+            }
+
+            const loadNext = () => {
+                const start = currentChunk * chunkSize;
+                const end = Math.min(start + chunkSize, fileSize);
+
+                const reader = new FileReader();
+
+                reader.onload = (e) => {
+                    try {
+                        spark.append(e.target.result);
+                        currentChunk++;
+
+                        // 进度回调
+                        if (typeof onProgress === 'function') {
+                            const percent = Math.round((currentChunk / totalChunks) * 100);
+                            onProgress(currentChunk, totalChunks, percent);
+                        }
+
+                        if (currentChunk < totalChunks) {
+                            // 使用 setTimeout 避免阻塞主线程
+                            setTimeout(loadNext, 0);
+                        } else {
+                            // 计算完成
+                            const md5 = spark.end();
+                            resolve(md5.toLowerCase());
+                        }
+                    } catch (error) {
+                        reject(new Error(`MD5 计算错误: ${error.message}`));
+                    }
+                };
+
+                reader.onerror = () => {
+                    reject(new Error(`读取文件块 ${currentChunk + 1} 失败`));
+                };
+
+                reader.onabort = () => {
+                    reject(new Error('文件读取被中止'));
+                };
+
+                // 读取文件块
+                reader.readAsArrayBuffer(file.slice(start, end));
+            };
+
+            // 开始读取
+            loadNext();
+        });
+    }
+
+
+    /**
+     * 使用 Web Worker 计算文件 MD5（超大文件推荐）
+     * @param {File} file - 文件对象
+     * @param {function} onProgress - 进度回调
+     * @returns {Promise<string>} MD5 字符串
+     */
+    async computeFileMd5WithWorker(file, onProgress = null) {
+        return new Promise((resolve, reject) => {
+            // 检查浏览器支持
+            if (!window.Worker) {
+                // 降级使用主线程版本
+                return this.computeFileMd5(file, 2 * 1024 * 1024, onProgress)
+                    .then(resolve)
+                    .catch(reject);
+            }
+
+            const worker = new Worker('/static/js/md5-worker.js');
+
+            worker.onmessage = (e) => {
+                if (e.data.type === 'progress' && typeof onProgress === 'function') {
+                    onProgress(e.data.current, e.data.total, e.data.percent);
+                } else if (e.data.type === 'complete') {
+                    worker.terminate();
+                    resolve(e.data.md5);
+                }
+            };
+
+            worker.onerror = (error) => {
+                worker.terminate();
+                reject(new Error(`Worker 错误: ${error.message}`));
+            };
+
+            // 发送文件（使用 Transferable 优化性能）
+            worker.postMessage({file}, [file]);
+        });
+    }
+
+}
 
 
 // static/js/utils.js - 添加 FrontendConfigManager 类
@@ -440,7 +552,7 @@ class FrontendConfigManager {
                 // 尝试从 localStorage 读取缓存的配置（5 分钟内有效）
                 const cached = localStorage.getItem(this.STORAGE_KEY);
                 if (cached) {
-                    const { configs, timestamp } = JSON.parse(cached);
+                    const {configs, timestamp} = JSON.parse(cached);
                     // 5 分钟内使用缓存
                     if (Date.now() - timestamp < 5 * 60 * 1000) {
                         this.configs = configs;

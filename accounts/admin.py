@@ -15,7 +15,7 @@ class DepartmentAdmin(admin.ModelAdmin):
 
 
 class CustomLoginLogAdmin(admin.ModelAdmin):
-    list_display = ('id', 'username', 'ip', 'agent', 'browser', 'os', 'login_type', 'create_time')
+    list_display = ('id', 'username', 'ip', 'city', 'district', 'agent', 'browser', 'os', 'create_time')
     list_filter = ['login_type', 'os', 'browser']
     search_fields = ('username', 'ip')
     list_per_page = 20

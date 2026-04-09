@@ -525,6 +525,9 @@ class CloudApp {
             let html = '';
             data.forEach(file => {
                 const isFolder = file.is_folder;
+                const isImage = file.is_image || (file.mime_type && file.mime_type.startsWith('image/'));
+                const isVideo = file.is_video || (file.mime_type && file.mime_type.startsWith('video/'));
+                const isPdf = file.document_type === 'pdf' || (file.mime_type && file.mime_type.startsWith('application/pdf'));
                 const isSelected = this.selectedFiles.has(file.id);
                 html += `
                     <div class="file-item ${isFolder ? 'is-folder' : ''} ${isSelected ? 'selected' : ''}" 
@@ -545,11 +548,11 @@ class CloudApp {
                         <div class="file-col size">${isFolder ? '-' : (file.size_formatted || '-')}</div>
                         <div class="file-col date">${this.formatDate(file.updated_at || file.created_at)}</div>
                         <div class="file-col actions">
-                            ${!isFolder ? `
+                            ${!isFolder ? isImage || isVideo || isPdf ? `
                                 <button class="btn-action" onclick="event.stopPropagation(); cloudApp.previewFile('${file.id}')" title="预览">
                                     <i class="fas fa-eye"></i>
                                 </button>
-                            ` : `
+                            ` : `` : `
                                 <button class="btn-action" onclick="event.stopPropagation(); cloudApp.handleItemDoubleClick('${file.id}', true)" title="打开">
                                     <i class="fas fa-folder-open"></i>
                                 </button>
@@ -587,7 +590,7 @@ class CloudApp {
                             <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${file.id}'], ${isFolder})" title="移动">
                                 <i class="fas fa-cut"></i>
                             </button>
-                            <button class="btn-action btn-danger" onclick="event.stopPropagation(); cloudApp.deleteItem('${file.id}', ${isFolder})" title="删除">
+                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${file.id}', ${isFolder})" title="删除">
                                 <i class="fas fa-trash"></i>
                             </button>
                         </div>
@@ -614,6 +617,7 @@ class CloudApp {
                 const isSelected = this.selectedFiles.has(file.id);
                 const isImage = file.is_image || (file.mime_type && file.mime_type.startsWith('image/'));
                 const isVideo = file.is_video || (file.mime_type && file.mime_type.startsWith('video/'));
+                const isPdf = file.document_type === 'pdf' || (file.mime_type && file.mime_type.startsWith('application/pdf'));
                 const tagType = isImage ? 'img' : isVideo ? 'video' : 'file';
 
 
@@ -651,11 +655,11 @@ class CloudApp {
                         <div class="file-date">${this.formatDate(file.updated_at || file.created_at)}</div>
                         <div class="file-actions">
                         
-                            ${!isFolder ? `
+                            ${!isFolder ? isImage || isVideo || isPdf ? `
                                 <button class="btn-action" onclick="event.stopPropagation(); cloudApp.previewFile('${file.id}')" title="预览">
                                     <i class="fas fa-eye"></i>
                                 </button>
-                            ` : `
+                            ` : `` : `
                                 <button class="btn-action" onclick="event.stopPropagation(); cloudApp.handleItemDoubleClick('${file.id}', true)" title="打开">
                                     <i class="fas fa-folder-open"></i>
                                 </button>
@@ -1505,8 +1509,8 @@ class CloudApp {
                         <button class="btn-action" onclick="event.stopPropagation(); cloudApp.openCollabDoc('${doc.id}')" title="编辑">
                             <i class="fas fa-edit"></i>
                         </button>
-                        <button class="btn-action" onclick="event.stopPropagation(); cloudApp.manageCollabDoc('${doc.id}')" title="管理">
-                            <i class="fas fa-cog"></i>
+                        <button class="btn-action" onclick="event.stopPropagation(); cloudApp.removeCollabDoc('${doc.id}')" title="删除">
+                            <i class="fas fa-trash"></i>
                         </button>
                         <button class="btn-action" onclick="event.stopPropagation(); cloudApp.shareFile('${doc.id}', false)" title="分享">
                             <i class="fas fa-share-alt"></i>
@@ -1548,7 +1552,7 @@ class CloudApp {
                                 ${doc.doc_type_text || this.getDocTypeText(docType)}
                             </span>
                         </div>
-                        <div class="collab-type">
+                       <div class="collab-type">
                             <span title="协作者"><i class="fas fa-users"></i> ${collaboratorCount}</span>
                         </div>
                     </div>
@@ -1564,13 +1568,14 @@ class CloudApp {
                             <i class="fas fa-edit"></i>
                         </button>
                         ${isOwner ? `
-                            <button class="btn-icon" onclick="event.stopPropagation(); cloudApp.manageCollabDoc('${doc.id}')" title="管理">
-                                <i class="fas fa-cog"></i>
+                            <button class="btn-icon" onclick="event.stopPropagation(); cloudApp.removeCollabDoc('${doc.id}')" title="删除">
+                                <i class="fas fa-trash"></i>
                             </button>
                         ` : ''}
                         <button class="btn-icon" onclick="event.stopPropagation(); cloudApp.shareFile('${doc.id}', false)" title="分享">
                             <i class="fas fa-share-alt"></i>
                         </button>
+                        
                     </div>
                     
                     ${!isOwner ? '<div class="collab-badge">协作</div>' : ''}
@@ -1617,7 +1622,7 @@ class CloudApp {
 
         try {
             // 加载文档详情
-            const response = await fetch(`/api/cloud/documents/${docId}/`, {
+            const response = await fetch(`/api/cloud/documents/${docId}/retrieve_doc_detail/`, {
                 headers: TokenManager.getHeaders()
             });
             if (!response.ok) throw new Error('加载文档失败');
@@ -1788,7 +1793,6 @@ class CloudApp {
             this.showError('移除失败', error.message);
         }
     }
-
 
 
     // 🔧 删除协作文档
@@ -1969,7 +1973,7 @@ class CloudApp {
     /**
      * 🔧 搜索协作用户
      */
-    async searchCollabUsers(keyword, elementId='collabUserResults') {
+    async searchCollabUsers(keyword, elementId = 'collabUserResults') {
         if (!keyword.trim()) {
             document.getElementById(elementId).innerHTML = '';
             document.getElementById(elementId).classList.remove('show');
@@ -2001,7 +2005,7 @@ class CloudApp {
     /**
      * 🔧 渲染搜索结果
      */
-    renderCollabUserResults(users, elementId='collabUserResults') {
+    renderCollabUserResults(users, elementId = 'collabUserResults') {
         const container = document.getElementById(elementId);
         if (users.length === 0) {
             container.innerHTML = '<div class="empty-tip">未找到用户</div>';
@@ -2144,7 +2148,7 @@ class CloudApp {
         try {
             this.showLoading();
 
-            const response = await fetch('/api/cloud/documents/custom-create/', {
+            const response = await fetch('/api/cloud/documents/create-collab/', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -2193,6 +2197,37 @@ class CloudApp {
         this.currentCreateFileId = null;
         this.currentCreateFileName = null;
         this.selectedCollabUsers.clear();
+    }
+
+
+    async removeCollabDoc(fileId) {
+
+        if (!fileId) {
+            this.showError('操作失败', '未选择文档');
+            return;
+        }
+
+        const confirmed = await this.showConfirmDialog(
+            '删除协作文档',
+            '确定要删除这个协作文档吗？<br><small style="color: var(--text-light);">删除后所有协作者将失去访问权限</small>',
+            'danger'
+        );
+
+        if (!confirmed) return;
+
+        try {
+            const response = await fetch(`/api/cloud/documents/${fileId}/remove-collab/`, {
+                method: 'DELETE',
+                headers: TokenManager.getHeaders()
+            });
+            if (!response.ok) throw new Error('删除失败');
+
+            this.showSuccess('删除成功', '已经删除该协作文档');
+            await this.loadCollaborations();
+        } catch (error) {
+            console.error('删除失败:', error);
+            this.showError('删除失败', error.message);
+        }
     }
 
     /**
@@ -2467,7 +2502,7 @@ class CloudApp {
             this.showLoading();
 
 
-            const response = await fetch('/api/cloud/documents/custom-create/', {
+            const response = await fetch('/api/cloud/documents/create-collab/', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -2699,9 +2734,27 @@ class CloudApp {
             return null;
         }
 
+
+        // 2. 显示 MD5 计算进度
+        this.showLoading('正在计算文件指纹...');
+
+        // 3. 计算 MD5（智能选择方案）
+        const md5 = file.size > 100 * 1024 * 1024
+            ? await this.computeFileMd5WithWorker(file, (current, total, percent) => {
+                this.updateLoading(`计算 MD5: ${percent}%`);
+            })
+            : await this.computeFileMd5(file, 2 * 1024 * 1024, (current, total, percent) => {
+                this.updateLoading(`计算 MD5: ${percent}%`);
+            });
+
+        console.log('🔐 文件 MD5:', md5);
+        this.hideLoading();
+
+
         try {
             const formData = new FormData();
             formData.append('file', file);
+            formData.append('md5', md5); // 后端用于去重
             if (folderId) formData.append('folder', folderId);
 
             this.showUploadProgress(file.name, 0);
@@ -3060,7 +3113,7 @@ class CloudApp {
                                     title="恢复">
                                 <i class="fas fa-undo"></i>
                             </button>
-                            <button class="btn-action btn-danger" 
+                            <button class="btn-action" 
                                     onclick="event.stopPropagation(); cloudApp.permanentDeleteItem('${item.id}', ${isFolder})" 
                                     title="永久删除">
                                 <i class="fas fa-trash-alt"></i>
@@ -3346,7 +3399,7 @@ class CloudApp {
                 throw new Error(error.error || '删除失败');
             }
 
-            this.showSuccess('删除成功', '文件已永久删除');
+            this.showSuccess('删除成功', response.error || response.message || '文件已永久删除');
             await this.loadTrash();
 
         } catch (error) {
@@ -4190,6 +4243,14 @@ class CloudApp {
                 for (let file of files) {
                     this.uploadFile(file, this.currentFolderId);
                 }
+                this.closeModal('uploadModal')
+                let uploadProgressContainer = document.getElementById('uploadProgressContainer')
+                if (uploadProgressContainer) {
+                    uploadProgressContainer.childNodes.forEach(child => {
+                        child.remove()
+                    })
+
+                }
             });
             uploadArea.addEventListener('click', () => {
                 const fileInput = document.getElementById('fileInput');
@@ -4203,6 +4264,13 @@ class CloudApp {
                 const files = e.target.files;
                 for (let file of files) {
                     this.uploadFile(file, this.currentFolderId);
+                }
+                this.closeModal('uploadModal')
+                let uploadProgressContainer = document.getElementById('uploadProgressContainer')
+                if (uploadProgressContainer) {
+                    uploadProgressContainer.childNodes.forEach(child => {
+                        child.remove()
+                    })
                 }
             });
         }
@@ -4439,8 +4507,6 @@ class CloudApp {
         });
 
 
-
-
         // 模态框关闭时清理
         const collabModal = document.getElementById('createCollabDocModal');
         if (collabModal) {
@@ -4530,9 +4596,135 @@ class CloudApp {
         document.body.appendChild(overlay);
     }
 
+
+    /**
+     * 更新加载提示（辅助方法）
+     * @param {string} message - 提示消息
+     */
+    updateLoading(message) {
+        const overlay = document.querySelector('.loading-overlay');
+        if (overlay) {
+            const spinner = overlay.querySelector('.loading-text');
+            if (spinner) spinner.textContent = message;
+        }
+    }
+
     hideLoading() {
         document.querySelector('.loading-overlay')?.remove();
     }
+
+
+    /**
+     * 计算文件 MD5（分块读取版 - 企业级推荐）
+     * @param {File} file - 文件对象
+     * @param {number} chunkSize - 分块大小（字节），默认 2MB
+     * @param {function} onProgress - 进度回调函数 (currentChunk, totalChunks, percent)
+     * @returns {Promise<string>} MD5 字符串（32位小写十六进制）
+     */
+    async computeFileMd5(file, chunkSize = 2 * 1024 * 1024, onProgress = null) {
+        return new Promise((resolve, reject) => {
+            // 参数校验
+            if (!file || !(file instanceof File)) {
+                reject(new Error('无效的文件对象'));
+                return;
+            }
+
+            const spark = new SparkMD5.ArrayBuffer();
+            const fileSize = file.size;
+            const totalChunks = Math.ceil(fileSize / chunkSize);
+            let currentChunk = 0;
+
+            // 空文件处理
+            if (fileSize === 0) {
+                resolve(SparkMD5.hash(''));
+                return;
+            }
+
+            const loadNext = () => {
+                const start = currentChunk * chunkSize;
+                const end = Math.min(start + chunkSize, fileSize);
+
+                const reader = new FileReader();
+
+                reader.onload = (e) => {
+                    try {
+                        spark.append(e.target.result);
+                        currentChunk++;
+
+                        // 进度回调
+                        if (typeof onProgress === 'function') {
+                            const percent = Math.round((currentChunk / totalChunks) * 100);
+                            onProgress(currentChunk, totalChunks, percent);
+                        }
+
+                        if (currentChunk < totalChunks) {
+                            // 使用 setTimeout 避免阻塞主线程
+                            setTimeout(loadNext, 0);
+                        } else {
+                            // 计算完成
+                            const md5 = spark.end();
+                            resolve(md5.toLowerCase());
+                        }
+                    } catch (error) {
+                        reject(new Error(`MD5 计算错误: ${error.message}`));
+                    }
+                };
+
+                reader.onerror = () => {
+                    reject(new Error(`读取文件块 ${currentChunk + 1} 失败`));
+                };
+
+                reader.onabort = () => {
+                    reject(new Error('文件读取被中止'));
+                };
+
+                // 读取文件块
+                reader.readAsArrayBuffer(file.slice(start, end));
+            };
+
+            // 开始读取
+            loadNext();
+        });
+    }
+
+
+    /**
+     * 使用 Web Worker 计算文件 MD5（超大文件推荐）
+     * @param {File} file - 文件对象
+     * @param {function} onProgress - 进度回调
+     * @returns {Promise<string>} MD5 字符串
+     */
+    async computeFileMd5WithWorker(file, onProgress = null) {
+        return new Promise((resolve, reject) => {
+            // 检查浏览器支持
+            if (!window.Worker) {
+                // 降级使用主线程版本
+                return this.computeFileMd5(file, 2 * 1024 * 1024, onProgress)
+                    .then(resolve)
+                    .catch(reject);
+            }
+
+            const worker = new Worker('/static/js/md5-worker.js');
+
+            worker.onmessage = (e) => {
+                if (e.data.type === 'progress' && typeof onProgress === 'function') {
+                    onProgress(e.data.current, e.data.total, e.data.percent);
+                } else if (e.data.type === 'complete') {
+                    worker.terminate();
+                    resolve(e.data.md5);
+                }
+            };
+
+            worker.onerror = (error) => {
+                worker.terminate();
+                reject(new Error(`Worker 错误: ${error.message}`));
+            };
+
+            // 发送文件（使用 Transferable 优化性能）
+            worker.postMessage({file}, [file]);
+        });
+    }
+
 
     showError(title, message) {
         this.showToast(`${title}: ${message}`, 'error');

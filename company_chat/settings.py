@@ -524,6 +524,13 @@ ONLYOFFICE = {
     'VERSION_KEEP_COUNT': 10,  # 保留最近 10 个版本
     'VERSION_KEEP_DAYS': 30,  # 保留 30 天
     'EDIT_LOCK_EXPIRE_MINUTES': 30,  # 编辑锁过期时间（分钟）
+
+    # 🔧 聊天相关配置
+    'CHAT_ENABLED': True,
+    'CHAT_HISTORY_LIMIT': 100,
 }
+
+
+CHANNELS_ENABLED = True
 
 # CORS_ALLOW_CREDENTIALS = True

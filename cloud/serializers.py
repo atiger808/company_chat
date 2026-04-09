@@ -142,6 +142,8 @@ class CloudFileSerializer(serializers.ModelSerializer):
     size_formatted = serializers.SerializerMethodField()
     is_document = serializers.SerializerMethodField()
 
+    _physical_file_path = serializers.CharField(write_only=True, required=False)
+
 
     class Meta:
         model = CloudFile
@@ -153,6 +155,7 @@ class CloudFileSerializer(serializers.ModelSerializer):
             'owner', 'owner_name', 'owner_avatar', 'description', 'tags',
             'is_starred', 'download_count', 'created_at', 'updated_at', 'deleted_at',
             'permanently_deleted', 'document_type', 'current_version', 'editing_user',
+            '_physical_file_path',  # 只写字段，不返回
         ]
         # 🔧 关键修复：name 和 original_name 设为只读（自动从文件获取）
         read_only_fields = ['owner', 'size', 'name', 'original_name', 'created_at', 'updated_at']
@@ -260,7 +263,18 @@ class CloudFileSerializer(serializers.ModelSerializer):
             # 自动设置 mime_type
             validated_data['mime_type'] = file.content_type
 
-        return super().create(validated_data)
+        # 🔧 提取物理文件路径（秒传专用）
+        physical_path = validated_data.pop('_physical_file_path', None)
+
+        # 正常创建记录
+        instance = super().create(validated_data)
+
+        # 🔧 关键：如果指定了物理路径，直接设置（绕过存储系统的复制）
+        if physical_path:
+            instance.file.name = physical_path  # 直接赋值相对路径
+            instance.save(update_fields=['file'])
+
+        return instance
 
 
 class FileShareSerializer(serializers.ModelSerializer):
