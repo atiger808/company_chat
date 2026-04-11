@@ -5449,7 +5449,7 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                     'title': file_obj.name or file_obj.original_name,
                     'url': file_url,
                     'permissions': {
-                        'comment': True,
+                        'comment': can_edit,
                         'copy': can_edit,
                         'download': can_edit,
                         'edit': can_edit,  # 🔧 根据权限控制编辑
@@ -5495,9 +5495,18 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                             'display': 'original',
                         },
                         'spellcheck': True,
+                        'comment': can_edit,
+                        'copy': can_edit,
+                        'download': can_edit,
+                        'edit': can_edit,  # 🔧 根据权限控制编辑
+                        'fillForms': can_edit,
+                        'modifyContentControl': can_edit,
+                        'modifyFilter': can_edit,
+                        'print': can_edit,
+                        'review': can_edit,
                     },
                     'coEditing': {
-                        'mode': 'strict',
+                        'mode': 'fast', # strict: 严格模式（实时保存），fast: 快速模式
                         'change': can_edit,
                     },
                     'recent': self._get_recent_documents(request.user) if can_edit else [],
