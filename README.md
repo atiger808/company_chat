@@ -622,7 +622,7 @@ CREATE DATABASE onlyoffice
     TEMPLATE=template0;
 
 -- 创建用户（密码请替换为强密码）
-CREATE USER onlyoffice WITH PASSWORD 'YourSecurePassword123!';
+CREATE USER onlyoffice WITH PASSWORD 'onlyoffice_pass';
 
 -- 授权
 GRANT ALL PRIVILEGES ON DATABASE onlyoffice TO onlyoffice;

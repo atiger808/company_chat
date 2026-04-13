@@ -45,6 +45,8 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
+    'django_celery_beat',
+
     # Third party apps
     'rest_framework',
     'channels',
@@ -169,52 +171,6 @@ LOGGING = {
 # ASGI application
 ASGI_APPLICATION = 'company_chat.asgi.application'
 
-# # Channels Layer (Redis)
-# CHANNEL_LAYERS = {
-#     "default": {
-#         "BACKEND": "channels_redis.core.RedisChannelLayer",
-#         "CONFIG": {
-#             "hosts": [(REDIS_HOST, REDIS_PORT)],
-#             "capacity": 1500,  # 每个频道容量
-#             "expiry": 60,  # 消息过期时间（秒）
-#             "prefix": "asgi",  # Redis key 前缀
-#
-#         },
-#     },
-# }
-#
-# # 🔧 关键修复：缓存配置
-# CACHES = {
-#     "default": {
-#         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-#         "LOCATION": REDIS_LOCATION,
-#         "OPTIONS": {
-#             "MAX_ENTRIES": 1000,
-#             "CULL_FREQUENCY": 3,
-#         }
-#     }
-# }
-
-
-# # 🔧 关键修复：缓存配置
-# CACHES = {
-#     "default": {
-#         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-#         "LOCATION": f"redis://{REDIS_HOST}:{REDIS_PORT}/1",  # 数据库 1
-#         "OPTIONS": {
-#             "CONNECTION_POOL_KWARGS": {
-#                 "max_connections": 50,
-#                 "retry_on_timeout": True,
-#                 "socket_connect_timeout": 5,
-#                 "socket_timeout": 5,
-#                 "health_check_interval": 30,
-#             },
-#             "SERIALIZER": "django.core.cache.backends.redis.serializers.JSONSerializer",
-#         },
-#         "KEY_PREFIX": "company_chat",
-#         "TIMEOUT": 300,
-#     }
-# }
 
 # 安装 django-redis
 CACHES = {
@@ -254,6 +210,31 @@ CHANNEL_LAYERS = {
         },
     },
 }
+
+
+
+celery_redis_host = config('CELERY_REDIS_HOST')
+celery_redis_port = config('CELERY_REDIS_PORT')
+celery_redis_password = config('CELERY_REDIS_PASSWORD')
+ENABLE_LOGIN_ANALYSIS_LOG = True
+# CELERY_REDIS_LOCATION = f"redis://:{celery_redis_password}@{celery_redis_host}:{celery_redis_port}/3"
+CELERY_REDIS_LOCATION = f"redis://{celery_redis_host}:{celery_redis_port}/3"
+
+# Celery 配置
+CELERY_BROKER_URL = f'{CELERY_REDIS_LOCATION}'
+CELERY_RESULT_BACKEND = f'{CELERY_REDIS_LOCATION}'
+CELERY_TIMEZONE = "Asia/Shanghai"
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+# 添加这些关键配置
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_ENABLE_UTC = False
+
+
+
+KEEP_DAYS = config('KEEP_DAYS', default=15, cast=int)
 
 # WebSocket 超时配置
 WEBSOCKET_CONNECT_TIMEOUT = 30  # 连接超时（秒）
