@@ -15,7 +15,6 @@ from loguru import logger
 
 def schedule_message():
     """
-    删除超过15天的聊天消息，包括文件消息
     :return:
     """
     now = datetime.now()

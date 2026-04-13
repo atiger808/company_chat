@@ -1643,3 +1643,125 @@ server
 }
 ```
 
+
+
+
+
+### 部署celery 
+
+```
+pip install django-celery-beat
+```
+
+修改 setting.py INSTALLED_APPS添加
+
+```
+INSTALLED_APPS = [
+    'django.contrib.admin',
+    'django.contrib.auth',  # 必须保留，提供认证框架
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+
+    'django_celery_beat',
+
+    # Third party apps
+    'rest_framework',
+    'channels',
+    'corsheaders',
+
+    # Local apps - accounts 必须在 chat 之前
+    'accounts',  # 自定义用户模型应用
+    'chat',
+    'cloud',
+]
+```
+
+Celery 配置
+
+```
+celery_redis_host = config('CELERY_REDIS_HOST')
+celery_redis_port = config('CELERY_REDIS_PORT')
+celery_redis_password = config('CELERY_REDIS_PASSWORD')
+ENABLE_LOGIN_ANALYSIS_LOG = True
+# CELERY_REDIS_LOCATION = f"redis://:{celery_redis_password}@{celery_redis_host}:{celery_redis_port}/3"
+CELERY_REDIS_LOCATION = f"redis://{celery_redis_host}:{celery_redis_port}/3"
+
+# Celery 配置
+CELERY_BROKER_URL = f'{CELERY_REDIS_LOCATION}'
+CELERY_RESULT_BACKEND = f'{CELERY_REDIS_LOCATION}'
+CELERY_TIMEZONE = "Asia/Shanghai"
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+# 添加这些关键配置
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_ENABLE_UTC = False
+```
+
+
+
+company_chat 目录添加 celery_app.py
+
+```
+# -*- coding: utf-8 -*-
+# @File   :celery.py
+# @Time   :2025/6/2 11:07
+# @Author :admin
+
+from __future__ import absolute_import
+import os
+from celery import Celery
+from django.conf import settings
+
+# 设置默认的 Django 设置模块
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'company_chat.settings')
+
+# 创建 Celery 应用实例
+app = Celery('company_chat')
+
+# 使用 Django 的设置文件配置 Celery
+app.config_from_object('django.conf:settings', namespace='CELERY')
+
+# 自动发现所有 Django 应用中的 tasks.py
+app.autodiscover_tasks()
+# app.autodiscover_tasks(lambda: settings.INSTALLED_APPS)
+
+# # 设置定时任务
+# app.conf.beat_schedule = {
+#     'monitor-chat-every-minute': {
+#         'task': 'chat.tasks.chat_task',
+#         'schedule': 5.0,  # 每5秒执行一次
+#     },
+# }
+```
+
+对应的应用里面添加tasks.py
+
+```
+# -*- coding: utf-8 -*-
+# @File   :tasks.py
+# @Time   :2025/6/2 11:07
+# @Author :admin
+
+from company_chat.celery_app import app
+import time
+from loguru import logger
+
+
+# 添加一个简单的测试任务
+@app.task
+def chat_task():
+    logger.info("Starting chat_task task...")
+    try:
+        logger.info("chat_task task completed successfully!")
+        return "Success"
+    except Exception as e:
+        logger.info(f"chat_task task failed: {str(e)}")
+        raise
+
+
+```
+
