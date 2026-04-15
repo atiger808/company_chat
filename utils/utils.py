@@ -11,9 +11,7 @@
 from functools import wraps
 from rest_framework.response import Response
 from rest_framework import status
-
 from django.core.cache import cache
-from chat.models import SystemConfig
 # import logging
 # logger = logging.getLogger(__name__)
 
@@ -30,6 +28,11 @@ class SystemConfigManager:
     @classmethod
     def get_config(cls, key, default=None):
         """获取配置值（带缓存）"""
+
+        # ✅ 延迟导入
+        from chat.models import SystemConfig
+        from django.core.cache import cache
+
         # 🔧 使用统一前缀构建缓存键
         cache_key = f'{cls.CACHE_PREFIX}{key}'
 

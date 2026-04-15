@@ -4,6 +4,8 @@ from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework import serializers
+
 # 生成 JWT token
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -11,12 +13,14 @@ from django.contrib.auth.models import AnonymousUser
 from django.utils import timezone
 from django.contrib.auth import logout
 from django.db.models import Q
+from django.conf import settings
 from .models import CustomUser, Department
 from chat.models import ChatRoom
 from loguru import logger
 
 from utils.request_util import get_browser, get_request_ip, get_os, get_ip_analysis, get_request_path, save_login_log
 from utils.utils import SystemConfigManager
+
 
 from .serializers import (
     UserSerializer,
@@ -27,10 +31,12 @@ from .serializers import (
 
     RegisterSerializer,
     LoginSerializer,
-    ChangePasswordSerializer,
     UserProfileUpdateSerializer,
     UserListSerializer,
-    AvatarUploadSerializer
+    AvatarUploadSerializer,
+    ChangePasswordSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetConfirmSerializer,
 )
 from .permissions import IsSuperAdmin, IsAdminOrSuperAdmin, IsAdminUserManagement
 
@@ -682,6 +688,7 @@ class DepartmentListViewSet(viewsets.ViewSet):
             )
 
 
+
 class UserViewSet(viewsets.ModelViewSet):
     queryset = CustomUser.objects.all()
     serializer_class = UserDetailSerializer
@@ -748,7 +755,7 @@ class UserViewSet(viewsets.ModelViewSet):
         )
 
     def get_permissions(self):
-        if self.action in ['register', 'login']:
+        if self.action in ['register', 'login', 'request_password_reset', 'confirm_password_reset']:
             return [permissions.AllowAny()]
         elif self.action in ['me', 'update_profile', 'change_password', 'logout', 'partial_update']:
             return [permissions.IsAuthenticated()]
@@ -1059,3 +1066,245 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response({'message': '用户权限已降级'})
 
 
+    @action(detail=False, methods=['post'])
+    def change_password(self, request):
+
+        """
+        修改密码
+        POST /api/auth/change_password/
+        {
+            "old_password": "old_pwd",
+            "new_password": "new_pwd_123",
+            "new_password_confirm": "new_pwd_123"
+        }
+        """
+        serializer = ChangePasswordSerializer(
+            data=request.data,
+            context={'request': request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        # 🔧 可选：发送密码修改通知邮件
+        try:
+            from django.core.mail import send_mail
+            from django.template.loader import render_to_string
+
+            context = {
+                'username': request.user.username,
+                'change_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'ip': get_request_ip(request),
+                'site_name': SystemConfigManager.get_config('system.name', '企业聊天室')
+            }
+
+            send_mail(
+                subject=f"{context['site_name']} - 密码修改通知",
+                message=render_to_string('emails/password_changed.txt', context),
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[request.user.email],
+                html_message=render_to_string('emails/password_changed.html', context),
+                fail_silently=False
+            )
+        except Exception as e:
+            logger.warning(f"发送密码修改通知失败: {e}")
+
+        return Response({
+            'message': '密码修改成功'
+        }, status=status.HTTP_200_OK)
+
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
+    def request_password_reset(self, request):
+        """
+        请求密码重置 - 发送重置邮件
+        POST /api/auth/request_password_reset/
+        {
+            "email": "user@example.com"
+        }
+        """
+        from django.core.mail import send_mail
+        from django.template.loader import render_to_string
+        from django.utils.http import urlsafe_base64_encode
+        from django.utils.encoding import force_bytes
+
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        email = serializer.validated_data['email']
+        user = CustomUser.objects.get(email=email)
+
+        # 🔧 频率限制：同一邮箱1小时内只能请求1次
+        if user.password_reset_token_expires and timezone.now() < user.password_reset_token_expires:
+            return Response({
+                'message': '重置邮件已发送，请检查邮箱（1小时内请勿重复请求）'
+            }, status=status.HTTP_200_OK)
+
+        # 生成重置令牌
+        expires_minutes = settings.PASSWORD_RESET_TOKEN_EXPIRES_MINUTES
+        expires_hours = settings.PASSWORD_RESET_TOKEN_EXPIRES_HOURS
+        token = user.generate_password_reset_token(expires_hours=expires_hours, expires_minutes=expires_minutes)
+
+        # 构建重置链接
+        reset_url = f"{settings.FRONTEND_URL}/api/auth/reset-password?token={token}&email={email}"
+
+        # 发送重置邮件
+        try:
+            # 渲染邮件模板
+            context = {
+                'username': user.username or user.email,
+                'reset_url': reset_url,
+                'expires_hours': expires_hours,
+                'expires_minutes': expires_minutes,
+                'site_name': SystemConfigManager.get_config('system.name', '企业聊天室')
+            }
+
+            html_message = render_to_string('emails/password_reset.html', context)
+            text_message = f"""
+            您好 {context['username']},
+
+            您请求重置 {context['site_name']} 的登录密码。
+
+            请点击以下链接重置密码（{expires_hours}小时内有效）：
+            {reset_url}
+
+            如果这不是您本人的操作，请忽略此邮件。
+            """
+
+            send_mail(
+                subject=f"{context['site_name']} - 密码重置请求",
+                message=text_message,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[email],
+                html_message=html_message,
+                fail_silently=False
+            )
+
+            logger.info(f"密码重置邮件已发送至：{email}")
+
+            return Response({
+                'message': '重置链接已发送至您的邮箱，请查收'
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"发送重置邮件失败：{email}, error: {e}")
+            return Response({
+                'error': '发送重置邮件失败，请稍后重试'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
+    def confirm_password_reset(self, request):
+        """
+        确认密码重置 - 验证令牌并设置新密码
+        POST /api/auth/confirm_password_reset/
+        {
+            "email": "user@example.com",
+            "token": "reset_token_here",
+            "new_password": "new_password_123",
+            "new_password_confirm": "new_password_123"
+        }
+        """
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        email = request.data.get('email')
+        token = serializer.validated_data['token']
+        new_password = serializer.validated_data['new_password']
+
+        # 查找用户
+        try:
+            user = CustomUser.objects.get(email=email)
+        except CustomUser.DoesNotExist:
+            # 安全考虑：不暴露用户是否存在
+            raise serializers.ValidationError({
+                'token': "无效的请求"
+            })
+
+        # 验证令牌
+        if not user.verify_password_reset_token(token):
+            logger.warning(f"无效的重置令牌：{email}")
+            raise serializers.ValidationError({
+                'token': "重置链接已过期或无效，请重新申请"
+            })
+
+        # 🔧 从配置读取密码策略
+        password_min_length = SystemConfigManager.get_config('security.password_min_length', 8)
+        password_require_special = SystemConfigManager.get_config('security.password_require_special', True)
+
+        if len(new_password) < password_min_length:
+            raise serializers.ValidationError({
+                'new_password': f'密码长度至少{password_min_length}位'
+            })
+
+        if password_require_special:
+            import re
+            if not re.search(r'[!@#$%^&*(),.?":{}|<>]', new_password):
+                raise serializers.ValidationError({
+                    'new_password': '密码必须包含特殊字符'
+                })
+
+        # 设置新密码
+        user.set_password(new_password)
+        user.clear_password_reset_token()  # 清除令牌（一次性使用）
+        user.reset_login_attempts()  # 重置失败计数
+        user.save()
+
+        logger.info(f"密码重置成功：{email}")
+
+        return Response({
+            'message': '密码重置成功，请使用新密码登录'
+        }, status=status.HTTP_200_OK)
+
+
+
+
+
+# chat/views.py - 在文件末尾添加
+from django.shortcuts import render
+from django.http import JsonResponse
+from django.conf import settings
+from loguru import logger
+
+
+def reset_password_page(request):
+    """
+    渲染重置密码页面
+    GET /reset-password/?token=xxx&email=xxx
+    """
+    try:
+        # 🔧 获取 URL 参数（用于前端预填充和验证）
+        token = request.GET.get('token', '')
+        email = request.GET.get('email', '')
+
+        # 🔧 基础参数校验（可选：提前验证令牌有效性）
+        if not token or not email:
+            logger.warning(f"重置密码链接参数不完整: token={bool(token)}, email={bool(email)}")
+            # 仍然渲染页面，让前端展示错误提示（用户体验更好）
+            # 返回友好的错误页面（而不是 502）
+            return render(request, 'chat/reset-password-error.html', {
+                'error_message': ''
+            }, status=200)
+
+        # 🔧 可选：提前验证令牌（如果验证失败可重定向到错误页）
+        # from accounts.models import CustomUser
+        # user = CustomUser.objects.filter(email=email).first()
+        # if not user or not user.verify_password_reset_token(token):
+        #     return render(request, 'chat/reset-password-error.html', {
+        #         'error_message': '重置链接已过期或无效，请重新申请'
+        #     })
+
+        # 渲染重置密码页面
+        return render(request, 'chat/reset-password.html', {
+            'initial_token': token,
+            'initial_email': email,
+            'site_name': getattr(settings, 'SITE_NAME', '企业聊天室')
+        })
+
+    except Exception as e:
+        # 🔧 关键：记录错误日志，避免 502
+        logger.error(f"重置密码页面渲染失败: {e}", exc_info=True)
+
+        # 返回友好的错误页面（而不是 502）
+        return render(request, 'chat/reset-password-error.html', {
+            'error_message': '页面加载失败，请刷新重试或重新申请重置链接'
+        }, status=200)

@@ -13,6 +13,7 @@ from .views import (
     AdminDashboardViewSet,
     UserAdminViewSet,
     DepartmentListViewSet,
+    reset_password_page,
 )
 
 router = DefaultRouter()
@@ -25,6 +26,15 @@ router.register(r'admin/departments', DepartmentListViewSet, basename='admin-dep
 
 urlpatterns = [
     path('', include(router.urls)),
+
+    # 🔧 新增：密码重置相关接口
+    path('request_password_reset/', UserViewSet.as_view({'post': 'request_password_reset'}),
+         name='request_password_reset'),
+    path('confirm_password_reset/', UserViewSet.as_view({'post': 'confirm_password_reset'}),
+         name='confirm_password_reset'),
+
+    # 🔧 新增：重置密码页面路由（前端页面渲染）
+    path('reset-password/', reset_password_page, name='reset_password_page'),
 
     # 管理控制台
     path('admin/dashboard/', AdminDashboardViewSet.as_view({'get': 'statistics'}), name='admin-statistics'),
@@ -49,9 +59,11 @@ urlpatterns = [
 
     # 便捷的URL
     path('me/', UserViewSet.as_view({'get': 'me'}), name='user-me'),
-    # path('register/', UserViewSet.as_view({'post': 'register'}), name='user-register'), # 关闭注册
+
+    path('register/', UserViewSet.as_view({'post': 'register'}), name='user-register'), # 关闭注册
     path('login/', UserViewSet.as_view({'post': 'login'}), name='user-login'),
     path('logout/', UserViewSet.as_view({'post': 'logout'}), name='user-logout'),
+
     # path('profile/', UserViewSet.as_view({'get': 'me', 'put': 'update_profile'}), name='user-profile'),
     path('profile/', UserViewSet.as_view({'put': 'update_profile', 'patch': 'update_profile'}), name='user-profile'),
     path('change-password/', UserViewSet.as_view({'post': 'change_password'}), name='user-change-password'),

@@ -442,6 +442,12 @@ EMAIL_USE_SSL = config('EMAIL_USE_SSL', default=True, cast=bool)
 EMAIL_SUBJECT_PREFIX = config('EMAIL_SUBJECT_PREFIX')
 EMAIL_TIMEOUT = config('EMAIL_TIMEOUT', default=300, cast=int)  # 超时(5分钟)
 
+PASSWORD_RESET_TOKEN_EXPIRES_MINUTES = config('PASSWORD_RESET_TOKEN_EXPIRES_MINUTES', default=20, cast=int)
+PASSWORD_RESET_TOKEN_EXPIRES_HOURS = config('PASSWORD_RESET_TOKEN_EXPIRES_HOURS', default=1, cast=int)
+
+# 前端地址（用于生成重置链接）
+FRONTEND_URL = config('FRONTEND_URL', default='https://chat.first-iq.com', cast=str)
+
 # LOGGING = {
 #     'version': 1,
 #     'disable_existing_loggers': False,

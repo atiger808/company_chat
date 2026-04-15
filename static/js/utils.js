@@ -3,6 +3,7 @@
 // 工具函数
 class Utils {
 
+
     // 计算文件的 MD5 哈希值
     static async calculateFileHash(file) {
         return new Promise((resolve, reject) => {
@@ -186,6 +187,46 @@ class Utils {
                 code: response.status
             };
         }
+    }
+
+
+    /**
+     * 解析后端返回的验证错误
+     * @param {Object} errorData - 后端返回的错误对象，如 {"email":["该邮箱未注册"]}
+     * @param {Number} statusCode - HTTP 状态码
+     * @returns {String} 用户友好的错误消息
+     */
+
+    static parseApiError(errorData, statusCode) {
+        // 1. Django REST Framework 字段验证错误格式: { "field": ["错误消息"] }
+        if (typeof errorData === 'object' && errorData !== null) {
+            // 提取第一个字段的第一个错误消息
+            for (const [field, messages] of Object.entries(errorData)) {
+                if (Array.isArray(messages) && messages.length > 0) {
+                    return messages[0]; // 返回第一条错误消息
+                }
+            }
+
+            // 2. 通用错误格式: { "error": "消息" } 或 { "message": "消息" }
+            if (errorData.error) return errorData.error;
+            if (errorData.message) return errorData.message;
+            if (errorData.detail) return errorData.detail;
+            if (errorData.non_field_errors?.[0]) return errorData.non_field_errors[0];
+        }
+
+        // 3. 状态码映射
+        const statusMap = {
+            400: '请求参数错误',
+            401: '未授权，请重新登录',
+            403: '权限不足',
+            404: '资源不存在',
+            429: '请求过于频繁，请稍后重试',
+            500: '服务器内部错误',
+            502: '网关错误',
+            503: '服务暂时不可用'
+        };
+
+        return statusMap[statusCode] || `请求失败 (${statusCode})`;
     }
 
 

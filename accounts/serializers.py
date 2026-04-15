@@ -16,6 +16,7 @@ from .models import CustomUser
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import CustomUser, Department
 from utils.encrypt_aes import encrypt_data, decrypt_data
+from utils.utils import SystemConfigManager
 
 from loguru import logger
 import re
@@ -28,101 +29,92 @@ class DepartmentSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'parent']
 
 
-class UserDetailSerializer(serializers.ModelSerializer):
-    """用户详细信息序列化器"""
-    # department_info = DepartmentSerializer(source='department', read_only=True)
-    department_info = serializers.SerializerMethodField()
+class UserSerializer(serializers.ModelSerializer):
+    """用户序列化器 - 用于展示用户信息"""
+
+    # 只读字段
+    is_online = serializers.BooleanField(read_only=True)
+    last_seen = serializers.DateTimeField(read_only=True)
     avatar_url = serializers.SerializerMethodField()
-    online_status = serializers.SerializerMethodField()
 
     class Meta:
         model = CustomUser
         fields = [
-            'id', 'username', 'email', 'phone', 'real_name', 'department', 'department_info',
-            'position', 'avatar', 'avatar_url', 'gender', 'bio', 'user_type',
-            'is_online', 'last_seen', 'date_joined', 'last_login', 'online_status', 'is_active',
+            'id',
+            'real_name',
+            'email',
+            'username',
+            'email',
+            'phone',
+            'department',
+            'position',
+            'avatar',
+            'avatar_url',
+            'gender',
+            'bio',
+            'is_online',
+            'last_seen',
+            'date_joined',
+            'last_login'
         ]
-        read_only_fields = ['id', 'date_joined', 'last_login', 'user_type', 'username']  # 添加 username 为只读
+        read_only_fields = ['id', 'date_joined', 'last_login', 'is_online', 'last_seen']
+        extra_kwargs = {
+            'email': {'required': True},
+            'username': {'required': True},
+        }
 
     def get_avatar_url(self, obj):
+        """获取头像的完整URL"""
         request = self.context.get('request')
         if obj.avatar and hasattr(obj.avatar, 'url'):
             return os.path.join(settings.BASE_URL, obj.avatar.url.strip('/'))
+            # if request is not None:
+            #     return request.build_absolute_uri(obj.avatar.url)
+            # return obj.avatar.url
         return '/static/images/default-avatar.png'
 
-    def get_online_status(self, obj):
-        return {
-            'is_online': obj.is_online,
-            'last_seen': obj.last_seen.isoformat() if obj.last_seen else None
-        }
-
-    def get_department_info(self, obj):
-        if obj.department:
-            return {
-                'id': obj.department.id,
-                'name': obj.department.name
-            }
-        return None
-
-
-class UserProfileUpdateSerializer(serializers.ModelSerializer):
-    """用户资料更新序列化器"""
-
-
-    class Meta:
-        model = CustomUser
-        fields = ['real_name', 'email', 'phone', 'gender', 'bio', 'avatar']
-
+    def validate_email(self, value):
+        """验证邮箱格式和唯一性"""
+        # 检查邮箱是否已被其他用户使用
+        user_id = self.instance.id if self.instance else None
+        if CustomUser.objects.filter(email=value).exclude(id=user_id).exists():
+            raise serializers.ValidationError("该邮箱已被其他用户使用")
+        return value
 
     def validate_phone(self, value):
-        if value and not value.isdigit():
-            raise serializers.ValidationError("手机号必须为数字")
-        if value and len(value) != 11:
-            raise serializers.ValidationError("手机号长度必须为11位")
-
-        # 如果手机号已存在，则不允许修改
-        user = self.instance
-        if value and user.phone != value and CustomUser.objects.filter(phone=value).exists():
-            raise serializers.ValidationError("该手机号已被其他用户使用")
-
+        """验证手机号格式"""
+        if value:
+            # 简单的手机号格式验证（可以根据需要调整）
+            if not value.isdigit():
+                raise serializers.ValidationError("手机号必须为数字")
+            if len(value) != 11:
+                raise serializers.ValidationError("手机号长度必须为11位")
         return value
 
-    def validate_email(self, value):
-        pattern = r'^[a-zA-Z0-9_-]+@[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)+$'
-        if value and not re.match(pattern, value):
-            raise serializers.ValidationError("邮箱格式不正确")
+    def update(self, instance, validated_data):
+        """更新用户信息"""
+        # 移除不能直接更新的字段
+        validated_data.pop('is_online', None)
+        validated_data.pop('last_seen', None)
 
-        # 如果邮箱已存在，则不允许修改
-        user = self.instance
-        if user.email != value and CustomUser.objects.filter(email=value).exists():
-            raise serializers.ValidationError("该邮箱已被其他用户使用")
+        # 更新头像
+        if 'avatar' in validated_data:
+            avatar = validated_data.pop('avatar')
+            if avatar:
+                # 生成唯一的文件名
+                import os
+                from datetime import datetime
+                ext = os.path.splitext(avatar.name)[1]
+                avatar.name = f"{instance.id}_{datetime.now().strftime('%Y%m%d%H%M%S')}{ext}"
+                instance.avatar = avatar
 
-        return value
+        # 更新其他字段
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
 
-    def validate_real_name(self, value):
-        if value and len(str(value))>5:
-            raise serializers.ValidationError("真实姓名长度不能超过5个字符")
-        return value
+        instance.save()
+        return instance
 
-
-    # def update(self, instance, validated_data):
-    #     """更新用户资料"""
-    #     # 处理头像上传
-    #     if 'avatar' in validated_data:
-    #         avatar = validated_data.pop('avatar')
-    #         if avatar:
-    #             import os
-    #             from datetime import datetime
-    #             ext = os.path.splitext(avatar.name)[1]
-    #             avatar.name = f"{instance.id}_{datetime.now().strftime('%Y%m%d%H%M%S')}{ext}"
-    #             instance.avatar = avatar
-    #
-    #     # 更新其他字段
-    #     for attr, value in validated_data.items():
-    #         setattr(instance, attr, value)
-    #
-    #     instance.save()
-    #     return instance
 
 
 # 在 serializers.py 中添加
@@ -264,121 +256,35 @@ class AdminProfileUpdateSerializer(serializers.ModelSerializer):
 
 
 
-class UserListSerializer(serializers.ModelSerializer):
-    """用户列表序列化器"""
-    avatar_url = serializers.SerializerMethodField()
-    online_status = serializers.SerializerMethodField()
-    department_name = serializers.CharField(source='department.name', read_only=True)
+# class UserListSerializer(serializers.ModelSerializer):
+#     """用户列表序列化器"""
+#     avatar_url = serializers.SerializerMethodField()
+#     online_status = serializers.SerializerMethodField()
+#     department_name = serializers.CharField(source='department.name', read_only=True)
+#
+#     class Meta:
+#         model = CustomUser
+#         fields = [
+#             'id', 'username', 'real_name', 'email' , 'avatar_url', 'department_name', 'position',
+#             'online_status', 'is_active', 'user_type'
+#         ]
+#
+#     def get_avatar_url(self, obj):
+#         request = self.context.get('request')
+#         if obj.avatar and hasattr(obj.avatar, 'url'):
+#             return os.path.join(settings.BASE_URL, obj.avatar.url.strip('/'))
+#             # if request:
+#             #     return request.build_absolute_uri(obj.avatar.url)
+#             # return obj.avatar.url
+#
+#         return '/static/images/default-avatar.png'
+#
+#     def get_online_status(self, obj):
+#         return {
+#             'is_online': obj.is_online,
+#             'last_seen': obj.last_seen.isoformat() if obj.last_seen else None
+#         }
 
-    class Meta:
-        model = CustomUser
-        fields = [
-            'id', 'username', 'real_name', 'email' , 'avatar_url', 'department_name', 'position',
-            'online_status', 'is_active', 'user_type'
-        ]
-
-    def get_avatar_url(self, obj):
-        request = self.context.get('request')
-        if obj.avatar and hasattr(obj.avatar, 'url'):
-            return os.path.join(settings.BASE_URL, obj.avatar.url.strip('/'))
-            # if request:
-            #     return request.build_absolute_uri(obj.avatar.url)
-            # return obj.avatar.url
-
-        return '/static/images/default-avatar.png'
-
-    def get_online_status(self, obj):
-        return {
-            'is_online': obj.is_online,
-            'last_seen': obj.last_seen.isoformat() if obj.last_seen else None
-        }
-
-
-class UserSerializer(serializers.ModelSerializer):
-    """用户序列化器 - 用于展示用户信息"""
-
-    # 只读字段
-    is_online = serializers.BooleanField(read_only=True)
-    last_seen = serializers.DateTimeField(read_only=True)
-    avatar_url = serializers.SerializerMethodField()
-
-    class Meta:
-        model = CustomUser
-        fields = [
-            'id',
-            'real_name',
-            'email',
-            'username',
-            'email',
-            'phone',
-            'department',
-            'position',
-            'avatar',
-            'avatar_url',
-            'gender',
-            'bio',
-            'is_online',
-            'last_seen',
-            'date_joined',
-            'last_login'
-        ]
-        read_only_fields = ['id', 'date_joined', 'last_login', 'is_online', 'last_seen']
-        extra_kwargs = {
-            'email': {'required': True},
-            'username': {'required': True},
-        }
-
-    def get_avatar_url(self, obj):
-        """获取头像的完整URL"""
-        request = self.context.get('request')
-        if obj.avatar and hasattr(obj.avatar, 'url'):
-            return os.path.join(settings.BASE_URL, obj.avatar.url.strip('/'))
-            # if request is not None:
-            #     return request.build_absolute_uri(obj.avatar.url)
-            # return obj.avatar.url
-        return '/static/images/default-avatar.png'
-
-    def validate_email(self, value):
-        """验证邮箱格式和唯一性"""
-        # 检查邮箱是否已被其他用户使用
-        user_id = self.instance.id if self.instance else None
-        if CustomUser.objects.filter(email=value).exclude(id=user_id).exists():
-            raise serializers.ValidationError("该邮箱已被其他用户使用")
-        return value
-
-    def validate_phone(self, value):
-        """验证手机号格式"""
-        if value:
-            # 简单的手机号格式验证（可以根据需要调整）
-            if not value.isdigit():
-                raise serializers.ValidationError("手机号必须为数字")
-            if len(value) != 11:
-                raise serializers.ValidationError("手机号长度必须为11位")
-        return value
-
-    def update(self, instance, validated_data):
-        """更新用户信息"""
-        # 移除不能直接更新的字段
-        validated_data.pop('is_online', None)
-        validated_data.pop('last_seen', None)
-
-        # 更新头像
-        if 'avatar' in validated_data:
-            avatar = validated_data.pop('avatar')
-            if avatar:
-                # 生成唯一的文件名
-                import os
-                from datetime import datetime
-                ext = os.path.splitext(avatar.name)[1]
-                avatar.name = f"{instance.id}_{datetime.now().strftime('%Y%m%d%H%M%S')}{ext}"
-                instance.avatar = avatar
-
-        # 更新其他字段
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-
-        instance.save()
-        return instance
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -521,45 +427,78 @@ class LoginSerializer(serializers.Serializer):
     )
 
     def validate(self, data):
-        """验证登录信息"""
+        """验证登录信息 - 增加锁定策略"""
         username = data.get('username')
         password = data.get('password')
+
+        # 解密密码（如果前端加密传输）
         if password:
-            password = decrypt_data(password)
+            try:
+                password = decrypt_data(password)
+            except:
+                logger.warning(f"用户 {username} 密码解密失败：{password}")
+                raise serializers.ValidationError("密码解析失败")
+                # pass  # 解密失败按原密码处理
+
+        # 🔧 从配置读取锁定策略
+        login_max_attempts = SystemConfigManager.get_config('security.login_max_attempts', 5)
+        login_lockout_minutes = SystemConfigManager.get_config('security.login_lockout_minutes', 15)
 
         logger.info(f"用户 {username} 尝试登录")
 
-        # 尝试用用户名或邮箱登录
+        # 1️⃣ 查找用户（支持用户名或邮箱）
         user = None
         if '@' in username:
-            # 可能是邮箱
-            try:
-                user_obj = CustomUser.objects.get(email=username)
-                username = user_obj.username
-            except CustomUser.DoesNotExist:
-                pass
+            user = CustomUser.objects.filter(email=username).first()
+        if not user:
+            user = CustomUser.objects.filter(username=username).first()
 
-
-        # 认证用户
-        user = authenticate(username=username, password=password)
-        logger.info(f"用户 {username} 准备登录")
-        if user is None:
+        # 2️⃣ 用户不存在时，统一返回错误（避免枚举攻击）
+        if not user:
+            # 记录失败尝试（可选：记录IP用于风控）
+            logger.warning(f"登录失败：用户 {username} 不存在")
             raise serializers.ValidationError({
                 'non_field_errors': ["用户名或密码错误"]
             })
 
+        # 3️⃣ 检查账户是否被锁定
+        if user.is_locked_out(login_max_attempts, login_lockout_minutes):
+            # 计算剩余锁定时间
+            from datetime import timedelta
+            lockout_end = user.last_failed_login + timedelta(minutes=login_lockout_minutes)
+            remaining_seconds = int((lockout_end - timezone.now()).total_seconds())
+
+            logger.warning(f"账户锁定：{user.username}, 剩余 {remaining_seconds} 秒")
+            raise serializers.ValidationError({
+                'non_field_errors': [f"账户已锁定，请{remaining_seconds // 60}分钟{remaining_seconds % 60}秒后再试"]
+            })
+
+        # 4️⃣ 验证密码
+        if not user.check_password(password):
+            # 记录失败次数
+            user.increment_login_attempts()
+            logger.warning(f"密码错误：{user.username}, 失败次数：{user.login_attempts}")
+
+            # 如果达到最大尝试次数，记录警告
+            if user.login_attempts >= login_max_attempts:
+                logger.warning(f"账户 {user.username} 因多次失败被锁定 {login_lockout_minutes} 分钟")
+
+            raise serializers.ValidationError({
+                'non_field_errors': ["用户名或密码错误"]
+            })
+
+        # 5️⃣ 检查账户状态
         if not user.is_active:
+            logger.warning(f"账户禁用：{user.username}")
             raise serializers.ValidationError({
                 'non_field_errors': ["账户已被禁用，请联系管理员"]
             })
 
-        # 更新用户在线状态
+        # ✅ 登录成功：重置失败计数 + 更新状态
+        user.reset_login_attempts()
         user.update_online_status(True)
-
-        # 更新用户最后登录时间
         user.last_login = timezone.now()
-        user.save()
-
+        user.save(update_fields=['last_login'])
 
         # 生成 JWT token
         refresh = RefreshToken.for_user(user)
@@ -568,56 +507,265 @@ class LoginSerializer(serializers.Serializer):
         data['refresh'] = str(refresh)
         data['access'] = str(refresh.access_token)
 
+        logger.info(f"登录成功：{user.username}")
         return data
 
 
+
+class UserDetailSerializer(serializers.ModelSerializer):
+    """用户详细信息序列化器"""
+    # department_info = DepartmentSerializer(source='department', read_only=True)
+    department_info = serializers.SerializerMethodField()
+    avatar_url = serializers.SerializerMethodField()
+    online_status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CustomUser
+        fields = [
+            'id', 'username', 'email', 'phone', 'real_name', 'department', 'department_info',
+            'position', 'avatar', 'avatar_url', 'gender', 'bio', 'user_type',
+            'is_online', 'last_seen', 'date_joined', 'last_login', 'online_status', 'is_active',
+        ]
+        read_only_fields = ['id', 'date_joined', 'last_login', 'user_type', 'username']  # 添加 username 为只读
+
+    def get_avatar_url(self, obj):
+        request = self.context.get('request')
+        if obj.avatar and hasattr(obj.avatar, 'url'):
+            return os.path.join(settings.BASE_URL, obj.avatar.url.strip('/'))
+        return '/static/images/default-avatar.png'
+
+    def get_online_status(self, obj):
+        return {
+            'is_online': obj.is_online,
+            'last_seen': obj.last_seen.isoformat() if obj.last_seen else None
+        }
+
+    def get_department_info(self, obj):
+        if obj.department:
+            return {
+                'id': obj.department.id,
+                'name': obj.department.name
+            }
+        return None
+
+
+class UserProfileUpdateSerializer(serializers.ModelSerializer):
+    """用户资料更新序列化器"""
+
+
+    class Meta:
+        model = CustomUser
+        fields = ['real_name', 'email', 'phone', 'gender', 'bio', 'avatar']
+
+
+    def validate_phone(self, value):
+        if value and not value.isdigit():
+            raise serializers.ValidationError("手机号必须为数字")
+        if value and len(value) != 11:
+            raise serializers.ValidationError("手机号长度必须为11位")
+
+        # 如果手机号已存在，则不允许修改
+        user = self.instance
+        if value and user.phone != value and CustomUser.objects.filter(phone=value).exists():
+            raise serializers.ValidationError("该手机号已被其他用户使用")
+
+        return value
+
+    def validate_email(self, value):
+        pattern = r'^[a-zA-Z0-9_-]+@[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)+$'
+        if value and not re.match(pattern, value):
+            raise serializers.ValidationError("邮箱格式不正确")
+
+        # 如果邮箱已存在，则不允许修改
+        user = self.instance
+        if user.email != value and CustomUser.objects.filter(email=value).exists():
+            raise serializers.ValidationError("该邮箱已被其他用户使用")
+
+        return value
+
+    def validate_real_name(self, value):
+        if value and len(str(value))>5:
+            raise serializers.ValidationError("真实姓名长度不能超过5个字符")
+        return value
+
+
+    # def update(self, instance, validated_data):
+    #     """更新用户资料"""
+    #     # 处理头像上传
+    #     if 'avatar' in validated_data:
+    #         avatar = validated_data.pop('avatar')
+    #         if avatar:
+    #             import os
+    #             from datetime import datetime
+    #             ext = os.path.splitext(avatar.name)[1]
+    #             avatar.name = f"{instance.id}_{datetime.now().strftime('%Y%m%d%H%M%S')}{ext}"
+    #             instance.avatar = avatar
+    #
+    #     # 更新其他字段
+    #     for attr, value in validated_data.items():
+    #         setattr(instance, attr, value)
+    #
+    #     instance.save()
+    #     return instance
+
+
+class AvatarUploadSerializer(serializers.Serializer):
+    """头像上传序列化器"""
+
+    avatar = serializers.ImageField(
+        required=True,
+        help_text="头像图片"
+    )
+
+    def validate_avatar(self, value):
+        """验证头像"""
+        # 验证文件大小（最大2MB）
+        if value.size > 2 * 1024 * 1024:
+            raise serializers.ValidationError("头像大小不能超过2MB")
+
+        # 验证文件类型
+        valid_extensions = ['.jpg', '.jpeg', '.png', '.gif']
+        ext = value.name.lower().split('.')[-1]
+        if f'.{ext}' not in valid_extensions:
+            raise serializers.ValidationError("只支持 JPG、PNG、GIF 格式的图片")
+
+        return value
+
+    def save(self):
+        """保存头像"""
+        user = self.context['request'].user
+        avatar = self.validated_data['avatar']
+
+        # 生成唯一文件名
+        import os
+        from datetime import datetime
+        ext = os.path.splitext(avatar.name)[1]
+        avatar.name = f"{user.id}_{datetime.now().strftime('%Y%m%d%H%M%S')}{ext}"
+
+        # 删除旧头像
+        if user.avatar and user.avatar.name != 'default-avatar.png':
+            if os.path.exists(user.avatar.path):
+                os.remove(user.avatar.path)
+
+        user.avatar = avatar
+        user.save()
+        return user
+
+
+class UserListSerializer(serializers.ModelSerializer):
+    """用户列表序列化器（精简版，用于通讯录）"""
+
+    department_info = DepartmentSerializer(source='department', read_only=True)
+
+    avatar_url = serializers.SerializerMethodField()
+    online_status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CustomUser
+        fields = [
+            'id',
+            'username',
+            'real_name',
+            'phone',
+            'email',
+            'avatar_url',
+            'department',
+            'department_info',
+            'position',
+            'online_status'
+        ]
+
+    def get_avatar_url(self, obj):
+        """获取头像URL"""
+        request = self.context.get('request')
+        if obj.avatar and hasattr(obj.avatar, 'url'):
+            return os.path.join(settings.BASE_URL, obj.avatar.url.strip('/'))
+            # if request is not None:
+            #     return request.build_absolute_uri(obj.avatar.url)
+            # return obj.avatar.url
+        # 返回默认头像或首字母头像
+        return '/static/images/default_avatar.png'
+
+    def get_online_status(self, obj):
+        """获取在线状态"""
+        return {
+            'is_online': obj.is_online,
+            'last_seen': obj.last_seen.isoformat() if obj.last_seen else None
+        }
+
+
+# accounts/serializers.py
+
 class ChangePasswordSerializer(serializers.Serializer):
-    """修改密码序列化器"""
+    """修改密码序列化器 - 完善版"""
 
     old_password = serializers.CharField(
-        required=True,
-        style={'input_type': 'password'},
-        help_text="当前密码"
+        required=True, style={'input_type': 'password'}, help_text="当前密码"
     )
     new_password = serializers.CharField(
-        required=True,
-        style={'input_type': 'password'},
-        validators=[validate_password],
-        help_text="新密码"
+        required=True, style={'input_type': 'password'},
+        validators=[validate_password], help_text="新密码"
     )
     new_password_confirm = serializers.CharField(
-        required=True,
-        style={'input_type': 'password'},
-        help_text="确认新密码"
+        required=True, style={'input_type': 'password'}, help_text="确认新密码"
     )
 
     def validate(self, data):
-        """验证密码"""
+        """增强验证逻辑"""
+        user = self.context['request'].user
+
+        # 1️⃣ 验证两次新密码一致
         if data['new_password'] != data['new_password_confirm']:
             raise serializers.ValidationError({
                 'new_password_confirm': "两次输入的新密码不一致"
             })
 
-        # 验证旧密码
-        user = self.context['request'].user
+        # 2️⃣ 验证旧密码正确
         if not user.check_password(data['old_password']):
+            # 记录失败尝试（防止暴力破解）
+            logger.warning(f"修改密码失败 - 旧密码错误: {user.username}")
             raise serializers.ValidationError({
                 'old_password': "当前密码错误"
             })
 
-        # 检查新密码是否与旧密码相同
+        # 3️⃣ 新密码不能与旧密码相同
         if user.check_password(data['new_password']):
             raise serializers.ValidationError({
                 'new_password': "新密码不能与当前密码相同"
             })
 
+        # 4️⃣ 🔧 从配置读取密码策略并验证
+        password_min_length = SystemConfigManager.get_config('security.password_min_length', 8)
+        password_require_special = SystemConfigManager.get_config('security.password_require_special', True)
+
+        if len(data['new_password']) < password_min_length:
+            raise serializers.ValidationError({
+                'new_password': f'密码长度至少{password_min_length}位'
+            })
+
+        if password_require_special:
+            import re
+            if not re.search(r'[!@#$%^&*(),.?":{}|<>]', data['new_password']):
+                raise serializers.ValidationError({
+                    'new_password': '密码必须包含特殊字符'
+                })
+
+        # 5️⃣ 可选：检查密码历史（防止重复使用最近用过的密码）
+        # 如需实现，可添加 PasswordHistory 模型记录
+
         return data
 
-    def save(self):
+    def save(self, **kwargs):
         """保存新密码"""
         user = self.context['request'].user
         user.set_password(self.validated_data['new_password'])
         user.save()
+
+        # 🔧 关键：修改密码后使其他设备登录失效（可选）
+        # 方案1：更新 user.password 会自动使旧 token 失效（如果 token 包含 password hash）
+        # 方案2：记录密码修改时间，在 token 验证时检查
+
+        logger.info(f"用户 {user.username} 成功修改密码")
         return user
 
 
@@ -665,46 +813,6 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
 
 
-class UserListSerializer(serializers.ModelSerializer):
-    """用户列表序列化器（精简版，用于通讯录）"""
-
-    department_info = DepartmentSerializer(source='department', read_only=True)
-
-    avatar_url = serializers.SerializerMethodField()
-    online_status = serializers.SerializerMethodField()
-
-    class Meta:
-        model = CustomUser
-        fields = [
-            'id',
-            'username',
-            'real_name',
-            'phone',
-            'email',
-            'avatar_url',
-            'department',
-            'department_info',
-            'position',
-            'online_status'
-        ]
-
-    def get_avatar_url(self, obj):
-        """获取头像URL"""
-        request = self.context.get('request')
-        if obj.avatar and hasattr(obj.avatar, 'url'):
-            return os.path.join(settings.BASE_URL, obj.avatar.url.strip('/'))
-            # if request is not None:
-            #     return request.build_absolute_uri(obj.avatar.url)
-            # return obj.avatar.url
-        # 返回默认头像或首字母头像
-        return '/static/images/default_avatar.png'
-
-    def get_online_status(self, obj):
-        """获取在线状态"""
-        return {
-            'is_online': obj.is_online,
-            'last_seen': obj.last_seen.isoformat() if obj.last_seen else None
-        }
 
 
 class TokenResponseSerializer(serializers.Serializer):
@@ -732,44 +840,3 @@ class UserSearchSerializer(serializers.Serializer):
     )
 
 
-class AvatarUploadSerializer(serializers.Serializer):
-    """头像上传序列化器"""
-
-    avatar = serializers.ImageField(
-        required=True,
-        help_text="头像图片"
-    )
-
-    def validate_avatar(self, value):
-        """验证头像"""
-        # 验证文件大小（最大2MB）
-        if value.size > 2 * 1024 * 1024:
-            raise serializers.ValidationError("头像大小不能超过2MB")
-
-        # 验证文件类型
-        valid_extensions = ['.jpg', '.jpeg', '.png', '.gif']
-        ext = value.name.lower().split('.')[-1]
-        if f'.{ext}' not in valid_extensions:
-            raise serializers.ValidationError("只支持 JPG、PNG、GIF 格式的图片")
-
-        return value
-
-    def save(self):
-        """保存头像"""
-        user = self.context['request'].user
-        avatar = self.validated_data['avatar']
-
-        # 生成唯一文件名
-        import os
-        from datetime import datetime
-        ext = os.path.splitext(avatar.name)[1]
-        avatar.name = f"{user.id}_{datetime.now().strftime('%Y%m%d%H%M%S')}{ext}"
-
-        # 删除旧头像
-        if user.avatar and user.avatar.name != 'default-avatar.png':
-            if os.path.exists(user.avatar.path):
-                os.remove(user.avatar.path)
-
-        user.avatar = avatar
-        user.save()
-        return user

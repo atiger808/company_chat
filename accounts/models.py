@@ -2,19 +2,37 @@
 from email.policy import default
 
 from django.db import models
+from django.db.models.signals import post_save
 from django.contrib.auth.models import AbstractUser, Group, Permission
-from django.contrib.auth.signals import user_logged_in, user_logged_out  # 修复：添加信号导入
+from django.contrib.auth.signals import user_logged_in, user_logged_out, user_login_failed # 修复：添加信号导入
+from django.core.validators import FileExtensionValidator, RegexValidator
 from django.dispatch import receiver
 from django.utils import timezone
-from django.db.models.signals import post_save
-from django.core.validators import FileExtensionValidator
+from django.conf import settings
+import secrets
+import hashlib
 
 
 class Department(models.Model):
     """部门模型"""
     name = models.CharField(max_length=100, unique=True, verbose_name='部门名称')
+    # code = models.CharField(max_length=50, unique=True, blank=True, verbose_name='部门编码')
+    code = models.CharField(max_length=50, default='', blank=True, verbose_name='部门编码')
     parent = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, verbose_name='上级部门')
+
+    # ✅ 修复：添加 related_name 避免与 CustomUser.department 冲突
+    manager = models.ForeignKey(
+        settings.AUTH_USER_MODEL,  # 或使用 settings.AUTH_USER_MODEL
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name='部门负责人',
+        related_name='managed_departments'  # 🔑 关键修复
+    )
+
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+
 
     class Meta:
         verbose_name = '部门'
@@ -26,12 +44,13 @@ class Department(models.Model):
 
 
 class CustomUser(AbstractUser):
-    """扩展用户模型"""
+    """扩展用户模型 - 企业级安全增强版"""
 
     USER_TYPE_CHOICES = (
         ('super_admin', '超级管理员'),
         ('admin', '管理员'),
         ('normal', '普通用户'),
+        ('visitor', '访客'),  # 🔧 新增：访客类型
         # ('user', '普通用户'),
     )
 
@@ -43,7 +62,17 @@ class CustomUser(AbstractUser):
 
     # 基本信息
     email = models.EmailField(unique=True, verbose_name='邮箱')
-    phone = models.CharField(max_length=20, blank=True, null=True, verbose_name='手机号')
+    # 🔧 手机号验证器（中国大陆）
+    phone = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+        verbose_name='手机号',
+        validators=[RegexValidator(
+            regex=r'^1[3-9]\d{9}$',
+            message='请输入有效的中国大陆手机号'
+        )]
+    )
     real_name = models.CharField(max_length=100, blank=True, null=True, default='', verbose_name='真实姓名')
 
     # 工作信息
@@ -58,7 +87,7 @@ class CustomUser(AbstractUser):
         blank=True,
         null=True,
         verbose_name='头像',
-        validators=[FileExtensionValidator(allowed_extensions=['jpg', 'jpeg', 'png', 'gif'])]
+        validators=[FileExtensionValidator(allowed_extensions=['jpg', 'jpeg', 'png', 'gif', 'webp'])]
     )
     gender = models.CharField(
         max_length=10,
@@ -73,11 +102,43 @@ class CustomUser(AbstractUser):
     is_online = models.BooleanField(default=False, verbose_name='在线状态')
     last_seen = models.DateTimeField(null=True, blank=True, verbose_name='最后在线时间')
 
-    # 启用禁用
+    # 启用禁用 ==================== 账户状态 ====================
     is_active = models.BooleanField(default=True, verbose_name='是否启用')
 
+    # 🔐 登录安全相关（新增）
+    login_attempts = models.IntegerField(default=0, verbose_name="登录失败次数")
+    last_failed_login = models.DateTimeField(null=True, blank=True, verbose_name="最后登录失败时间")
+
+    # 🔑 密码重置相关（新增）
+    password_reset_token = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        verbose_name="密码重置令牌"
+    )
+    password_reset_token_expires = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="令牌过期时间"
+    )
+
+    # 🔧 密码审计相关（新增）
+    last_password_change = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="上次密码修改时间"
+    )
+
+    # ✉️ 邮箱/手机验证（新增）
+    email_verified = models.BooleanField(default=False, verbose_name="邮箱已验证")
+    email_verified_at = models.DateTimeField(null=True, blank=True, verbose_name="邮箱验证时间")
+    phone_verified = models.BooleanField(default=False, verbose_name="手机已验证")
+    phone_verified_at = models.DateTimeField(null=True, blank=True, verbose_name="手机验证时间")
+
+
+
     # 修复：为 groups 和 user_permissions 添加 related_name 避免反向关系冲突
-    # 权限相关
+    #  ==================== 权限相关 ====================
     groups = models.ManyToManyField(
         Group,
         verbose_name='用户组',
@@ -96,6 +157,7 @@ class CustomUser(AbstractUser):
         related_query_name='customuser'
     )
 
+    # ==================== 好友关系 ====================
     # 好友关系（多对多）
     friends = models.ManyToManyField(
         'self',
@@ -118,29 +180,234 @@ class CustomUser(AbstractUser):
         ]
 
     def __str__(self):
-        return f'{self.username}({self.real_name})'
+        return f'{self.username}({self.real_name or "未设置"})'
+
+    def __repr__(self):
+        return f'<CustomUser: {self.id} {self.username}>'
+
+    # ==================== 登录安全方法 ====================
+
+    def increment_login_attempts(self):
+        """增加登录失败次数"""
+        self.login_attempts = models.F('login_attempts') + 1
+        self.last_failed_login = timezone.now()
+        self.save(update_fields=['login_attempts', 'last_failed_login'])
+        # 🔧 刷新实例以获取最新值
+        self.refresh_from_db(fields=['login_attempts'])
+
+    def reset_login_attempts(self):
+        """重置登录失败次数"""
+        if self.login_attempts > 0:
+            self.login_attempts = 0
+            self.last_failed_login = None
+            self.save(update_fields=['login_attempts', 'last_failed_login'])
+
+    def is_locked_out(self, max_attempts=None, lockout_minutes=None):
+        """
+        检查账户是否被锁定
+
+        Args:
+            max_attempts: 最大尝试次数（默认从配置读取）
+            lockout_minutes: 锁定分钟数（默认从配置读取）
+
+        Returns:
+            bool: 是否被锁定
+        """
+        # ✅ 在方法内部按需导入（Django 模型加载完成后才执行）
+        from utils.utils import SystemConfigManager
+        # 从配置读取策略
+        if max_attempts is None:
+            max_attempts = SystemConfigManager.get_config('security.login_max_attempts', 5)
+        if lockout_minutes is None:
+            lockout_minutes = SystemConfigManager.get_config('security.login_lockout_minutes', 15)
+
+        if self.login_attempts >= max_attempts and self.last_failed_login:
+            lockout_end = self.last_failed_login + timezone.timedelta(minutes=lockout_minutes)
+            return timezone.now() < lockout_end
+        return False
+
+    def get_lockout_remaining_seconds(self, lockout_minutes=None):
+        """获取账户锁定剩余秒数"""
+        # ✅ 在方法内部按需导入（Django 模型加载完成后才执行）
+        from utils.utils import SystemConfigManager
+        if lockout_minutes is None:
+            lockout_minutes = SystemConfigManager.get_config('security.login_lockout_minutes', 15)
+
+        if self.last_failed_login and self.is_locked_out(lockout_minutes=lockout_minutes):
+            lockout_end = self.last_failed_login + timezone.timedelta(minutes=lockout_minutes)
+            return int((lockout_end - timezone.now()).total_seconds())
+        return 0
+
+    # ==================== 密码重置方法 ====================
+
+    def generate_password_reset_token(self, expires_hours=1, expires_minutes=20):
+        """
+        生成密码重置令牌
+
+        Args:
+            expires_hours: 令牌有效期（小时）
+
+        Returns:
+            str: 重置令牌
+        """
+        # 生成64位安全随机令牌（32字节 = 64字符base64url）
+        self.password_reset_token = secrets.token_urlsafe(32)
+        self.password_reset_token_expires = timezone.now() + timezone.timedelta(hours=expires_hours)
+        # self.password_reset_token_expires = timezone.now() + timezone.timedelta(minutes=expires_minutes)
+
+        self.save(update_fields=['password_reset_token', 'password_reset_token_expires'])
+        return self.password_reset_token
+
+    def verify_password_reset_token(self, token):
+        """
+        验证密码重置令牌
+
+        Args:
+            token: 待验证的令牌
+
+        Returns:
+            bool: 是否有效
+        """
+        if not self.password_reset_token or not self.password_reset_token_expires:
+            return False
+
+        # 🔧 使用恒定时间比较防止时序攻击
+        is_valid = secrets.compare_digest(self.password_reset_token, token)
+        is_not_expired = timezone.now() < self.password_reset_token_expires
+
+        return is_valid and is_not_expired
+
+    def clear_password_reset_token(self):
+        """清除重置令牌（一次性使用）"""
+        if self.password_reset_token:
+            self.password_reset_token = None
+            self.password_reset_token_expires = None
+            self.save(update_fields=['password_reset_token', 'password_reset_token_expires'])
+
+    # ==================== 密码管理方法 ====================
+
+    def set_password(self, raw_password):
+        """
+        重写 set_password：自动记录修改时间、清理重置令牌、重置登录失败计数
+        ⚠️ 注意：此处不调用 self.save()，遵循 Django 规范（由调用方统一 save）
+        """
+        super().set_password(raw_password)  # 完成密码哈希赋值
+        self.last_password_change = timezone.now()
+        self.clear_password_reset_token()   # 一次性令牌立即失效
+        self.reset_login_attempts()         # 重置登录失败计数
+
+    def check_password(self, raw_password):
+        """重写 check_password 以记录成功登录"""
+        result = super().check_password(raw_password)
+        if result:
+            # 密码正确时重置失败计数
+            self.reset_login_attempts()
+        return result
+
+
+
+    # ==================== 在线状态方法 ====================
 
     def update_online_status(self, is_online=True):
-        """更新在线状态"""
+        """更新在线状态（原子操作）"""
+        update_fields = ['is_online']
         self.is_online = is_online
+
         if not is_online:
             self.last_seen = timezone.now()
-        self.save(update_fields=['is_online', 'last_seen'])
+            update_fields.append('last_seen')
+
+        # 🔧 使用 update() 避免触发 save() 信号循环
+        CustomUser.objects.filter(pk=self.pk).update(**{
+            field: getattr(self, field) for field in update_fields
+        })
+        # 刷新本地实例
+        for field in update_fields:
+            setattr(self, field, getattr(self, field))
+
+    # ==================== 权限检查方法 ====================
 
     def can_edit_department_position(self, editor_user):
         """检查是否可以编辑部门和职位"""
         return editor_user.user_type in ['super_admin', 'admin']
 
+    def is_super_admin(self):
+        """是否为超级管理员"""
+        return self.user_type == 'super_admin'
+
+    def is_admin_or_higher(self):
+        """是否为管理员或更高权限"""
+        return self.user_type in ['super_admin', 'admin']
+
+    def can_manage_users(self):
+        """是否可以管理用户"""
+        return self.is_admin_or_higher()
+
+
+    # ==================== 工具方法 ====================
+
     def get_full_name(self):
-        """返回用户全名"""
-        full_name = f"{self.department or ''} {self.position or ''}".strip()
-        return full_name if full_name else self.username
+        """返回用户全名（部门 + 职位 + 真实姓名）"""
+        parts = []
+        if self.department:
+            parts.append(self.department.name)
+        if self.position:
+            parts.append(self.position)
+        if self.real_name:
+            parts.append(self.real_name)
+        return ' - '.join(parts) if parts else self.username
 
     def get_avatar_url(self):
-        """获取头像URL"""
+        """获取头像URL（带CDN支持）"""
         if self.avatar and hasattr(self.avatar, 'url'):
-            return self.avatar.url
+            url = self.avatar.url
+            # 🔧 支持CDN配置
+            cdn_base = getattr(settings, 'CDN_BASE_URL', None)
+            if cdn_base and url.startswith('/'):
+                return f'{cdn_base.rstrip("/")}{url}'
+            return url
         return '/static/images/default-avatar.png'
+
+    def get_display_info(self):
+        """获取用户显示信息（用于聊天列表等）"""
+        return {
+            'id': self.id,
+            'username': self.username,
+            'real_name': self.real_name,
+            'avatar_url': self.get_avatar_url(),
+            'department': self.department.name if self.department else None,
+            'position': self.position,
+            'is_online': self.is_online,
+            'last_seen': self.last_seen.isoformat() if self.last_seen else None,
+            'user_type': self.user_type,
+        }
+
+    # ==================== 信号处理（类方法） ====================
+    #
+    # @classmethod
+    # def on_user_logged_in(cls, sender, request, user, **kwargs):
+    #     """用户登录信号处理"""
+    #     if isinstance(user, CustomUser):
+    #         user.update_online_status(True)
+    #         # 🔧 记录登录日志（如果存在登录日志模型）
+    #         # from accounts.models import LoginLog
+    #         # LoginLog.objects.create(user=user, ip=request.META.get('REMOTE_ADDR'))
+    #
+    # @classmethod
+    # def on_user_logged_out(cls, sender, request, user, **kwargs):
+    #     """用户登出信号处理"""
+    #     if isinstance(user, CustomUser):
+    #         user.update_online_status(False)
+    #
+    # @classmethod
+    # def on_password_changed(cls, sender, user, **kwargs):
+    #     """密码修改信号处理"""
+    #     if isinstance(user, CustomUser):
+    #         user.last_password_change = timezone.now()
+    #         user.clear_password_reset_token()
+    #         user.save(update_fields=['last_password_change'])
+
+
 
 
 class UserActivity(models.Model):

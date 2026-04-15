@@ -164,6 +164,29 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON FUNCTIONS TO n
 
 
 
+###  一键修复方案（推荐）
+
+以 `postgres` 超级用户身份登录数据库，执行以下 SQL 批量转移所有权：
+
+```
+# 1. 切换至 postgres 用户登录
+psql -U postgres -d new_company_chat
+```
+
+```
+DO $$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname='public' AND tableowner='postgres' LOOP
+    EXECUTE 'ALTER TABLE ' || r.tablename || ' OWNER TO new_company_chat';
+  END LOOP;
+END $$;
+```
+
+
+
+
+
 ##### 开机启动服务
 
 ```

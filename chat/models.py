@@ -3,7 +3,6 @@ from django.db import models
 from django.utils import timezone
 
 from django.conf import settings
-from accounts.models import CustomUser
 import os
 import json
 import hashlib
@@ -37,8 +36,8 @@ class ChatRoom(models.Model):
 
     name = models.CharField(max_length=100, blank=True, null=True, verbose_name='群聊名称')
     room_type = models.CharField(max_length=20, choices=ROOM_TYPE_CHOICES, default='private', verbose_name='聊天类型')
-    members = models.ManyToManyField(CustomUser, related_name='chat_rooms', verbose_name='成员')
-    creator = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='created_rooms',
+    members = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name='chat_rooms', verbose_name='成员')
+    creator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='created_rooms',
                                 verbose_name='创建者')
     is_pinned = models.BooleanField(default=False, verbose_name='是否置顶')
     is_muted = models.BooleanField(default=False, verbose_name='是否免打扰')
@@ -148,7 +147,7 @@ class FileUpload(models.Model):
     filename = models.CharField(max_length=255, verbose_name='原始文件名')
     size = models.BigIntegerField(verbose_name='文件大小')
     mime_type = models.CharField(max_length=100, verbose_name='MIME类型')
-    uploaded_by = models.ForeignKey(CustomUser, on_delete=models.CASCADE, verbose_name='上传者')
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, verbose_name='上传者')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='上传时间')
 
     class Meta:
@@ -229,7 +228,7 @@ class Message(models.Model):
     )
 
     chat_room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='messages', verbose_name='聊天室')
-    sender = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='sent_messages',
+    sender = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='sent_messages',
                                verbose_name='发送者')
     content = models.TextField(blank=True, null=True, verbose_name='消息内容')
     message_type = models.CharField(max_length=20, choices=MESSAGE_TYPE_CHOICES, default='text',
@@ -256,7 +255,7 @@ class Message(models.Model):
     )
     # @提及
     mentioned_users = models.ManyToManyField(
-        CustomUser,
+        settings.AUTH_USER_MODEL,
         blank=True,
         related_name='mentioned_in_messages',
         verbose_name='被提及的用户'
@@ -359,7 +358,7 @@ class Message(models.Model):
 
 class UserOnlineStatus(models.Model):
     """用户在线状态"""
-    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='online_status', verbose_name='用户')
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='online_status', verbose_name='用户')
     is_online = models.BooleanField(default=False, verbose_name='在线状态')
     last_seen = models.DateTimeField(null=True, blank=True, verbose_name='最后在线时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
@@ -376,7 +375,7 @@ class ChatRoomDeleteStatus(models.Model):
     """聊天室删除状态（用于私聊的个人删除）"""
 
     chat_room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='delete_statuses', verbose_name='聊天室')
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, verbose_name='用户')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, verbose_name='用户')
     is_deleted = models.BooleanField(default=False, verbose_name='是否已删除')
     deleted_at = models.DateTimeField(null=True, blank=True, verbose_name='删除时间')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
@@ -390,7 +389,7 @@ class ChatRoomDeleteStatus(models.Model):
 class MessageReadStatus(models.Model):
     """消息阅读状态（用于群聊）"""
     message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name='read_statuses', verbose_name='消息')
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, verbose_name='用户')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, verbose_name='用户')
     read_at = models.DateTimeField(auto_now_add=True, verbose_name='阅读时间')
 
     class Meta:
@@ -403,7 +402,7 @@ class MessageDeleteStatus(models.Model):
     """消息删除状态（用于私聊的用户删除）"""
 
     message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name='delete_statuses', verbose_name='消息')
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, verbose_name='用户')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, verbose_name='用户')
     is_deleted = models.BooleanField(default=False, verbose_name='是否已删除')
     deleted_at = models.DateTimeField(null=True, blank=True, verbose_name='删除时间')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
