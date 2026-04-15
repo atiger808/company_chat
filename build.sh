@@ -62,6 +62,7 @@ fi
 
 # 使用绝对路径运行 Python
 $CONDA_ENV_PATH/bin/python manage.py collectstatic --noinput
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/login.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/chat.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/index.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/admin.html" ${VERSION}

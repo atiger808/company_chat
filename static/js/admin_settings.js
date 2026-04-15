@@ -323,7 +323,7 @@ class AdminSettingsClient {
         const container = document.getElementById('systemInfoPanel');
         if (!container || !this.systemInfo.server) return;
 
-        const {server, resources, database, cache} = this.systemInfo;
+        const {server, resources, database, cache, celery} = this.systemInfo;
 
         container.innerHTML = `
             <div class="system-info-grid">
@@ -418,6 +418,30 @@ class AdminSettingsClient {
                         </strong>
                     </div>
                 </div>
+                
+                
+                <div class="info-card">
+                    <h4><i class="fas fa-cube"></i> 计划任务</h4>
+                    <div class="info-row">
+                        <span>后端:</span>
+                        <strong>${celery.backend}</strong>
+                    </div>
+                    <div class="info-row">
+                        <span>beat 状态:</span>
+                        <strong class="${celery.beat === 'ok' ? 'text-success' : celery.beat === 'degraded' ? 'text-warning' : 'text-danger'}">
+                            ${celery.beat === 'ok' ? '✓ 正常' : celery.beat === 'degraded' ? '⚠ 降级' : '✗ 异常'}
+                        </strong>
+                    </div>
+                    
+                    <div class="info-row">
+                        <span>worker 状态:</span>
+                        <strong class="${celery.worker === 'ok' ? 'text-success' : celery.worker === 'degraded' ? 'text-warning' : 'text-danger'}">
+                            ${celery.worker === 'ok' ? '✓ 正常' : celery.worker === 'degraded' ? '⚠ 降级' : '✗ 异常'}
+                        </strong>
+                    </div>
+                    
+                </div>
+                
             </div>
             
             <div style="margin-top: 20px; text-align: right;">

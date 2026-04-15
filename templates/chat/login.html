@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <title>企业聊天室 - 登录</title>
+    <!--    <script src="https://cdn.jsdelivr.net/npm/crypto-js@4.2.0/crypto-js.min.js"></script>-->
+    <!--    <script src="https://cdn.jsdelivr.net/npm/sm-crypto@0.3.13/dist/sm4.min.js"></script>-->
+
+    <script src="/static/js/dist/crypto-js.min.js?v=20260414-797715c"></script>
+    <script src="/static/js/dist/sm4.min.js?v=20260414-797715c"></script>
+    <script src="/static/js/encrypts.js?v=20260414-797715c"></script>
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -1230,7 +1236,7 @@
                 },
                 body: JSON.stringify({
                     username: username,
-                    password: password
+                    password: window.EncryptUtils.encryptData(password)
                 })
             });
 
@@ -1395,7 +1401,8 @@
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify(userData)
+                // body: JSON.stringify(userData)
+                body: JSON.stringify(window.EncryptUtils.encryptData({'userData': userData}))
             });
 
             const data = await response.json();

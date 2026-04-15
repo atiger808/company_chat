@@ -28,7 +28,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-fz(25n_*5fk$glzg%mh_imzritgz4_syd5nls3x1u3-3o*j4y-'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', cast=lambda x: x.split(',')) or ['*']
 
@@ -233,6 +233,8 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_ENABLE_UTC = False
 
 
+AES_KEY = config('AES_KEY')
+SM4_KEY = config('SM4_KEY')
 
 KEEP_DAYS = config('KEEP_DAYS', default=15, cast=int)
 

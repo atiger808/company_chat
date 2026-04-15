@@ -523,7 +523,8 @@ class AdminChatRoomsClient {
             }
 
             const data = await response.json();
-            let newMessages = Array.isArray(data.results) ? data.results : data;
+            let results = Array.isArray(data.results) ? data.results : window.EncryptUtils.decryptData(data.results);
+            let newMessages = Array.isArray(results) ? data.results : [results];
 
             // 去重
             if (append && newMessages.length > 0) {

@@ -14,6 +14,7 @@ from django.db import connection, close_old_connections
 from accounts.models import CustomUser
 from chat.models import ChatRoom, Message, FileUpload, MessageReadStatus, MessageDeleteStatus, ChatRoomDeleteStatus, UserOnlineStatus
 from cloud.models import CloudFile, FileCollaboration
+from utils.encrypt_aes import encrypt_data, decrypt_data
 
 from django.conf import settings
 import json

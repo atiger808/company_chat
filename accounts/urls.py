@@ -49,7 +49,7 @@ urlpatterns = [
 
     # 便捷的URL
     path('me/', UserViewSet.as_view({'get': 'me'}), name='user-me'),
-    path('register/', UserViewSet.as_view({'post': 'register'}), name='user-register'),
+    # path('register/', UserViewSet.as_view({'post': 'register'}), name='user-register'), # 关闭注册
     path('login/', UserViewSet.as_view({'post': 'login'}), name='user-login'),
     path('logout/', UserViewSet.as_view({'post': 'logout'}), name='user-logout'),
     # path('profile/', UserViewSet.as_view({'get': 'me', 'put': 'update_profile'}), name='user-profile'),

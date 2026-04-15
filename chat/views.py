@@ -41,6 +41,8 @@ from .pagination import ChatRoomPagination, MessageHistoryPagination, MessagePag
 from accounts.permissions import IsSuperAdmin, IsAdminOrSuperAdmin, IsAdminUserManagement
 
 from utils.utils import SystemConfigManager, require_super_admin, require_admin_or_super_admin
+from utils.mixins import CustomResponseMixin, EncryptionResponseMixin
+from utils.encrypt_aes import encrypt_data, decrypt_data
 
 
 
@@ -2939,6 +2941,16 @@ class SystemSettingsViewSet(viewsets.ViewSet):
                 logger.warning(f'缓存检查失败: {e}')
                 return 'degraded'
 
+        def safe_celery_check(mode='worker'):
+            try:
+                cmd = f"ps aux|grep -v grep|grep 'company_chat.celery_app {mode}'"
+                process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                result = process.stdout.read().decode().strip()
+                return 'ok' if result else 'error'
+            except Exception as e:
+                logger.warning(f'缓存检查失败: {e}')
+                return 'degraded'
+
         # 资源信息（带异常处理）
         try:
             cpu_percent = psutil.cpu_percent(interval=0.5)
@@ -2990,6 +3002,11 @@ class SystemSettingsViewSet(viewsets.ViewSet):
             'cache': {
                 'backend': settings.CACHES['default']['BACKEND'],
                 'status': safe_cache_check()
+            },
+            'celery': {
+                'backend': 'django_celery_beat' or settings.CELERY_BEAT_SCHEDULER,
+                'worker': safe_celery_check('worker'),
+                'beat': safe_celery_check('beat')
             },
             'timestamp': timezone.now().isoformat()
         })

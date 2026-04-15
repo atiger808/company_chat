@@ -1485,7 +1485,9 @@ class ChatClient {
 
             if (response.ok) {
                 const data = await response.json();
-                const latestMessage = data.results?.[0];
+                let results = Array.isArray(data.results) ? data.results : window.EncryptUtils.decryptData(data.results);
+
+                const latestMessage = Array.isArray(results) ? results?.[0] : results;
 
                 const room = this.chatRooms.find(r => parseInt(r.id) === parseInt(roomId));
                 if (room && latestMessage) {
@@ -2639,7 +2641,8 @@ class ChatClient {
             }
 
             const data = await response.json();
-            let newMessages = Array.isArray(data.results) ? data.results : data;
+            let results = Array.isArray(data.results) ? data.results : window.EncryptUtils.decryptData(data.results);
+            let newMessages = Array.isArray(results) ? results : [results];
 
             // 🔧 关键修复1: 消息去重（基于ID，避免重复）
             if (append && newMessages.length > 0) {
@@ -2686,7 +2689,7 @@ class ChatClient {
                 // return;
             }
 
-            console.log('加载聊天历史成功:', newMessages);
+            // console.log('加载聊天历史成功:', newMessages);
             console.log('append:', append);
             console.log('this.hasMoreMessages:', this.hasMoreMessages);
 

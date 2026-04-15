@@ -10,13 +10,13 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
-
-
 from django.conf import settings
 
 from .models import CustomUser
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import CustomUser, Department
+from utils.encrypt_aes import encrypt_data, decrypt_data
+
 from loguru import logger
 import re
 import os
@@ -524,6 +524,8 @@ class LoginSerializer(serializers.Serializer):
         """验证登录信息"""
         username = data.get('username')
         password = data.get('password')
+        if password:
+            password = decrypt_data(password)
 
         logger.info(f"用户 {username} 尝试登录")
 

@@ -13,7 +13,7 @@ from .utils import schedule_message
 def chat_task():
     logger.info("Starting chat_task task...")
     try:
-        # schedule_message()
+        schedule_message()
         logger.info("chat_task task completed successfully!")
         return "Success"
     except Exception as e:
