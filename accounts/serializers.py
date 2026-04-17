@@ -714,6 +714,19 @@ class ChangePasswordSerializer(serializers.Serializer):
         """增强验证逻辑"""
         user = self.context['request'].user
 
+        # 解密
+        old_password = data['old_password']
+        new_password = data['new_password']
+        new_password_confirm = data['new_password_confirm']
+
+        try:
+            data['old_password'] = decrypt_data(old_password)
+            data['new_password'] = decrypt_data(new_password)
+            data['new_password_confirm'] = decrypt_data(new_password_confirm)
+        except Exception as e:
+            logger.error(f"修改密码失败 - 解密失败: {e}")
+
+
         # 1️⃣ 验证两次新密码一致
         if data['new_password'] != data['new_password_confirm']:
             raise serializers.ValidationError({

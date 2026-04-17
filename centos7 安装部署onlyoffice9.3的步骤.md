@@ -1,5 +1,13 @@
 在 CentOS 7 上部署 OnlyOffice 9.3，推荐优先使用 **Docker** 部署，可以避开很多依赖问题；如果条件不允许，也可以采用 **RPM 包** 的方式安装。
 
+
+
+```
+https://github.com/ONLYOFFICE/DocumentServer/releases
+```
+
+
+
 ### 📋 部署前的检查
 
 在开始前，请确保你的 CentOS 7 服务器满足以下要求，以保证 OnlyOffice 9.3 的顺畅运行：

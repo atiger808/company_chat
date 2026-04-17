@@ -131,48 +131,30 @@
                 <span>企业聊天室</span>
             </div>
             <div class="user-actions">
+                <!-- 管理员控制台按钮（默认隐藏） -->
+                <button class="btn-icon" id="adminConsoleBtn" style="display: none;" title="管理员控制台">
+                    <i class="fas fa-shield-alt"></i>
+                </button>
+
+                <button class="btn-icon" id="settingsBtn" title="个人设置">
+                    <i class="fas fa-cog"></i>
+                </button>
+
+                <button class="btn-icon" title="退出">
+                    <i class="fas fa-sign-out-alt"></i>
+                </button>
+
+                <button class="btn-icon" id="cloudBtn" style="display: none;" title="企业网盘">
+                    <i class="fas fa-cloud"></i>
+                </button>
+
                 <!-- 清除缓存按钮 -->
                 <button id="clearCacheBtn" class="btn-clear-cache" title="清除缓存">
                     <i class="fas fa-sync-alt"></i>
                 </button>
 
-                <!-- 下拉触发按钮 -->
-                <button class="btn-icon user-menu-trigger" id="userMenuTrigger" title="更多操作">
-                    <i class="fas fa-ellipsis-v"></i>
-                </button>
 
-                <!-- 下拉菜单 -->
-                <div class="user-dropdown-menu" id="userDropdownMenu">
-                    <!-- 管理员按钮（默认隐藏，JS 控制显示） -->
-                    <div class="dropdown-item" id="adminConsoleBtn" style="display: none;">
-                        <i class="fas fa-shield-alt"></i>
-                        <span>管理控制台</span>
-                    </div>
-                    <div class="dropdown-item" id="cloudBtn" style="display: none;">
-                        <i class="fas fa-cloud"></i>
-                        <span>企业云盘</span>
-                    </div>
-
-                    <div class="dropdown-divider"></div>
-
-                    <div class="dropdown-item" id="settingsBtn">
-                        <i class="fas fa-cog"></i>
-                        <span>个人设置</span>
-                    </div>
-                    <div class="dropdown-item" id="changePasswordBtn">
-                        <i class="fas fa-key"></i>
-                        <span>修改密码</span>
-                    </div>
-
-                    <div class="dropdown-divider"></div>
-
-                    <div class="dropdown-item text-danger" id="logoutBtn">
-                        <i class="fas fa-sign-out-alt"></i>
-                        <span>退出登录</span>
-                    </div>
-                </div>
             </div>
-
         </div>
 
         <div class="user-profile">
@@ -382,6 +364,13 @@
             </div>
 
 
+            <!--
+
+
+
+            -->
+
+
             <div id="atPanel"></div>
 
             <div class="input-wrapper">
@@ -392,11 +381,7 @@
                     <div class="typing-dot"></div>
                 </div>
             </div>
-<!--            <button class="send-btn" id="sendBtn" class="send-btn" disabled>发送</button>-->
-            <button id="sendBtn" class="send-btn" disabled title="发送">
-<!--                <i class="fas fa-paper-plane"></i>-->
-                发送
-            </button>
+            <button class="send-btn" id="sendBtn">发送</button>
 
 
             <!-- 语音录音覆盖层（移动端优化版） -->
@@ -435,137 +420,6 @@
             </div>
 
         </div>
-
-
-        <!--        <div class="chat-input-area">-->
-        <!--            &lt;!&ndash; 顶部/左侧工具栏 &ndash;&gt;-->
-        <!--            <div class="input-toolbar">-->
-        <!--                &lt;!&ndash; ➕ 展开/收起按钮（默认显示） &ndash;&gt;-->
-        <!--                <button class="action-btn toggle-plus-btn" id="togglePlusBtn" title="更多功能">-->
-        <!--                    <i class="fas fa-plus"></i>-->
-        <!--                </button>-->
-
-        <!--                &lt;!&ndash; 语音消息按钮（优化版） &ndash;&gt;-->
-        <!--                <button class="action-btn voice-btn" id="voiceBtn" title="按住 说话">-->
-        <!--                    <i class="fas fa-microphone"></i>-->
-        <!--                    <span class="voice-btn-text">按住 说话</span>-->
-        <!--                    <span class="voice-btn-recording-text" style="display: none;">松开 结束</span>-->
-        <!--                </button>-->
-        <!--                <span id="voiceNotSupportedTip" class="voice-not-supported-tip" style="display: none;"-->
-        <!--                      title="语音消息功能不可用">-->
-        <!--                    <i class="fas fa-exclamation-circle"></i>-->
-        <!--                </span>-->
-
-        <!--                &lt;!&ndash; 😊 表情按钮（默认显示） &ndash;&gt;-->
-        <!--                <button class="action-btn" id="emojiBtn" title="表情">-->
-        <!--                    <i class="fas fa-smile"></i>-->
-        <!--                </button>-->
-        <!--                &lt;!&ndash; 📷📎 隐藏的功能区（默认折叠） &ndash;&gt;-->
-        <!--                <div class="extra-actions" id="extraActions">-->
-        <!--                    <button class="action-btn" id="imageBtn" title="发送图片">-->
-        <!--                        <i class="fas fa-image"></i>-->
-        <!--                    </button>-->
-        <!--                    <button class="action-btn" id="fileBtn" title="发送文件">-->
-        <!--                        <i class="fas fa-paperclip"></i>-->
-        <!--                    </button>-->
-        <!--                    &lt;!&ndash; 后续可扩展：语音、位置、截图等 &ndash;&gt;-->
-        <!--                </div>-->
-        <!--            </div>-->
-
-        <!--            &lt;!&ndash; 输入框区域 &ndash;&gt;-->
-        <!--            <div class="input-wrapper">-->
-        <!--                <textarea id="messageInput" placeholder="输入消息... (Enter 发送，Shift+Enter 换行)" rows="1"></textarea>-->
-        <!--            </div>-->
-
-        <!--            &lt;!&ndash; 发送按钮 &ndash;&gt;-->
-        <!--            <button id="sendBtn" class="send-btn" disabled>-->
-        <!--                <i class="fas fa-paper-plane"></i>-->
-        <!--            </button>-->
-
-
-        <!--            &lt;!&ndash; 表情包面板（隐藏默认） &ndash;&gt;-->
-        <!--            <div class="emoji-panel" id="emojiPanel" style="display: none;">-->
-        <!--                <div class="emoji-grid">-->
-        <!--                    &lt;!&ndash; 常用表情 &ndash;&gt;-->
-        <!--                    <span class="emoji-item" data-emoji="😊">😊</span>-->
-        <!--                    <span class="emoji-item" data-emoji="😂">😂</span>-->
-        <!--                    <span class="emoji-item" data-emoji="😄">😄</span>-->
-        <!--                    <span class=" emoji-item" data-emoji="😍">😍</span>-->
-        <!--                    <span class="emoji-item" data-emoji="😅">😅</span>-->
-        <!--                    <span class="emoji-item" data-emoji="🤣">🤣</span>-->
-        <!--                    <span class="emoji-item" data-emoji="😇">😇</span>-->
-        <!--                    <span class="emoji-item" data-emoji="🙂">🙂</span>-->
-        <!--                    <span class="emoji-item" data-emoji="🙃">🙃</span>-->
-        <!--                    <span class="emoji-item" data-emoji="😉">😉</span>-->
-        <!--                    <span class="emoji-item" data-emoji="🥰">🥰</span>-->
-        <!--                    <span class="emoji-item" data-emoji="😘">😘</span>-->
-        <!--                    <span class="emoji-item" data-emoji="😗">😗</span>-->
-        <!--                    <span class="emoji-item" data-emoji="😚">😚</span>-->
-        <!--                    <span class="emoji-item" data-emoji="😋">😋</span>-->
-        <!--                    <span class="emoji-item" data-emoji="😝">😝</span>-->
-        <!--                    <span class="emoji-item" data-emoji="🤪">🤪</span>-->
-        <!--                    <span class="emoji-item" data-emoji="🧐">🧐</span>-->
-        <!--                    <span class="emoji-item" data-emoji="😎">😎</span>-->
-        <!--                    <span class="emoji-item" data-emoji="👋">👋</span>-->
-        <!--                    <span class="emoji-item" data-emoji="👌">👌</span>-->
-        <!--                    <span class="emoji-item" data-emoji="👍">👍</span>-->
-        <!--                    <span class="emoji-item" data-emoji="❤️">❤️</span>-->
-        <!--                    <span class="emoji-item" data-emoji="🎉">🎉</span>-->
-        <!--                    <span class="emoji-item" data-emoji="👏">👏</span>-->
-        <!--                    <span class="emoji-item" data-emoji="🙏">🙏</span>-->
-        <!--                    <span class="emoji-item" data-emoji="💪">💪</span>-->
-        <!--                    <span class="emoji-item" data-emoji="🔥">🔥</span>-->
-        <!--                    <span class="emoji-item" data-emoji="💯">💯</span>-->
-        <!--                    <span class="emoji-item" data-emoji="🏆">🏆</span>-->
-        <!--                    <span class="emoji-item" data-emoji="👎">👎</span>-->
-        <!--                    <span class="emoji-item" data-emoji="🙌">🙌</span>-->
-
-
-        <!--                    &lt;!&ndash; 更多表情可以继续添加 &ndash;&gt;-->
-        <!--                </div>-->
-        <!--            </div>-->
-
-
-        <!--            <div id="atPanel"></div>-->
-
-        <!--            &lt;!&ndash; 语音录音覆盖层（移动端优化版） &ndash;&gt;-->
-        <!--            <div id="voiceRecorderOverlay" class="voice-recorder-overlay" style="display: none;">-->
-        <!--                <div class="voice-recorder-backdrop"></div>-->
-        <!--                <div class="voice-recorder-panel">-->
-        <!--                    <div class="voice-recorder-cancel-area">-->
-        <!--                        <i class="fas fa-times-circle"></i>-->
-        <!--                        <span>松开手指 取消发送</span>-->
-        <!--                    </div>-->
-        <!--                    <div class="voice-recorder-wave-container">-->
-        <!--                        <div class="voice-recorder-wave">-->
-        <!--                            <div class="wave-bar"></div>-->
-        <!--                            <div class="wave-bar"></div>-->
-        <!--                            <div class="wave-bar"></div>-->
-        <!--                            <div class="wave-bar"></div>-->
-        <!--                            <div class="wave-bar"></div>-->
-        <!--                            <div class="wave-bar"></div>-->
-        <!--                            <div class="wave-bar"></div>-->
-        <!--                            <div class="wave-bar"></div>-->
-        <!--                            <div class="wave-bar"></div>-->
-        <!--                            <div class="wave-bar"></div>-->
-        <!--                        </div>-->
-        <!--                    </div>-->
-        <!--                    <div class="voice-recorder-time" id="voiceRecorderTime">00:00</div>-->
-        <!--                    <div class="voice-recorder-hint">-->
-        <!--                        <i class="fas fa-microphone"></i>-->
-        <!--                        <span>手指上滑 取消发送</span>-->
-        <!--                    </div>-->
-        <!--                    &lt;!&ndash; 🔧 移动端专用：发送按钮（松开发送） &ndash;&gt;-->
-        <!--                    <div class="voice-recorder-send-hint">-->
-        <!--                        <i class="fas fa-arrow-up"></i>-->
-        <!--                        <span>松开 结束</span>-->
-        <!--                    </div>-->
-        <!--                </div>-->
-        <!--            </div>-->
-
-
-        <!--        </div>-->
-
 
         <!-- 语音消息模板（移动端优化） -->
         <template id="voiceMessageTemplate">
@@ -803,8 +657,7 @@
                     <label for="currentPassword">当前密码</label>
                     <div class="input-with-icon">
                         <i class="fas fa-lock"></i>
-                        <input type="password" id="currentPassword" class="form-control" placeholder="请输入当前密码"
-                               required>
+                        <input type="password" id="currentPassword" class="form-control" placeholder="请输入当前密码" required>
                     </div>
                     <div class="error-message" id="currentPasswordError"></div>
                 </div>
@@ -812,8 +665,7 @@
                     <label for="newPassword">新密码</label>
                     <div class="input-with-icon">
                         <i class="fas fa-lock"></i>
-                        <input type="password" id="newPassword" class="form-control"
-                               placeholder="至少8位，建议含字母/数字/符号" minlength="8" required>
+                        <input type="password" id="newPassword" class="form-control" placeholder="至少8位，建议含字母/数字/符号" minlength="8" required>
                     </div>
                     <div class="error-message" id="newPasswordError"></div>
                 </div>
@@ -821,8 +673,7 @@
                     <label for="confirmPassword">确认新密码</label>
                     <div class="input-with-icon">
                         <i class="fas fa-check-circle"></i>
-                        <input type="password" id="confirmPassword" class="form-control" placeholder="请再次输入新密码"
-                               required>
+                        <input type="password" id="confirmPassword" class="form-control" placeholder="请再次输入新密码" required>
                     </div>
                     <div class="error-message" id="confirmPasswordError"></div>
                 </div>
@@ -830,8 +681,7 @@
             </form>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="chatClient.closeChangePasswordModal()">取消
-            </button>
+            <button type="button" class="btn btn-secondary" onclick="chatClient.closeChangePasswordModal()">取消</button>
             <button type="button" class="btn btn-primary" id="submitChangePasswordBtn">
                 <span class="btn-text">确认修改</span>
                 <span class="loading"></span>

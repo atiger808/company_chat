@@ -707,6 +707,9 @@ class ChatClient {
             // 设置事件监听
             this.setupEventListeners();
 
+            // 初始化用户下拉菜单
+            this.initUserDropdown()
+
             // 请求通知权限
             if ('Notification' in window) {
                 Notification.requestPermission();
@@ -2113,7 +2116,7 @@ class ChatClient {
 
 
         // 🔧 关键修复 2: 确认是对方在输入（不是自己）
-        if (user_id &&  parseInt(user_id) === this.currentUser.id) {
+        if (user_id && parseInt(user_id) === this.currentUser.id) {
             this.hideAllTypingIndicators();
             return;
         }
@@ -5567,6 +5570,50 @@ class ChatClient {
 
         }
 
+
+        // ==================== 输入区域优化逻辑 ====================
+
+        // 1. ➕ 按钮展开/收起功能
+        const togglePlusBtn = document.getElementById('togglePlusBtn');
+        const extraActions = document.getElementById('extraActions');
+
+        if (togglePlusBtn && extraActions) {
+            togglePlusBtn.addEventListener('click', () => {
+                const isShow = extraActions.classList.toggle('show');
+                togglePlusBtn.classList.toggle('active', isShow);
+
+                // 切换图标：+ 变 ×
+                const icon = togglePlusBtn.querySelector('i');
+                if (icon) icon.className = isShow ? 'fas fa-times' : 'fas fa-plus';
+            });
+
+            // 点击输入框外部自动收起（提升体验）
+            document.addEventListener('click', (e) => {
+                if (!extraActions.contains(e.target) &&
+                    !togglePlusBtn.contains(e.target) &&
+                    extraActions.classList.contains('show')) {
+                    extraActions.classList.remove('show');
+                    togglePlusBtn.classList.remove('active');
+                    const icon = togglePlusBtn.querySelector('i');
+                    if (icon) icon.className = 'fas fa-plus';
+                }
+            });
+        }
+
+        // 2. 输入框内容变化控制发送按钮状态
+        // const messageInput = document.getElementById('messageInput');
+        // const sendBtn = document.getElementById('sendBtn');
+
+        if (messageInput && sendBtn) {
+            // 复用您原有的 adjustTextareaHeight，此处增强禁用/启用逻辑
+            messageInput.addEventListener('input', () => {
+                this.adjustTextareaHeight(messageInput);
+                // 有内容时启用发送按钮
+                sendBtn.disabled = !messageInput.value.trim();
+            });
+        }
+
+
         // 头像上传事件
         const avatarUpload = document.getElementById('avatarUpload');
         if (avatarUpload) {
@@ -5934,6 +5981,28 @@ class ChatClient {
                 this.clearSearchResults();
             });
         }
+
+
+        // 🔑 绑定修改密码提交事件
+        const submitPwdBtn = document.getElementById('submitChangePasswordBtn');
+        if (submitPwdBtn) {
+            submitPwdBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                this.submitChangePassword();
+            });
+        }
+
+        // 回车键提交支持
+        const pwdForm = document.getElementById('changePasswordForm');
+        if (pwdForm) {
+            pwdForm.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    this.submitChangePassword();
+                }
+            });
+        }
+
 
         // 点击外部关闭搜索结果
         document.addEventListener('click', (e) => {
@@ -9684,6 +9753,182 @@ class ChatClient {
         } catch (e) {
             console.warn('Failed to create AudioContext for mobile:', e);
             this.audioContextForMobile = null;
+        }
+    }
+
+
+    // 初始化用户下拉菜单
+    initUserDropdown() {
+        const trigger = document.getElementById('userMenuTrigger');
+        const menu = document.getElementById('userDropdownMenu');
+        if (!trigger || !menu) return;
+
+        trigger.addEventListener('click', (e) => {
+            e.stopPropagation();
+            menu.classList.toggle('show');
+        });
+
+        // 点击外部关闭
+        document.addEventListener('click', (e) => {
+            if (!menu.contains(e.target) && !trigger.contains(e.target)) {
+                menu.classList.remove('show');
+            }
+        });
+
+        // 绑定菜单项事件
+        document.getElementById('settingsBtn')?.addEventListener('click', () => {
+            this.showSettings();
+            menu.classList.remove('show');
+        });
+
+        document.getElementById('changePasswordBtn')?.addEventListener('click', () => {
+            this.openChangePasswordModal();
+            menu.classList.remove('show');
+        });
+
+        document.getElementById('logoutBtn')?.addEventListener('click', () => {
+            this.logout();
+            menu.classList.remove('show');
+        });
+    }
+
+
+    // ================= 修改密码相关方法 =================
+    openChangePasswordModal() {
+        this.resetChangePasswordForm();
+        const modal = document.getElementById('changePasswordModal');
+        if (modal) modal.classList.add('show');
+    }
+
+    closeChangePasswordModal() {
+        const modal = document.getElementById('changePasswordModal');
+        if (modal) modal.classList.remove('show');
+        this.resetChangePasswordForm();
+    }
+
+    resetChangePasswordForm() {
+        document.getElementById('changePasswordForm').reset();
+        ['currentPasswordError', 'newPasswordError', 'confirmPasswordError'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.textContent = '';
+                el.style.display = 'none';
+            }
+        });
+        const successEl = document.getElementById('changePasswordSuccess');
+        if (successEl) {
+            successEl.textContent = '';
+            successEl.style.display = 'none';
+        }
+
+        const btn = document.getElementById('submitChangePasswordBtn');
+        if (btn) {
+            btn.classList.remove('loading');
+            btn.disabled = false;
+        }
+
+        // 清除输入框错误样式
+        ['currentPassword', 'newPassword', 'confirmPassword'].forEach(id => {
+            const input = document.getElementById(id);
+            if (input) input.classList.remove('error');
+        });
+    }
+
+    showChangePasswordError(elementId, message) {
+        const el = document.getElementById(elementId);
+        if (el) {
+            el.textContent = message;
+            el.style.display = 'block';
+            // 联动高亮输入框
+            const inputId = elementId.replace('Error', '');
+            const input = document.getElementById(inputId);
+            if (input) input.classList.add('error');
+        }
+    }
+
+
+    async submitChangePassword() {
+        const currentPwd = document.getElementById('currentPassword').value.trim();
+        const newPwd = document.getElementById('newPassword').value.trim();
+        const confirmPwd = document.getElementById('confirmPassword').value.trim();
+
+        // 清除历史状态
+        ['currentPassword', 'newPassword', 'confirmPassword'].forEach(id => {
+            document.getElementById(id).classList.remove('error');
+        });
+        ['currentPasswordError', 'newPasswordError', 'confirmPasswordError'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+        });
+
+        // 🔍 前端基础验证
+        let isValid = true;
+        if (!currentPwd) {
+            this.showChangePasswordError('currentPasswordError', '请输入当前密码');
+            isValid = false;
+        }
+        if (!newPwd) {
+            this.showChangePasswordError('newPasswordError', '请输入新密码');
+            isValid = false;
+        } else if (newPwd.length < 8) {
+            this.showChangePasswordError('newPasswordError', '新密码长度至少为8位');
+            isValid = false;
+        }
+        if (!confirmPwd) {
+            this.showChangePasswordError('confirmPasswordError', '请确认新密码');
+            isValid = false;
+        } else if (newPwd !== confirmPwd) {
+            this.showChangePasswordError('confirmPasswordError', '两次输入的新密码不一致');
+            isValid = false;
+        }
+
+        if (!isValid) return;
+
+        // 🔄 显示加载状态
+        const btn = document.getElementById('submitChangePasswordBtn');
+        btn.classList.add('loading');
+        btn.disabled = true;
+
+        try {
+            // 🔐 加密传输（与登录逻辑保持一致）
+            const encCurrent = window.EncryptUtils ? window.EncryptUtils.encryptData(currentPwd) : currentPwd;
+            const encNew = window.EncryptUtils ? window.EncryptUtils.encryptData(newPwd) : newPwd;
+
+            const response = await API.changePassword(encCurrent, encNew, encNew);
+            const data = await response.json();
+
+            if (response.ok) {
+                const successEl = document.getElementById('changePasswordSuccess');
+                successEl.textContent = data.message || '✅ 密码修改成功';
+                successEl.style.display = 'block';
+
+                // 1.5秒后自动关闭并提示重新登录（因为修改密码后旧Token通常失效）
+                setTimeout(() => {
+                    this.closeChangePasswordModal();
+                    this.showSuccess('密码已更新，请重新登录');
+                    this.logout(); // 修改密码后使旧 Token 失效并跳回登录页
+                    // 可选：自动跳转登录页
+                    // localStorage.removeItem('access_token');
+                    // window.location.href = '/login/';
+                }, 1500);
+            } else {
+                // 🛡️ 处理后端 DRF 验证错误
+                if (data.old_password?.[0]) {
+                    this.showChangePasswordError('currentPasswordError', data.old_password[0]);
+                } else if (data.new_password?.[0]) {
+                    this.showChangePasswordError('newPasswordError', data.new_password[0]);
+                } else if (data.new_password_confirm?.[0]) {
+                    this.showChangePasswordError('confirmPasswordError', data.new_password_confirm[0]);
+                } else {
+                    this.showChangePasswordError('currentPasswordError', data.detail || data.error || data.message || '修改失败');
+                }
+            }
+        } catch (error) {
+            console.error('修改密码请求失败:', error);
+            this.showChangePasswordError('currentPasswordError', '网络异常，请稍后重试');
+        } finally {
+            btn.classList.remove('loading');
+            btn.disabled = false;
         }
     }
 

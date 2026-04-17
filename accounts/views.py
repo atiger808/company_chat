@@ -1,4 +1,6 @@
 # accounts/views.py
+import datetime
+
 from rest_framework.exceptions import ValidationError
 from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import viewsets, status, permissions
@@ -1090,23 +1092,37 @@ class UserViewSet(viewsets.ModelViewSet):
             from django.core.mail import send_mail
             from django.template.loader import render_to_string
 
+            # 准备邮件上下文
             context = {
-                'username': request.user.username,
+                'username': request.user.real_name or request.user.username,
                 'change_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'ip': get_request_ip(request),
-                'site_name': SystemConfigManager.get_config('system.name', '企业聊天室')
+                'user_agent': request.META.get('HTTP_USER_AGENT', '未知设备')[:100],
+                'site_name': SystemConfigManager.get_config('system.name', '企业聊天室'),
+                'support_email': SystemConfigManager.get_config('system.support_email', 'support@company.com'),
+                'login_url': f"{getattr(settings, 'FRONTEND_URL', '')}/login/",
+                'help_url': f"{getattr(settings, 'FRONTEND_URL', '')}/help/",
+                'current_year': timezone.now().year,
             }
 
+            # 渲染邮件模板
+            text_content = render_to_string('emails/password_changed.txt', context)
+            html_content = render_to_string('emails/password_changed.html', context)
+
+            # 发送邮件
             send_mail(
                 subject=f"{context['site_name']} - 密码修改通知",
-                message=render_to_string('emails/password_changed.txt', context),
+                message=text_content,
                 from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[request.user.email],
-                html_message=render_to_string('emails/password_changed.html', context),
-                fail_silently=False
+                html_message=html_content,
+                fail_silently=False  # 生产环境建议设为 True + 日志记录
             )
+
+            logger.info(f"密码修改通知邮件已发送至：{request.user.email}")
         except Exception as e:
-            logger.warning(f"发送密码修改通知失败: {e}")
+            # 🔧 邮件发送失败不影响密码修改流程，仅记录日志
+            logger.warning(f"发送密码修改通知邮件失败: {request.user.email}, error: {e}")
 
         return Response({
             'message': '密码修改成功'
@@ -1292,6 +1308,7 @@ def reset_password_page(request):
         #     return render(request, 'chat/reset-password-error.html', {
         #         'error_message': '重置链接已过期或无效，请重新申请'
         #     })
+
 
         # 渲染重置密码页面
         return render(request, 'chat/reset-password.html', {

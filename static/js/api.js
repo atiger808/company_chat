@@ -82,6 +82,24 @@ class API {
         TokenManager.removeToken();
     }
 
+    /**
+     * 修改密码
+     * @param {string} oldPassword
+     * @param {string} newPassword
+     * @param {string} confirmNewPassword
+     */
+    static async changePassword(oldPassword, newPassword, confirmNewPassword) {
+        return fetch(`${API_BASE_URL}/auth/users/change_password/`, {
+            method: 'POST',
+            headers: TokenManager.getHeaders(),
+            body: JSON.stringify({
+                old_password: oldPassword,
+                new_password: newPassword,
+                new_password_confirm: confirmNewPassword
+            })
+        });
+    }
+
     // 聊天室相关
     static async getChatRooms() {
         const response = await fetch(`${API_BASE_URL}/chat/rooms/`, {

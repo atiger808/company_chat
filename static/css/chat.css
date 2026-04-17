@@ -80,11 +80,13 @@ body {
     align-items: center;
     justify-content: space-between;
     background-color: #409EFF;
+    /*background: linear-gradient(135deg, #ff6b6b 0%, #2489d1 100%);*/
+    /*background: linear-gradient(135deg, #ff6b6b 0%, #24ee34 100%);*/
     color: white;
 }
 
 .logo {
-    font-size: 16px;
+    font-size: 18px;
     font-weight: bold;
     display: flex;
     align-items: center;
@@ -3258,9 +3260,9 @@ input:checked + .slider:before {
 
 /* 管理员控制台按钮样式 */
 #adminConsoleBtn {
-    background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
-    color: white;
-    box-shadow: 0 2px 8px rgba(255, 107, 107, 0.3);
+    /*background: linear-gradient(135deg, #ff6b6b 0%, #2489d1 100%);*/
+    /*color: white;*/
+    /*box-shadow: 0 2px 8px rgba(255, 107, 107, 0.3);*/
 }
 
 #adminConsoleBtn:hover {
@@ -3269,9 +3271,9 @@ input:checked + .slider:before {
 }
 
 #cloudBtn {
-    background: linear-gradient(135deg, #ff6b6b 0%, #24ee34 100%);
-    color: white;
-    box-shadow: 0 2px 8px rgba(255, 107, 107, 0.3);
+    /*background: linear-gradient(135deg, #ff6b6b 0%, #24ee34 100%);*/
+    /*color: white;*/
+    /*box-shadow: 0 2px 8px rgba(255, 107, 107, 0.3);*/
 }
 
 #cloudBtn:hover {
@@ -3553,7 +3555,7 @@ input:checked + .slider:before {
 .form-group select,
 .form-group textarea {
     width: 100%;
-    padding: 10px 12px;
+    padding: 10px 40px;
     border: 1px solid var(--border-color);
     border-radius: 8px;
     font-size: 14px;
@@ -8547,3 +8549,326 @@ body.pwa-mode .chat-input-area {
     }
 }
 
+
+
+
+
+/* ================= 修改密码模态框专属样式 ================= */
+#changePasswordModal .modal-content {
+    max-width: 480px;
+}
+#changePasswordModal .form-group {
+    margin-bottom: 18px;
+}
+#changePasswordModal .error-message {
+    color: var(--danger-color);
+    font-size: 12px;
+    margin-top: 4px;
+    display: none;
+    min-height: 16px;
+}
+#changePasswordModal .success-message {
+    color: var(--success-color);
+    font-size: 13px;
+    margin-top: 12px;
+    text-align: center;
+    display: none;
+    padding: 8px;
+    background: rgba(103, 194, 58, 0.1);
+    border-radius: 6px;
+}
+/* 表单输入框错误高亮 */
+#changePasswordModal .form-control.error {
+    border-color: var(--danger-color);
+    box-shadow: 0 0 0 2px rgba(245, 108, 108, 0.15);
+}
+/* 提交按钮加载状态 */
+#submitChangePasswordBtn.loading .btn-text { display: none; }
+#submitChangePasswordBtn .loading { display: none; }
+#submitChangePasswordBtn.loading .loading {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+#submitChangePasswordBtn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+
+
+
+/* ==================== 用户下拉菜单 ==================== */
+.user-actions {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.user-menu-trigger {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
+    border: none;
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--transition);
+    font-size: 16px;
+}
+.user-menu-trigger:hover {
+    background: rgba(255, 255, 255, 0.3);
+    transform: scale(1.05);
+}
+
+.user-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    width: 200px;
+    background: var(--bg-primary);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    padding: 8px 0;
+    z-index: 1000;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-10px);
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    border: 1px solid var(--border-color);
+}
+.user-dropdown-menu.show {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+.dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    cursor: pointer;
+    transition: var(--transition);
+    color: var(--text-primary);
+    font-size: 14px;
+}
+.dropdown-item:hover {
+    background: var(--bg-secondary);
+    color: var(--primary-color);
+}
+.dropdown-item i {
+    width: 20px;
+    text-align: center;
+    font-size: 16px;
+}
+.dropdown-item.text-danger {
+    color: var(--danger-color);
+}
+.dropdown-item.text-danger:hover {
+    background: var(--danger-bg);
+}
+
+.dropdown-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 4px 0;
+}
+
+/* 修改密码模态框专用样式 */
+.error-message, .success-message {
+    padding: 10px;
+    border-radius: 6px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    text-align: center;
+}
+.error-message { background: var(--danger-bg); color: var(--danger-color); }
+.success-message { background: var(--success-bg); color: var(--success-color); }
+.btn .loading {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@media (max-width: 768px) {
+    .user-dropdown-menu {
+        width: 180px;
+        right: -10px;
+    }
+}
+
+
+
+
+
+/* 输入区域布局 */
+
+/*!* ==================== 输入区域核心布局 ==================== *!*/
+/*.chat-input-area {*/
+/*    padding: 12px 16px;*/
+/*    background: var(--bg-primary);*/
+/*    border-top: 1px solid var(--border-color);*/
+/*    display: flex;*/
+/*    flex-direction: column; !* 移动端默认纵向堆叠，体验更佳 *!*/
+/*    gap: 10px;*/
+/*    flex-shrink: 0;*/
+/*    transition: all 0.3s ease;*/
+/*}*/
+
+/*!* 工具栏 *!*/
+/*.input-toolbar {*/
+/*    display: flex;*/
+/*    align-items: center;*/
+/*    gap: 8px;*/
+/*    min-height: 36px;*/
+/*    flex-wrap: wrap;*/
+/*}*/
+
+/*!* 功能按钮通用样式 *!*/
+/*.action-btn {*/
+/*    width: 36px;*/
+/*    height: 36px;*/
+/*    border-radius: 50%;*/
+/*    border: none;*/
+/*    background: var(--bg-secondary);*/
+/*    color: var(--text-secondary);*/
+/*    cursor: pointer;*/
+/*    display: flex;*/
+/*    align-items: center;*/
+/*    justify-content: center;*/
+/*    transition: all 0.2s ease;*/
+/*    flex-shrink: 0;*/
+/*}*/
+/*.action-btn:hover { background: var(--primary-color); color: white; transform: scale(1.05); }*/
+/*.action-btn.active { background: var(--primary-color); color: white; }*/
+
+/*!* ➕ 展开区域（默认隐藏，平滑过渡） *!*/
+/*.extra-actions {*/
+/*    display: flex;*/
+/*    align-items: center;*/
+/*    gap: 8px;*/
+/*    max-width: 0;*/
+/*    overflow: hidden;*/
+/*    opacity: 0;*/
+/*    transition: max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease, margin 0.3s ease;*/
+/*    margin-left: 0;*/
+/*}*/
+/*.extra-actions.show {*/
+/*    max-width: 120px; !* 根据按钮数量调整 *!*/
+/*    opacity: 1;*/
+/*    margin-left: 4px;*/
+/*}*/
+
+/*!* 输入框容器 *!*/
+/*.input-wrapper {*/
+/*    flex: 1;*/
+/*    position: relative;*/
+/*    min-height: 42px;*/
+/*}*/
+
+/*!* 多行输入框 *!*/
+/*#messageInput {*/
+/*    width: 100%;*/
+/*    min-height: 42px;*/
+/*    max-height: 150px; !* 限制最大高度，超出显示滚动条 *!*/
+/*    padding: 10px 14px;*/
+/*    border: 1px solid var(--border-color);*/
+/*    border-radius: 12px;*/
+/*    font-size: 15px;*/
+/*    line-height: 1.6;*/
+/*    resize: none;*/
+/*    outline: none;*/
+/*    background: var(--bg-secondary);*/
+/*    color: var(--text-primary);*/
+/*    transition: all 0.2s ease;*/
+/*    overflow-y: auto;*/
+/*    font-family: inherit;*/
+/*}*/
+/*#messageInput:focus {*/
+/*    border-color: var(--primary-color);*/
+/*    background: white;*/
+/*    box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.1);*/
+/*}*/
+/*!* 占位符样式 *!*/
+/*#messageInput::placeholder {*/
+/*    color: var(--text-light);*/
+/*    font-size: 14px;*/
+/*}*/
+
+/*!* 发送按钮 *!*/
+/*.send-btn {*/
+/*    align-self: flex-end;*/
+/*    padding: 8px 16px;*/
+/*    border-radius: 20px;*/
+/*    border: none;*/
+/*    background: var(--primary-color);*/
+/*    color: white;*/
+/*    font-size: 14px;*/
+/*    font-weight: 500;*/
+/*    cursor: pointer;*/
+/*    transition: all 0.2s ease;*/
+/*    display: flex;*/
+/*    align-items: center;*/
+/*    justify-content: center;*/
+/*    gap: 6px;*/
+/*}*/
+/*.send-btn:hover:not(:disabled) {*/
+/*    background: var(--primary-dark);*/
+/*    transform: translateY(-2px);*/
+/*    box-shadow: 0 4px 12px rgba(64, 158, 255, 0.3);*/
+/*}*/
+/*.send-btn:active:not(:disabled) { transform: translateY(0); }*/
+/*.send-btn:disabled {*/
+/*    opacity: 0.4;*/
+/*    cursor: not-allowed;*/
+/*    background: var(--text-light);*/
+/*}*/
+
+/*!* ==================== 响应式优化 ==================== *!*/
+/*!* 🖥️ 桌面端 (≥769px)：单行布局，工具栏与输入框并列 *!*/
+/*@media (min-width: 769px) {*/
+/*    .chat-input-area {*/
+/*        flex-direction: row;*/
+/*        align-items: flex-end;*/
+/*        padding: 14px 20px;*/
+/*        gap: 12px;*/
+/*    }*/
+/*    .input-toolbar {*/
+/*        flex-direction: row;*/
+/*        align-self: flex-start;*/
+/*        margin-bottom: 4px;*/
+/*    }*/
+/*    .input-wrapper {*/
+/*        margin: 0 8px;*/
+/*        max-height: 120px;*/
+/*    }*/
+/*    .send-btn {*/
+/*        margin-bottom: 2px;*/
+/*        min-width: 60px;*/
+/*    }*/
+/*    .extra-actions.show { max-width: 160px; }*/
+/*}*/
+
+/*!* 📱 移动端 (≤768px)：紧凑布局，防 iOS 放大 *!*/
+/*@media (max-width: 768px) {*/
+/*    .chat-input-area {*/
+/*        padding: 10px 12px;*/
+/*        gap: 8px;*/
+/*    }*/
+/*    .action-btn { width: 32px; height: 32px; font-size: 14px; }*/
+/*    !* 关键：16px 防止 iOS Safari 自动放大输入框 *!*/
+/*    #messageInput { font-size: 16px; padding: 9px 12px; }*/
+/*    .send-btn { padding: 6px 12px; font-size: 13px; }*/
+/*}*/
