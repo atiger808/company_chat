@@ -1055,7 +1055,6 @@ class CloudFileViewSet(viewsets.ModelViewSet):
 
         return queryset.order_by('-updated_at')
 
-
     @action(detail=False, methods=['get'])
     def trash_items(self, request, *args, **kwargs):
         """
@@ -1976,6 +1975,143 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                 {'error': f'清空失败: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    
+    
+    @action(detail=False, methods=['post'])
+    def sync_file_from_chat(self, request, *args, **kwargs):
+        """
+        将聊天文件同步到企业云盘
+        :param request:
+        :param args:
+        :param kwargs: 
+        :return:
+        """
+        user = request.user
+        
+        # 🔧 优化1：使用 get_or_create 返回的元组解包，确保获取的是对象实例而不是 (obj, created) 元组
+        safe_folder_name = '文档（来自聊天室）'
+        root_folder, _ = Folder.objects.get_or_create(
+            owner=user,
+            name=safe_folder_name,
+            defaults={
+                'parent': None,
+                'description': '从聊天室同步',
+                'is_public': False
+            }
+        )
+
+        from chat.models import FileUpload
+        
+
+        # ✅ 正确写法
+        no_sync_files = FileUpload.objects.filter(
+            uploaded_by=user,
+            is_sync_to_cloud=False
+        )
+        
+        sync_count = 0
+        error_count = 0
+        skipped_count = 0
+
+        for file_obj in no_sync_files:
+            try:
+                # 检查源文件是否存在
+                if not file_obj.file or not os.path.exists(file_obj.file.path):
+                    logger.warning(f"聊天文件不存在或路径无效: {file_obj.id}")
+                    skipped_count += 1
+                    # 标记为已同步以避免重复处理无效文件，或者保持 false 等待人工干预
+                    # 这里选择标记为 true 并记录日志，防止死循环
+                    file_obj.is_sync_to_cloud = True
+                    file_obj.save(update_fields=['is_sync_to_cloud'])
+                    continue
+
+                # 🔧 优化3：避免重复创建 CloudFile，先检查 MD5 或文件名是否存在
+                # 注意：update_or_create 需要唯一的 lookup 字段，这里假设 md5 + owner 是唯一的，或者 filename + folder + owner
+                # 如果 md5 可能为空，建议使用 filename + folder + owner 作为查找条件
+                lookup_kwargs = {
+                    'owner': user,
+                    'folder': root_folder,
+                    'md5': file_obj.md5 if file_obj.md5 else None, # 如果 md5 为空，可能需要其他策略
+                }
+                
+                # 如果 md5 为空，回退到文件名匹配（需谨慎，同名不同内容会被覆盖或跳过）
+                if not file_obj.md5:
+                     lookup_kwargs['name'] = file_obj.filename[:255]
+
+                # 尝试获取现有文件，如果存在则跳过或更新（视业务逻辑而定，这里假设如果存在则跳过物理复制但标记同步）
+                cloud_file, created = CloudFile.objects.get_or_create(
+                    **lookup_kwargs,
+                    defaults={
+                        'original_name': (file_obj.filename or 'unnamed')[:255],
+                        'name': file_obj.filename[:255],
+                        'mime_type': file_obj.mime_type,
+                        'created_at': file_obj.created_at,
+                        'description': '来自聊天室',
+                        'size': file_obj.file.size if hasattr(file_obj.file, 'size') else 0,
+                    }
+                )
+
+                # 如果是新创建的记录，或者文件物理路径不一致，则保存物理文件
+                if created or not cloud_file.file or not os.path.exists(cloud_file.file.path):
+                    with open(file_obj.file.path, 'rb') as f:
+                        content = f.read()
+                    
+                    content_file = ContentFile(content)
+                    # 使用 save 方法保存文件到存储后端
+                    # 注意：save 方法会触发 save() 调用，除非指定 save=False
+                    cloud_file.file.save(
+                        file_obj.filename[:255],
+                        content_file,
+                        save=True
+                    )
+                    
+                    # 更新大小信息（如果之前未知）
+                    if not cloud_file.size:
+                        cloud_file.size = len(content)
+                        cloud_file.save(update_fields=['size'])
+
+                # 标记聊天文件为已同步
+                file_obj.is_sync_to_cloud = True
+                file_obj.save(update_fields=['is_sync_to_cloud'])
+                sync_count += 1
+
+            except Exception as e:
+                logger.error(f"同步聊天文件失败 ID:{file_obj.id}, Error: {str(e)}")
+                error_count += 1
+                continue
+
+        total_processed = sync_count + skipped_count
+        
+        stats = {
+            'user': user.username,
+            'folder_id': str(root_folder.id),
+            'folder_name': root_folder.name,
+            'total_scanned': no_sync_files.count(), # 注意：如果在循环中修改了状态，这里的 count 可能需要重新查询或缓存
+            'sync_success': sync_count,
+            'skipped_invalid': skipped_count,
+            'errors': error_count,
+            'update_time': timezone.now().isoformat(),
+        }
+
+        # 记录操作日志
+        try:
+            FileOperationLog.objects.create(
+                folder=root_folder,
+                user=user,
+                operation='sync_to_cloud',
+                description=f'从聊天室同步文件: 成功 {sync_count}, 跳过 {skipped_count}, 错误 {error_count}',
+                ip_address=get_request_ip(request), # 🔧 修复：使用传入的 request 而不是 self.request
+                extra_data={'stats': stats}
+            )
+        except Exception as log_err:
+            logger.error(f"记录同步日志失败: {log_err}")
+
+        return Response({
+            'message': '同步完成',
+            'stats': stats,
+            'total_processed': total_processed
+        })
 
     # ====================== 工具函数 ======================
 
@@ -5252,6 +5388,10 @@ class DocumentEditorViewSet(viewsets.ViewSet):
         return settings.ONLYOFFICE.get('SERVER_URL', 'https://chat.first-iq.com')
 
     @property
+    def CLOUD_SERVER_URL(self):
+        return settings.ONLYOFFICE.get('CLOUD_SERVER_URL', 'https://chat.first-iq.com/cloud/')
+
+    @property
     def jwt_secret(self):
         return settings.ONLYOFFICE.get('JWT_SECRET', '')
 
@@ -5441,11 +5581,14 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                 'email': request.user.email or '',
             }
 
+            collaboration_mode = 'fast' # strict: 严格模式（实时保存），fast: 快速模式
+
             # 7. 构建 OnlyOffice 配置
             config = {
                 'document': {
                     'fileType': file_ext,
-                    'key': f"{file_obj.id}_{file_obj.md5 or str(file_obj.id)}_{int(timezone.now().timestamp())}",
+                    # 'key': f"{file_obj.id}_{file_obj.md5 or str(file_obj.id)}_{int(timezone.now().timestamp())}",
+                    'key': f"{file_obj.id}_{file_obj.md5 or str(file_obj.id)}",
                     'title': file_obj.name or file_obj.original_name,
                     'url': file_url,
                     'permissions': {
@@ -5478,16 +5621,38 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                             'text': '返回网盘',
                             'url': f'{self.server_url}/cloud/',
                         },
-                        'logo': {
-                            'image': f'{self.server_url}/media/avatars/cloud-green.svg',
-                            'imageEmbedded': True,
+                        # 'logo': {
+                        #     'image': f'{self.server_url}/media/avatars/cloud-green.svg',
+                        #     'imageEmbedded': True,
+                        # },
+                        # 替换顶部 Logo（支持 URL 或 Base64）
+                        'logo':f'{self.server_url}/media/avatars/cloud-green.svg',
+
+                        # 控制左侧“关于”按钮（社区版仅支持隐藏，无法修改内容）
+                        "about": False,
+
+                        "customer": {
+                            "name": "企业网盘",
+                            "mail": "ole211@qq.com",
+                            "www": f"{self.CLOUD_SERVER_URL}",
+                            "info": "内部协同办公平台 v1.0"
                         },
+
+                        "help": False,              # 隐藏右侧帮助菜单
+                        "feedback": False,          # 隐藏反馈按钮
+                        "hideRightMenu": False,     # 默认展开右侧工具栏
+                        "toolbarNoTabs": False,      # 工具栏显示标签页
+
+
                         'mentionShare': True,
                         'reviewDisplay': 'original',
                         'spellcheck': True,
                         'uiTheme': 'theme-light',
                         'forcesaveButton': can_edit,
                         'compactToolbar': False,
+                        'collaboration': {
+                            "mode": collaboration_mode  # 或 "strict"
+                        },
                     },
                     'permissions': {  # 新版权限位置
                         'chat': True,
@@ -5506,7 +5671,7 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                         'review': can_edit,
                     },
                     'coEditing': {
-                        'mode': 'fast', # strict: 严格模式（实时保存），fast: 快速模式
+                        'mode': collaboration_mode,  # strict: 严格模式（实时保存），fast: 快速模式
                         'change': can_edit,
                     },
                     'recent': self._get_recent_documents(request.user) if can_edit else [],
@@ -6406,9 +6571,6 @@ class DocumentEditorViewSet(viewsets.ViewSet):
             logger.error(f'Get collaborators failed: {e}', exc_info=True)
             return Response({'error': f'获取失败：{str(e)}'}, status=500)
 
-
-
-
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated],
             url_path='collaboration/status')
     def update_collaboration_status(self, request, pk=None):
@@ -6485,7 +6647,8 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                     sender_id=str(request.user.id),
                     sender_username=request.user.username,
                     sender_real_name=request.user.real_name or request.user.username,
-                    sender_avatar=request.user.get_avatar_url() if hasattr(request.user, 'get_avatar_url') else getattr(request.user, 'avatar_url', '/static/images/default-avatar.png'),
+                    sender_avatar=request.user.get_avatar_url() if hasattr(request.user, 'get_avatar_url') else getattr(
+                        request.user, 'avatar_url', '/static/images/default-avatar.png'),
                 )
 
                 # 2. 🔧 如果有输入状态，广播 user_typing
@@ -6503,7 +6666,9 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                         sender_id=str(request.user.id),
                         sender_username=request.user.username,
                         sender_real_name=request.user.real_name or request.user.username,
-                        sender_avatar=request.user.get_avatar_url() if hasattr(request.user, 'get_avatar_url') else getattr(request.user, 'avatar_url', '/static/images/default-avatar.png'),
+                        sender_avatar=request.user.get_avatar_url() if hasattr(request.user,
+                                                                               'get_avatar_url') else getattr(
+                            request.user, 'avatar_url', '/static/images/default-avatar.png'),
                     )
 
                 # 3. 🔧 如果有光标位置，广播 cursor_update
@@ -6521,7 +6686,9 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                         sender_id=str(request.user.id),
                         sender_username=request.user.username,
                         sender_real_name=request.user.real_name or request.user.username,
-                        sender_avatar=request.user.get_avatar_url() if hasattr(request.user, 'get_avatar_url') else getattr(request.user, 'avatar_url', '/static/images/default-avatar.png'),
+                        sender_avatar=request.user.get_avatar_url() if hasattr(request.user,
+                                                                               'get_avatar_url') else getattr(
+                            request.user, 'avatar_url', '/static/images/default-avatar.png'),
                     )
 
                 # 4. 🔧 如果有选区，广播 selection_update
@@ -6539,7 +6706,9 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                         sender_id=str(request.user.id),
                         sender_username=request.user.username,
                         sender_real_name=request.user.real_name or request.user.username,
-                        sender_avatar=request.user.get_avatar_url() if hasattr(request.user, 'get_avatar_url') else getattr(request.user, 'avatar_url', '/static/images/default-avatar.png'),
+                        sender_avatar=request.user.get_avatar_url() if hasattr(request.user,
+                                                                               'get_avatar_url') else getattr(
+                            request.user, 'avatar_url', '/static/images/default-avatar.png'),
                     )
 
             return Response({
@@ -6561,8 +6730,6 @@ class DocumentEditorViewSet(viewsets.ViewSet):
             hash_val = ord(char) + ((hash_val << 5) - hash_val)
         hue = abs(hash_val) % 360
         return f'hsl({hue}, 75%, 55%)'
-
-
 
     def _get_active_collaborators_count(self, file_obj):
         """获取活跃协作者数量"""

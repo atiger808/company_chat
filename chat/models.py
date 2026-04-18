@@ -144,6 +144,8 @@ class FileUpload(models.Model):
     # 🔧 新增：音频时长字段（秒）
     duration = models.FloatField(null=True, blank=True, verbose_name='音频时长(秒)')
 
+    is_sync_to_cloud = models.BooleanField(default=False, verbose_name='是否已同步到云端')
+
     filename = models.CharField(max_length=255, verbose_name='原始文件名')
     size = models.BigIntegerField(verbose_name='文件大小')
     mime_type = models.CharField(max_length=100, verbose_name='MIME类型')

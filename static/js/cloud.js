@@ -4190,6 +4190,70 @@ class CloudApp {
         container.innerHTML = html;
     }
 
+
+    /**
+     * 🔧 同步聊天室文档到网盘
+     */
+    async syncChatDocuments() {
+        // 1. 二次确认提示
+        const confirmed = await this.showConfirmDialog(
+            '同步聊天室文档',
+            '确定要将聊天室中未同步的文档同步到企业网盘吗？<br><small style="color: var(--text-light);">系统将在根目录自动创建/维护“文档（来自聊天室）”文件夹</small>',
+            'confirm'
+        );
+        if (!confirmed) return;
+
+        try {
+            // 2. 显示全局加载遮罩
+            this.showLoading('正在扫描并同步聊天室文档，请稍候...');
+
+            // 3. 调用后端同步接口
+            const response = await fetch('/api/cloud/files/sync_file_from_chat/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...TokenManager.getHeaders() // 复用现有鉴权逻辑
+                },
+                body: JSON.stringify({}) // 后端已自动处理，无需传参
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || errorData.detail || '同步请求失败');
+            }
+
+            const result = await response.json();
+            const stats = result.stats || {};
+
+            // 4. 解析并展示同步结果
+            const successCount = stats.sync_success || 0;
+            const skipCount = stats.skipped_invalid || 0;
+            const errorCount = typeof stats.errors === 'number' ? stats.errors : (stats.errors?.length || 0);
+
+            let message = `成功同步 ${successCount} 个文件`;
+            if (skipCount > 0) message += `，跳过 ${skipCount} 个`;
+            if (errorCount > 0) message += `，失败 ${errorCount} 个`;
+
+            this.showSuccess('同步完成', message);
+
+            // 5. 自动刷新当前视图
+            if (this.currentView === 'files') {
+                await this.loadFiles(this.currentFolderId);
+            } else {
+                // 若在其他视图，默认刷新根目录确保能看到同步结果
+                await this.loadFiles(null);
+            }
+
+        } catch (error) {
+            console.error('同步聊天室文档失败:', error);
+            this.showError('同步失败', error.message || '网络异常或接口请求失败');
+        } finally {
+            // 6. 无论成功失败，均关闭加载状态
+            this.hideLoading();
+        }
+    }
+
+
     // ==================== 系统配置 ====================
 
     async loadSystemConfigs() {
@@ -4224,6 +4288,17 @@ class CloudApp {
         const newFolderBtn = document.getElementById('newFolderBtn');
         if (newFolderBtn) {
             newFolderBtn.addEventListener('click', () => this.openModal('newFolderModal'));
+        }
+
+        const refreshBtn = document.getElementById('refreshBtn');
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', () => this.loadFiles(this.currentFolderId));
+        }
+
+        // 👇 新增：绑定同步聊天室文档按钮
+        const syncChatBtn = document.getElementById('syncChatDocsBtn');
+        if (syncChatBtn) {
+            syncChatBtn.addEventListener('click', () => this.syncChatDocuments());
         }
 
         // 拖拽上传

@@ -493,6 +493,7 @@ ONLYOFFICE = {
     # 必须是 OnlyOffice 服务器能访问的地址
     # 'SERVER_URL': 'http://192.168.1.130:10900',
     'SERVER_URL': 'https://chat.first-iq.com',
+    'CLOUD_SERVER_URL': 'https://chat.first-iq.com/cloud/',
 
     # 🔧 JWT 密钥（必须与服务器 2 的 JWT_SECRET 完全一致）
     'JWT_SECRET': config('JWT_SECRET'),

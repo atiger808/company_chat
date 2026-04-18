@@ -85,6 +85,7 @@ class DocumentEditorApp {
             // 10. 设置搜索事件监听
             this.setupSearchListener();
 
+
         } catch (error) {
             console.error('初始化失败:', error);
             const loadingEl = document.getElementById('loadingState');
@@ -222,6 +223,7 @@ class DocumentEditorApp {
                 events: {
                     onDocumentReady: () => {
                         console.log('✅ 文档就绪');
+                        this.setupHideElementListener()
                         this.loadCollaborators();
                         this.startCollabHeartbeat();
                     },
@@ -465,6 +467,8 @@ class DocumentEditorApp {
         if (!user?.id) return;
 
         console.log(`👋 用户加入: ${user.real_name || user.username}`);
+        console.log('user:', user);
+        console.log('payload:', payload);
 
         // 更新本地协作者列表
         const existingIndex = this.collaborators.findIndex(c => c.id === user.id);
@@ -497,7 +501,18 @@ class DocumentEditorApp {
 
         // 播放加入提示音（非自己）
         if (user.id !== this.config?.editorConfig?.user?.id && this.shouldPlayJoinSound()) {
-            this.playNotificationSound('join');
+            this.playNotificationSound('join',
+                user.name || user.real_name || user.username,
+                {
+                    body: '加入了协同编辑',
+                    icon: user?.avatar || user?.avatar_url || '/static/images/default-avatar.png',
+                    data: payload,
+                    // 🔧 关键修复4: 移动端锁屏通知必需参数
+                    requireInteraction: Utils.isMobile() ? false : true,
+                    silent: false,  // 强制播放系统通知声音
+                    tag: `collab-${user.id}-${Date.now()}`  // 防止重复通知
+                }
+            );
         }
 
         // 渲染远程光标
@@ -762,7 +777,18 @@ class DocumentEditorApp {
         // 处理@提及
         if (mentionUsers?.includes(this.config?.editorConfig?.user?.id)) {
             this.highlightMentionMessage(messageId);
-            this.playNotificationSound('mention');
+            this.playNotificationSound('mention',
+                userName,
+                {
+                    body: content,
+                    icon: avatar || '/static/images/default-avatar.png',
+                    data: payload,
+                    // 🔧 关键修复4: 移动端锁屏通知必需参数
+                    requireInteraction: Utils.isMobile() ? false : true,
+                    silent: false,  // 强制播放系统通知声音
+                    tag: `collab-${userId}-${Date.now()}`  // 防止重复通知
+                }
+            );
         }
 
         // 桌面通知（页面不可见时）
@@ -1227,7 +1253,7 @@ class DocumentEditorApp {
 
 
     // 添加编辑动态显示方法
-    showEditActivity(userName, action, timestamp, collab=null) {
+    showEditActivity(userName, action, timestamp, collab = null) {
         const container = document.getElementById('editActivityList');
         if (!container) return;
 
@@ -1424,7 +1450,35 @@ class DocumentEditorApp {
                 this.searchCollaborators(e.target.value);
             });
         }
+
     }
+
+    // 隐藏指定元素事件监听
+    setupHideElementListener(elementId = 'left-btn-about') {
+        elementId = elementId || 'left-btn-about'
+
+        let attempts = 0;
+        const maxAttempts = 50;   // 总超时 50*200 = 10s
+        const interval = setInterval(() => {
+            const iframe = document.querySelector('iframe[name="frameEditor"]')
+
+            if (iframe && iframe.contentDocument && iframe.contentDocument.readyState === 'complete') {
+                const elem = iframe.contentDocument.getElementById(elementId);
+                if (elem) {
+                    console.log('隐藏元素成功');
+                    elem.style.display = 'none';
+                    clearInterval(interval);
+                }
+            }
+            attempts++;
+            if (attempts >= maxAttempts) {
+                clearInterval(interval);
+                console.log('未找到元素或超时');
+            }
+        }, 200);
+
+    }
+
 
     // 搜索用户
     async searchCollaborators(keyword) {
@@ -2012,7 +2066,7 @@ class DocumentEditorApp {
         }
 
         // 创建静默通知（silent: false 会触发系统默认提示音）
-        const notification = new Notification(title, {
+        const notification = new Notification('🔔' + title, {
             ...options,
             silent: false,  // 🔧 关键：允许系统播放默认提示音
             requireInteraction: false,
@@ -2043,13 +2097,13 @@ class DocumentEditorApp {
      * 播放通知音效
      * @param {string} type - 'join' | 'leave' | 'mention' | 'message'
      */
-    playNotificationSound(type = 'message') {
+    playNotificationSound(type = 'message', title = '新消息', options = {}) {
         try {
             const soundEnabled = localStorage.getItem('soundNotifications') !== 'false';
             if (!soundEnabled) return;
             // 优先尝试系统通知声音
             if (Notification.permission === 'granted') {
-                this.playSystemNotificationSound('🔔');
+                this.playSystemNotificationSound(title, options);
             } else {
                 // 降级：自定义声音
                 this.playCustomSound();
