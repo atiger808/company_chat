@@ -1,0 +1,119 @@
+{% extends 'cloud/base.html' %}
+{% load static %}
+
+{% block title %}系统配置 - 企业网盘{% endblock %}
+
+{% block extra_css %}
+<!--<link rel="stylesheet" href="{% static 'css/cloud_settings.css' %}">-->
+<link rel="stylesheet" href="/static/css/cloud_settings.css?v=20260425-f8c3711">
+<link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
+{% endblock %}
+
+{% block content %}
+<div class="settings-layout">
+    <!-- 左侧导航栏 -->
+    <aside class="settings-sidebar" id="settingsSidebar">
+        <div class="settings-header">
+            <h3><i class="fas fa-cogs"></i> 系统配置</h3>
+            <button class="sidebar-close-btn" id="sidebarCloseBtn" title="关闭导航">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <nav class="settings-nav" id="settingsNav">
+            <!-- 分类由JS动态渲染 -->
+            <div class="loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</div>
+        </nav>
+        <div class="settings-actions">
+            <a href="/cloud/" class="btn btn-outline">
+                <i class="fas fa-cloud"></i> 返回企业网盘
+            </a>
+            <button class="btn btn-secondary" onclick="cloudSettings.showSystemInfo()">
+                <i class="fas fa-info-circle"></i> 系统信息
+            </button>
+            <button class="btn btn-primary" onclick="cloudSettings.exportConfigs()">
+                <i class="fas fa-download"></i> 导出配置
+            </button>
+            <button class="btn btn-danger" onclick="cloudSettings.clearCache()">
+                <i class="fas fa-broom"></i> 清除缓存
+            </button>
+
+        </div>
+    </aside>
+
+    <!-- 移动端侧边栏遮罩 -->
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <!-- 右侧内容区 -->
+    <main class="settings-content">
+        <header class="settings-header-mobile">
+            <button class="sidebar-toggle-btn" id="sidebarToggleBtn" title="切换导航">
+                <i class="fas fa-bars"></i>
+            </button>
+            <h2 id="currentCategoryName">加载中...</h2>
+        </header>
+
+        <div class="settings-body">
+            <div class="config-list" id="configList">
+                <div class="loading">
+                    <i class="fas fa-spinner fa-spin"></i>
+                    <span>加载中...</span>
+                </div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<!-- 编辑配置模态框 -->
+<div class="modal" id="editConfigModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3><i class="fas fa-edit"></i> 编辑配置</h3>
+            <button class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>配置名称</label>
+                <input type="text" id="editConfigName" class="form-control" readonly>
+            </div>
+            <div class="form-group">
+                <label>配置键</label>
+                <input type="text" id="editConfigKey" class="form-control" readonly>
+            </div>
+            <div class="form-group">
+                <label>配置值</label>
+                <div id="editConfigValueContainer"></div>
+            </div>
+            <div class="form-group">
+                <label>描述</label>
+                <p id="editConfigDesc" class="form-text"></p>
+            </div>
+            <p id="editConfigError" class="error-message"></p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="cloudSettings.closeEditModal()">取消</button>
+            <button class="btn btn-primary" onclick="cloudSettings.saveConfig()">保存</button>
+        </div>
+    </div>
+</div>
+
+<!-- 系统信息模态框 -->
+<div class="modal" id="systemInfoModal">
+    <div class="modal-content modal-lg">
+        <div class="modal-header">
+            <h3><i class="fas fa-server"></i> 系统信息</h3>
+            <button class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body" id="systemInfoContent">
+            <div class="loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="cloudSettings.closeSystemInfoModal()">关闭</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<!--<script src="{% static 'js/cloud_settings.js' %}"></script>-->
+<script src="/static/js/cloud_settings.js?v=20260425-f8c3711"></script>
+{% endblock %}

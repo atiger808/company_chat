@@ -12,6 +12,7 @@ from .views import (
     share_access_api,  # ✅ 导入 API 版本
     CloudFileDownloadView,
     DocumentEditorViewSet,
+    CloudSystemSettingsViewSet,
 )
 
 router = DefaultRouter()
@@ -21,9 +22,12 @@ router.register(r'shares', FileShareViewSet, basename='cloud-share')
 router.register(r'comments', FileCommentViewSet, basename='cloud-comment')
 router.register(r'dashboard', CloudDashboardViewSet, basename='cloud-dashboard')
 router.register(r'documents', DocumentEditorViewSet, basename='document')
+router.register(r'settings', CloudSystemSettingsViewSet, basename='cloud-settings')  # 🔧 注册配置路由
+
 
 urlpatterns = [
     path('', include(router.urls)),
+
 
     # 🔧 独立的文件下载视图
     path('cloudfiles/<uuid:file_id>/download_file/', CloudFileDownloadView.as_view(), name='cloud-file-download'),

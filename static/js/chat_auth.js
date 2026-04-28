@@ -1,47 +1,43 @@
-// static/js/chat_auth.js
-// 企业聊天室 - 认证模块逻辑 (重构版)
-// 依赖: /static/css/chat_auth.css
-
+/**
+ * @File   : chat_auth.js
+ * @Time   : 2026/04/23
+ * @Author : Enterprise Chat Team
+ * @Desc   : 企业聊天室认证模块逻辑（基于 cloud_auth.js 重构版）
+ * 依赖: /static/css/chat_auth.css, /static/js/api.js, /static/js/token.js
+ */
 
 // ==================== 配置常量 ====================
 const CHAT_CONFIG = {
-    API_BASE_URL: '/api/auth',           // 与聊天室共用认证接口
-    REDIRECT_AFTER_LOGIN: '/chat/',     // 登录成功跳转聊天室首页
-    REGISTRATION_ENABLED: false,          // 🔧 注册功能默认关闭
-    REMEMBER_ME_DURATION: 7 * 24 * 60 * 60 * 1000,  // 记住我有效期：7天
+    API_BASE_URL: '/api/auth',                    // 与网盘共用认证接口
+    REDIRECT_AFTER_LOGIN: '/chat/',              // 登录成功跳转聊天室首页
+    REGISTRATION_ENABLED: false,                  // 🔧 注册功能默认关闭（从系统配置加载）
+    REMEMBER_ME_DURATION: 7 * 24 * 60 * 60 * 1000, // 记住我有效期：7天
     PASSWORD_MIN_LENGTH: 8,
     USERNAME_PATTERN: /^[a-zA-Z0-9_-]{3,20}$/,
     EMAIL_PATTERN: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
     PHONE_PATTERN: /^1[3-9]\d{9}$/
 };
 
-// ==================== 工具函数 ====================
+// ==================== 工具函数（复用） ====================
 
 /**
  * 解析后端返回的验证错误
- * @param {Object} errorData - 后端返回的错误对象，如 {"email":["该邮箱未注册"]}
- * @param {Number} statusCode - HTTP 状态码
- * @returns {String} 用户友好的错误消息
  */
 function parseApiError(errorData, statusCode) {
-
-    // 1. Django REST Framework 字段验证错误格式: { "field": ["错误消息"] }
     if (typeof errorData === 'object' && errorData !== null) {
-        // 提取第一个字段的第一个错误消息
+        // DRF 字段验证错误
         for (const [field, messages] of Object.entries(errorData)) {
             if (Array.isArray(messages) && messages.length > 0) {
-                return messages[0]; // 返回第一条错误消息
+                return messages[0];
             }
         }
-
-        // 2. 通用错误格式: { "error": "消息" } 或 { "message": "消息" }
+        // 通用错误格式
         if (errorData.error) return errorData.error;
         if (errorData.message) return errorData.message;
         if (errorData.detail) return errorData.detail;
         if (errorData.non_field_errors?.[0]) return errorData.non_field_errors[0];
     }
-
-    // 3. 状态码映射
+    // 状态码映射
     const statusMap = {
         400: '请求参数错误',
         401: '未授权，请重新登录',
@@ -52,60 +48,37 @@ function parseApiError(errorData, statusCode) {
         502: '网关错误',
         503: '服务暂时不可用'
     };
-
     return statusMap[statusCode] || `请求失败 (${statusCode})`;
 }
 
-
 /**
- * 显示/隐藏元素
+ * UI 操作工具
  */
 const UI = {
-    show: (el) => {
-        if (el) el.style.display = '';
-        el?.classList?.add('show');
-    },
-    hide: (el) => {
-        if (el) el.style.display = 'none';
-        el?.classList?.remove('show');
-    },
-
-    clearHTML: (el) => {
-        if (el) {
-            el.textContent = '';
-            el.style.display = ''}
-        },
-
-    toggle: (el) => {
-        if (!el) return;
-        el.classList.toggle('show');
-        el.style.display = el.classList.contains('show') ? '' : 'none';
-    },
+    show: (el) => { if (el) { el.style.display = ''; el.classList?.add('show'); } },
+    hide: (el) => { if (el) { el.style.display = 'none'; el.classList?.remove('show'); } },
+    clearHTML: (el) => { if (el) { el.textContent = ''; el.style.display = '' } },
+    toggle: (el) => { if (el) { el.classList.toggle('show'); el.style.display = el.classList.contains('show') ? '' : 'none'; } },
     addClass: (el, cls) => el?.classList?.add(cls),
     removeClass: (el, cls) => el?.classList?.remove(cls),
-    setText: (el, text) => {
-        if (el) el.textContent = text;
-    },
-    setHTML: (el, html) => {
-        if (el) el.innerHTML = html;
-    }
+    setText: (el, text) => { if (el) el.textContent = text; },
+    setHTML: (el, html) => { if (el) el.innerHTML = html; }
 };
 
 /**
- * 显示错误/成功信息
+ * 消息提示
  */
 function showMessage(elementId, message, type = 'error') {
     const el = document.getElementById(elementId);
     if (!el) return;
-
     el.textContent = message;
     el.className = `alert alert-${type} show`;
-
     // 高亮关联输入框
     const fieldId = elementId.replace(/(Error|Message)$/, '');
     const field = document.getElementById(fieldId);
     if (field && type === 'error') {
         field.classList.add('error');
+        setTimeout(() => field.classList.remove('error'), 2000);
     }
 }
 
@@ -113,26 +86,25 @@ function clearMessage(elementId) {
     const el = document.getElementById(elementId);
     if (el) {
         el.textContent = '';
-        el.className = 'alert';
+        el.className = el.classList.contains('alert') ? 'alert' : '';
     }
 }
 
 function clearAllMessages() {
     document.querySelectorAll('.error-message, .success-message, .alert').forEach(el => {
         el.textContent = '';
-        el.className = el.classList.contains('alert') ? 'alert' : 'error-message success-message';
+        el.className = el.classList.contains('alert') ? 'alert' : '';
     });
     document.querySelectorAll('.form-control').forEach(el => el.classList.remove('error'));
 }
 
 /**
- * 按钮加载状态管理
+ * 按钮加载状态
  */
 function setLoading(btn, loading = true) {
     if (!btn) return;
     const text = btn.querySelector('.text');
     const loader = btn.querySelector('.loading');
-
     if (loading) {
         btn.classList.add('loading');
         btn.disabled = true;
@@ -152,9 +124,8 @@ function setLoading(btn, loading = true) {
 function showToast(message, type = 'success', duration = 3000) {
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
-    toast.textContent = message;
+    toast.innerHTML = `<i class="fas fa-${type === 'error' ? 'exclamation-circle' : 'check-circle'}"></i><span>${message}</span>`;
     document.body.appendChild(toast);
-
     setTimeout(() => {
         toast.style.opacity = '0';
         toast.style.transform = 'translateX(100%)';
@@ -162,7 +133,7 @@ function showToast(message, type = 'success', duration = 3000) {
     }, duration);
 }
 
-// ==================== 滑块验证码类 ====================
+// ==================== 滑块验证码类（复用 cloud_auth.js 增强版） ====================
 
 class SliderCaptcha {
     constructor(containerId, options = {}) {
@@ -171,27 +142,21 @@ class SliderCaptcha {
             console.error(`SliderCaptcha: Container "${containerId}" not found`);
             return null;
         }
-
         this.options = {
             width: 400,
             height: 160,
             sliderWidth: 44,
             sliderHeight: 44,
-            onSuccess: () => {
-            },
-            onFail: () => {
-            },
-            onRefresh: () => {
-            },
+            onSuccess: () => {},
+            onFail: () => {},
+            onRefresh: () => {},
             ...options
         };
-
         this.isDragging = false;
         this.offsetX = 0;
         this.correctPosition = 0;
         this.sliderPosition = 0;
         this.verified = false;
-
         this.init();
         return this;
     }
@@ -204,31 +169,27 @@ class SliderCaptcha {
 
     createHTML() {
         this.container.innerHTML = `
-      <div class="slider-captcha-container">
-        <div class="slider-captcha-bg">
-          <canvas id="captchaCanvas" width="${this.options.width}" height="${this.options.height}"></canvas>
-          <div class="slider-track-box" id="trackBox"></div>
-        </div>
-        <div class="slider-captcha-track">
-          <div class="slider-captcha-thumb" id="captchaThumb">
-            <i class="fas fa-arrow-right"></i>
-          </div>
-          <span class="slider-captcha-text" id="captchaText">向右滑动完成验证</span>
-        </div>
-      </div>
-    `;
+            <div class="slider-captcha-container">
+                <div class="slider-captcha-bg">
+                    <canvas id="captchaCanvas" width="${this.options.width}" height="${this.options.height}"></canvas>
+                    <div class="slider-track-box" id="trackBox"></div>
+                </div>
+                <div class="slider-captcha-track">
+                    <div class="slider-captcha-thumb" id="captchaThumb">
+                        <i class="fas fa-arrow-right"></i>
+                    </div>
+                    <span class="slider-captcha-text" id="captchaText">向右滑动完成验证</span>
+                </div>
+            </div>
+        `;
     }
 
     bindEvents() {
         const thumb = document.getElementById('captchaThumb');
         if (!thumb) return;
-
-        // 鼠标事件
         thumb.addEventListener('mousedown', (e) => this.startDrag(e));
         document.addEventListener('mousemove', (e) => this.drag(e));
         document.addEventListener('mouseup', () => this.endDrag());
-
-        // 触摸事件
         thumb.addEventListener('touchstart', (e) => this.startDrag(e), {passive: false});
         document.addEventListener('touchmove', (e) => this.drag(e), {passive: false});
         document.addEventListener('touchend', () => this.endDrag());
@@ -238,7 +199,6 @@ class SliderCaptcha {
         e.preventDefault();
         this.isDragging = true;
         this.offsetX = this.getMouseX(e);
-
         UI.setText(document.getElementById('captchaText'), '拖动中...');
         UI.addClass(document.getElementById('captchaThumb'), 'dragging');
         UI.addClass(document.getElementById('trackBox'), 'show');
@@ -246,11 +206,9 @@ class SliderCaptcha {
 
     drag(e) {
         if (!this.isDragging) return;
-
         const currentX = this.getMouseX(e);
         const deltaX = currentX - this.offsetX;
         const maxX = this.options.width - this.options.sliderWidth;
-
         this.sliderPosition = Math.max(0, Math.min(deltaX, maxX));
         this.updateSliderPosition();
         this.updateTrackBoxPosition();
@@ -258,12 +216,9 @@ class SliderCaptcha {
 
     endDrag() {
         if (!this.isDragging) return;
-
         this.isDragging = false;
         UI.removeClass(document.getElementById('captchaThumb'), 'dragging');
         UI.removeClass(document.getElementById('trackBox'), 'show');
-
-        // 验证（±10像素容差）
         if (Math.abs(this.sliderPosition - this.correctPosition) <= 10) {
             this.success();
         } else {
@@ -293,21 +248,17 @@ class SliderCaptcha {
         const canvas = document.getElementById('captchaCanvas');
         const ctx = canvas?.getContext('2d');
         if (!ctx) return;
-
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // 背景渐变
+        // 背景（聊天室主题配色）
         const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-        gradient.addColorStop(0, '#f0f0f0');
-        gradient.addColorStop(1, '#e0e0e0');
+        gradient.addColorStop(0, '#f0f7ff');
+        gradient.addColorStop(1, '#e6f4ff');
         ctx.fillStyle = gradient;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-
         // 随机正确位置
         this.correctPosition = Math.floor(Math.random() * (canvas.width - 140)) + 70;
-
         // 绘制拼图缺口
-        ctx.strokeStyle = 'rgba(64, 158, 255, 0.6)';
+        ctx.strokeStyle = 'rgba(24, 144, 255, 0.6)';
         ctx.lineWidth = 2;
         ctx.setLineDash([5, 3]);
         ctx.beginPath();
@@ -318,32 +269,30 @@ class SliderCaptcha {
         ctx.closePath();
         ctx.stroke();
         ctx.setLineDash([]);
-
-        // 装饰图案
-        this.drawDecorations(ctx, canvas.width, canvas.height);
-
+        // 装饰图案（聊天气泡元素）
+        this.drawChatDecorations(ctx, canvas.width, canvas.height);
         // 提示文字
-        ctx.fillStyle = '#999';
-        ctx.font = '14px Arial';
+        ctx.fillStyle = '#909399';
+        ctx.font = '14px -apple-system, BlinkMacSystemFont, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('拖动滑块完成验证', canvas.width / 2, canvas.height - 20);
     }
 
-    drawDecorations(ctx, width, height) {
-        // 随机圆点
-        ctx.fillStyle = 'rgba(64, 158, 255, 0.1)';
-        for (let i = 0; i < 25; i++) {
+    drawChatDecorations(ctx, width, height) {
+        // 绘制聊天气泡装饰
+        ctx.fillStyle = 'rgba(24, 144, 255, 0.1)';
+        for (let i = 0; i < 8; i++) {
             const x = Math.random() * width;
-            const y = Math.random() * height;
-            const r = Math.random() * 12 + 6;
+            const y = Math.random() * (height - 60);
+            const r = Math.random() * 15 + 10;
             ctx.beginPath();
             ctx.arc(x, y, r, 0, Math.PI * 2);
             ctx.fill();
         }
-        // 随机线条
-        ctx.strokeStyle = 'rgba(64, 158, 255, 0.2)';
+        // 随机对话线
+        ctx.strokeStyle = 'rgba(24, 144, 255, 0.15)';
         ctx.lineWidth = 1;
-        for (let i = 0; i < 15; i++) {
+        for (let i = 0; i < 10; i++) {
             ctx.beginPath();
             ctx.moveTo(Math.random() * width, Math.random() * height);
             ctx.lineTo(Math.random() * width, Math.random() * height);
@@ -355,15 +304,12 @@ class SliderCaptcha {
         this.sliderPosition = 0;
         this.verified = false;
         this.updateSliderPosition();
-
         UI.setText(document.getElementById('captchaText'), '向右滑动完成验证');
-
         const thumb = document.getElementById('captchaThumb');
         if (thumb) {
             thumb.className = 'slider-captcha-thumb';
             thumb.innerHTML = '<i class="fas fa-arrow-right"></i>';
         }
-
         UI.removeClass(document.getElementById('trackBox'), 'show');
         this.generateCaptcha();
         this.options.onRefresh();
@@ -372,20 +318,17 @@ class SliderCaptcha {
     success() {
         this.verified = true;
         UI.setText(document.getElementById('captchaText'), '验证通过 ✓');
-
         const thumb = document.getElementById('captchaThumb');
         if (thumb) {
             thumb.className = 'slider-captcha-thumb success';
             thumb.innerHTML = '<i class="fas fa-check"></i>';
         }
-
         setTimeout(() => this.options.onSuccess(), 500);
     }
 
     fail() {
         this.verified = false;
         UI.setText(document.getElementById('captchaText'), '验证失败 ✗');
-
         const thumb = document.getElementById('captchaThumb');
         if (thumb) {
             thumb.className = 'slider-captcha-thumb error';
@@ -394,7 +337,6 @@ class SliderCaptcha {
                 thumb.style.animation = '';
             }, {once: true});
         }
-
         this.options.onFail();
     }
 
@@ -409,43 +351,99 @@ class SliderCaptcha {
 
 // ==================== 全局状态管理 ====================
 
-const AppState = {
+const ChatAuthState = {
     captcha: null,
-    currentAction: null, // 'login' | 'register'
+    currentAction: null,  // 'login' | 'register'
     rememberMe: false,
 
-    init() {
-        // 恢复记住我状态
-        this.rememberMe = localStorage.getItem('rememberMe') === 'true';
-        if (this.rememberMe) {
-            const username = localStorage.getItem('username') || '';
-            const password = localStorage.getItem('password') || '';
-            const usernameEl = document.getElementById('loginUsername');
-            const passwordEl = document.getElementById('loginPassword');
-            const rememberEl = document.getElementById('rememberMe');
+    async init() {
+        // 1. 恢复"记住我"状态
+        this._restoreRememberedCredentials();
 
-            if (usernameEl) usernameEl.value = username;
-            if (passwordEl) passwordEl.value = password;
-            if (rememberEl) rememberEl.checked = true;
+        // 2. 异步加载系统配置并更新注册开关状态
+        await this._loadSystemConfig();
+
+        // 3. 根据最终配置渲染界面（显示/隐藏注册入口）
+        this._applyRegistrationVisibility();
+    },
+
+    /**
+     * 从本地存储恢复用户名和密码
+     * @private
+     */
+    _restoreRememberedCredentials() {
+        const isRemembered = localStorage.getItem('chat_rememberMe') === 'true';
+        if (!isRemembered) return;
+
+        const username = localStorage.getItem('chat_username') || '';
+        const password = localStorage.getItem('chat_password') || '';
+
+        const usernameEl = document.getElementById('loginUsername');
+        const passwordEl = document.getElementById('loginPassword');
+        const rememberEl = document.getElementById('rememberMe');
+
+        if (usernameEl) usernameEl.value = username;
+        if (passwordEl) passwordEl.value = password;
+        if (rememberEl) rememberEl.checked = true;
+
+        this.rememberMe = true;
+    },
+
+    /**
+     * 加载后端系统配置
+     * @private
+     */
+    async _loadSystemConfig() {
+        try {
+            // 确保 frontendConfig 存在且方法可用
+            if (window.frontendConfig && typeof window.frontendConfig.loadConfigs === 'function') {
+                await window.frontendConfig.loadConfigs();
+            }
+
+            // 获取注册开关配置
+            if (window.frontendConfig && typeof window.frontendConfig.get === 'function') {
+                CHAT_CONFIG.REGISTRATION_ENABLED = window.frontendConfig.get('system.user_registration_enabled', false);
+            }
+        } catch (error) {
+            console.warn('Failed to load system config for registration status:', error);
+            // 失败时保持默认值或原有值
+        }
+    },
+
+    /**
+     * 应用注册功能的可见性逻辑
+     * @private
+     */
+    _applyRegistrationVisibility() {
+        const registerToggle = document.getElementById('registerToggle');
+        const registerForm = document.getElementById('registerForm');
+
+        // 如果注册未启用，则隐藏相关元素
+        if (!CHAT_CONFIG.REGISTRATION_ENABLED) {
+            UI.hide(registerToggle);
+            UI.hide(registerForm);
+        } else {
+            // 如果启用，确保它们可见
+            UI.show(registerToggle);
         }
     },
 
     setRemember(username, password, remember) {
         if (remember) {
-            localStorage.setItem('username', username);
-            localStorage.setItem('password', password);
-            localStorage.setItem('rememberMe', 'true');
+            localStorage.setItem('chat_username', username);
+            localStorage.setItem('chat_password', password);
+            localStorage.setItem('chat_rememberMe', 'true');
         } else {
-            localStorage.removeItem('username');
-            localStorage.removeItem('password');
-            localStorage.removeItem('rememberMe');
+            localStorage.removeItem('chat_username');
+            localStorage.removeItem('chat_password');
+            localStorage.removeItem('chat_rememberMe');
         }
     }
 };
 
 // ==================== 表单控制 ====================
 
-const FormController = {
+const ChatFormController = {
     showLoginForm() {
         UI.show(document.getElementById('loginForm'));
         UI.hide(document.getElementById('registerForm'));
@@ -454,6 +452,11 @@ const FormController = {
     },
 
     showRegisterForm() {
+        // 🔧 注册功能未启用时拦截
+        if (!CHAT_CONFIG.REGISTRATION_ENABLED) {
+            showToast('注册功能暂未开放，请联系管理员', 'error');
+            return;
+        }
         UI.hide(document.getElementById('loginForm'));
         UI.show(document.getElementById('registerForm'));
         document.title = '企业聊天室 - 注册';
@@ -484,23 +487,23 @@ const FormController = {
 
         let valid = true;
 
-        if (!username || username.length < 3 || username.length > 20) {
-            showMessage('registerUsernameError', '用户名长度必须在3-20个字符之间');
+        if (!username || !CHAT_CONFIG.USERNAME_PATTERN.test(username)) {
+            showMessage('registerUsernameError', '用户名长度必须在3-20个字符之间，仅支持字母、数字、下划线');
             valid = false;
         }
-        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        if (!email || !CHAT_CONFIG.EMAIL_PATTERN.test(email)) {
             showMessage('registerEmailError', '请输入有效的邮箱地址');
             valid = false;
         }
-        if (!password || password.length < 8) {
-            showMessage('registerPasswordError', '密码长度至少8位');
+        if (!password || password.length < CHAT_CONFIG.PASSWORD_MIN_LENGTH) {
+            showMessage('registerPasswordError', `密码长度至少${CHAT_CONFIG.PASSWORD_MIN_LENGTH}位`);
             valid = false;
         }
         if (password !== passwordConfirm) {
             showMessage('registerPasswordConfirmError', '两次输入的密码不一致');
             valid = false;
         }
-        if (phone && !/^1[3-9]\d{9}$/.test(phone)) {
+        if (phone && !CHAT_CONFIG.PHONE_PATTERN.test(phone)) {
             showMessage('registerPhoneError', '请输入有效的手机号');
             valid = false;
         }
@@ -509,10 +512,10 @@ const FormController = {
     }
 };
 
-// ==================== API 请求 ====================
+// ==================== API 请求（复用认证接口） ====================
 
-const API = {
-    BASE_URL: '/api/auth/',
+const ChatAPI = {
+    BASE_URL: CHAT_CONFIG.API_BASE_URL,
 
     async request(endpoint, method = 'POST', data = null) {
         try {
@@ -527,20 +530,20 @@ const API = {
                 data: await response.json()
             };
         } catch (error) {
-            console.error(`API ${endpoint} error:`, error);
+            console.error(`ChatAPI ${endpoint} error:`, error);
             return {ok: false, error: '网络错误，请稍后重试'};
         }
     },
 
     async login(username, encryptedPassword) {
-        return this.request('login/', 'POST', {
+        return this.request('/login/', 'POST', {
             username,
             password: encryptedPassword
         });
     },
 
     async register(userData) {
-        return this.request('register/', 'POST', {
+        return this.request('/register/', 'POST', {
             ...userData,
             password: window.EncryptUtils?.encryptData(userData.password) || userData.password,
             password_confirm: window.EncryptUtils?.encryptData(userData.password_confirm) || userData.password_confirm
@@ -548,47 +551,41 @@ const API = {
     },
 
     async requestPasswordReset(email) {
-        return this.request('request_password_reset/', 'POST', {email});
-    },
-
-    async confirmPasswordReset(email, token, newPassword, confirmPassword) {
-        return this.request('confirm_password_reset/', 'POST', {
-            email, token, new_password: newPassword, new_password_confirm: confirmPassword
-        });
+        return this.request('/request_password_reset/', 'POST', {email});
     }
 };
 
 // ==================== 业务逻辑 ====================
 
-const AuthLogic = {
+const ChatAuthLogic = {
     // 滑块验证码控制
     showCaptcha(action) {
-        AppState.currentAction = action;
+        ChatAuthState.currentAction = action;
         UI.show(document.getElementById('captchaModal'));
 
-        if (!AppState.captcha) {
-            AppState.captcha = new SliderCaptcha('captchaContainer', {
+        if (!ChatAuthState.captcha) {
+            ChatAuthState.captcha = new SliderCaptcha('captchaContainer', {
                 onSuccess: () => this.executeAction(),
                 onFail: () => showToast('验证失败，请重试', 'error'),
                 onRefresh: () => console.log('Captcha refreshed')
             });
         } else {
-            AppState.captcha.reset();
+            ChatAuthState.captcha.reset();
         }
     },
 
     closeCaptcha() {
         UI.hide(document.getElementById('captchaModal'));
-        AppState.currentAction = null;
+        ChatAuthState.currentAction = null;
     },
 
     async executeAction() {
-        if (AppState.currentAction === 'login') {
+        if (ChatAuthState.currentAction === 'login') {
             await this.performLogin();
-        } else if (AppState.currentAction === 'register') {
+        } else if (ChatAuthState.currentAction === 'register') {
             await this.performRegister();
         }
-        this.closeCaptcha()
+        this.closeCaptcha();
     },
 
     async performLogin() {
@@ -602,8 +599,9 @@ const AuthLogic = {
         setLoading(loginBtn, true);
 
         try {
+            // 密码加密（如果存在加密工具）
             const encryptedPwd = window.EncryptUtils?.encryptData(password) || password;
-            const result = await API.login(username, encryptedPwd);
+            const result = await ChatAPI.login(username, encryptedPwd);
 
             if (result.ok) {
                 // 保存 token
@@ -611,14 +609,15 @@ const AuthLogic = {
                 localStorage.setItem('refresh_token', result.data.refresh);
 
                 // 记住我
-                AppState.setRemember(username, password, remember);
+                ChatAuthState.setRemember(username, password, remember);
 
-                showMessage('loginSuccessMessage', '登录成功，正在跳转...', 'success');
+                showMessage('loginSuccessMessage', '登录成功，正在跳转到聊天室...', 'success');
 
+                // 🔧 跳转到聊天室首页
                 setTimeout(() => {
-                    const redirect = localStorage.getItem('redirect_url');
-                    localStorage.removeItem('redirect_url');
-                    window.location.href = redirect || '/chat/';
+                    const redirect = localStorage.getItem('chat_redirect_url');
+                    localStorage.removeItem('chat_redirect_url');
+                    window.location.href = redirect || CHAT_CONFIG.REDIRECT_AFTER_LOGIN;
                 }, 1000);
             } else {
                 this.handleLoginError(result.data);
@@ -650,6 +649,12 @@ const AuthLogic = {
     },
 
     async performRegister() {
+        // 🔧 注册功能未启用时拦截
+        if (!CHAT_CONFIG.REGISTRATION_ENABLED) {
+            showToast('注册功能暂未开放', 'error');
+            return;
+        }
+
         const userData = {
             username: document.getElementById('registerUsername')?.value.trim(),
             email: document.getElementById('registerEmail')?.value.trim(),
@@ -664,11 +669,11 @@ const AuthLogic = {
         setLoading(registerBtn, true);
 
         try {
-            const result = await API.register(userData);
+            const result = await ChatAPI.register(userData);
 
             if (result.ok) {
                 showMessage('registerSuccessMessage', '注册成功！正在跳转到登录页面...', 'success');
-                setTimeout(() => FormController.showLoginForm(), 2000);
+                setTimeout(() => ChatFormController.showLoginForm(), 2000);
             } else {
                 this.handleRegisterError(result.data);
             }
@@ -696,11 +701,10 @@ const AuthLogic = {
                 showMessage(fieldMap[field], messages[0]);
             }
             if (typeof messages === 'string' && fieldMap[field]) {
-                showMessage(fieldMap[field], messages)
+                showMessage(fieldMap[field], messages);
             }
         }
     },
-
 
     async handleForgotPassword() {
         const email = document.getElementById('resetEmail')?.value;
@@ -709,7 +713,7 @@ const AuthLogic = {
 
         if (sendBtn?.disabled) return;
 
-        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        if (!email || !CHAT_CONFIG.EMAIL_PATTERN.test(email)) {
             UI.setHTML(messageDiv, '请输入有效的邮箱地址');
             messageDiv.className = 'alert alert-danger show';
             return;
@@ -719,73 +723,53 @@ const AuthLogic = {
         UI.clearHTML(messageDiv);
 
         try {
-            // const result = await API.requestPasswordReset(email);
-            // console.log('result: ', result)
-
-            // 使用 AbortController 添加超时
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 秒超时
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-            const response = await fetch('/api/auth/request_password_reset/', {
+            const response = await fetch(`${ChatAPI.BASE_URL}/request_password_reset/`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    // ...TokenManager.getHeaders?.() // 兼容可能不存在的 TokenManager
-                },
+                headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({email}),
                 signal: controller.signal
             });
 
             clearTimeout(timeoutId);
 
-            // 🔧 关键修复：解析响应（无论成功或失败）
             let responseData;
             const contentType = response.headers.get('content-type');
 
             if (contentType && contentType.includes('application/json')) {
                 responseData = await response.json();
             } else {
-                // 非 JSON 响应，降级处理
                 const text = await response.text();
                 throw new Error(text || `服务器返回错误: ${response.status}`);
             }
-
-            console.log('responseData: ', responseData)
 
             if (response.ok) {
                 UI.setHTML(messageDiv, responseData.message || '重置链接已发送，请检查邮箱');
                 messageDiv.className = 'alert alert-success show';
 
-                // 可选：成功后清空输入框
                 const emailInput = document.getElementById('resetEmail');
                 if (emailInput) emailInput.value = '';
 
                 setTimeout(() => {
-                    AuthLogic.closeForgotPasswordModal();
+                    this.closeForgotPasswordModal();
                     showToast('请检查邮箱查收重置链接', 'success');
                 }, 3000);
-
                 return;
             }
 
-            // 🔧 错误响应 (400/401/403/500 等)
             throw new Error(parseApiError(responseData, response.status));
 
         } catch (error) {
             console.error('密码重置请求失败:', error);
-
-
-            // 🔧 显示错误信息
             UI.setHTML(messageDiv, error.message || '请求失败，请稍后重试');
             messageDiv.className = 'alert alert-danger show';
-
         } finally {
-            // 🔧 恢复按钮状态
             setLoading(sendBtn, false);
         }
     },
 
-    // 模态框控制
     openForgotPasswordModal() {
         UI.show(document.getElementById('forgotPasswordModal'));
         UI.hide(document.getElementById('resetMessage'));
@@ -800,64 +784,110 @@ const AuthLogic = {
 
 // ==================== 事件绑定 ====================
 
-function bindEvents() {
+function setupEnterKeyHandler() {
+    let lastEnterTime = 0;
 
-    // 绑定表单切换
-    // document.getElementById('showRegisterLink').addEventListener('click', function (e) {
-    //     e.preventDefault();
-    //     FormController.showRegisterForm();
-    // });
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.shiftKey) return;
 
+        // 防抖：避免快速连按
+        const now = Date.now();
+        if (now - lastEnterTime < 300) return;
+        lastEnterTime = now;
+
+        e.preventDefault();
+
+        // 检查当前激活的表单
+        const forms = [
+            { id: 'loginForm', btnId: 'loginSubmitBtn', validator: CloudFormController.validateLogin },
+            { id: 'registerForm', btnId: 'registerSubmitBtn', validator: CloudFormController.validateRegister }
+        ];
+
+        for (const form of forms) {
+            const el = document.getElementById(form.id);
+            if (el && isElementVisible(el)) {
+                // 先验证，再触发滑块
+                if (typeof form.validator === 'function' && form.validator()) {
+                    CloudAuthLogic.showCaptcha(form.id === 'loginForm' ? 'login' : 'register');
+                }
+                return;
+            }
+        }
+    });
+}
+
+// 辅助函数：可靠判断元素可见性
+function isElementVisible(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    return style.display !== 'none' &&
+           style.visibility !== 'hidden' &&
+           style.opacity !== '0' &&
+           !el.classList.contains('hidden');
+}
+
+
+function bindChatEvents() {
     // 表单切换
     document.getElementById('showLoginLink')?.addEventListener('click', (e) => {
         e.preventDefault();
-        FormController.showLoginForm();
+        ChatFormController.showLoginForm();
     });
 
-    // 登录/注册提交（触发滑块验证）
+    document.getElementById('showRegisterLink')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        ChatFormController.showRegisterForm();
+    });
+
+    // 登录/注册提交
     document.getElementById('loginSubmitBtn')?.addEventListener('click', (e) => {
         e.preventDefault();
         clearAllMessages();
-        if (FormController.validateLogin()) {
-            AuthLogic.showCaptcha('login');
+        if (ChatFormController.validateLogin()) {
+            ChatAuthLogic.showCaptcha('login');
         }
     });
 
     document.getElementById('registerSubmitBtn')?.addEventListener('click', (e) => {
         e.preventDefault();
         clearAllMessages();
-        if (FormController.validateRegister()) {
-            AuthLogic.showCaptcha('register');
+        if (ChatFormController.validateRegister()) {
+            ChatAuthLogic.showCaptcha('register');
         }
     });
 
     // 忘记密码
     document.getElementById('forgotPasswordForm')?.addEventListener('submit', (e) => {
         e.preventDefault();
-        AuthLogic.handleForgotPassword();
+        ChatAuthLogic.handleForgotPassword();
     });
 
-    // 滑块验证码弹窗控制
+    document.getElementById('sendResetBtn')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        ChatAuthLogic.handleForgotPassword();
+    });
+
+    // 滑块验证码控制
     document.getElementById('captchaCancelBtn')?.addEventListener('click', () => {
-        AuthLogic.closeCaptcha();
+        ChatAuthLogic.closeCaptcha();
     });
 
     document.getElementById('captchaRefreshBtn')?.addEventListener('click', () => {
-        AppState.captcha?.refresh();
+        ChatAuthState.captcha?.refresh();
     });
 
     document.getElementById('captchaModal')?.addEventListener('click', (e) => {
-        if (e.target.id === 'captchaModal') AuthLogic.closeCaptcha();
+        if (e.target.id === 'captchaModal') ChatAuthLogic.closeCaptcha();
     });
 
-    // 模态框关闭按钮
+    // 模态框关闭
     document.querySelectorAll('.close-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             const modal = btn.closest('.modal');
             if (modal?.id === 'forgotPasswordModal') {
-                AuthLogic.closeForgotPasswordModal();
+                ChatAuthLogic.closeForgotPasswordModal();
             } else if (modal?.id === 'captchaModal') {
-                AuthLogic.closeCaptcha();
+                ChatAuthLogic.closeCaptcha();
             }
         });
     });
@@ -876,35 +906,58 @@ function bindEvents() {
             }
         }
     });
+
+    // 输入框实时验证反馈
+    document.getElementById('loginUsername')?.addEventListener('blur', function() {
+        if (this.value && !this.value.includes('@') && this.value.length < 3) {
+            showMessage('loginUsernameError', '用户名至少3个字符');
+        } else {
+            clearMessage('loginUsernameError');
+        }
+    });
+
+    document.getElementById('loginPassword')?.addEventListener('input', function() {
+        clearMessage('loginPasswordError');
+    });
 }
 
 // ==================== 初始化 ====================
 
-function init() {
-    // 恢复记住我状态
-    AppState.init();
+function initChatAuth() {
+    // 恢复状态
+    ChatAuthState.init();
 
     // 绑定事件
-    bindEvents();
+    bindChatEvents();
 
-    // 检查登录状态
+    // 检查登录状态（避免重复登录）
     const token = localStorage.getItem('access_token');
     if (token) {
-        const redirect = localStorage.getItem('redirect_url');
-        localStorage.removeItem('redirect_url');
-        window.location.href = redirect || '/chat/';
+        // 验证 token 有效性（可选）
+        const redirect = localStorage.getItem('chat_redirect_url');
+        localStorage.removeItem('chat_redirect_url');
+        // 如果已登录且未指定来源，可考虑直接跳转
+        window.location.href = redirect || CHAT_CONFIG.REDIRECT_AFTER_LOGIN;
     }
 
-    console.log('Auth module initialized');
+    console.log('💬 ChatAuth module initialized');
 }
 
 // DOM 加载完成后初始化
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    document.addEventListener('DOMContentLoaded', initChatAuth);
 } else {
-    init();
+    initChatAuth();
 }
 
 // 导出全局函数（供 HTML 内联调用）
-window.openForgotPasswordModal = () => AuthLogic.openForgotPasswordModal();
-window.closeForgotPasswordModal = () => AuthLogic.closeForgotPasswordModal();
+window.openForgotPasswordModal = () => ChatAuthLogic.openForgotPasswordModal();
+window.closeForgotPasswordModal = () => ChatAuthLogic.closeForgotPasswordModal();
+window.togglePassword = function(inputId, icon) {
+    const input = document.getElementById(inputId);
+    if (input) {
+        input.type = input.type === 'password' ? 'text' : 'password';
+        icon.classList.toggle('fa-eye');
+        icon.classList.toggle('fa-eye-slash');
+    }
+};

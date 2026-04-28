@@ -7,6 +7,7 @@
 日志 django中间件
 """
 import json
+import time
 from django.db import close_old_connections
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
@@ -127,6 +128,7 @@ class ApiLoggingMiddleware(MiddlewareMixin):
                         break
 
     def process_view(self, request, view_func, view_args, view_kwargs):
+        request.start_time = time.time()
         if hasattr(view_func, 'cls'):
             if self.enable:
                 if self.methods == 'ALL' or request.method in self.methods:
@@ -171,6 +173,11 @@ class ApiLoggingMiddleware(MiddlewareMixin):
         :param response:
         :return:
         """
+
+        if hasattr(request, 'start_time'):
+            elapsed = time.time() - request.start_time
+            if elapsed > 1.0:  # 超过1秒的记录
+                print(f"Slow request: {request.path} took {elapsed:.2f}s")
 
         if self.enable:
             if self.methods == 'ALL' or request.method in self.methods:

@@ -4,11 +4,34 @@
 # @Author :admin
 
 
-# !/usr/bin/env python3
+import os
 import re
 import sys
 import shutil
 from pathlib import Path
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def read_version_message():
+    update_message = ""
+    update_msg_file = os.path.join(BASE_DIR, 'VERSION_MESSAGE.txt')
+    if os.path.exists(update_msg_file):
+        with open(update_msg_file, 'r', encoding='utf-8') as f:
+            update_message = f.read().strip()
+    return update_message
+
+def update_version_log(build_time, static_version, update_message):
+    """更新版本日志"""
+    try:
+        log_file = os.path.join(BASE_DIR, 'version_log.log')
+        with open(log_file, 'a', encoding='utf-8') as f:
+            line_content = f"{build_time} - 版本:{static_version}\n{update_message}\n\n"
+            f.write(line_content)
+        print(f"✓ 添加版本日志: {build_time} - 版本:{static_version}")
+    except Exception as e:
+        print(f"Error writing version log: {e}")
 
 
 def update_static_versions(html_file, version):
@@ -84,6 +107,13 @@ def update_static_versions(html_file, version):
 
 
 if __name__ == "__main__":
+
+    if len(sys.argv) >= 4:
+        build_time = f'{sys.argv[1]} {sys.argv[2]}'
+        version = sys.argv[3]
+        update_version_log(build_time, version, read_version_message())
+        sys.exit(0)
+
     if len(sys.argv) != 3:
         print("用法: python update_static_versions.py <html_file> <version>")
         sys.exit(1)

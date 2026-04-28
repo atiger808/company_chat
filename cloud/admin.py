@@ -2,8 +2,7 @@ from django.contrib import admin
 
 # Register your models here.
 
-from .models import Folder, CloudFile, FileShare, FileComment, FileOperationLog, FileVersion,FileCollaboration, DocumentVersion, DocumentEditLock, DocumentCollaboration
-
+from .models import Folder, CloudFile, UploadSession, FileShare, FileComment, FileOperationLog, FileVersion,FileCollaboration, DocumentVersion, DocumentEditLock, DocumentCollaboration, CloudSystemConfig
 @admin.register(Folder)
 class FolderAdmin(admin.ModelAdmin):
     """文件夹管理"""
@@ -16,10 +15,22 @@ class FolderAdmin(admin.ModelAdmin):
 @admin.register(CloudFile)
 class CloudFileAdmin(admin.ModelAdmin):
     """云文件管理"""
-    list_display = ('id', 'name', 'original_name', 'is_document', 'owner', 'reference_count', 'current_version', 'deleted_at', 'description', 'tags', 'is_starred', 'download_count', 'deleted_at', 'created_at', 'updated_at')
+    list_display = ('id', 'name', 'md5', 'is_document', 'owner', 'reference_count', 'current_version', 'deleted_at', 'description', 'tags', 'is_starred', 'download_count', 'deleted_at', 'created_at', 'updated_at')
     list_filter = ('owner', 'folder', 'tags')
     search_fields = ('name', 'original_name', 'id', 'md5')
     list_per_page = 20
+
+
+
+@admin.register(UploadSession)
+class UploadSessionAdmin(admin.ModelAdmin):
+    """云文件管理"""
+    list_display = ('id', 'file_md5', 'file_name', 'file_size', 'total_chunks', 'is_completed', 'expires_at', 'updated_at', 'created_at')
+    list_filter = ('user', 'is_completed')
+    search_fields = ('file_md5', 'file_name')
+    list_per_page = 20
+
+
 
 @admin.register(FileShare)
 class FileShareAdmin(admin.ModelAdmin):
@@ -83,4 +94,12 @@ class DocumentCollaborationAdmin(admin.ModelAdmin):
     list_display = ('id', 'file', 'user', 'status', 'joined_at', 'left_at', 'last_activity')
     list_filter = ('file', 'user', 'status')
     search_fields = ('id', 'user')
+    list_per_page = 20
+
+
+@admin.register(CloudSystemConfig)
+class CloudSystemConfigAdmin(admin.ModelAdmin):
+    list_display = ('id', 'key', 'name', 'value', 'value_type', 'category', 'description', 'is_public', 'created_at', 'updated_at', 'updated_by')
+    list_filter = ('is_public',)
+    search_fields = ('key', 'name', 'id')
     list_per_page = 20

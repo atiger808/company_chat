@@ -1,0 +1,309 @@
+/* =========================================
+企业网盘 - 认证模块样式 (cloud_auth.css)
+版本: 1.0 | 基于 auth.css 定制
+========================================= */
+
+/* 🎨 网盘专属设计变量 */
+:root {
+    /* 品牌色 - 网盘主题色 */
+    --primary-color: #1890ff;        /* 科技蓝 */
+    --primary-dark: #096dd9;
+    --primary-light: #e6f7ff;
+    --primary-gradient-start: #1890ff;
+    --primary-gradient-end: #0050b3;
+
+    /* 辅助色 */
+    --success-color: #52c41a;
+    --warning-color: #faad14;
+    --danger-color: #ff4d4f;
+
+    /* 文件类型色 */
+    --file-doc: #1890ff;
+    --file-excel: #52c41a;
+    --file-ppt: #fa541c;
+    --file-pdf: #f5222d;
+    --file-image: #722ed1;
+    --file-video: #eb2f96;
+}
+
+/* 继承基础样式 */
+@import url('auth.css');
+
+/* 🔧 网盘专属样式覆盖 */
+
+/* 左侧欢迎区域 - 网盘主题 */
+.login-left {
+    background: linear-gradient(135deg, var(--primary-gradient-start) 0%, var(--primary-gradient-end) 100%);
+}
+
+.login-left .logo i {
+    color: white;
+    font-size: 36px;
+    animation: float 3s ease-in-out infinite;
+}
+
+@keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-8px); }
+}
+
+/* 功能列表增强 */
+.features {
+    margin-top: 32px;
+    text-align: left;
+    padding: 0 10px;
+}
+
+.feature-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    backdrop-filter: blur(4px);
+    transition: all 0.3s ease;
+}
+
+.feature-item:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: translateX(4px);
+}
+
+.feature-item i {
+    width: 32px;
+    height: 32px;
+    background: rgba(255, 255, 255, 0.25);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.feature-item span {
+    font-size: 14px;
+    font-weight: 500;
+}
+
+/* 表单区域增强 */
+.login-right {
+    position: relative;
+}
+
+/* 网盘标识角标 */
+.login-right::before {
+    content: 'CLOUD';
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    padding: 4px 12px;
+    background: var(--primary-light);
+    color: var(--primary-color);
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+
+/* 输入框聚焦效果 */
+.form-control:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(24, 144, 255, 0.15);
+}
+
+/* 按钮增强 */
+.btn-primary {
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+    border: none;
+    position: relative;
+    overflow: hidden;
+}
+
+.btn-primary::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+    transition: left 0.5s;
+}
+
+.btn-primary:hover::after {
+    left: 100%;
+}
+
+/* 密码可见性切换 */
+.toggle-password {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-light);
+    cursor: pointer;
+    z-index: 2;
+    transition: color 0.2s;
+}
+
+.toggle-password:hover {
+    color: var(--primary-color);
+}
+
+/* 滑块验证码定制 */
+.slider-captcha-thumb {
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+}
+
+.slider-captcha-thumb.success {
+    background: linear-gradient(135deg, var(--success-color) 0%, #389e0d 100%);
+}
+
+/* 文件类型图标色（用于后续功能展示） */
+.file-icon-word { color: var(--file-doc); }
+.file-icon-excel { color: var(--file-excel); }
+.file-icon-ppt { color: var(--file-ppt); }
+.file-icon-pdf { color: var(--file-pdf); }
+.file-icon-image { color: var(--file-image); }
+.file-icon-video { color: var(--file-video); }
+
+/* 📱 移动端适配增强 */
+@media (max-width: 768px) {
+    .login-left {
+        padding: 30px 20px;
+        text-align: center;
+    }
+
+    .features {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+
+    .feature-item {
+        padding: 10px 12px;
+        justify-content: center;
+    }
+
+    .feature-item i {
+        width: 28px;
+        height: 28px;
+        font-size: 12px;
+    }
+
+    .feature-item span {
+        font-size: 13px;
+    }
+
+    .login-right::before {
+        display: none; /* 移动端隐藏角标 */
+    }
+}
+
+@media (max-width: 480px) {
+    .login-container {
+        flex-direction: column;
+    }
+
+    .login-left {
+        min-height: auto;
+        padding: 24px 16px;
+    }
+
+    .welcome-text h1 {
+        font-size: 20px;
+    }
+
+    .welcome-text p {
+        font-size: 13px;
+    }
+
+    .features {
+        display: none; /* 超小屏隐藏功能列表 */
+    }
+
+    .login-right {
+        padding: 24px 16px;
+    }
+}
+
+/* 🌙 暗色模式支持 */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --primary-gradient-start: #177ddc;
+        --primary-gradient-end: #003a8c;
+        --primary-light: #111d2c;
+    }
+
+    .feature-item {
+        background: rgba(255, 255, 255, 0.08);
+    }
+
+    .feature-item:hover {
+        background: rgba(255, 255, 255, 0.15);
+    }
+}
+
+/* ✨ 加载动画优化 */
+.btn-primary.loading {
+    pointer-events: none;
+}
+
+.btn-primary .loading {
+    display: none;
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+.btn-primary.loading .text {
+    display: none;
+}
+
+.btn-primary.loading .loading {
+    display: inline-block;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* 🔐 安全提示 */
+.security-notice {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 12px;
+    color: var(--text-light);
+}
+
+.security-notice i {
+    color: var(--success-color);
+    margin-right: 4px;
+}
+
+/* 注册表单禁用状态 */
+#registerForm[disabled] {
+    opacity: 0.6;
+    pointer-events: none;
+    position: relative;
+}
+
+#registerForm[disabled]::after {
+    content: '注册功能暂未开放';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 8px 20px;
+    background: rgba(0,0,0,0.7);
+    color: white;
+    border-radius: 20px;
+    font-size: 13px;
+    z-index: 10;
+}

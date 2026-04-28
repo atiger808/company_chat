@@ -8,6 +8,8 @@ from .managers import SoftDeleteManager
 import hashlib
 import os
 import uuid
+import json
+
 
 
 class Folder(models.Model):
@@ -70,7 +72,7 @@ class Folder(models.Model):
     class Meta:
         verbose_name = '文件夹'
         verbose_name_plural = verbose_name
-        ordering = ['name']
+        ordering = ['-created_at']
         # 唯一约束：同一父文件夹下不能有重名文件夹
         unique_together = ['parent', 'name', 'owner']
         indexes = [
@@ -146,8 +148,23 @@ class CloudFile(models.Model):
         null=False,  # ✅ 确保不为 null
         blank=False  # ✅ 确保不为 blank
     )
-    description = models.TextField(blank=True, verbose_name='描述')
-    tags = models.CharField(max_length=500, blank=True, verbose_name='标签（逗号分隔）')
+    # 🔧 方案：允许 null 并设置默认空字符串（需执行迁移）
+    description = models.TextField(
+        blank=True,  # 表单允许为空
+        null=True,  # 数据库允许 NULL
+        default='',  # 默认值
+        verbose_name='文件描述'
+    )
+
+    # 🔧 方案：允许 null 并设置默认空字符串（需执行迁移）
+    tags = models.CharField(
+        max_length=255,
+        blank=True,  # 表单允许为空
+        null=True,  # 数据库允许 NULL
+        default='',  # 默认值
+        verbose_name='标签（逗号分隔）'
+    )
+
     is_starred = models.BooleanField(default=False, verbose_name='是否星标')
     download_count = models.IntegerField(default=0, verbose_name='下载次数')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
@@ -209,6 +226,13 @@ class CloudFile(models.Model):
 
     def __str__(self):
         return self.name
+
+    def get_mime_type(self, filename=None):
+        """获取文件的 MIME 类型"""
+        import mimetypes
+        name = filename or self.original_name
+        mime_type, _ = mimetypes.guess_type(name)
+        return mime_type or 'application/octet-stream'
 
     def get_extension(self):
         """获取文件扩展名"""
@@ -292,7 +316,87 @@ class CloudFile(models.Model):
                 self.is_document = False
                 self.document_type = None
 
+        if not self.mime_type:
+            self.mime_type = self.get_mime_type(self.original_name)
+
         super().save(*args, **kwargs)
+
+
+# cloud/models.py - 新增上传会话模型
+class UploadSession(models.Model):
+    """
+    🔧 上传会话模型 - 支持分片上传和断点续传
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='upload_sessions'
+    )
+
+    # 文件信息
+    file_md5 = models.CharField(max_length=32, db_index=True, help_text='文件完整MD5')
+    file_name = models.CharField(max_length=255)
+    file_size = models.BigIntegerField(help_text='文件总大小(字节)')
+    total_chunks = models.IntegerField(help_text='总分片数')
+    chunk_size = models.IntegerField(default=5 * 1024 * 1024, help_text='分片大小(默认5MB)')
+
+    # 上传进度
+    uploaded_chunks = models.JSONField(default=list, help_text='已上传的分片索引列表')
+    uploaded_size = models.BigIntegerField(default=0, help_text='已上传字节数')
+
+    # 状态控制
+    is_completed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    expires_at = models.DateTimeField(help_text='会话过期时间(默认24小时)')
+
+    # 临时存储路径
+    temp_path = models.CharField(max_length=500, blank=True, help_text='临时分片存储目录')
+
+    class Meta:
+        verbose_name = '上传会话'
+        verbose_name_plural = '上传会话'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['file_md5', 'user']),
+            models.Index(fields=['expires_at']),
+            models.Index(fields=['is_completed', 'updated_at']),
+        ]
+
+    def __str__(self):
+        return f"UploadSession-{self.file_name[:20]}-{self.file_md5[:8]}"
+
+    def is_expired(self):
+        """检查会话是否过期"""
+        return timezone.now() > self.expires_at
+
+    def get_uploaded_chunk_set(self):
+        """返回已上传分片的集合(用于快速查找)"""
+        return set(self.uploaded_chunks)
+
+    def add_uploaded_chunk(self, chunk_index):
+        """添加已上传的分片索引"""
+        if chunk_index not in self.uploaded_chunks:
+            self.uploaded_chunks.append(chunk_index)
+            self.uploaded_size += self.chunk_size
+            self.save(update_fields=['uploaded_chunks', 'uploaded_size', 'updated_at'])
+
+    def is_chunk_uploaded(self, chunk_index):
+        """检查指定分片是否已上传"""
+        return chunk_index in self.uploaded_chunks
+
+    def get_missing_chunks(self):
+        """获取未上传的分片索引列表"""
+        all_chunks = set(range(self.total_chunks))
+        uploaded = set(self.uploaded_chunks)
+        return sorted(list(all_chunks - uploaded))
+
+    def get_upload_progress(self):
+        """计算上传进度百分比"""
+        if self.total_chunks == 0:
+            return 100
+        return round(len(self.uploaded_chunks) / self.total_chunks * 100, 2)
 
 
 class FileShare(models.Model):
@@ -405,7 +509,7 @@ class FileComment(models.Model):
     class Meta:
         verbose_name = '文件评论'
         verbose_name_plural = verbose_name
-        ordering = ['created_at']
+        ordering = ['-created_at']
 
     def __str__(self):
         return f'{self.user.username} - {self.file.name}'
@@ -519,7 +623,7 @@ class FileVersion(models.Model):
     class Meta:
         verbose_name = '文件版本'
         verbose_name_plural = verbose_name
-        ordering = ['-version_number']
+        ordering = ['-version_number', '-created_at']
         unique_together = ['file', 'version_number']
 
     def __str__(self):
@@ -574,6 +678,7 @@ class FileCollaboration(models.Model):
         verbose_name = '文件协作'
         verbose_name_plural = verbose_name
         unique_together = ['file', 'user']  # 同一用户对同一文件只能有一条协作记录
+        ordering = ['-created_at']
         indexes = [
             models.Index(fields=['file', 'is_active']),
             models.Index(fields=['user', 'is_active']),
@@ -705,6 +810,7 @@ class DocumentEditLock(models.Model):
     class Meta:
         verbose_name = '文档编辑锁'
         verbose_name_plural = verbose_name
+        ordering = ['-locked_at']
         indexes = [
             models.Index(fields=['file', 'is_active']),
             models.Index(fields=['expires_at']),
@@ -841,10 +947,362 @@ class DocumentChatMessage(models.Model):
     class Meta:
         verbose_name = '文档聊天消息'
         verbose_name_plural = verbose_name
-        ordering = ['created_at']
+        ordering = ['-created_at']
         indexes = [
             models.Index(fields=['file', '-created_at']),
         ]
 
     def __str__(self):
         return f'{self.user.username}: {self.content[:50]}'
+
+# cloud/models.py - 系统配置模型
+class CloudSystemConfig(models.Model):
+    """
+    🔧 企业网盘系统配置模型
+    支持动态配置管理，无需重启服务
+    """
+
+
+    # 配置分类枚举
+    CATEGORY_CHOICES = [
+        ('storage', '存储设置'),
+        ('security', '安全设置'),
+        ('upload', '上传设置'),
+        ('share', '分享设置'),
+        ('collaboration', '协同设置'),
+        ('system', '系统设置'),
+        ('notification', '通知设置'),
+        ('audit', '审计日志'),
+    ]
+
+
+    # 值类型
+    VALUE_TYPE_CHOICES = [
+        ('string', '文本'),
+        ('integer', '整数'),
+        ('float', '浮点数'),
+        ('boolean', '布尔值'),
+        ('json', 'JSON'),
+        ('password', '密码'),
+    ]
+
+    key = models.CharField(max_length=100, unique=True, db_index=True,
+                           verbose_name='配置键')
+    name = models.CharField(max_length=200, verbose_name='配置名称')
+    value = models.TextField(verbose_name='配置值')
+    value_type = models.CharField(max_length=20, choices=VALUE_TYPE_CHOICES,
+                                  default='string', verbose_name='值类型')
+    category = models.CharField(
+        max_length=50,
+        choices=CATEGORY_CHOICES,
+        default='system',
+        verbose_name='配置分类',
+        db_index=True
+    )
+    description = models.TextField(blank=True, null=True, verbose_name='描述')
+    default_value = models.TextField(blank=True, null=True, verbose_name='默认值')
+    is_public = models.BooleanField(default=False, verbose_name='是否公开')
+    is_editable = models.BooleanField(default=True, verbose_name='是否可编辑')
+
+    # 🔧 OnlyOffice 配置字段
+    # 服务器配置
+    onlyoffice_document_server_url = models.CharField(
+        max_length=500,
+        default= settings.ONLYOFFICE.get('DOCUMENT_SERVER_URL') or 'http://192.168.1.122:8000',
+        verbose_name='OnlyOffice 文档服务器地址'
+    )
+    onlyoffice_jwt_enabled = models.BooleanField(
+        default=settings.ONLYOFFICE.get('JWT_ENABLED') or True,
+        verbose_name='启用 JWT 认证'
+    )
+    onlyoffice_jwt_secret = models.CharField(
+        max_length=500,
+        default=settings.ONLYOFFICE.get('JWT_SECRET') or  '',
+        blank=True,
+        verbose_name='JWT 密钥'
+    )
+
+    # 权限配置
+    onlyoffice_permission_download = models.BooleanField(
+        default=True,
+        verbose_name='允许下载'
+    )
+    onlyoffice_permission_copy = models.BooleanField(
+        default=True,
+        verbose_name='允许复制'
+    )
+    onlyoffice_permission_edit = models.BooleanField(
+        default=True,
+        verbose_name='允许编辑'
+    )
+    onlyoffice_permission_print = models.BooleanField(
+        default=True,
+        verbose_name='允许打印'
+    )
+    onlyoffice_permission_comment = models.BooleanField(
+        default=True,
+        verbose_name='允许评论'
+    )
+    onlyoffice_permission_chat = models.BooleanField(
+        default=True,
+        verbose_name='允许聊天'
+    )
+    onlyoffice_permission_review = models.BooleanField(
+        default=True,
+        verbose_name='允许审阅'
+    )
+    onlyoffice_permission_fill_forms = models.BooleanField(
+        default=True,
+        verbose_name='允许填写表单'
+    )
+    onlyoffice_permission_modify_content_control = models.BooleanField(
+        default=True,
+        verbose_name='允许修改内容控件'
+    )
+    onlyoffice_permission_modify_filter = models.BooleanField(
+        default=True,
+        verbose_name='允许修改筛选器'
+    )
+
+    # 语言配置
+    onlyoffice_language = models.CharField(
+        max_length=10,
+        default='zh-CN',
+        choices=[
+            ('zh-CN', '简体中文'),
+            ('zh-TW', '繁体中文'),
+            ('en-US', 'English'),
+            ('ru-RU', 'Русский'),
+            ('de-DE', 'Deutsch'),
+            ('fr-FR', 'Français'),
+            ('es-ES', 'Español'),
+            ('pt-BR', 'Português'),
+            ('ja-JP', '日本語'),
+            ('ko-KR', '한국어'),
+        ],
+        verbose_name='界面语言'
+    )
+
+    # 协同编辑配置
+    onlyoffice_collaboration_mode = models.CharField(
+        max_length=20,
+        default='fast',
+        choices=[
+            ('fast', '快速模式'),
+            ('strict', '严格模式'),
+        ],
+        verbose_name='协同编辑模式'
+    )
+
+    # 界面定制
+    onlyoffice_show_chat = models.BooleanField(
+        default=True,
+        verbose_name='显示聊天功能'
+    )
+    onlyoffice_show_comments = models.BooleanField(
+        default=True,
+        verbose_name='显示评论功能'
+    )
+    onlyoffice_show_review = models.BooleanField(
+        default=True,
+        verbose_name='显示审阅功能'
+    )
+    onlyoffice_show_spellcheck = models.BooleanField(
+        default=True,
+        verbose_name='启用拼写检查'
+    )
+    onlyoffice_forcesave = models.BooleanField(
+        default=True,
+        verbose_name='显示强制保存按钮'
+    )
+    onlyoffice_compact_toolbar = models.BooleanField(
+        default=False,
+        verbose_name='紧凑工具栏'
+    )
+    onlyoffice_ui_theme = models.CharField(
+        max_length=20,
+        default='theme-light',
+        choices=[
+            ('theme-light', '浅色主题'),
+            ('theme-dark', '深色主题'),
+        ],
+        verbose_name='界面主题'
+    )
+
+    # 版本控制
+    onlyoffice_version_keep_count = models.IntegerField(
+        default=10,
+        verbose_name='保留版本数量'
+    )
+
+
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                                   null=True, blank=True, verbose_name='最后更新人')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '企业网盘系统配置'
+        verbose_name_plural = '企业网盘系统配置'
+        ordering = ['category', 'key']
+        indexes = [
+            models.Index(fields=['category']),
+            models.Index(fields=['key']),
+            models.Index(fields=['is_public']),
+        ]
+
+    def __str__(self):
+        return f'{self.name} ({self.key})'
+
+    def get_typed_value(self):
+        """🔧 获取类型化的配置值"""
+        try:
+            if self.value_type == 'integer':
+                return int(self.value)
+            elif self.value_type == 'float':
+                return float(self.value)
+            elif self.value_type == 'boolean':
+                return self.value.lower() in ('true', '1', 'yes')
+            elif self.value_type == 'json':
+                return json.loads(self.value)
+            else:
+                return self.value
+        except (ValueError, json.JSONDecodeError):
+            return self.default_value
+
+    def set_value(self, value):
+        """🔧 设置配置值（自动类型转换）"""
+        if self.value_type == 'boolean':
+            self.value = 'true' if value else 'false'
+        elif self.value_type == 'json':
+            self.value = json.dumps(value, ensure_ascii=False)
+        else:
+            self.value = str(value)
+
+    @classmethod
+    def get_value(cls, key, default=None):
+        """🔧 类方法：获取配置值（带缓存）"""
+        from django.core.cache import cache
+        cache_key = f'cloud_config:{key}'
+
+        # 尝试从缓存获取
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # 从数据库获取
+        try:
+            config = cls.objects.get(key=key)
+            value = config.get_typed_value()
+            # 缓存 5 分钟 10 秒
+            cache.set(cache_key, value, 10)
+            return value
+        except cls.DoesNotExist:
+            return default
+
+    @classmethod
+    def set_value(cls, key, value, user=None):
+        """🔧 类方法：设置配置值"""
+        from django.core.cache import cache
+        from django.db import transaction
+
+        with transaction.atomic():
+            config, created = cls.objects.update_or_create(
+                key=key,
+                defaults={
+                    'value': str(value) if not isinstance(value, (bool, dict, list))
+                    else ('true' if value else 'false') if isinstance(value, bool)
+                    else json.dumps(value, ensure_ascii=False),
+                    'updated_by': user
+                }
+            )
+
+            # 清除缓存
+            cache.delete(f'cloud_config:{key}')
+            cache.delete('cloud_config:all')
+
+            return config
+
+    def get_category_display(self):
+        """获取分类显示名称"""
+        return dict(self.CATEGORY_CHOICES).get(self.category, '')
+
+    def get_category_info(self):
+        """
+        🔧 获取分类的详细信息（图标、描述、排序等）
+        用于前端渲染分类导航
+        """
+        category_info = {
+            'storage': {
+                'icon': 'fas fa-hdd',
+                'desc': '存储空间、配额、清理策略等设置',
+                'order': 1,
+                'color': '#409EFF'
+            },
+            'security': {
+                'icon': 'fas fa-shield-alt',
+                'desc': '访问权限、加密、水印等安全设置',
+                'order': 2,
+                'color': '#67C23A'
+            },
+            'upload': {
+                'icon': 'fas fa-cloud-upload-alt',
+                'desc': '文件上传限制、分片、秒传等设置',
+                'order': 3,
+                'color': '#E6A23C'
+            },
+            'share': {
+                'icon': 'fas fa-share-alt',
+                'desc': '分享链接、密码、有效期等设置',
+                'order': 4,
+                'color': '#F56C6C'
+            },
+            'collaboration': {
+                'icon': 'fas fa-users',
+                'desc': '在线编辑、协同权限、版本控制等',
+                'order': 5,
+                'color': '#909399'
+            },
+            'system': {
+                'icon': 'fas fa-cog',
+                'desc': '系统基础参数、维护模式等',
+                'order': 6,
+                'color': '#606266'
+            },
+            'notification': {
+                'icon': 'fas fa-bell',
+                'desc': '消息通知、邮件、企业微信集成',
+                'order': 7,
+                'color': '#909399'
+            },
+            'audit': {
+                'icon': 'fas fa-clipboard-list',
+                'desc': '操作日志、审计追踪、合规设置',
+                'order': 8,
+                'color': '#909399'
+            },
+        }
+        return category_info.get(self.category, {
+            'icon': 'fas fa-cog',
+            'desc': '系统配置项',
+            'order': 99,
+            'color': '#909399'
+        })
+
+    @property
+    def category_name(self):
+        """🔧 属性方式获取分类名称（兼容序列化）"""
+        return self.get_category_display()
+
+    @property
+    def category_icon(self):
+        """🔧 获取分类图标"""
+        return self.get_category_info()['icon']
+
+    @property
+    def category_desc(self):
+        """🔧 获取分类描述"""
+        return self.get_category_info()['desc']
+
+
+

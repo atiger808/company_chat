@@ -153,6 +153,55 @@ body {
     text-align: center;
 }
 
+.nav-item .badge {
+    margin-left: auto;
+    background: var(--danger-color);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+}
+
+.nav-item .badge-danger {
+    margin-left: auto;
+    background: var(--danger-color);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+}
+
+.nav-item .badge-success {
+    margin-left: auto;
+    background: var(--secondary-color);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+}
+
+
+.nav-item .badge-primary {
+    margin-left: auto;
+    background: var(--primary-color);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+}
+
+
+.nav-item .badge-warning {
+    margin-left: auto;
+    background: var(--warning-color);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+}
+
+
+
 .storage-status {
     padding: 20px;
     border-top: 1px solid #ebeef5;
@@ -547,7 +596,7 @@ body {
     border-radius: 6px;
     font-size: 14px;
     cursor: pointer;
-    display: flex;
+    display: table-column;
     align-items: center;
     gap: 6px;
     transition: all 0.2s;
@@ -562,6 +611,29 @@ body {
 .btn-danger:hover {
     background: #fef0f0;
     color: #f56c6c;
+}
+
+
+.btn-outline {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px;
+    border-radius: 6px;
+    text-decoration: none;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+
+.btn-outline {
+    background: #f5f7fa;
+    color: #606266;
+}
+
+.btn-outline:hover {
+    background: #ecf5ff;
+    color: var(--primary-color);
 }
 
 
@@ -695,14 +767,18 @@ body {
 
 .share-info {
     flex: 1;
+    width: 100%;
 }
 
 .share-name {
     font-weight: 600;
     margin-bottom: 5px;
-    display: flex;
+    /*display: flex;*/
     align-items: center;
     gap: 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .share-meta {
@@ -781,6 +857,25 @@ body {
 .simple-file-item:last-child {
     border-bottom: none;
 }
+
+
+.stat-name {
+    margin-bottom: 5px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.stat-meta {
+    font-size: 14px;
+    color: #909399;
+    display: flex;
+    gap: 15px;
+}
+
 
 /* 模态框 */
 .modal {
@@ -1543,6 +1638,9 @@ body {
 .hidden {
     display: none !important;
 }
+
+
+
 
 /* 徽章 */
 .badge {
@@ -2907,3 +3005,225 @@ body {
     text-align: center;
 }
 
+
+
+
+
+/* cloud.css - 上传进度对话框样式 */
+.upload-progress-dialog {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 5000;
+    align-items: center;
+    justify-content: center;
+}
+
+.upload-progress-dialog.show {
+    display: flex;
+}
+
+.upload-progress-content {
+    background: white;
+    border-radius: 12px;
+    width: 90%;
+    max-width: 480px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+    from {
+        transform: translateY(20px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.upload-progress-header {
+    padding: 15px 20px;
+    border-bottom: 1px solid #ebeef5;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.upload-progress-header h4 {
+    margin: 0;
+    font-size: 16px;
+    color: #303133;
+}
+
+.upload-progress-body {
+    padding: 20px;
+}
+
+.file-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    background: #f5f7fa;
+    border-radius: 6px;
+    margin-bottom: 20px;
+}
+
+.file-info i {
+    font-size: 24px;
+    color: #409EFF;
+}
+
+.file-info span {
+    font-size: 14px;
+    color: #303133;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.progress-section {
+    margin-bottom: 15px;
+}
+
+.progress-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: #606266;
+    margin-bottom: 8px;
+}
+
+.progress-bar {
+    height: 8px;
+    background: #ebeef5;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: #409EFF;
+    transition: width 0.3s ease;
+    border-radius: 4px;
+}
+
+.progress-detail {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #909399;
+    margin-top: 5px;
+}
+
+.progress-status {
+    padding: 10px;
+    background: #f0f9eb;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #67C23A;
+    margin-bottom: 15px;
+    text-align: center;
+}
+
+.progress-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px solid #ebeef5;
+}
+
+.progress-actions .btn-sm {
+    padding: 6px 16px;
+    font-size: 13px;
+}
+
+/* 移动端适配 */
+@media (max-width: 480px) {
+    .upload-progress-content {
+        width: 95%;
+        margin: 10px;
+    }
+
+    .progress-actions {
+        flex-direction: column;
+    }
+
+    .progress-actions .btn-sm {
+        width: 100%;
+    }
+}
+
+
+
+
+/* 🔧 分页控件样式 */
+.pagination-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 20px;
+    background: #fff;
+    border-radius: 8px;
+    margin-top: 15px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.pagination-info {
+    font-size: 13px;
+    color: #606266;
+    user-select: none;
+}
+.pagination-controls {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+.pagination-btn {
+    padding: 6px 12px;
+    border: 1px solid #dcdfe6;
+    background: #fff;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+    min-width: 36px;
+    text-align: center;
+}
+.pagination-btn:hover:not(:disabled) {
+    background: #409EFF;
+    color: #fff;
+    border-color: #409EFF;
+}
+
+.pagination-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background: #f5f7fa;
+}
+.pagination-btn.active {
+    background: #409EFF;
+    color: #fff;
+    border-color: #409EFF;
+    font-weight: 500;
+}
+
+/* 🔧 移动端适配 */
+@media (max-width: 768px) {
+    .pagination-container {
+        flex-direction: column;
+        gap: 10px;
+        padding: 10px 15px;
+    }
+    .pagination-controls {
+        width: 100%;
+        justify-content: center;
+    }
+}

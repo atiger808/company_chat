@@ -21,7 +21,7 @@ from chat.models import ChatRoom
 from loguru import logger
 
 from utils.request_util import get_browser, get_request_ip, get_os, get_ip_analysis, get_request_path, save_login_log
-from utils.utils import SystemConfigManager
+from utils.utils import SystemConfigManager, CloudSystemConfigManager
 
 
 from .serializers import (
@@ -773,29 +773,20 @@ class UserViewSet(viewsets.ModelViewSet):
         """用户注册"""
 
         # 🔧 关键修复：从配置读取是否允许注册
-        registration_enabled = SystemConfigManager.get_config('system.user_registration_enabled', False)
+
+        referer_from = request.META.get('HTTP_REFERER', '')
+        if referer_from and 'cloud/login' in str(referer_from):
+            registration_enabled = CloudSystemConfigManager.get_config('system.user_registration_enabled', False)
+            logger.info(f'cloud: register: {registration_enabled}')
+        else:
+            registration_enabled = SystemConfigManager.get_config('system.user_registration_enabled', False)
+            logger.info(f'chat: register: {registration_enabled}')
 
         if not registration_enabled:
             return Response({
                 'error': '当前不允许新用户注册'
             }, status=status.HTTP_403_FORBIDDEN)
 
-        # 🔧 从配置读取密码策略
-        password_min_length = SystemConfigManager.get_config('security.password_min_length', 8)
-        password_require_special = SystemConfigManager.get_config('security.password_require_special', True)
-
-        password = request.data.get('password', '')
-        if len(password) < password_min_length:
-            return Response({
-                'error': f'密码长度至少{password_min_length}位'
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        if password_require_special:
-            import re
-            if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
-                return Response({
-                    'error': '密码必须包含特殊字符'
-                }, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)

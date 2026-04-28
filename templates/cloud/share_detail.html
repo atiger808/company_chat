@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>文件分享 - 企业网盘</title>
     <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
-    <link rel="stylesheet" href="/static/css/chat.css">
-    <link rel="stylesheet" href="/static/css/cloud.css">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260423-3e93083">
+    <link rel="stylesheet" href="/static/css/cloud.css?v=20260423-3e93083">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         * {
@@ -412,9 +412,9 @@
                         id="saveBtnFolder">
                     <i class="fas fa-cloud-upload-alt"></i> 保存到我的网盘
                 </button>
-                <a href="/cloud/" class="btn-home">
-                    <i class="fas fa-home"></i> 返回首页
-                </a>
+<!--                <a href="/cloud/" class="btn-home">-->
+<!--                    <i class="fas fa-home"></i> 返回首页-->
+<!--                </a>-->
             </div>
         </div>
         {% endif %}
@@ -489,7 +489,7 @@
                     showToast('提示', '请先登录', 'warning');
                     setTimeout(() => {
                         localStorage.setItem('redirect_url', window.location.href);
-                        window.location.href = '/login/';
+                        window.location.href = '/cloud/login/';
                     }, 1500);
                     return;
                 }
@@ -539,7 +539,7 @@
             // 保存当前页面链接，登录后跳转到该页面
             localStorage.setItem('redirect_url', window.location.href);
             showToast('请先登录', 'error');
-            setTimeout(() => window.location.href = '/login/', 1500);
+            setTimeout(() => window.location.href = '/cloud/login/', 1500);
             return;
         }
 

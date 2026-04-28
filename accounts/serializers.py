@@ -380,7 +380,34 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         """验证密码一致性"""
-        if data['password'] != data['password_confirm']:
+
+        password = data.get('password')
+        password_confirm = data.get('password_confirm')
+
+        if not password or not password_confirm:
+            raise serializers.ValidationError({
+                'password': "密码不能为空",
+                'password_confirm': "确认密码不能为空"
+            })
+
+        # 🔧 从配置读取密码策略
+        password_min_length = SystemConfigManager.get_config('security.password_min_length', 8)
+        password_require_special = SystemConfigManager.get_config('security.password_require_special', True)
+
+        password = decrypt_data(password)
+        password_confirm = decrypt_data(password_confirm)
+
+        if len(password) < password_min_length:
+            raise serializers.ValidationError("密码长度不能少于{}个字符".format(password_min_length))
+
+        if password_require_special:
+            import re
+            if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+                raise serializers.ValidationError({
+                    'password': '密码必须包含特殊字符'
+                })
+
+        if password != password_confirm:
             raise serializers.ValidationError({
                 'password_confirm': "两次输入的密码不一致"
             })

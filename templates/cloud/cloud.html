@@ -5,12 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>企业网盘 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/cloud.css?v=20260418-66d28a7">
+    <link rel="stylesheet" href="/static/css/cloud.css?v=20260428-2fb8f7d">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
     <!-- 🔧 添加二维码库 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>-->
-    <script src="/static/js/dist/qrcode.min.js?v=20260418-66d28a7"></script>
+    <script src="/static/js/dist/qrcode.min.js?v=20260428-2fb8f7d"></script>
 </head>
 <body>
 <div class="cloud-layout">
@@ -33,24 +33,30 @@
         <nav class="nav-menu">
             <a href="#" class="nav-item active" data-view="files" data-folder-id="">
                 <i class="fas fa-folder"></i> 全部文件
+                <span class="badge-primary" id="filesCount" style="display: none;"></span>
             </a>
             <a href="#" class="nav-item" data-view="starred" style="display:none;">
                 <i class="fas fa-star"></i> 星标文件
+                <span class="badge-primary" id="starredCount" style="display: none;"></span>
             </a>
             <a href="#" class="nav-item" data-view="shared">
                 <i class="fas fa-share-alt"></i> 我的分享
+                <span class="badge-primary" id="sharedCount" style="display: none;"></span>
             </a>
             <a href="#" class="nav-item" data-view="shared-with-me" style="display:none;">
                 <i class="fas fa-users"></i> 分享给我
+                <span class="badge-primary" id="sharedWithMeCount" style="display: none;"></span>
             </a>
 
             <!-- 🔧 新增：协作文档 -->
             <a href="#" class="nav-item" data-view="collaborations">
                 <i class="fas fa-file-alt"></i> 协作文档
+                <span class="badge-danger" id="collabCount" style="display: none;"></span>
             </a>
 
             <a href="#" class="nav-item" data-view="trash">
                 <i class="fas fa-trash"></i> 回收站
+                <span class="badge-primary" id="trashCount" style="display: none;"></span>
             </a>
             <a href="#" class="nav-item" data-view="dashboard">
                 <i class="fas fa-chart-pie"></i> 数据统计
@@ -65,6 +71,11 @@
         </div>
 
         <div class="sidebar-footer">
+
+            <a href="/cloud/settings/" class="btn-back-chat" id="cloudSystemConfig" style="display: none">
+                <i class="fas fa-cog"></i> 系统配置
+            </a>
+
             <a href="/chat/" class="btn-back-chat">
                 <i class="fas fa-comments"></i> 返回聊天室
             </a>
@@ -93,7 +104,7 @@
             </div>
             <div class="admin-header-right">
                 <span id="adminUsername"></span>
-                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260418-66d28a7" alt="头像">
+                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260428-2fb8f7d" alt="头像">
             </div>
         </header>
 
@@ -201,19 +212,31 @@
                     </div>
                 </div>
 
+                <div id="paginationContainerFiles" class="pagination-container"></div>
+
             </div>
 
             <!-- 🔧 2. 我的分享视图 -->
             <div class="view-section" id="sharedView">
                 <div class="view-header">
                     <h3><i class="fas fa-share-alt"></i> 我的分享</h3>
-                    <button class="btn btn-secondary" onclick="cloudApp.loadMyShares()">
-                        <i class="fas fa-sync"></i> 刷新
-                    </button>
+                    <div class="toolbar-actions">
+                        <div class="search-box">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="shareSearchInput" placeholder="搜索分享名称或提取码...">
+                        </div>
+                        <button class="btn btn-secondary" onclick="cloudApp.loadMyShares()"><i class="fas fa-sync"></i>
+                            刷新
+                        </button>
+                    </div>
+
+
                 </div>
                 <div class="share-list-container" id="mySharesList">
                     <!-- 动态生成 -->
                 </div>
+                <!-- 在分享列表容器下方添加分页容器 -->
+                <div id="paginationContainerShares" class="pagination-container"></div>
             </div>
 
             <!-- 🔧 3. 分享给我视图 -->
@@ -276,6 +299,11 @@
                         </div>
                     </div>
                 </div>
+
+
+                <!-- 协作文档列表下方 -->
+                <div id="paginationContainerCollabs" class="pagination-container"></div>
+
             </div>
 
 
@@ -289,7 +317,7 @@
                             <i class="fas fa-undo"></i> 批量恢复
                         </button>
                         <button class="btn btn-danger" id="batchDeleteTrashBtn" style="display:none;">
-                            <i class="fas fa-trash-alt"></i> 批量删除
+                            <i class="fas fa-trash-alt"></i> 批量清空
                         </button>
                         <button class="btn btn-primary" onclick="cloudApp.emptyTrash()">
                             <i class="fas fa-trash-alt"></i> 清空回收站
@@ -405,8 +433,8 @@
                 <select id="shareType">
                     <option value="public">公开链接（任何人可访问）</option>
                     <option value="password">密码保护</option>
-                    <option value="private">指定用户</option>
-                    <option value="department">指定部门</option>
+                    <!--                    <option value="private">指定用户</option>-->
+                    <!--                    <option value="department">指定部门</option>-->
                 </select>
             </div>
 
@@ -424,11 +452,13 @@
 
             <div class="form-group" id="expiresGroup">
                 <label>过期时间</label>
-                <input type="datetime-local" id="shareExpires">
+                <input type="datetime-local" id="shareExpires" min="" placeholder="留空表示永久有效">
+                <small class="form-hint">默认读取系统配置，可手动清空</small>
             </div>
             <div class="form-group" id="downloadsGroup">
                 <label>最大下载次数</label>
-                <input type="number" id="shareMaxDownloads" placeholder="留空表示不限制">
+                <input type="number" id="shareMaxDownloads" min="0" placeholder="0 表示无限制">
+                <small class="form-hint">默认读取系统配置，0 或留空表示不限制</small>
             </div>
 
             <!-- 🔧 分享方式选择 -->
@@ -696,10 +726,11 @@
 
 <!-- 脚本引入 -->
 <!--<script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>-->
-<script src="/static/js/dist/spark-md5.min.js?v=20260418-66d28a7"></script>
-<script src="/static/js/utils.js?v=20260418-66d28a7"></script>
-<script src="/static/js/api.js?v=20260418-66d28a7"></script>
-<script src="/static/js/cloud.js?v=20260418-66d28a7"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260428-2fb8f7d"></script>
+<script src="/static/js/utils.js?v=20260428-2fb8f7d"></script>
+<script src="/static/js/frontend_cloud_config.js?v=20260428-2fb8f7d"></script>
+<script src="/static/js/api.js?v=20260428-2fb8f7d"></script>
+<script src="/static/js/cloud.js?v=20260428-2fb8f7d"></script>
 
 <script>
     // 🔧 初始化侧边栏按钮显示状态
@@ -716,17 +747,54 @@
             }
         });
 
-        // 监听选中状态变化
-        setInterval(() => {
+        // 监听回收站选中状态变化，优化性能：使用 MutationObserver 或事件委托替代 setInterval
+        // 这里采用在 cloudApp 中暴露更新方法或在关键操作后触发自定义事件的方式会更佳，
+        // 但为了保持最小改动且兼容现有结构，我们保留监听逻辑，但改为更高效的事件监听或防抖处理。
+        // 考虑到无法修改 JS 文件，我们在这里使用一个更合理的轮询间隔，或者尝试绑定事件。
+        // 由于 selectedFiles 是 JS 内部状态，最直接的非侵入式重构是使用 requestAnimationFrame 或减少轮询频率，
+        // 或者监听 DOM 变化（如果选中会改变 DOM 类名）。
+        // 假设 cloudApp.selectedFiles 的变化不会直接触发 DOM 事件，我们保留轮询但优化代码结构。
+
+        const updateTrashBatchButtons = () => {
             const batchRestoreBtn = document.getElementById('batchRestoreBtn');
             const batchDeleteTrashBtn = document.getElementById('batchDeleteTrashBtn');
 
             if (batchRestoreBtn && batchDeleteTrashBtn) {
-                const hasSelection = cloudApp?.selectedFiles?.size > 0;
-                batchRestoreBtn.style.display = hasSelection ? 'inline-block' : 'none';
-                batchDeleteTrashBtn.style.display = hasSelection ? 'inline-block' : 'none';
+                // 确保当前在回收站视图，或者根据需求始终显示
+                // 如果只想在回收站显示，可以检查 #trashView 是否活跃
+                const isTrashViewActive = document.getElementById('trashView')?.classList.contains('active');
+
+                if (isTrashViewActive) {
+                    const hasSelection = cloudApp?.selectedFiles?.size > 0;
+                    const displayStyle = hasSelection ? 'inline-block' : 'none';
+
+                    if (batchRestoreBtn.style.display !== displayStyle) {
+                        batchRestoreBtn.style.display = displayStyle;
+                        batchDeleteTrashBtn.style.display = displayStyle;
+                    }
+                } else {
+                    // 如果不在回收站视图，隐藏按钮
+                    if (batchRestoreBtn.style.display !== 'none') {
+                        batchRestoreBtn.style.display = 'none';
+                        batchDeleteTrashBtn.style.display = 'none';
+                    }
+                }
             }
-        }, 500);
+        };
+
+        // 使用更高效的轮询或结合 requestAnimationFrame
+        let lastCheckTime = 0;
+        const checkInterval = 1000; // 降低频率至 1秒，因为回收站操作不频繁
+
+        const observerLoop = (timestamp) => {
+            if (timestamp - lastCheckTime >= checkInterval) {
+                updateTrashBatchButtons();
+                lastCheckTime = timestamp;
+            }
+            requestAnimationFrame(observerLoop);
+        };
+
+        requestAnimationFrame(observerLoop);
 
 
     });

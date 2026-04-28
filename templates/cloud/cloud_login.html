@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>企业网盘 - 登录</title>
+    <link rel="stylesheet" href="/static/css/auth.css?v=20260423-2f85186">
+    <link rel="stylesheet" href="/static/css/cloud_auth.css?v=20260423-2f85186">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
+
+    <!-- 引入依赖库 -->
+    <!--    <script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>-->
+    <script src="/static/js/dist/spark-md5.min.js?v=20260423-2f85186"></script>
+    <!-- 引入业务逻辑 -->
+
+    <!-- 2. 依赖库 -->
+    <script src="/static/js/dist/crypto-js.min.js?v=20260423-2f85186"></script>
+    <script src="/static/js/dist/sm4.min.js?v=20260423-2f85186"></script>
+    <script src="/static/js/encrypts.js?v=20260423-2f85186"></script>
+
+    <!--    <script src="/static/js/token.js?v=20260423-2f85186"></script>-->
+    <script src="/static/js/api.js?v=20260423-2f85186"></script>
+    <script src="/static/js/utils.js?v=20260423-2f85186"></script>
+    <script src="/static/js/cloud_auth.js?v=20260423-2f85186"></script>
+</head>
+<body>
+<div class="login-container">
+    <!-- 左侧欢迎区域 -->
+    <div class="login-left">
+        <div class="logo">
+            <i class="fas fa-cloud"></i>
+            <span>企业网盘</span>
+        </div>
+
+        <div class="welcome-text">
+            <h1>安全 · 高效 · 协同</h1>
+            <p>一站式企业文件管理与协作平台</p>
+        </div>
+
+        <div class="features">
+            <div class="feature-item">
+                <i class="fas fa-folder-open"></i>
+                <span>海量存储，文件统一管理</span>
+            </div>
+            <div class="feature-item">
+                <i class="fas fa-users"></i>
+                <span>多人在线协作，实时同步</span>
+            </div>
+            <div class="feature-item">
+                <i class="fas fa-share-alt"></i>
+                <span>灵活分享，权限精细控制</span>
+            </div>
+            <div class="feature-item">
+                <i class="fas fa-file-alt"></i>
+                <span>在线编辑文档，无需下载</span>
+            </div>
+            <div class="feature-item">
+                <i class="fas fa-shield-alt"></i>
+                <span>企业级安全，数据加密保护</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 右侧表单区域 -->
+    <div class="login-right">
+        <!-- 登录表单 -->
+        <div id="loginForm" class="auth-form">
+            <h2><i class="fas fa-sign-in-alt"></i> 用户登录</h2>
+
+            <div class="form-group">
+                <label for="loginUsername">用户名或邮箱</label>
+                <div class="input-with-icon">
+                    <i class="fas fa-user"></i>
+                    <input type="text" id="loginUsername" class="form-control"
+                           placeholder="请输入用户名或邮箱" autocomplete="username">
+                </div>
+                <div id="loginUsernameError" class="error-message"></div>
+            </div>
+
+            <div class="form-group">
+                <label for="loginPassword">密码</label>
+                <div class="input-with-icon">
+                    <i class="fas fa-lock"></i>
+                    <input type="password" id="loginPassword" class="form-control"
+                           placeholder="请输入密码" autocomplete="current-password">
+                    <i class="fas fa-eye toggle-password" onclick="togglePassword('loginPassword', this)"></i>
+                </div>
+                <div id="loginPasswordError" class="error-message"></div>
+            </div>
+
+            <div class="remember-forgot">
+                <label class="remember-me">
+                    <input type="checkbox" id="rememberMe">
+                    <span>记住我</span>
+                </label>
+                <a href="javascript:void(0)" class="forgot-password" onclick="openForgotPasswordModal()">忘记密码？</a>
+            </div>
+
+            <button type="button" id="loginSubmitBtn" class="btn btn-primary btn-block">
+                <span class="text">立即登录</span>
+                <span class="loading"></span>
+            </button>
+
+            <div id="loginGeneralError" class="error-message"></div>
+            <div id="loginSuccessMessage" class="success-message"></div>
+
+            <!-- 注册入口（默认隐藏） -->
+            <div class="switch-form" id="registerToggle" style="display: none;">
+                <span>还没有账号？</span>
+                <a href="javascript:void(0)" id="showRegisterLink">立即注册</a>
+            </div>
+        </div>
+
+        <!-- 注册表单（默认隐藏） -->
+        <div id="registerForm" class="auth-form" style="display: none;">
+            <h2><i class="fas fa-user-plus"></i> 用户注册</h2>
+
+            <div class="form-group">
+                <label for="registerUsername">用户名</label>
+                <div class="input-with-icon">
+                    <i class="fas fa-user"></i>
+                    <input type="text" id="registerUsername" class="form-control"
+                           placeholder="3-20位字母、数字或下划线" maxlength="20">
+                </div>
+                <div id="registerUsernameError" class="error-message"></div>
+            </div>
+
+            <div class="form-group">
+                <label for="registerEmail">邮箱</label>
+                <div class="input-with-icon">
+                    <i class="fas fa-envelope"></i>
+                    <input type="email" id="registerEmail" class="form-control"
+                           placeholder="请输入有效邮箱地址">
+                </div>
+                <div id="registerEmailError" class="error-message"></div>
+            </div>
+
+            <div class="form-group">
+                <label for="registerPassword">密码</label>
+                <div class="input-with-icon">
+                    <i class="fas fa-lock"></i>
+                    <input type="password" id="registerPassword" class="form-control"
+                           placeholder="至少8位，含字母和数字" minlength="8">
+                    <i class="fas fa-eye toggle-password" onclick="togglePassword('registerPassword', this)"></i>
+                </div>
+                <div id="registerPasswordError" class="error-message"></div>
+            </div>
+
+            <div class="form-group">
+                <label for="registerPasswordConfirm">确认密码</label>
+                <div class="input-with-icon">
+                    <i class="fas fa-lock"></i>
+                    <input type="password" id="registerPasswordConfirm" class="form-control"
+                           placeholder="请再次输入密码">
+                    <i class="fas fa-eye toggle-password" onclick="togglePassword('registerPasswordConfirm', this)"></i>
+                </div>
+                <div id="registerPasswordConfirmError" class="error-message"></div>
+            </div>
+
+            <div class="form-group">
+                <label for="registerPhone">手机号（可选）</label>
+                <div class="input-with-icon">
+                    <i class="fas fa-phone"></i>
+                    <input type="tel" id="registerPhone" class="form-control"
+                           placeholder="11位手机号码" pattern="^1[3-9]\d{9}$" maxlength="11">
+                </div>
+                <div id="registerPhoneError" class="error-message"></div>
+            </div>
+
+            <button type="button" id="registerSubmitBtn" class="btn btn-primary btn-block">
+                <span class="text">创建账号</span>
+                <span class="loading"></span>
+            </button>
+
+            <div id="registerGeneralError" class="error-message"></div>
+            <div id="registerSuccessMessage" class="success-message"></div>
+
+            <div class="switch-form">
+                <span>已有账号？</span>
+                <a href="javascript:void(0)" id="showLoginLink">立即登录</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 忘记密码模态框 -->
+<div id="forgotPasswordModal" class="modal">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3><i class="fas fa-key"></i> 忘记密码</h3>
+            <button class="close-btn" onclick="closeForgotPasswordModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>请输入您的注册邮箱，我们将发送密码重置链接</p>
+            <div class="form-group">
+                <input type="email" id="resetEmail" class="form-control"
+                       placeholder="请输入注册邮箱" style="padding-left: 12px;">
+            </div>
+            <div id="resetMessage" class="alert"></div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeForgotPasswordModal()">取消</button>
+            <button type="button" id="sendResetBtn" class="btn btn-primary">
+                <span class="text">发送重置链接</span>
+                <span class="loading"></span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- 滑块验证码模态框 -->
+<div id="captchaModal" class="captcha-modal">
+    <div class="captcha-modal-content">
+        <div class="captcha-modal-header">
+            <h3><i class="fas fa-shield-alt"></i> 安全验证</h3>
+            <p>请完成滑块验证以继续操作</p>
+        </div>
+        <div id="captchaContainer" class="captcha-container"></div>
+        <div class="captcha-actions">
+            <button class="btn btn-secondary" id="captchaCancelBtn">取消</button>
+            <button class="btn btn-primary" id="captchaRefreshBtn">
+                <i class="fas fa-sync-alt"></i> 换一张
+            </button>
+        </div>
+    </div>
+</div>
+
+
+<script>
+    // 密码可见性切换
+    function togglePassword(inputId, icon) {
+        const input = document.getElementById(inputId);
+        if (input.type === 'password') {
+            input.type = 'text';
+            icon.classList.remove('fa-eye');
+            icon.classList.add('fa-eye-slash');
+        } else {
+            input.type = 'password';
+            icon.classList.remove('fa-eye-slash');
+            icon.classList.add('fa-eye');
+        }
+    }
+</script>
+</body>
+</html>

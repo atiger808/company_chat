@@ -421,7 +421,7 @@ class Utils {
 
     // 检测是否为 iOS 设备
     static isIOS() {
-        return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+        return /iPad|iPhone|iPod|Mac|Safari/.test(navigator.userAgent) && !window.MSStream;
     }
 
     // 检测是否为 Android 设备
@@ -594,8 +594,8 @@ class FrontendConfigManager {
                 const cached = localStorage.getItem(this.STORAGE_KEY);
                 if (cached) {
                     const {configs, timestamp} = JSON.parse(cached);
-                    // 5 分钟内使用缓存
-                    if (Date.now() - timestamp < 5 * 60 * 1000) {
+                    // 0.5 分钟内使用缓存
+                    if (Date.now() - timestamp < 0.5 * 60 * 1000) {
                         this.configs = configs;
                         this.isLoaded = true;
                         console.log('✅ 使用缓存的系统配置');
@@ -604,7 +604,7 @@ class FrontendConfigManager {
                 }
 
                 // 从后端 API 获取最新配置
-                const response = await fetch('/api/chat/admin/settings/list_configs/', {
+                const response = await fetch(TokenManager.getToken() ? '/api/chat/admin/settings/list_configs/' : '/api/chat/system/configs/', {
                     headers: TokenManager.getHeaders()
                 });
 

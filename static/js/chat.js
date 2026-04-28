@@ -416,11 +416,6 @@ class ChatClient {
     }
 
 
-    // 检测是否为 iOS 设备
-    isIOS() {
-        return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-    }
-
     // 修复 iOS Safari 输入框遮挡问题
     fixIOSSafariInput() {
         if (!Utils.isIOS()) return;
@@ -678,7 +673,6 @@ class ChatClient {
                     });
                 }
 
-
                 const cloudBtn = document.getElementById('cloudBtn');
                 if (cloudBtn) {
                     cloudBtn.style.display = 'flex';
@@ -686,10 +680,21 @@ class ChatClient {
                         e.preventDefault();
                         window.location.href = '/cloud/';
                         // 以新页面形式打开
-                        // window.open('/control/', '_blank');
+                        // window.open('/cloud/', '_blank');
                     });
                 }
 
+            } else {
+                let cloudBtn = document.getElementById('cloudBtn');
+                if (cloudBtn) {
+                    cloudBtn.style.display = 'flex';
+                    cloudBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        window.location.href = '/cloud/';
+                        // 以新页面形式打开
+                        // window.open('/cloud/', '_blank');
+                    });
+                }
             }
 
             // 连接全局 WebSocket
@@ -3330,6 +3335,7 @@ class ChatClient {
             avatarElement.className = 'message-avatar';
 
             const contentElementContainer = document.createElement('div');
+            contentElementContainer.className = 'message-container';
 
 
             // 显示对方头像
@@ -3370,6 +3376,7 @@ class ChatClient {
             headerElement.className = 'message-header';
             headerElement.innerHTML = `
             <span class="message-sender">${message.sender?.real_name || message.sender?.username || message.sender_name || '未知用户'}</span>
+            <span class="message-time">${Utils.formatTime(message.timestamp)}</span>
             `;
 
             // 创建消息内容元素
@@ -3379,11 +3386,11 @@ class ChatClient {
             <div class="message-text"></div>
             `;
 
-            const headerElement_2 = document.createElement('div');
-            headerElement_2.className = 'message-header';
-            headerElement_2.innerHTML = `
-            <span class="message-time">${Utils.formatTime(message.timestamp)}</span>
-            `;
+            // const headerElement_2 = document.createElement('div');
+            // headerElement_2.className = 'message-header';
+            // headerElement_2.innerHTML = `
+            // <span class="message-time">${Utils.formatTime(message.timestamp)}</span>
+            // `;
 
             // 设置消息内容
             const messageContent = contentElement.querySelector('.message-text');
@@ -3394,7 +3401,7 @@ class ChatClient {
             contentElementContainer.appendChild(headerElement);
             contentElementContainer.appendChild(contentElement);
             messageWrapper.appendChild(contentElementContainer);
-            messageWrapper.appendChild(headerElement_2);
+            // messageWrapper.appendChild(headerElement_2);
         } else {
             // 发送的消息 - 使用右侧 wrapper
             messageWrapper = document.createElement('div');
@@ -3996,8 +4003,8 @@ class ChatClient {
                     const iconClass = Utils.getFileIconClass(message.file_info.mime_type, message.file_info.name);
                     fileLink.innerHTML = `
                         <i class="${iconClass}"></i>
-                        <span>${message.file_info.name}</span>
-                        <span>(${Utils.formatFileSize(message.file_info.size)})</span>
+                        <span class="file-name">${message.file_info.name}</span>
+                        <span class="file-size">(${Utils.formatFileSize(message.file_info.size)})</span>
                     `;
                     fileLink.onclick = () => window.open(message.file_info.url, '_blank');
                     container.appendChild(fileLink);
@@ -4171,8 +4178,9 @@ class ChatClient {
                     const iconClass = Utils.getFileIconClass(message.file_info.mime_type, message.file_info.name);
                     fileLink.innerHTML = `
                     <i class="${iconClass}"></i>
-                    <span>${message.file_info.name}</span>
-                    <span>(${Utils.formatFileSize(message.file_info.size)})</span>
+                    <span  class="file-name">${message.file_info.name}</span>
+                    <span  class="file-size">(${Utils.formatFileSize(message.file_info.size)})</span>
+                    <i class="fas fa-download download-icon"></i>
                 `;
                     fileLink.onclick = () => window.open(message.file_info.url, '_blank');
                     container.appendChild(fileLink);

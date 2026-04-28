@@ -146,6 +146,12 @@ class DocumentEditorApp {
 
         if (!response.ok) {
             const error = await response.json().catch(() => ({}));
+
+            // 🔧 处理权限错误
+            if (response.status === 403) {
+                throw new Error('您没有权限编辑此文档');
+            }
+
             throw new Error(error.error || `加载失败：${response.status}`);
         }
 
@@ -158,6 +164,9 @@ class DocumentEditorApp {
         if (!this.config.document?.url) {
             throw new Error('文档访问链接缺失');
         }
+
+        // 🔧 验证 document key 是否稳定
+        console.log('🔑 Document Key:', this.config.document.key);
     }
 
 
@@ -230,11 +239,25 @@ class DocumentEditorApp {
                     onDocumentStateChange: (event) => {
                         this.updateSaveStatus({data: event.data});
                     },
-                    onRequestClose: () => {
-                        this.closeEditor();
+                    // 🔧 关键修复：优化关闭事件处理
+                    onRequestClose: async () => {
+                        console.log('📝 用户请求关闭文档');
+                        // 不立即关闭，先保存状态
+                        await this.updateCollaborationStatus('closed');
+                        // 然后调用自定义关闭逻辑
+                        await this.closeEditor();
+                    },
+                    onError: (event) => {
+                        console.error('❌ OnlyOffice 错误:', event.data);
+                        this.showError('编辑器发生错误：' + JSON.stringify(event.data));
                     },
                     onRequestEditRights: () => {
-                        console.log('请求编辑权限');
+                        console.log('🔑 请求编辑权限');
+                        // 重新获取编辑配置
+                        this.fetchEditConfig().then(() => {
+                            // 重新初始化编辑器
+                            this.initEditor();
+                        });
                     },
                     onInfo: (event) => {
                         console.log('信息:', event.data);
@@ -385,8 +408,6 @@ class DocumentEditorApp {
 
     // 🔧 核心修复：处理协同消息（与后端消息类型对齐）
     handleCollabMessage(data) {
-        console.log('📨 收到协同消息 data:', data);
-        console.log('📨 收到协同消息:', data.type, data.data);
 
         const type = data.type;
         const payload = data.data;
@@ -569,7 +590,6 @@ class DocumentEditorApp {
         if (!userId) return;
 
         const collab = this.collaborators.find(c => parseInt(c.id) === parseInt(userId));
-        console.log('collab: ', collab)
         if (collab) {
             collab.status = status;
             collab.last_activity = last_activity;
@@ -2032,27 +2052,57 @@ class DocumentEditorApp {
         const confirmed = await this.showConfirmDialog('关闭编辑器', '确定要关闭编辑器吗？', 'danger');
         if (!confirmed) return;
 
-        // 停止心跳
-        if (this.collabHeartbeatTimer) {
-            clearInterval(this.collabHeartbeatTimer);
+        try {
+
+            // 🔧 1. 先等待文档保存完成
+            if (this.editor) {
+                // 触发自定义保存事件（如果需要）
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+
+
+            // 2. 停止心跳
+            if (this.collabHeartbeatTimer) {
+                clearInterval(this.collabHeartbeatTimer);
+                this.collabHeartbeatTimer = null;
+            }
+
+            // 3. 上报离开状态（等待后端处理）
+            if (this.fileId) {
+                try {
+                    await this.updateCollaborationStatus('closed');
+                    // 等待后端处理完成
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                } catch (error) {
+                    console.warn('上报离开状态失败:', error);
+                }
+            }
+
+            // 4. 关闭 WebSocket（等待关闭完成）
+            if (this.collabSocket?.readyState === WebSocket.OPEN) {
+                this.collabSocket.close(1000, 'Page unload');
+                // 等待 WebSocket 关闭
+                await new Promise(resolve => setTimeout(resolve, 300));
+            }
+
+            // 5. 销毁编辑器
+            if (this.editor) {
+                this.editor.destroyEditor();
+                this.editor = null;
+            }
+
+            // 6. 清理配置（关键！）
+            this.config = null;
+
+
+            // 7. 关闭窗口或跳转
+            window.close();
+            // 或者：window.location.href = '/cloud/';
+        } catch (error) {
+            console.error('关闭编辑器失败:', error);
+            // 即使出错也要关闭窗口
+            window.close();
         }
-
-        // 上报离开状态
-        this.updateCollaborationStatus('closed');
-
-        // 销毁编辑器
-        if (this.editor) {
-            this.editor.destroyEditor();
-            this.editor = null;
-        }
-
-        // 关闭 WebSocket
-        if (this.collabSocket?.readyState === WebSocket.OPEN) {
-            this.collabSocket.close(1000, 'Page unload');
-        }
-
-        window.close()
-        // window.location.href = '/cloud/';
 
     }
 
@@ -2122,7 +2172,7 @@ class DocumentEditorApp {
         localStorage.removeItem('user_id');
         localStorage.removeItem('user_type');
         localStorage.setItem('redirect_url', window.location.href);
-        window.location.href = '/login/';
+        window.location.href = '/cloud/login/';
     }
 
 
@@ -2157,17 +2207,29 @@ document.addEventListener('visibilitychange', () => {
             this.collabHeartbeatTimer = setTimeout(() => this.startCollabHeartbeat(), 60000);
         }
     } else {
-        // 页面恢复时立即同步状态
-        this.loadCollaborators();
-        this.startCollabHeartbeat();
+        try {
+            // 页面恢复时立即同步状态
+            this.loadCollaborators();
+            this.startCollabHeartbeat();
+        } catch (error) {
+            console.warn('页面恢复时同步失败:', error);
+        }
+
     }
 });
 
 
-// 页面卸载时清理
-window.addEventListener('beforeunload', () => {
+// 🔧 页面卸载时的清理
+window.addEventListener('beforeunload', async (event) => {
     if (window.editorApp) {
-        window.editorApp.updateCollaborationStatus('closed');
+        // 同步上报离开状态
+        try {
+            await window.editorApp.updateCollaborationStatus('closed');
+        } catch (error) {
+            console.warn('页面卸载时上报失败:', error);
+        }
+
+        // 关闭 WebSocket
         if (window.editorApp.collabSocket?.readyState === WebSocket.OPEN) {
             window.editorApp.collabSocket.close(1000, 'Page unload');
         }

@@ -20,6 +20,7 @@ class TokenManager {
 
     static getHeaders() {
         const token = this.getToken();
+        if (!token) return {'Content-Type': 'application/json' };
         return {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
@@ -39,6 +40,33 @@ class API {
         }
         return await response.json();
     }
+
+    static async loadConfigs(category = null) {
+        try {
+            const url = category
+                ? `/api/chat/admin/settings/list_configs/?category=${category}`
+                : '/api/chat/admin/settings/list_configs/';
+
+            const response = await fetch(url, {headers: TokenManager.getHeaders()});
+            if (!response.ok) throw new Error('加载配置失败');
+            const data = await response.json();
+
+            // 按分类组织配置
+            this.configs = {};
+            (data.configs || []).forEach(config => {
+                if (!this.configs[config.category]) {
+                    this.configs[config.category] = [];
+                }
+                this.configs[config.category].push(config);
+            });
+
+            return data.configs;
+        } catch (error) {
+            console.error('加载配置失败:', error);
+            return [];
+        }
+    }
+
 
     static async login(username, password) {
         const response = await fetch(`${API_BASE_URL}/auth/login/`, {

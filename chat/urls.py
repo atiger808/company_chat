@@ -16,6 +16,7 @@ from .views import (
     ChatRoomAdminViewSet,
     AdminStatisticsViewSet,
     SystemSettingsViewSet,
+    SystemcConfigView,
 )
 
 router = DefaultRouter()
@@ -34,6 +35,8 @@ urlpatterns = [
     path('', include(router.urls)),
 
     path('version/', VersionView.as_view(), name='version'),
+
+    path('system/configs/', SystemcConfigView.as_view(), name='system-config'),
 
     # 聊天室相关操作
     # path('rooms/<int:pk>/clear_history/', ChatRoomViewSet.as_view({'delete': 'clear_history'}), name='clear-history'),

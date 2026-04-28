@@ -5,6 +5,463 @@
  * @Desc   : 企业网盘前端逻辑（完善版 - 支持文件夹层级导航/响应式布局）
  */
 
+
+// cloud.js - 在 CloudApp 类中添加或作为独立类
+
+/**
+ * 🔧 分片上传管理器 - 支持断点续传和进度回调
+ */
+class ChunkedUploader {
+    constructor(options = {}) {
+        this.file = options.file;                    // File 对象
+        this.fileName = options.fileName;            // 文件名
+        this.fileSize = options.fileSize;            // 文件大小
+        this.fileMd5 = options.fileMd5;              // 文件完整MD5
+        this.chunkSize = options.chunkSize || 5 * 1024 * 1024;  // 分片大小，默认5MB
+        this.concurrent = options.concurrent || 3;   // 并发上传数
+        this.retryCount = options.retryCount || 3;   // 失败重试次数
+
+        this.sessionId = null;                        // 上传会话ID
+        this.totalChunks = 0;                         // 总分片数
+        this.uploadedChunks = new Set();              // 已上传的分片索引
+        this.missingChunks = [];                      // 待上传的分片索引
+
+        this.isPaused = false;                        // 是否暂停
+        this.isCancelled = false;                     // 是否取消
+        this.isCompleted = false;                     // 是否完成
+
+        // 回调函数
+        this.onProgress = options.onProgress || (() => {
+        });      // (progress, uploaded, total)
+        this.onChunkSuccess = options.onChunkSuccess || (() => {
+        }); // (chunkIndex)
+        this.onChunkError = options.onChunkError || (() => {
+        });     // (chunkIndex, error)
+        this.onComplete = options.onComplete || (() => {
+        });         // (fileInfo)
+        this.onError = options.onError || (() => {
+        });               // (error)
+        this.onQuickUpload = options.onQuickUpload || (() => {
+        });   // (fileInfo) 秒传回调
+    }
+
+    /**
+     * 计算文件分片
+     */
+    _sliceFile(start, end) {
+        return this.file.slice(start, end);
+    }
+
+    /**
+     * 计算分片MD5
+     */
+    async _calculateChunkMd5(chunkBlob) {
+        return new Promise((resolve, reject) => {
+            const spark = new SparkMD5.ArrayBuffer();
+            const reader = new FileReader();
+
+            reader.onload = (e) => {
+                spark.append(e.target.result);
+                resolve(spark.end().toLowerCase());
+            };
+            reader.onerror = reject;
+            reader.readAsArrayBuffer(chunkBlob);
+        });
+    }
+
+    /**
+     * 初始化上传会话
+     */
+    async initUpload(folderId = null, description = '', tags = '') {
+        try {
+            const response = await fetch('/api/cloud/files/init_upload/', {
+                method: 'POST',
+                headers: {
+                    ...TokenManager.getHeaders(),
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    file_name: this.fileName,
+                    file_size: this.fileSize,
+                    file_md5: this.fileMd5,
+                    chunk_size: this.chunkSize,
+                    folder: folderId,
+                    description: description,
+                    tags: tags
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || '初始化上传失败');
+            }
+
+            const data = await response.json();
+
+            // 🔧 处理秒传
+            if (data.status === 'quick_upload') {
+                this.isCompleted = true;
+                this.onQuickUpload(data.file);
+                return {quickUpload: true, file: data.file};
+            }
+
+            // 🔧 处理断点续传或新上传
+            this.sessionId = data.session.id;
+            this.totalChunks = data.session.total_chunks;
+            this.uploadedChunks = new Set(data.session.uploaded_chunks);
+
+            // 🔧🔧🔧 关键修复：严格过滤 missingChunks，确保是有效的数字数组
+            this.missingChunks = (data.missing_chunks || [])
+                .filter(idx => {
+                    const num = Number(idx);
+                    return idx !== undefined && idx !== null && !isNaN(num) && num >= 0;
+                })
+                .map(idx => Number(idx));  // 统一转为数字类型
+
+            console.log('✅ 待上传分片索引:', this.missingChunks);
+
+            // 计算初始进度
+            const progress = data.session.progress || 0;
+            this.onProgress(progress, this.uploadedChunks.size, this.totalChunks);
+
+            return {
+                quickUpload: false,
+                sessionId: this.sessionId,
+                totalChunks: this.totalChunks,
+                missingChunks: this.missingChunks,
+                progress: progress
+            };
+
+        } catch (error) {
+            console.error('初始化上传失败:', error);
+            this.onError(error);
+            throw error;
+        }
+    }
+
+    /**
+     * 上传单个分片
+     */
+    async _uploadChunk(chunkIndex, retry = 0) {
+        // 🔧🔧🔧 关键修复：严格校验 chunkIndex
+        if (chunkIndex === undefined || chunkIndex === null || isNaN(Number(chunkIndex))) {
+            const errorMsg = `❌ 无效的分片索引: chunkIndex=${chunkIndex}, type=${typeof chunkIndex}`;
+            console.error(errorMsg);
+            throw new Error(errorMsg);
+        }
+
+
+        if (this.isCancelled) throw new Error('Upload cancelled');
+        if (this.isPaused) return null;
+
+        const start = chunkIndex * this.chunkSize;
+        const end = Math.min(start + this.chunkSize, this.fileSize);
+        const chunkBlob = this._sliceFile(start, end);
+
+        // 计算分片MD5
+        const chunkMd5 = await this._calculateChunkMd5(chunkBlob);
+
+        // 构建 FormData
+        const formData = new FormData();
+        formData.append('session_id', this.sessionId);
+        formData.append('chunk_index', chunkIndex);     // 🔧 确保是数字
+        formData.append('chunk_md5', chunkMd5);
+        formData.append('chunk', chunkBlob, `chunk_${chunkIndex}`);
+
+        try {
+            // 🔧 关键修复：获取头部并移除 Content-Type
+            const headers = TokenManager.getHeaders();
+            // 删除可能存在的 Content-Type，让浏览器自动设置 multipart/form-data
+            delete headers['Content-Type'];
+            delete headers['content-type'];
+
+            // 🔧 调试日志（生产环境可注释）
+            console.log(`📤 上传分片 #${chunkIndex}:`, {
+                sessionId: this.sessionId,
+                chunkSize: chunkBlob.size,
+                start,
+                end,
+                headers: Object.keys(headers)
+            });
+
+            const response = await fetch('/api/cloud/files/upload_chunk/', {
+                method: 'POST',
+                headers: headers,  // 使用清理后的头部
+                body: formData  // FormData 会自动设置正确的 Content-Type
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || `分片 ${chunkIndex} 上传失败`);
+            }
+
+            const result = await response.json();
+
+            if (result.skipped) {
+                // 分片已存在，跳过
+                return {skipped: true, ...result};
+            }
+
+            // 标记为已上传
+            this.uploadedChunks.add(chunkIndex);
+            this.onChunkSuccess(chunkIndex);
+
+            // 更新进度
+            const progress = (this.uploadedChunks.size / this.totalChunks) * 100;
+            this.onProgress(progress, this.uploadedChunks.size, this.totalChunks);
+
+            return result;
+
+        } catch (error) {
+            console.warn(`分片 ${chunkIndex} 上传失败 (重试 ${retry + 1}/${this.retryCount}):`, error);
+            this.onChunkError(chunkIndex, error);
+
+            // 重试逻辑
+            if (retry < this.retryCount) {
+                const delay = 1000 * Math.pow(2, retry); // 1s, 2s, 4s...
+                await new Promise(resolve => setTimeout(resolve, delay));
+                return this._uploadChunk(chunkIndex, retry + 1);
+            }
+
+            throw error;
+        }
+    }
+
+    /**
+     * 并发上传分片
+     */
+    async _uploadChunksConcurrently(chunkIndices) {
+        // 🔧🔧🔧 关键修复：过滤无效索引
+        const validIndices = chunkIndices.filter(idx => {
+            const num = Number(idx);
+            return idx !== undefined && idx !== null && !isNaN(num) && num >= 0;
+        }).map(idx => Number(idx));
+
+        if (validIndices.length === 0) {
+            console.log('⚠️ 没有有效的分片需要上传');
+            return [];
+        }
+
+        console.log(`📦 开始并发上传 ${validIndices.length} 个分片:`, validIndices.slice(0, 10), '...');
+
+
+        const queue = [...chunkIndices];
+        const inProgress = new Set();
+        const results = [];
+
+        const processNext = async () => {
+            while (queue.length > 0 && !this.isCancelled) {
+                // 等待并发限制
+                while (inProgress.size >= this.concurrent && !this.isCancelled) {
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                }
+
+                if (this.isCancelled) break;
+                if (this.isPaused) {
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    continue;
+                }
+
+                const chunkIndex = queue.shift();
+
+                // 🔧🔧🔧 二次校验：防止 shift 返回异常值
+                if (chunkIndex === undefined || chunkIndex === null) {
+                    console.warn('⚠️ queue.shift() 返回空值，跳过');
+                    continue;
+                }
+
+                inProgress.add(chunkIndex);
+
+                this._uploadChunk(chunkIndex)
+                    .then(result => {
+                        results.push({chunkIndex, success: true, result});
+                    })
+                    .catch(error => {
+                        results.push({chunkIndex, success: false, error});
+                    })
+                    .finally(() => {
+                        inProgress.delete(chunkIndex);
+                    });
+            }
+        };
+
+        // 启动并发任务
+        const workers = Array(Math.min(this.concurrent, chunkIndices.length))
+            .fill(null)
+            .map(() => processNext());
+
+        await Promise.all(workers);
+
+        if (this.isCancelled) {
+            throw new Error('Upload cancelled');
+        }
+
+        return results;
+    }
+
+    /**
+     * 合并分片完成上传
+     */
+    async mergeChunks(folderId = null, description = null, tags = null) {
+        try {
+
+            // 🔧 关键修复：合并前先检查会话状态
+            const sessionCheck = await this.checkSession();
+            if (sessionCheck && sessionCheck.missingChunks?.length > 0) {
+                console.warn(`⚠️ 合并前检查：还有 ${sessionCheck.missingChunks.length} 个分片未上传，尝试补传...`);
+
+                const results = await this._uploadChunksConcurrently(sessionCheck.missingChunks);
+                const failed = results.filter(r => !r.success);
+                if (failed.length > 0) {
+                    throw new Error(`${failed.length} 个分片补传失败`);
+                }
+            }
+
+
+            const response = await fetch('/api/cloud/files/merge_chunks/', {
+                method: 'POST',
+                headers: {
+                    ...TokenManager.getHeaders(),
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    session_id: this.sessionId,
+                    folder: folderId,
+                    description: description || null,  // 🔧 确保传递 null 而非空字符串  // null 会被 DRF 正确处理
+                    tags: tags || null
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || '合并分片失败');
+            }
+
+            const data = await response.json();
+            this.isCompleted = true;
+            this.onComplete(data.file);
+
+            return data;
+
+        } catch (error) {
+            console.error('合并分片失败:', error);
+            this.onError(error);
+            throw error;
+        }
+    }
+
+    /**
+     * 检查会话状态（用于恢复上传）
+     */
+    async checkSession() {
+        if (!this.sessionId) return null;
+
+        try {
+            const response = await fetch(
+                `/api/cloud/files/check_session/?session_id=${this.sessionId}`,
+                {headers: TokenManager.getHeaders()}
+            );
+
+            if (!response.ok) return null;
+
+            const data = await response.json();
+            if (data.exists && !data.is_completed) {
+                this.missingChunks = data.missing_chunks || [];
+                return {
+                    progress: data.session?.progress || 0,
+                    missingChunks: this.missingChunks,
+                    uploadedCount: this.uploadedChunks.size
+                };
+            }
+            return null;
+
+        } catch (error) {
+            console.warn('检查会话状态失败:', error);
+            return null;
+        }
+    }
+
+    /**
+     * 取消上传
+     */
+    async cancel() {
+        this.isCancelled = true;
+        this.isPaused = false;
+
+        if (this.sessionId) {
+            try {
+                await fetch(`/api/cloud/files/cancel_upload/?session_id=${this.sessionId}`, {
+                    method: 'DELETE',
+                    headers: TokenManager.getHeaders()
+                });
+            } catch (error) {
+                console.warn('取消上传请求失败:', error);
+            }
+        }
+
+        this.onError(new Error('Upload cancelled by user'));
+    }
+
+    /**
+     * 暂停上传
+     */
+    pause() {
+        this.isPaused = true;
+    }
+
+    /**
+     * 恢复上传
+     */
+    resume() {
+        this.isPaused = false;
+    }
+
+    /**
+     * 主上传流程
+     */
+    async upload(folderId = null, description = '', tags = '') {
+        try {
+            // 1. 初始化上传会话
+            const initResult = await this.initUpload(folderId, description, tags);
+            if (initResult.quickUpload) {
+                return initResult;  // 秒传直接返回
+            }
+
+            // 2. 上传所有缺失的分片
+            if (this.missingChunks.length > 0) {
+                console.log(`开始上传 ${this.missingChunks.length} 个分片...`);
+
+                const results = await this._uploadChunksConcurrently(this.missingChunks);
+
+                // 检查是否有失败的分片
+                const failed = results.filter(r => !r.success);
+                if (failed.length > 0) {
+                    throw new Error(`${failed.length} 个分片上传失败`);
+                }
+            }
+
+            // 3. 合并分片
+            console.log('所有分片上传完成，开始合并...');
+            // 🔧 确保传递 null 而不是空字符串
+            const mergeResult = await this.mergeChunks(
+                folderId,
+                description || null,   // 🔧 空字符串转 null
+                tags || null           // 🔧 空字符串转 null
+            );
+
+            return mergeResult;
+
+        } catch (error) {
+            if (error.message !== 'Upload cancelled') {
+                console.error('上传失败:', error);
+                this.onError(error);
+            }
+            throw error;
+        }
+    }
+}
+
+
 class CloudApp {
     constructor() {
         // 🔧 核心状态
@@ -14,12 +471,38 @@ class CloudApp {
         this.viewMode = 'grid';                // 视图模式：list/grid
         this.contextTarget = null;             // 右键菜单目标元素
 
+        this.pagination = {
+            files: {page: 1, pageSize: 20, count: 0, next: null, previous: null},
+            shares: {page: 1, pageSize: 10, count: 0, next: null, previous: null, search: ''},
+            collabs: {page: 1, pageSize: 20, count: 0, next: null, previous: null}
+        };
+
         // 🔧 配置（从前端配置管理器获取）
         this.fileMaxSizeMB = 50;
         this.imageMaxSizeMB = 20;
         this.videoMaxSizeMB = 100;
         this.audioMaxSizeMB = 30;
         this.allowedFileTypes = ['image', 'video', 'audio', 'file'];
+        this.storageQuotaGB = 10;
+        this.downloadEnabled = false;
+        this.defaultExpireDays = 7;
+        this.defaultMaxDownloads = 0;
+
+
+        // 🔧 新增：分片上传相关属性
+        this.chunkedUploaders = new Map();  // 存储进行中的上传任务 (sessionId -> ChunkedUploader)
+        this.uploadProgressMap = new Map();  // 存储上传进度 (fileId -> progress)
+        // 🔧 新增：上传速度追踪
+        this.uploadTrackers = new Map(); // 文件名 -> {startTime, loaded, lastUpdateTime, lastLoaded}
+
+        // 🔧 上传配置
+        this.uploadConfig = {
+            chunkSize: 5 * 1024 * 1024,      // 5MB 分片
+            concurrent: 3,                    // 并发 3 个分片
+            retryCount: 3,                    // 失败重试 3 次
+            maxFileSize: 500 * 1024 * 1024    // 最大 500MB 使用分片上传
+        };
+
 
         // 🔧 UI 状态
         this.sidebarOpen = false;
@@ -30,6 +513,7 @@ class CloudApp {
 
         this.currentMoveIds = [];
         this.currentMoveType = 'file'; // 'file' 或 'folder'
+        this.lastFolderId = null
 
         this.currentShareFileId = null;
         this.currentUser = null;
@@ -93,12 +577,15 @@ class CloudApp {
             const token = localStorage.getItem('access_token');
             if (!token) {
                 localStorage.setItem('redirect_url', window.location.href);
-                window.location.href = '/login/';
+                window.location.href = '/cloud/login/';
                 return;
             }
 
             // 2. 获取用户信息
             this.currentUser = await API.getCurrentUser();
+            if (this.currentUser?.user_type === 'super_admin') {
+                document.getElementById('cloudSystemConfig').style.display = '';
+            }
             this.renderAdminInfo();
 
             // 3. 加载系统配置
@@ -267,23 +754,45 @@ class CloudApp {
      * @param {number} sliceIndex - 可选：截断路径栈的位置
      */
     async navigateToFolder(folderId, sliceIndex = null) {
-        if (sliceIndex !== null) {
-            // 🔧 点击面包屑中间项：截断路径
-            this.pathStack = this.pathStack.slice(0, sliceIndex + 1);
-        } else if (folderId === null) {
-            // 🔧 返回根目录
-            this.pathStack = [];
-        } else {
-            // 🔧 进入新文件夹：添加到路径栈
-            const folderName = this.getFolderNameById(folderId);
-            if (folderName) {
-                this.pathStack.push({id: folderId, name: folderName});
-            }
-        }
+        try {
+            if (sliceIndex !== null && sliceIndex >= 0) {
+                // 🔧 点击面包屑中间项：截断路径
+                this.pathStack = this.pathStack.slice(0, sliceIndex + 1);
+            } else if (folderId === null) {
+                // 🔧 返回根目录
+                this.pathStack = [];
+            } else {
+                // 🔧 进入新文件夹：检查是否已存在，防止重复添加
+                const existingIndex = this.pathStack.findIndex(item => item.id === folderId);
 
-        this.currentFolderId = folderId;
-        this.updateBreadcrumb();
-        await this.loadFiles(folderId);
+                if (existingIndex !== -1) {
+                    // 如果路径中已存在该文件夹，截断到该位置（处理循环导航或历史状态不一致）
+                    this.pathStack = this.pathStack.slice(0, existingIndex + 1);
+                } else {
+                    // 获取文件夹名称并压入栈
+                    const folderName = this.getFolderNameById(folderId);
+                    if (folderName) {
+                        this.pathStack.push({id: folderId, name: folderName});
+                    } else {
+                        console.warn(`未能获取文件夹 ${folderId} 的名称`);
+                        // 即使没有名称也尝试导航，但使用默认名或ID
+                        this.pathStack.push({id: folderId, name: '未知文件夹'});
+                    }
+                }
+            }
+
+            this.currentFolderId = folderId;
+
+            // 更新 UI
+            this.updateBreadcrumb();
+
+            // 加载文件数据
+            await this.loadFiles(folderId);
+
+        } catch (error) {
+            console.error('导航失败:', error);
+            this.showError('导航错误', '无法进入该文件夹');
+        }
     }
 
     /**
@@ -336,6 +845,11 @@ class CloudApp {
 
         // 更新状态
         this.currentView = view;
+
+        // 🔧 切换视图时重置分页
+        if (view === 'files') this.pagination.files.page = 1;
+        else if (view === 'shared') this.pagination.shares.page = 1;
+        else if (view === 'collaborations') this.pagination.collabs.page = 1;
 
         // 🔧 关键：只在"全部文件"视图下支持文件夹钻取
         if (view !== 'files') {
@@ -430,6 +944,62 @@ class CloudApp {
 
     }
 
+
+    renderPagination(type) {
+        const containerId = `paginationContainer${type.charAt(0).toUpperCase() + type.slice(1)}`;
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        const pag = this.pagination[type];
+        if (!pag || pag.count === 0) {
+            container.innerHTML = '';
+            return;
+        }
+
+        const totalPages = Math.max(1, Math.ceil(pag.count / pag.pageSize));
+        container.innerHTML = `
+        <div class="pagination-info">共 ${pag.count} 项，第 ${pag.page}/${totalPages} 页</div>
+        <div class="pagination-controls">
+            <button class="pagination-btn" ${!pag.previous ? 'disabled' : ''} onclick="cloudApp.changePage('${type}', ${pag.page - 1})">上一页</button>
+            ${this._renderPageNumbers(type, pag.page, totalPages)}
+            <button class="pagination-btn" ${!pag.next ? 'disabled' : ''} onclick="cloudApp.changePage('${type}', ${pag.page + 1})">下一页</button>
+        </div>
+    `;
+    }
+
+    _renderPageNumbers(type, currentPage, totalPages) {
+        let html = '';
+        const showPages = 5; // 最多显示页码数
+        let start = Math.max(1, currentPage - Math.floor(showPages / 2));
+        let end = Math.min(totalPages, start + showPages - 1);
+        if (end - start + 1 < showPages) start = Math.max(1, end - showPages + 1);
+
+        if (start > 1) {
+            html += `<button class="pagination-btn" onclick="cloudApp.changePage('${type}', 1)">1</button>`;
+            if (start > 2) html += `<span style="padding:0 4px;color:#909399;">...</span>`;
+        }
+        for (let i = start; i <= end; i++) {
+            html += `<button class="pagination-btn ${i === currentPage ? 'active' : ''}" onclick="cloudApp.changePage('${type}', ${i})">${i}</button>`;
+        }
+        if (end < totalPages) {
+            if (end < totalPages - 1) html += `<span style="padding:0 4px;color:#909399;">...</span>`;
+            html += `<button class="pagination-btn" onclick="cloudApp.changePage('${type}', ${totalPages})">${totalPages}</button>`;
+        }
+        return html;
+    }
+
+    changePage(type, page) {
+        if (page < 1) return;
+        this.pagination[type].page = page;
+        if (type === 'files') this.loadFiles(this.currentFolderId);
+        else if (type === 'shares') this.loadMyShares();
+        else if (type === 'collabs') this.loadCollaborations();
+
+        // 滚动到列表顶部
+        document.querySelector(`#${type === 'files' ? 'fileListContainer' : type === 'shares' ? 'mySharesList' : 'collabListView'}`)?.scrollTo(0, 0);
+    }
+
+
     // ==================== 数据加载 ====================
 
     async loadDashboard() {
@@ -440,9 +1010,8 @@ class CloudApp {
             if (!response.ok) throw new Error('加载仪表盘失败');
 
             const data = await response.json();
-            document.getElementById('storageUsed').style.width = `${data.storage_used_percent}%`;
-            document.getElementById('storageText').textContent =
-                `${data.total_size_formatted} / ${data.storage_quota_formatted}`;
+            this.renderOverview(data);
+
         } catch (error) {
             console.error('加载仪表盘失败:', error);
         }
@@ -453,7 +1022,7 @@ class CloudApp {
      * @param {string|null} folderId - 文件夹 ID
      * @param {Object} filters - 额外过滤参数
      */
-    async loadFiles(folderId = null, filters = {}) {
+    async loadFiles_v1(folderId = null, filters = {}) {
         try {
             this.showLoading();
 
@@ -483,6 +1052,40 @@ class CloudApp {
             this.hideLoading();
         }
     }
+
+
+    async loadFiles(folderId = null, filters = {}) {
+        try {
+            this.showLoading();
+            if (folderId !== this.lastFolderId) {
+                this.pagination.files.page = 1;
+            }
+            const params = new URLSearchParams();
+            if (folderId) params.append('folder', folderId);
+            if (filters.starred) params.append('starred', 'true');
+            params.append('page', this.pagination.files.page);
+            params.append('page_size', this.pagination.files.pageSize);
+
+            const res = await fetch(`/api/cloud/files/?${params.toString()}`, {headers: TokenManager.getHeaders()});
+            if (!res.ok) throw new Error('加载失败');
+
+            const data = await res.json();
+            const fileList = Array.isArray(data.results) ? data.results : [];
+            this.pagination.files.count = data.count || 0;
+            this.pagination.files.next = data.next;
+            this.pagination.files.previous = data.previous;
+            this.lastLoadedFiles = fileList;
+            this.lastFolderId = folderId;
+            this.renderFiles(fileList);
+            this.renderPagination('files');
+        } catch (e) {
+            console.error(e);
+            this.showError('加载失败', e.message);
+        } finally {
+            this.hideLoading();
+        }
+    }
+
 
     /**
      * 渲染文件列表（支持列表/网格视图）
@@ -525,15 +1128,19 @@ class CloudApp {
             let html = '';
             data.forEach(file => {
                 const isFolder = file.is_folder;
+                const isDocument = file.is_document
                 const isImage = file.is_image || (file.mime_type && file.mime_type.startsWith('image/'));
                 const isVideo = file.is_video || (file.mime_type && file.mime_type.startsWith('video/'));
                 const isPdf = file.document_type === 'pdf' || (file.mime_type && file.mime_type.startsWith('application/pdf'));
                 const isSelected = this.selectedFiles.has(file.id);
+                const isDownload = this.downloadEnabled || window.frontendCloudConfig?.get('system.download_enabled', false)
+
+
                 html += `
                     <div class="file-item ${isFolder ? 'is-folder' : ''} ${isSelected ? 'selected' : ''}" 
                          data-file-id="${file.id}" 
                          data-is-folder="${isFolder}"
-                         ondblclick="cloudApp.handleItemDoubleClick('${file.id}', ${isFolder})"
+                         ondblclick="cloudApp.handleItemDoubleClick('${file.id}', ${isFolder}, ${isDocument})"
                          oncontextmenu="cloudApp.handleContextMenu(event, '${file.id}', ${isFolder})" title="${file.name}">
                         <div class="file-col name">
                             <!-- 🔧 关键修复：添加复选框 -->
@@ -558,15 +1165,15 @@ class CloudApp {
                                 </button>
                             `}
                             
-                            ${isFolder ? `
+                            ${isFolder ? isDownload ? `
                                 <button class="btn-action" onclick="event.stopPropagation(); cloudApp.downloadFolder('${file.id}', '${this.escapeHtml(file.name)}')" title="下载文件夹">
                                     <i class="fas fa-download"></i>
                                 </button>
-                            ` : `
+                            ` : `` : isDownload ? `
                                 <button class="btn-action" onclick="event.stopPropagation(); cloudApp.downloadFile('${file.id}')" title="下载">
                                     <i class="fas fa-download"></i>
                                 </button>
-                            `}
+                            ` : ``}
                             
                            
                             ${!isFolder && file.is_document ? `
@@ -603,8 +1210,13 @@ class CloudApp {
             // 绑定复选框事件
             listBody.querySelectorAll('.file-checkbox').forEach(cb => {
                 cb.onchange = (e) => {
-                    const fileId = e.target.dataset.fileId;
-                    this.toggleFileSelection(fileId, e.target.checked);
+                    // 🔧 使用可选链 + 空值检查
+                    const fileId = e.target?.dataset?.fileId;
+                    if (fileId) {
+                        this.toggleFileSelection(fileId, e.target.checked);
+                    } else {
+                        console.warn('复选框缺少 data-file-id 属性', e.target);
+                    }
                 };
             });
         }
@@ -615,10 +1227,12 @@ class CloudApp {
             data.forEach(file => {
                 const isFolder = file.is_folder;
                 const isSelected = this.selectedFiles.has(file.id);
+                const isDocument = file.is_document
                 const isImage = file.is_image || (file.mime_type && file.mime_type.startsWith('image/'));
                 const isVideo = file.is_video || (file.mime_type && file.mime_type.startsWith('video/'));
                 const isPdf = file.document_type === 'pdf' || (file.mime_type && file.mime_type.startsWith('application/pdf'));
                 const tagType = isImage ? 'img' : isVideo ? 'video' : 'file';
+                const isDownload = this.downloadEnabled || window.frontendCloudConfig?.get('system.download_enabled', false)
 
 
                 // 🔧 关键修复：图片和视频显示缩略图
@@ -637,7 +1251,7 @@ class CloudApp {
                     <div class="file-grid-item ${isFolder ? 'is-folder' : ''} ${isSelected ? 'selected' : ''}" 
                          data-file-id="${file.id}" 
                          data-is-folder="${isFolder}"
-                         ondblclick="cloudApp.handleItemDoubleClick('${file.id}', ${isFolder})"
+                         ondblclick="cloudApp.handleItemDoubleClick('${file.id}', ${isFolder}, ${isDocument})"
                          oncontextmenu="cloudApp.handleContextMenu(event, '${file.id}', ${isFolder})" title="${file.name}">
                          <!-- 🔧 网格视图的复选框（悬停显示） -->
                         <div class="file-checkbox-overlay">
@@ -665,15 +1279,15 @@ class CloudApp {
                                 </button>
                             `}
                             
-                            ${isFolder ? `
+                            ${isFolder ? isDownload ? `
                                 <button class="btn-action" class="btn-action" onclick="event.stopPropagation(); cloudApp.downloadFolder('${file.id}', '${this.escapeHtml(file.name)}')" title="下载文件夹">
                                     <i class="fas fa-download"></i>
                                 </button>
-                            ` : `
+                            ` : `` : isDownload ? `
                                 <button class="btn-action" onclick="event.stopPropagation(); cloudApp.downloadFile('${file.id}')" title="下载">
                                     <i class="fas fa-download"></i>
                                 </button>
-                            `}
+                            ` : ``}
                             
                             ${!isFolder && file.is_document ? `
                                 <button class="btn-action" onclick="event.stopPropagation(); cloudApp.editDocument('${file.id}')" title="在线编辑">
@@ -713,6 +1327,12 @@ class CloudApp {
      * 🔧 切换单个文件的选择状态
      */
     toggleFileSelection(fileId, checked) {
+        // 🔧 添加空值检查
+        if (!fileId) {
+            console.warn('toggleFileSelection: fileId is empty', {fileId, checked});
+            return;
+        }
+
         if (checked) {
             this.selectedFiles.add(fileId);
         } else {
@@ -1232,11 +1852,16 @@ class CloudApp {
     /**
      * 处理项目双击（打开文件夹或预览文件）
      */
-    async handleItemDoubleClick(fileId, isFolder) {
+    async handleItemDoubleClick(fileId, isFolder, isDocument) {
         if (isFolder) {
             await this.navigateToFolder(fileId);
         } else {
-            await this.previewFile(fileId);
+            if (isDocument) {
+                await this.editDocument(fileId);
+            } else {
+                await this.previewFile(fileId);
+            }
+
         }
     }
 
@@ -1271,7 +1896,10 @@ class CloudApp {
             const response = await fetch(`/api/cloud/files/${fileId}/download/`, {
                 headers: TokenManager.getHeaders()
             });
-            if (!response.ok) throw new Error(`下载失败：${response.status}`);
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || '下载失败');
+            }
 
             const blob = await response.blob();
             if (!blob || blob.size === 0) throw new Error('下载的文件为空');
@@ -1341,7 +1969,7 @@ class CloudApp {
             this.showSuccess('下载成功', `文件 "${filename}" 已下载`);
         } catch (error) {
             console.error('下载失败:', error);
-            this.showError('下载失败', error.message);
+            this.showError('下载失败', error.message || error.error || error);
         }
     }
 
@@ -1385,7 +2013,7 @@ class CloudApp {
 
         } catch (error) {
             console.error('文件夹下载失败:', error);
-            this.showError('下载失败', error.message);
+            this.showError('下载失败', error.message || error.error || error);
         } finally {
             this.hideLoading();
         }
@@ -1402,7 +2030,7 @@ class CloudApp {
 
 
     // 🔧 修复：加载协作文档列表
-    async loadCollaborations(filters = {}) {
+    async loadCollaborations_v1(filters = {}) {
         try {
             this.showLoading();
 
@@ -1443,6 +2071,38 @@ class CloudApp {
         } catch (error) {
             console.error('加载协作文档失败:', error);
             this.showError('加载失败', error.message);
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+
+    async loadCollaborations(filters = {}) {
+        try {
+            this.showLoading();
+            const page = filters.page || this.pagination.collabs.page;
+            const params = new URLSearchParams({
+                page: page,
+                page_size: this.pagination.collabs.pageSize,
+                order: filters.order || '-updated_at'
+            });
+            if (filters.search) params.append('search', filters.search);
+            if (filters.folder) params.append('folder', filters.folder);
+
+            const res = await fetch(`/api/cloud/documents/list_collabs/?${params.toString()}`, {headers: TokenManager.getHeaders()});
+            if (!res.ok) throw new Error('加载协作文档失败');
+
+            const data = await res.json();
+            const docs = Array.isArray(data.results) ? data.results : [];
+            this.pagination.collabs.count = data.count || 0;
+            this.pagination.collabs.next = data.next;
+            this.pagination.collabs.previous = data.previous;
+            this.collabDocs = docs;
+            this.renderCollaborations(this.collabDocs);
+            this.renderPagination('collabs');
+        } catch (e) {
+            console.error(e);
+            this.showError('加载失败', e.message);
         } finally {
             this.hideLoading();
         }
@@ -1583,6 +2243,65 @@ class CloudApp {
             `;
             });
             gridBody.innerHTML = html;
+        }
+
+        this.updateCollabCount(docs.length);
+    }
+
+
+    updateCollabCount(count) {
+        this.collabTotalCount = count || 0
+        const collabElement = document.getElementById('collabCount')
+        if (collabElement) {
+            if (this.collabTotalCount > 0) {
+                if (this.currentView === 'collaborations') {
+                    collabElement.style.display = 'none'
+                } else {
+                    collabElement.style.display = 'block'
+                }
+                collabElement.textContent = this.collabTotalCount > 99 ? '99+' : `${this.collabTotalCount}`
+            } else {
+                collabElement.style.display = 'none'
+            }
+        }
+    }
+
+    updateCount(count, view, isHidden=false) {
+        let elementId = '';
+        switch (view) {
+            case 'files':
+                elementId = 'filesCount'
+                break;
+            case 'starred':
+                elementId = 'starredCount'
+                break;
+            case 'shared':
+                elementId = 'sharedCount';
+                break;
+            case 'shared-with-me':
+                elementId = 'sharedWithMeCount'
+                break;
+            case 'collaborations':
+                this.collabTotalCount = count || 0
+                elementId = 'collabCount'
+                break;
+            case 'trash':
+                elementId = 'trashCount'
+                break;
+        }
+
+        const element = document.getElementById(elementId)
+        if (element) {
+            if (count > 0) {
+                if (this.currentView === view && isHidden) {
+                    element.style.display = 'none'
+                } else {
+                    element.style.display = 'block'
+                }
+                element.textContent = count > 99 ? '99+' : `${count}`
+            } else {
+                element.style.display = 'none'
+            }
         }
     }
 
@@ -2704,85 +3423,441 @@ class CloudApp {
 
     // ==================== 文件操作 ====================
 
-    async uploadFile(file, folderId = null) {
+    /**
+     * 🔧 重构：文件上传（支持分片/断点续传/秒传）
+     * @param {File} file - 文件对象
+     * @param {string|null} folderId - 目标文件夹 ID
+     * @param {string} description - 文件描述
+     * @param {string} tags - 文件标签
+     */
+    async uploadFile(file, folderId = null, description = '', tags = '') {
         if (!file) {
             this.showError('上传失败', '文件不能为空');
             return null;
         }
 
+        // 🔧 文件验证
         if (!this.isValidFileType(file)) {
             this.showError('不支持的文件类型', `允许的类型：${this.allowedFileTypes.join(', ')}`);
             return null;
         }
 
+        if (description === '' && tags === '') {
+            // 可选：给用户提示，但不阻止上传
+            console.log('提示：建议填写文件描述便于后续管理');
+        }
+
+        // 🔧 文件大小验证
         const maxSizeBytes = this.fileMaxSizeMB * 1024 * 1024;
         if (file.size > maxSizeBytes) {
             this.showError('文件过大', `文件大小不能超过${this.fileMaxSizeMB}MB`);
             return null;
         }
 
-        const fileType = this.getFileCategory(file.type);
-        let typeMaxSizeMB = this.fileMaxSizeMB;
-
-        if (fileType === 'image') typeMaxSizeMB = this.imageMaxSizeMB;
-        else if (fileType === 'video') typeMaxSizeMB = this.videoMaxSizeMB;
-        else if (fileType === 'audio') typeMaxSizeMB = this.audioMaxSizeMB;
-
-        const typeMaxSizeBytes = typeMaxSizeMB * 1024 * 1024;
-        if (file.size > typeMaxSizeBytes) {
-            this.showError('文件过大', `${fileType}文件不能超过${typeMaxSizeMB}MB`);
-            return null;
-        }
-
-
-        // 2. 显示 MD5 计算进度
-        this.showLoading('正在计算文件指纹...');
-
-        // 3. 计算 MD5（智能选择方案）
-        const md5 = file.size > 100 * 1024 * 1024
-            ? await this.computeFileMd5WithWorker(file, (current, total, percent) => {
-                this.updateLoading(`计算 MD5: ${percent}%`);
-            })
-            : await this.computeFileMd5(file, 2 * 1024 * 1024, (current, total, percent) => {
-                this.updateLoading(`计算 MD5: ${percent}%`);
-            });
-
-        console.log('🔐 文件 MD5:', md5);
-        this.hideLoading();
-
+        // 🔧 显示上传进度对话框
+        const uploadDialog = this.showUploadDialog(file.name);
 
         try {
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('md5', md5); // 后端用于去重
-            if (folderId) formData.append('folder', folderId);
+            // 🔧 1. 计算文件 MD5（大文件使用 Worker）
+            uploadDialog.updateStatus('正在计算文件指纹...');
+            const fileMd5 = file.size > 100 * 1024 * 1024
+                ? await this.computeFileMd5WithWorker(file, (current, total, percent) => {
+                    uploadDialog.updateMd5Progress(percent);
+                })
+                : await this.computeFileMd5(file, 2 * 1024 * 1024, (current, total, percent) => {
+                    uploadDialog.updateMd5Progress(percent);
+                });
 
-            this.showUploadProgress(file.name, 0);
+            console.log('🔐 文件 MD5:', fileMd5);
 
-            const response = await fetch('/api/cloud/files/', {
-                method: 'POST',
-                headers: {'Authorization': `Bearer ${TokenManager.getToken()}`},
-                body: formData
+            // 🔧 2. 初始化上传追踪器（用于计算上传速度）
+            this.initUploadTracker(file.name, file.size);
+
+            // 🔧 3. 创建分片上传器
+            const uploader = new ChunkedUploader({
+                file: file,
+                fileName: file.name,
+                fileSize: file.size,
+                fileMd5: fileMd5,
+                chunkSize: this.uploadConfig.chunkSize,
+                concurrent: this.uploadConfig.concurrent,
+                retryCount: this.uploadConfig.retryCount,
+
+                // 🔧 进度回调 - 关键：在此处更新速度显示
+                onProgress: (progress, uploaded, total) => {
+                    uploadDialog.updateUploadProgress(progress, uploaded, total);
+                    // 🔧 实时更新上传速度
+                    this.updateUploadSpeed(file.name, progress, file.size);
+                },
+
+                // 🔧 分片成功回调
+                onChunkSuccess: (chunkIndex) => {
+                    console.log(`✅ 分片 ${chunkIndex} 上传成功`);
+                },
+
+                // 🔧 分片失败回调
+                onChunkError: (chunkIndex, error) => {
+                    console.warn(`❌ 分片 ${chunkIndex} 上传失败:`, error);
+                    uploadDialog.updateStatus(`分片 ${chunkIndex} 上传失败，重试中...`);
+                },
+
+                // 🔧 秒传回调
+                onQuickUpload: (fileInfo) => {
+                    uploadDialog.close();
+                    // 🔧 清理上传追踪器
+                    this.clearUploadTracker(file.name);
+                    this.showSuccess('上传成功', `${file.name} 已存在（秒传）`);
+                    this.loadFiles(this.currentFolderId);
+                },
+
+                // 🔧 完成回调
+                onComplete: (fileInfo) => {
+                    uploadDialog.close();
+                    // 🔧 清理上传追踪器
+                    this.clearUploadTracker(file.name);
+                    this.showSuccess('上传成功', `${file.name} 上传完成`);
+                    this.loadFiles(this.currentFolderId);
+                },
+
+                // 🔧 错误回调
+                onError: (error) => {
+                    uploadDialog.close();
+                    // 🔧 清理上传追踪器
+                    this.clearUploadTracker(file.name);
+                    this.showError('上传失败', error.message || '未知错误');
+                }
             });
 
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || errorData.detail || '上传失败');
-            }
+            // 🔧 4. 存储上传任务（支持取消）
+            const sessionId = `upload_${Date.now()}_${file.name}`;
+            this.chunkedUploaders.set(sessionId, uploader);
 
-            const result = await response.json();
-            this.updateUploadProgress(file.name, 100);
-            this.showSuccess('上传成功', result.exists ? `${file.name} 已存在（秒传）` : `${file.name} 上传成功`);
+            // 🔧 5. 执行上传
+            await uploader.upload(folderId, description, tags);
 
-            await this.loadFiles(this.currentFolderId);
-            return result;
+            // 🔧 6. 清理上传任务
+            this.chunkedUploaders.delete(sessionId);
+
+            return {success: true, fileInfo: uploader.fileInfo};
 
         } catch (error) {
             console.error('文件上传失败:', error);
+            uploadDialog.close();
+            // 🔧 异常时也要清理追踪器
+            this.clearUploadTracker(file.name);
             this.showError('上传失败', error.message);
-            this.hideUploadProgress(file.name);
             return null;
         }
+    }
+
+
+    /**
+     * 🔧 批量文件上传
+     * @param {FileList} files - 文件列表
+     * @param {string|null} folderId - 目标文件夹 ID
+     */
+    async uploadMultipleFiles(files, folderId = null) {
+        if (!files || files.length === 0) {
+            this.showError('上传失败', '请选择文件');
+            return;
+        }
+
+        const totalFiles = files.length;
+        let successCount = 0;
+        let failCount = 0;
+
+        // 🔧 显示批量上传进度
+        const batchDialog = this.showBatchUploadDialog(totalFiles);
+
+        // 🔧 关键修复：串行上传，避免分片会话冲突
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            batchDialog.updateFileProgress(i + 1, totalFiles, file.name);
+
+            try {
+                // 🔧 等待当前文件上传完成
+                await this.uploadFile(file, folderId);
+                successCount++;
+            } catch (error) {
+                console.error(`文件 ${file.name} 上传失败:`, error);
+                failCount++;
+            }
+        }
+
+        batchDialog.close();
+        this.showSuccess('批量上传完成',
+            `成功 ${successCount} 个，失败 ${failCount} 个`);
+        await this.loadFiles(this.currentFolderId);
+    }
+
+    /**
+     * 🔧 显示批量上传进度对话框
+     */
+    showBatchUploadDialog(totalFiles) {
+        let dialog = document.getElementById('batchUploadProgressDialog');
+
+        if (!dialog) {
+            dialog = document.createElement('div');
+            dialog.id = 'batchUploadProgressDialog';
+            dialog.className = 'upload-progress-dialog';
+            dialog.innerHTML = `
+            <div class="upload-progress-content">
+                <div class="upload-progress-header">
+                    <h4>批量上传</h4>
+                    <button class="close-btn" onclick="this.closest('.upload-progress-dialog').classList.remove('show')">&times;</button>
+                </div>
+                <div class="upload-progress-body">
+                    <div class="progress-section">
+                        <div class="progress-label">
+                            <span>总体进度</span>
+                            <span id="batchProgressText">0/${totalFiles}</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div id="batchProgressBar" class="progress-fill" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div class="current-file" id="currentFileName">准备上传...</div>
+                </div>
+            </div>
+        `;
+            document.body.appendChild(dialog);
+        }
+
+        dialog.classList.add('show');
+
+        return {
+            updateFileProgress: (current, total, filename) => {
+                const bar = document.getElementById('batchProgressBar');
+                const text = document.getElementById('batchProgressText');
+                const file = document.getElementById('currentFileName');
+                const percent = (current / total) * 100;
+
+                if (bar) bar.style.width = `${percent}%`;
+                if (text) text.textContent = `${current}/${total}`;
+                if (file) file.textContent = `正在上传：${filename}`;
+            },
+            close: () => {
+                dialog.classList.remove('show');
+            }
+        };
+    }
+
+
+    /**
+     * 🔧 显示上传进度对话框
+     * @param {string} filename - 文件名
+     */
+    showUploadDialog(filename) {
+        // 检查是否已存在
+        let dialog = document.getElementById('uploadProgressDialog');
+
+        if (!dialog) {
+            dialog = document.createElement('div');
+            dialog.id = 'uploadProgressDialog';
+            dialog.className = 'upload-progress-dialog';
+            dialog.innerHTML = `
+            <div class="upload-progress-content">
+                <div class="upload-progress-header">
+                    <h4>文件上传</h4>
+                    <button class="close-btn" id="uploadProgressClose">&times;</button>
+                </div>
+                <div class="upload-progress-body">
+                    <div class="file-info">
+                        <i class="fas fa-file"></i>
+                        <span id="uploadFileName">${this.escapeHtml(filename)}</span>
+                    </div>
+                    
+                    <div class="progress-section">
+                        <div class="progress-label">
+                            <span>MD5 计算</span>
+                            <span id="md5ProgressText">0%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div id="md5ProgressBar" class="progress-fill" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="progress-section">
+                        <div class="progress-label">
+                            <span>文件上传</span>
+                            <span id="uploadProgressText">0%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div id="uploadProgressBar" class="progress-fill" style="width: 0%"></div>
+                        </div>
+                        <div class="progress-detail">
+                            <span id="uploadDetail">0/0 分片</span>
+                            <span id="uploadSpeed">-- KB/s</span>
+                        </div>
+                    </div>
+                    
+                    <div class="progress-status" id="uploadStatus">准备上传...</div>
+                    
+                    <div class="progress-actions">
+                        <button id="pauseResumeBtn" class="btn btn-sm btn-secondary">暂停</button>
+                        <button id="cancelUploadBtn" class="btn btn-sm btn-danger">取消</button>
+                    </div>
+                </div>
+            </div>
+        `;
+            document.body.appendChild(dialog);
+        }
+
+        // 更新文件名
+        document.getElementById('uploadFileName').textContent = filename;
+
+        // 显示对话框
+        dialog.classList.add('show');
+
+        // 🔧 绑定暂停/恢复事件
+        const pauseResumeBtn = document.getElementById('pauseResumeBtn');
+        let isPaused = false;
+        pauseResumeBtn.onclick = () => {
+            isPaused = !isPaused;
+            pauseResumeBtn.textContent = isPaused ? '继续' : '暂停';
+            pauseResumeBtn.className = isPaused ?
+                'btn btn-sm btn-success' : 'btn btn-sm btn-secondary';
+
+            // 获取当前上传器（简化处理，实际应存储引用）
+            const uploader = Array.from(this.chunkedUploaders.values())[0];
+            if (uploader) {
+                if (isPaused) {
+                    uploader.pause();
+                } else {
+                    uploader.resume();
+                }
+            }
+        };
+
+        // 🔧 绑定取消事件
+        const cancelUploadBtn = document.getElementById('cancelUploadBtn');
+        cancelUploadBtn.onclick = () => {
+            const uploader = Array.from(this.chunkedUploaders.values())[0];
+            if (uploader) {
+                uploader.cancel();
+            }
+            dialog.classList.remove('show');
+        };
+
+        // 关闭按钮
+        const closeBtn = document.getElementById('uploadProgressClose');
+        closeBtn.onclick = () => {
+            dialog.classList.remove('show');
+        };
+
+        return {
+            updateMd5Progress: (percent) => {
+                const bar = document.getElementById('md5ProgressBar');
+                const text = document.getElementById('md5ProgressText');
+                if (bar) bar.style.width = `${percent}%`;
+                if (text) text.textContent = `${percent}%`;
+            },
+
+            updateUploadProgress: (percent, uploaded, total) => {
+                const bar = document.getElementById('uploadProgressBar');
+                const text = document.getElementById('uploadProgressText');
+                const detail = document.getElementById('uploadDetail');
+                if (bar) bar.style.width = `${percent}%`;
+                if (text) text.textContent = `${Math.round(percent)}%`;
+                if (detail) detail.textContent = `${uploaded}/${total} 分片`;
+            },
+
+            updateStatus: (message) => {
+                const status = document.getElementById('uploadStatus');
+                if (status) status.textContent = message;
+            },
+
+            close: () => {
+                dialog.classList.remove('show');
+            }
+        };
+    }
+
+
+    /**
+     * 🔧 格式化上传速度显示
+     * @param {number} bytesPerSecond - 每秒字节数
+     * @returns {string} 格式化后的速度字符串
+     */
+    formatSpeed(bytesPerSecond) {
+        if (!bytesPerSecond || bytesPerSecond < 0) return '-- KB/s';
+
+        if (bytesPerSecond < 1024) {
+            return `${bytesPerSecond.toFixed(1)} B/s`;
+        } else if (bytesPerSecond < 1024 * 1024) {
+            return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`;
+        } else if (bytesPerSecond < 1024 * 1024 * 1024) {
+            return `${(bytesPerSecond / 1024 / 1024).toFixed(2)} MB/s`;
+        } else {
+            return `${(bytesPerSecond / 1024 / 1024 / 1024).toFixed(2)} GB/s`;
+        }
+    }
+
+
+    /**
+     * 🔧 更新上传速度显示
+     * @param {string} filename - 文件名
+     * @param {number} progress - 上传进度百分比 (0-100)
+     * @param {number} fileSize - 文件总大小（字节）
+     */
+    updateUploadSpeed(filename, progress, fileSize) {
+        const tracker = this.uploadTrackers.get(filename);
+        if (!tracker) return;
+
+        const now = Date.now();
+        const elapsed = (now - tracker.startTime) / 1000; // 已用时间（秒）
+        const loaded = (progress / 100) * fileSize; // 已上传字节数
+
+        // 🔧 计算瞬时速度（滑动窗口：最近 500ms 的平均速度，避免抖动）
+        const timeDiff = (now - tracker.lastUpdateTime) / 1000;
+        const loadedDiff = loaded - tracker.lastLoaded;
+
+        let instantSpeed = 0;
+        // 至少间隔 100ms 才更新瞬时速度，避免频繁计算
+        if (timeDiff >= 0.1) {
+            instantSpeed = loadedDiff / timeDiff;
+            tracker.lastUpdateTime = now;
+            tracker.lastLoaded = loaded;
+        }
+
+        // 🔧 计算平均速度（用于进度较慢或刚开始时参考）
+        const avgSpeed = elapsed > 0 ? loaded / elapsed : 0;
+
+        // 🔧 智能选择显示速度：
+        // - 上传初期 (<5%) 或瞬时速度为 0 时，显示平均速度
+        // - 正常上传时显示瞬时速度
+        const displaySpeed = (progress < 5 || instantSpeed === 0) ? avgSpeed : instantSpeed;
+
+        // 🔧 更新 DOM 元素
+        const speedEl = document.getElementById('uploadSpeed');
+        if (speedEl) {
+            speedEl.textContent = this.formatSpeed(displaySpeed);
+        }
+    }
+
+
+    /**
+     * 🔧 初始化上传追踪器
+     * @param {string} filename - 文件名
+     * @param {number} fileSize - 文件大小（字节）
+     */
+    initUploadTracker(filename, fileSize) {
+        const now = Date.now();
+        this.uploadTrackers.set(filename, {
+            startTime: now,
+            loaded: 0,
+            lastUpdateTime: now,
+            lastLoaded: 0,
+            fileSize: fileSize
+        });
+    }
+
+    /**
+     * 🔧 清理上传追踪器
+     * @param {string} filename - 文件名
+     */
+    clearUploadTracker(filename) {
+        this.uploadTrackers.delete(filename);
     }
 
     isValidFileType(file) {
@@ -2796,47 +3871,6 @@ class CloudApp {
         if (mimeType.startsWith('video/')) return 'video';
         if (mimeType.startsWith('audio/')) return 'audio';
         return 'file';
-    }
-
-    showUploadProgress(filename, progress) {
-        let progressContainer = document.getElementById('uploadProgressContainer');
-        if (!progressContainer) {
-            progressContainer = document.createElement('div');
-            progressContainer.id = 'uploadProgressContainer';
-            progressContainer.className = 'upload-progress-container';
-            document.body.appendChild(progressContainer);
-        }
-
-        const progressItem = document.createElement('div');
-        progressItem.className = 'upload-progress-item';
-        progressItem.id = `upload-${filename.replace(/[^a-zA-Z0-9]/g, '-')}`;
-        progressItem.innerHTML = `
-            <div class="progress-info">
-                <span class="filename">${filename}</span>
-                <span class="progress-percent">${progress}%</span>
-            </div>
-            <div class="progress-bar">
-                <div class="progress-fill" style="width: ${progress}%"></div>
-            </div>
-        `;
-        progressContainer.appendChild(progressItem);
-    }
-
-    updateUploadProgress(filename, progress) {
-        const progressItem = document.getElementById(`upload-${filename.replace(/[^a-zA-Z0-9]/g, '-')}`);
-        if (progressItem) {
-            const percentEl = progressItem.querySelector('.progress-percent');
-            const fillEl = progressItem.querySelector('.progress-fill');
-            if (percentEl) percentEl.textContent = `${progress}%`;
-            if (fillEl) fillEl.style.width = `${progress}%`;
-        }
-    }
-
-    hideUploadProgress(filename) {
-        const progressItem = document.getElementById(`upload-${filename.replace(/[^a-zA-Z0-9]/g, '-')}`);
-        if (progressItem) {
-            setTimeout(() => progressItem.remove(), 2000);
-        }
     }
 
     async deleteFile(fileId) {
@@ -2892,7 +3926,7 @@ class CloudApp {
 
     // ==================== 分享功能 ====================
 
-    async loadMyShares() {
+    async loadMyShares_v1() {
         try {
             this.showLoading();
             const response = await fetch('/api/cloud/shares/?owner=me', {
@@ -2906,6 +3940,34 @@ class CloudApp {
         } catch (error) {
             console.error('加载我的分享失败:', error);
             this.showError('加载失败', error.message);
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+    async loadMyShares() {
+        try {
+            this.showLoading();
+            const params = new URLSearchParams({
+                owner: 'me',
+                page: this.pagination.shares.page,
+                page_size: this.pagination.shares.pageSize
+            });
+            if (this.pagination.shares.search) params.append('search', this.pagination.shares.search);
+
+            const res = await fetch(`/api/cloud/shares/?${params.toString()}`, {headers: TokenManager.getHeaders()});
+            if (!res.ok) throw new Error('加载分享失败');
+
+            const data = await res.json();
+            const shares = Array.isArray(data.results) ? data.results : [];
+            this.pagination.shares.count = data.count || 0;
+            this.pagination.shares.next = data.next;
+            this.pagination.shares.previous = data.previous;
+            this.renderMyShares(shares);
+            this.renderPagination('shares');
+        } catch (e) {
+            console.error(e);
+            this.showError('加载失败', e.message);
         } finally {
             this.hideLoading();
         }
@@ -3510,6 +4572,7 @@ class CloudApp {
             'confirm'
         );
 
+
         if (!confirmed) return;
 
         try {
@@ -3547,6 +4610,8 @@ class CloudApp {
             this.showError('操作失败', '请先选择要删除的项目');
             return;
         }
+
+        console.log('this.selectedFiles.size: ', this.selectedFiles.size)
 
         const confirmed = await this.showConfirmDialog(
             '批量永久删除',
@@ -3680,21 +4745,43 @@ class CloudApp {
         this.currentShareFileId = fileId;
         this.currentShareType = isFolder ? 'folder' : 'file';
 
-        // 重置表单
-        document.getElementById('shareType').value = 'public';
-        document.getElementById('sharePassword').value = '';
-        document.getElementById('shareExpires').value = '';
-        document.getElementById('shareMaxDownloads').value = '';
-        document.getElementById('shareLink').style.display = 'none';
-        document.getElementById('shareQrcode').style.display = 'none';
-        document.getElementById('passwordGroup').style.display = 'none';
-        document.getElementById('qrcodeContainer').innerHTML = '';
+        // 🔧 1. 安全读取系统配置默认值
+        const defaultExpireDays = window.frontendCloudConfig?.get('share.default_expire_days', 7);
+        const defaultMaxDownloads = window.frontendCloudConfig?.get('share.max_downloads', 0);
+
+        // 🔧 2. 计算默认过期时间 (当前时间 + 配置天数)
+        const now = new Date();
+        now.setDate(now.getDate() + defaultExpireDays);
+        // 转换为 <input type="datetime-local"> 标准格式: YYYY-MM-DDTHH:mm
+        const defaultExpireTime = now.toISOString().slice(0, 16);
+
+
+        // 🔧 3. 重置表单并预填默认值
+        const shareTypeEl = document.getElementById('shareType');
+        const sharePasswordEl = document.getElementById('sharePassword');
+        const shareExpiresEl = document.getElementById('shareExpires');
+        const shareMaxDownloadsEl = document.getElementById('shareMaxDownloads');
+
+        if (shareTypeEl) shareTypeEl.value = 'public';
+        if (sharePasswordEl) sharePasswordEl.value = '';
+        if (shareExpiresEl) shareExpiresEl.value = defaultExpireTime;
+        if (shareMaxDownloadsEl) shareMaxDownloadsEl.value = defaultMaxDownloads || '';
+
+        // 隐藏分享结果区域
+        const shareLinkEl = document.getElementById('shareLink');
+        const shareQrcodeEl = document.getElementById('shareQrcode');
+        const passwordGroupEl = document.getElementById('passwordGroup');
+        const qrcodeContainerEl = document.getElementById('qrcodeContainer');
+
+        if (shareLinkEl) shareLinkEl.style.display = 'none';
+        if (shareQrcodeEl) shareQrcodeEl.style.display = 'none';
+        if (passwordGroupEl) passwordGroupEl.style.display = 'none';
+        if (qrcodeContainerEl) qrcodeContainerEl.innerHTML = '';
+
 
         // 更新模态框标题
         const modalTitle = document.querySelector('#shareModal .modal-header h3');
-        if (modalTitle) {
-            modalTitle.textContent = isFolder ? '分享文件夹' : '分享文件';
-        }
+        if (modalTitle) modalTitle.textContent = isFolder ? '分享文件夹' : '分享文件';
 
         this.openModal('shareModal');
     }
@@ -3719,14 +4806,21 @@ class CloudApp {
             this.generatePassword();
             password = document.getElementById('sharePassword').value;
         }
+        if (shareType !== 'password') password = '';
 
-        if (shareType !== 'password') {
-            password = '';
-        }
+        // 🔧 安全解析过期时间
+        let expiresAt = document.getElementById('shareExpires')?.value || null;
+        // 如果用户清空了输入框，传递 null 给后端表示永久有效
+        if (expiresAt === '') expiresAt = null;
 
-        const expiresAt = document.getElementById('shareExpires')?.value || null;
-        const maxDownloads = document.getElementById('shareMaxDownloads')?.value || null;
+        // 🔧 安全解析最大下载次数
+        const maxDownloadsInput = document.getElementById('shareMaxDownloads')?.value;
+        let maxDownloads = (maxDownloadsInput === '' || maxDownloadsInput === null) ? null : parseInt(maxDownloadsInput, 10);
+        // 兼容后端逻辑：0 通常表示无限制，若为 0 则转为 null 或直接传 0（视后端校验而定）
+        if (maxDownloads === 0) maxDownloads = 0;
+
         const shareMethod = document.querySelector('input[name="shareMethod"]:checked')?.value || 'link';
+
 
         try {
             // 🔧 根据类型调用不同接口
@@ -4117,6 +5211,7 @@ class CloudApp {
 
             const stats = await response.json();
             this.renderDashboard(stats);
+            this.renderOverview(stats);
         } catch (error) {
             console.error('加载统计失败:', error);
             document.getElementById('dashboardStatsContent').innerHTML =
@@ -4132,7 +5227,7 @@ class CloudApp {
                 <div class="stat-card">
                     <div class="stat-icon"><i class="fas fa-file"></i></div>
                     <div class="stat-info">
-                        <div class="stat-value">${stats.total_files}</div>
+                        <div class="stat-value">${stats.total_count}</div>
                         <div class="stat-label">文件总数</div>
                     </div>
                 </div>
@@ -4160,34 +5255,72 @@ class CloudApp {
                 <div class="stat-card">
                     <div class="stat-icon"><i class="fas fa-star"></i></div>
                     <div class="stat-info">
-                        <div class="stat-value">${stats.starred_files}</div>
+                        <div class="stat-value">${stats.starred_count}</div>
                         <div class="stat-label">星标文件</div>
                     </div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-icon"><i class="fas fa-share-alt"></i></div>
                     <div class="stat-info">
-                        <div class="stat-value">${stats.shared_files}</div>
+                        <div class="stat-value">${stats.shared_count}</div>
                         <div class="stat-label">我的分享</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon"><i class="fas fa-users"></i></div>
+                    <div class="stat-info">
+                        <div class="stat-value">${stats.collab_count}</div>
+                        <div class="stat-label">协作文档</div>
                     </div>
                 </div>
             </div>
             
             <div class="recent-files-section">
+                
                 <h4>最近上传的文件</h4>
                 <div class="file-list-simple">
                     ${stats.recent_files?.map(f => `
                         <div class="simple-file-item">
                             <i class="fas ${f.icon_class}"></i>
-                            <span>${f.name}</span>
-                            <span class="text-muted">${this.formatDate(f.created_at)}</span>
+                            <span class="stat-name">${f.name}</span>
+                            <span class="stat-meta">${this.formatDate(f.created_at)}</span>
+                        </div>
+                    `).join('') || ''}
+                </div>
+               
+            </div>
+            
+            <div class="recent-files-section">
+                
+                <h4>最近分享的文件</h4>
+                <div class="file-list-simple">
+                    ${stats.recent_shares?.map(f => `
+                        <div class="simple-file-item">
+                            <i class="fas ${f.file_info?.icon_class}"></i>
+                            <span class="stat-name">${f.file_info?.name}</span>
+                            <span class="stat-meta">${this.formatDate(f.created_at)}</span>
                         </div>
                     `).join('') || ''}
                 </div>
             </div>
+            
         `;
 
         container.innerHTML = html;
+    }
+
+    renderOverview(data) {
+        document.getElementById('storageUsed').style.width = `${data.storage_used_percent}%`;
+        document.getElementById('storageText').textContent =
+            `${data.total_size_formatted} / ${data.storage_quota_formatted}`;
+
+        // this.updateCollabCount(data.collab_count);
+        this.updateCount(data.total_count, 'files')
+        this.updateCount(data.shared_count, 'shared')
+        this.updateCount(data.collab_count, 'collaborations')
+        this.updateCount(data.trash_count, 'trash')
+        this.updateCount(data.starred_count, 'starred')
+
     }
 
 
@@ -4258,21 +5391,39 @@ class CloudApp {
 
     async loadSystemConfigs() {
         try {
-            await frontendConfig?.loadConfigs?.();
-            this.applySystemConfigs();
+            await frontendCloudConfig?.loadConfigs?.();
+            this.applyFrontendConfigs();
             console.log('✅ 系统配置已应用');
         } catch (error) {
             console.warn('⚠️ 加载系统配置失败，使用默认值:', error);
-            this.applySystemConfigs();
+            this.applyFrontendConfigs();
         }
     }
 
-    applySystemConfigs() {
-        this.fileMaxSizeMB = frontendConfig?.get('file.max_upload_size_mb', 50) || 50;
-        this.imageMaxSizeMB = frontendConfig?.get('file.image_max_size_mb', 20) || 20;
-        this.videoMaxSizeMB = frontendConfig?.get('file.video_max_size_mb', 100) || 100;
-        this.audioMaxSizeMB = frontendConfig?.get('file.audio_max_size_mb', 30) || 30;
-        this.allowedFileTypes = frontendConfig?.get('file.allowed_types', ['image', 'video', 'audio', 'file']) || ['image', 'video', 'audio', 'file'];
+    /**
+     * 🔧 应用前端配置到本地属性
+     */
+    applyFrontendConfigs() {
+        this.fileMaxSizeMB = frontendCloudConfig.get('upload.max_file_size_mb', 50);
+        this.imageMaxSizeMB = frontendCloudConfig.get('upload.image_max_size_mb', 20);
+        this.videoMaxSizeMB = frontendCloudConfig.get('upload.video_max_size_mb', 100);
+        this.audioMaxSizeMB = frontendCloudConfig.get('upload.audio_max_size_mb', 30);
+        this.allowedFileTypes = frontendCloudConfig.get('upload.allowed_types', ['image', 'video', 'audio', 'file']);
+        this.storageQuotaGB = frontendCloudConfig.get('storage.quota_gb', 10);
+        this.downloadEnabled = frontendCloudConfig.get('system.download_enabled', false);
+        this.defaultExpireDays = frontendCloudConfig?.get('share.default_expire_days', 7);
+        this.defaultMaxDownloads = frontendCloudConfig?.get('share.max_downloads', 0);
+
+        // 更新页面标题
+        const cloudName = frontendCloudConfig.getCloudName();
+        document.title = `${cloudName} - 企业文件管理`;
+
+        // 更新 Logo
+        const logoUrl = frontendCloudConfig.get('cloud.logo_url');
+        if (logoUrl) {
+            const logo = document.getElementById('cloudLogo');
+            if (logo) logo.src = logoUrl;
+        }
     }
 
     // ==================== 事件监听 ====================
@@ -4301,6 +5452,7 @@ class CloudApp {
             syncChatBtn.addEventListener('click', () => this.syncChatDocuments());
         }
 
+
         // 拖拽上传
         const uploadArea = document.getElementById('uploadArea');
         if (uploadArea) {
@@ -4308,47 +5460,53 @@ class CloudApp {
                 e.preventDefault();
                 uploadArea.classList.add('dragover');
             });
+
             uploadArea.addEventListener('dragleave', () => {
                 uploadArea.classList.remove('dragover');
             });
+
             uploadArea.addEventListener('drop', (e) => {
                 e.preventDefault();
                 uploadArea.classList.remove('dragover');
                 const files = e.dataTransfer.files;
-                for (let file of files) {
-                    this.uploadFile(file, this.currentFolderId);
-                }
-                this.closeModal('uploadModal')
-                let uploadProgressContainer = document.getElementById('uploadProgressContainer')
-                if (uploadProgressContainer) {
-                    uploadProgressContainer.childNodes.forEach(child => {
-                        child.remove()
-                    })
 
+                // 🔧 支持批量上传
+                if (files.length > 1) {
+                    this.uploadMultipleFiles(files, this.currentFolderId);
+                } else {
+                    for (let file of files) {
+                        this.uploadFile(file, this.currentFolderId);
+                    }
                 }
+
+                this.closeModal('uploadModal');
             });
+
             uploadArea.addEventListener('click', () => {
                 const fileInput = document.getElementById('fileInput');
                 if (fileInput) fileInput.click();
             });
         }
 
+        // 文件输入
         const fileInput = document.getElementById('fileInput');
         if (fileInput) {
             fileInput.addEventListener('change', (e) => {
                 const files = e.target.files;
-                for (let file of files) {
-                    this.uploadFile(file, this.currentFolderId);
+
+                // 🔧 支持批量上传
+                if (files.length > 1) {
+                    this.uploadMultipleFiles(files, this.currentFolderId);
+                } else {
+                    for (let file of files) {
+                        this.uploadFile(file, this.currentFolderId);
+                    }
                 }
-                this.closeModal('uploadModal')
-                let uploadProgressContainer = document.getElementById('uploadProgressContainer')
-                if (uploadProgressContainer) {
-                    uploadProgressContainer.childNodes.forEach(child => {
-                        child.remove()
-                    })
-                }
+
+                this.closeModal('uploadModal');
             });
         }
+
 
         // 视图切换
         document.querySelectorAll('.view-switcher .btn-icon').forEach(btn => {
@@ -4484,6 +5642,18 @@ class CloudApp {
                 }
             });
         });
+
+        // 🔧 我的分享搜索功能
+        const shareSearchInput = document.getElementById('shareSearchInput');
+        if (shareSearchInput) {
+            // 使用防抖避免频繁请求
+            const debounceSearch = Utils.debounce((e) => {
+                this.pagination.shares.search = e.target.value.trim();
+                this.pagination.shares.page = 1; // 搜索时重置到第一页
+                this.loadMyShares();
+            }, 500);
+            shareSearchInput.addEventListener('input', debounceSearch);
+        }
 
 
         // 🔧 在 setupEventListeners 方法中添加以下事件监听
@@ -4787,6 +5957,9 @@ class CloudApp {
                 } else if (e.data.type === 'complete') {
                     worker.terminate();
                     resolve(e.data.md5);
+                } else if (e.data.type === 'error') {
+                    worker.terminate();
+                    reject(new Error(e.data.message));
                 }
             };
 
@@ -4795,8 +5968,12 @@ class CloudApp {
                 reject(new Error(`Worker 错误: ${error.message}`));
             };
 
-            // 发送文件（使用 Transferable 优化性能）
-            worker.postMessage({file}, [file]);
+            /// 🔧 修复2: 移除 [file] 参数，使用克隆方式传递（File 对象可克隆但不可转移）
+            worker.postMessage({
+                file: file,
+                chunkSize: 2 * 1024 * 1024  // 可选：传递分块大小
+            });
+            // ❌ 错误写法: worker.postMessage({file}, [file]);
         });
     }
 
@@ -4876,7 +6053,7 @@ class CloudApp {
         localStorage.removeItem('user_id');
         localStorage.removeItem('user_type');
         localStorage.setItem('redirect_url', window.location.href);
-        window.location.href = '/login/';
+        window.location.href = '/cloud/login/';
     }
 
     async logout() {
@@ -4890,7 +6067,7 @@ class CloudApp {
                 localStorage.removeItem('access_token');
                 localStorage.removeItem('user_id');
                 localStorage.removeItem('user_type');
-                window.location.href = '/login/';
+                window.location.href = '/cloud/login/';
             }
         }
     }
@@ -4898,7 +6075,15 @@ class CloudApp {
 
 // 全局初始化
 let cloudApp = null;
-document.addEventListener('DOMContentLoaded', () => {
+
+// 确保在 DOM 加载完成后初始化 CloudApp
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+        cloudApp = new CloudApp();
+        window.cloudApp = cloudApp;
+    });
+} else {
+    // 如果 DOM 已经加载完成，直接初始化
     cloudApp = new CloudApp();
     window.cloudApp = cloudApp;
-});
+}

@@ -61,6 +61,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",  # 跨域中间件
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',  # 👈 补充这行
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -71,6 +72,9 @@ MIDDLEWARE = [
     'accounts.middleware.ApiLoggingMiddleware',
     # 'chat.middleware.SystemConfigCacheMiddleware',  # 🔧 添加配置缓存中间件
 ]
+
+INSTALLED_APPS += ['debug_toolbar']
+MIDDLEWARE.insert(0, 'debug_toolbar.middleware.DebugToolbarMiddleware')
 
 ROOT_URLCONF = 'company_chat.urls'
 
@@ -109,14 +113,17 @@ if sys.platform == 'linux':
             'PASSWORD': config('DB_PASSWORD'),
             'HOST': config('DB_HOST'),
             'PORT': config('DB_PORT'),
-            'CONN_MAX_AGE': config('CONN_MAX_AGE', default=7200, cast=int),
+            'CONN_MAX_AGE': config('CONN_MAX_AGE', default=60, cast=int),
             # 'CONN_MAX_AGE': 60,  # 连接最大存活时间（秒）
             'CONN_HEALTH_CHECKS': True,  # 连接健康检查
             'OPTIONS': {
-                'connect_timeout': 15,
+                'connect_timeout': 10,
                 'options': '-c statement_timeout=30000',
                 'keepalives': 1,  # 启用 TCP Keepalive
                 'keepalives_idle': 30,  # 空闲 30 秒后发送探测包
+                # ❌ 删除 pool_size 和 max_overflow（psycopg2 不支持）
+                # 'pool_size': 10,
+                # 'max_overflow': 20,
             },
 
         }
@@ -126,6 +133,15 @@ if sys.platform == 'linux':
     REDIS_HOST = config('REDIS_HOST')
     REDIS_PASSWORD = config('REDIS_PASSWORD')
     REDIS_PORT = config('REDIS_PORT', default=6379, cast=int)
+
+    # 生产/Linux 环境：尝试使用 WhiteNoise，失败则自动降级
+    # try:
+    #     import whitenoise
+    #
+    #     STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+    # except ImportError:
+    #     STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
+
 else:
     DATABASES = {
         'default': {
@@ -138,6 +154,9 @@ else:
     REDIS_HOST = '127.0.0.1'
     REDIS_PASSWORD = 'dayue123456'
     REDIS_PORT = 6379
+
+    # 开发/Windows/macOS 环境：使用默认存储
+    STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.StaticFilesStorage'
 
 # REDIS_LOCATION = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
 REDIS_LOCATION = f"redis://{REDIS_HOST}:{REDIS_PORT}"
@@ -170,7 +189,6 @@ LOGGING = {
 
 # ASGI application
 ASGI_APPLICATION = 'company_chat.asgi.application'
-
 
 # 安装 django-redis
 CACHES = {
@@ -211,8 +229,6 @@ CHANNEL_LAYERS = {
     },
 }
 
-
-
 celery_redis_host = config('CELERY_REDIS_HOST')
 celery_redis_port = config('CELERY_REDIS_PORT')
 celery_redis_password = config('CELERY_REDIS_PASSWORD')
@@ -231,7 +247,6 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_ENABLE_UTC = False
-
 
 AES_KEY = config('AES_KEY')
 SM4_KEY = config('SM4_KEY')
@@ -505,9 +520,11 @@ ONLYOFFICE = {
     'JWT_HEADER': 'Authorization',
 
     # 支持的文件格式
-    'WORD_FORMATS': ['.doc', '.docx', '.docm', '.dot', '.dotx', '.dotm', '.odt', '.ott', '.rtf', '.txt'],
-    'EXCEL_FORMATS': ['.xls', '.xlsx', '.xlsm', '.xlt', '.xltx', '.xltm', '.ods', '.ots', '.csv'],
-    'PPT_FORMATS': ['.pps', '.ppsx', '.ppsm', '.ppt', '.pptx', '.pptm', '.pot', '.potx', '.potm', '.odp', '.otp'],
+    'WORD_FORMATS': ['.doc', '.docx', '.docm', '.dot', '.dotx', '.dotm', '.odt', '.ott', '.rtf', '.txt',
+                     '.html', '.htm', '.mht', '.pdf', '.fb2', '.epub', '.xps',
+                     ],
+    'EXCEL_FORMATS': ['.xls', '.xlsx', '.xlsm', '.xlt', '.xltx', '.xltm', '.ods', '.ots', '.csv', ],
+    'PPT_FORMATS': ['.pps', '.ppsx', '.ppsm', '.ppt', '.pptx', '.pptm', '.pot', '.potx', '.potm', '.odp', '.otp', ],
     'PDF_FORMATS': ['.pdf'],
 
     # 🔧 新增：文档版本和编辑锁配置
@@ -520,7 +537,326 @@ ONLYOFFICE = {
     'CHAT_HISTORY_LIMIT': 100,
 }
 
-
 CHANNELS_ENABLED = True
 
 # CORS_ALLOW_CREDENTIALS = True
+
+
+# 聊天室系统设置
+
+CACHE_PREFIX = 'company_chat:config:'  # ✅ 添加前缀避免冲突
+
+# 🔧 预定义配置项（企业级聊天室核心配置）
+PREDEFINED_CONFIGS = {
+    # ==================== 基础设置 ====================
+    'system.name': {
+        'name': '系统名称',
+        'value_type': 'string',
+        'default': '企业聊天室',
+        'description': '显示在页面标题和登录页的系统名称',
+        'category': 'basic',
+        'validation': {'min_length': 2, 'max_length': 50}
+    },
+    'system.logo_url': {
+        'name': '系统 Logo',
+        'value_type': 'string',
+        'default': '/static/images/logo.png',
+        'description': '系统标识图片的 URL 地址',
+        'category': 'basic',
+        'validation': {'pattern': r'^https?://.*\.(png|jpg|jpeg|svg)$'}
+    },
+    'system.maintenance_mode': {
+        'name': '维护模式',
+        'value_type': 'boolean',
+        'default': 'false',
+        'description': '开启后普通用户无法访问，仅管理员可用',
+        'category': 'basic'
+    },
+    'system.user_registration_enabled': {
+        'name': '用户注册',
+        'value_type': 'boolean',
+        'default': 'false',
+        'description': '是否允许新用户自主注册',
+        'category': 'basic'
+    },
+    'system.default_language': {
+        'name': '默认语言',
+        'value_type': 'string',
+        'default': 'zh-CN',
+        'description': '新用户默认界面语言',
+        'category': 'basic',
+        'choices': ['zh-CN', 'en-US', 'ja-JP']
+    },
+    'system.timezone': {
+        'name': '默认时区',
+        'value_type': 'string',
+        'default': 'Asia/Shanghai',
+        'description': '新用户默认时区设置',
+        'category': 'basic'
+    },
+
+    # ==================== 聊天设置 ====================
+    'chat.max_message_length': {
+        'name': '消息最大长度',
+        'value_type': 'integer',
+        'default': '2000',
+        'description': '单条消息允许的最大字符数',
+        'category': 'chat',
+        'validation': {'min': 100, 'max': 10000}
+    },
+    'chat.typing_timeout': {
+        'name': '输入状态超时',
+        'value_type': 'integer',
+        'default': '5',
+        'description': '输入状态显示超时时间（秒）',
+        'category': 'chat',
+        'validation': {'min': 1, 'max': 30}
+    },
+    'chat.message_retention_days': {
+        'name': '消息保留天数',
+        'value_type': 'integer',
+        'default': '365',
+        'description': '消息自动清理保留天数（0=永久保留）',
+        'category': 'chat',
+        'validation': {'min': 0, 'max': 3650}
+    },
+    'chat.read_receipt_enabled': {
+        'name': '已读回执',
+        'value_type': 'boolean',
+        'default': 'true',
+        'description': '是否显示消息已读状态',
+        'category': 'chat'
+    },
+    'chat.history_sync_enabled': {
+        'name': '历史消息同步',
+        'value_type': 'boolean',
+        'default': 'true',
+        'description': '新设备登录时是否同步历史消息',
+        'category': 'chat'
+    },
+    'chat.emoji_enabled': {
+        'name': '表情功能',
+        'value_type': 'boolean',
+        'default': 'true',
+        'description': '是否启用表情发送功能',
+        'category': 'chat'
+    },
+
+    # ==================== 文件设置 ====================
+    'file.max_upload_size_mb': {
+        'name': '文件上传总上限',
+        'value_type': 'integer',
+        'default': '50',
+        'description': '单个文件允许的最大上传大小（MB）',
+        'category': 'file',
+        'validation': {'min': 1, 'max': 500}
+    },
+    'file.image_max_size_mb': {
+        'name': '图片大小上限',
+        'value_type': 'integer',
+        'default': '20',
+        'description': '图片文件允许的最大大小（MB）',
+        'category': 'file',
+        'validation': {'min': 1, 'max': 100}
+    },
+    'file.video_max_size_mb': {
+        'name': '视频大小上限',
+        'value_type': 'integer',
+        'default': '100',
+        'description': '视频文件允许的最大大小（MB）',
+        'category': 'file',
+        'validation': {'min': 10, 'max': 500}
+    },
+    'file.audio_max_size_mb': {
+        'name': '音频大小上限',
+        'value_type': 'integer',
+        'default': '30',
+        'description': '音频文件允许的最大大小（MB）',
+        'category': 'file',
+        'validation': {'min': 1, 'max': 100}
+    },
+    'file.allowed_types': {
+        'name': '允许的文件类型',
+        'value_type': 'json',
+        'default': '["image", "video", "audio", "file"]',
+        'description': '允许上传的文件类型列表',
+        'category': 'file',
+        'validation': {'is_array': True}
+    },
+    'file.image_formats': {
+        'name': '允许的图片格式',
+        'value_type': 'json',
+        'default': '["jpg", "jpeg", "png", "gif", "webp"]',
+        'description': '允许上传的图片文件格式',
+        'category': 'file'
+    },
+    'file.video_formats': {
+        'name': '允许的视频格式',
+        'value_type': 'json',
+        'default': '["mp4", "webm", "mov"]',
+        'description': '允许上传的视频文件格式',
+        'category': 'file'
+    },
+
+    # ==================== 语音设置 ====================
+    'voice.max_duration_seconds': {
+        'name': '语音消息最大时长',
+        'value_type': 'integer',
+        'default': '60',
+        'description': '语音消息允许的最大录制时长（秒）',
+        'category': 'voice',
+        'validation': {'min': 10, 'max': 300}
+    },
+    'voice.min_duration_seconds': {
+        'name': '语音消息最小时长',
+        'value_type': 'integer',
+        'default': '1',
+        'description': '语音消息允许的最小录制时长（秒）',
+        'category': 'voice',
+        'validation': {'min': 1, 'max': 10}
+    },
+    'voice.allowed_formats': {
+        'name': '语音格式',
+        'value_type': 'json',
+        'default': '["webm", "mp3", "m4a", "ogg"]',
+        'description': '允许的语音文件格式',
+        'category': 'voice'
+    },
+    'voice.auto_transcribe': {
+        'name': '语音转文字',
+        'value_type': 'boolean',
+        'default': 'false',
+        'description': '是否自动将语音消息转换为文字',
+        'category': 'voice'
+    },
+
+    # ==================== 安全设置 ====================
+    'security.login_max_attempts': {
+        'name': '登录最大尝试次数',
+        'value_type': 'integer',
+        'default': '5',
+        'description': '连续登录失败最大次数后锁定账户',
+        'category': 'security',
+        'validation': {'min': 3, 'max': 20}
+    },
+    'security.login_lockout_minutes': {
+        'name': '登录锁定时间',
+        'value_type': 'integer',
+        'default': '15',
+        'description': '登录失败锁定账户的时长（分钟）',
+        'category': 'security',
+        'validation': {'min': 5, 'max': 1440}
+    },
+    'security.session_timeout_hours': {
+        'name': '会话超时时间',
+        'value_type': 'integer',
+        'default': '24',
+        'description': '用户会话无操作超时时间（小时）',
+        'category': 'security',
+        'validation': {'min': 1, 'max': 168}
+    },
+    'security.password_min_length': {
+        'name': '密码最小长度',
+        'value_type': 'integer',
+        'default': '8',
+        'description': '用户密码要求的最小长度',
+        'category': 'security',
+        'validation': {'min': 6, 'max': 32}
+    },
+    'security.password_require_special': {
+        'name': '密码特殊字符',
+        'value_type': 'boolean',
+        'default': 'true',
+        'description': '密码是否必须包含特殊字符',
+        'category': 'security'
+    },
+    'security.sensitive_words': {
+        'name': '敏感词过滤',
+        'value_type': 'json',
+        'default': '[]',
+        'description': '消息内容敏感词列表（正则表达式）',
+        'category': 'security',
+        'validation': {'is_array': True}
+    },
+
+    # ==================== 通知设置 ====================
+    'notification.desktop_enabled': {
+        'name': '桌面通知',
+        'value_type': 'boolean',
+        'default': 'true',
+        'description': '是否启用浏览器桌面通知',
+        'category': 'notification'
+    },
+    'notification.sound_enabled': {
+        'name': '声音提醒',
+        'value_type': 'boolean',
+        'default': 'true',
+        'description': '是否启用新消息声音提醒',
+        'category': 'notification'
+    },
+    'notification.vibrate_enabled': {
+        'name': '震动提醒',
+        'value_type': 'boolean',
+        'default': 'true',
+        'description': '是否启用移动端震动提醒',
+        'category': 'notification'
+    },
+    'notification.mention_sound': {
+        'name': '@提醒声音',
+        'value_type': 'boolean',
+        'default': 'true',
+        'description': '@提及是否使用特殊提醒音',
+        'category': 'notification'
+    },
+    'notification.badge_enabled': {
+        'name': '角标显示',
+        'value_type': 'boolean',
+        'default': 'true',
+        'description': '是否在浏览器标签显示未读数角标',
+        'category': 'notification'
+    },
+
+    # ==================== 高级设置 ====================
+    'advanced.cache_ttl_seconds': {
+        'name': '缓存过期时间',
+        'value_type': 'integer',
+        'default': '300',
+        'description': '系统缓存默认过期时间（秒）',
+        'category': 'advanced',
+        'validation': {'min': 60, 'max': 86400}
+    },
+    'advanced.api_rate_limit': {
+        'name': 'API 限流',
+        'value_type': 'integer',
+        'default': '100',
+        'description': '每用户每分钟最大请求次数',
+        'category': 'advanced',
+        'validation': {'min': 10, 'max': 1000}
+    },
+    'advanced.log_level': {
+        'name': '日志级别',
+        'value_type': 'string',
+        'default': 'INFO',
+        'description': '系统日志记录级别',
+        'category': 'advanced',
+        'choices': ['DEBUG', 'INFO', 'WARNING', 'ERROR']
+    },
+    'advanced.enable_compression': {
+        'name': '响应压缩',
+        'value_type': 'boolean',
+        'default': 'true',
+        'description': '是否启用响应数据压缩',
+        'category': 'advanced'
+    },
+}
+
+# 配置分类定义
+CONFIG_CATEGORIES = [
+    {'key': 'basic', 'name': '基础设置', 'icon': 'fas fa-cog', 'order': 1},
+    {'key': 'chat', 'name': '聊天设置', 'icon': 'fas fa-comments', 'order': 2},
+    {'key': 'file', 'name': '文件设置', 'icon': 'fas fa-file', 'order': 3},
+    {'key': 'voice', 'name': '语音设置', 'icon': 'fas fa-microphone', 'order': 4},
+    {'key': 'security', 'name': '安全设置', 'icon': 'fas fa-shield-alt', 'order': 5},
+    {'key': 'notification', 'name': '通知设置', 'icon': 'fas fa-bell', 'order': 6},
+    {'key': 'advanced', 'name': '高级设置', 'icon': 'fas fa-sliders-h', 'order': 7},
+]

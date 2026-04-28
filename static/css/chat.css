@@ -470,8 +470,8 @@ body {
     text-align: center;
     color: #999;
     font-size: 12px;
-    margin: 15px 0;
-    position: relative;
+    /*margin: 15px 0;*/
+    /*position: relative;*/
 }
 
 .message-time::before {
@@ -564,6 +564,19 @@ body {
     border-right: 8px solid white;
 }
 
+
+.message-left-wrapper .message-container {
+    max-width: 100%;
+    min-width: 25%;
+    padding: 0px 0px;
+    position: relative;
+    word-break: break-word;
+    line-height: 1.5;
+    font-size: 15px;
+    white-space: pre-wrap
+}
+
+
 /* 右侧消息（自己）*/
 .message-wrapper.sent {
     align-items: flex-end;
@@ -648,6 +661,8 @@ body {
     flex-direction: row;
     margin-bottom: 6px;
     font-size: 12px;
+    align-items: center;
+    gap: 10px;
 }
 
 .message-sender {
@@ -700,6 +715,22 @@ body {
     color: #409eff;
 }
 
+
+.file-name {
+    display: block;
+    font-size: 13px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-size {
+    display: block;
+    font-size: 11px;
+    color: var(--text-light);
+    margin-top: 2px;
+}
 
 /* 图片消息样式 */
 .message-image {
@@ -889,7 +920,7 @@ body {
     }
 
     .message-image, .message-video-container {
-        max-width: 180px;
+        max-width: 100%;
         /*max-height: 130px;*/
         max-height: auto;
     }
@@ -8657,7 +8688,7 @@ body.pwa-mode .chat-input-area {
     padding: 10px 16px;
     cursor: pointer;
     transition: var(--transition);
-    color: var(--text-primary);
+    color: var(--text-secondary);
     font-size: 14px;
 }
 .dropdown-item:hover {

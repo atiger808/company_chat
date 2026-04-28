@@ -43,8 +43,13 @@ urlpatterns = [
     # 🔧 1. 企业网盘主页 (SPA 入口)
     path('cloud/', TemplateView.as_view(template_name='cloud/cloud.html'), name='cloud-home'),
 
+    # 网盘登录页面
+    path('cloud/login/', TemplateView.as_view(template_name='cloud/cloud_login.html'), name='cloud-login-page'),
+
     # 🔧 2. 【关键】文档编辑器页面路由（必须在 api/cloud/ 之前）
     path('cloud/editor/', TemplateView.as_view(template_name='cloud/cloud_editor.html'), name='cloud-editor'),
+
+    path('cloud/settings/', TemplateView.as_view(template_name='cloud/cloud_settings.html'), name='cloud-settings'),
 
 
     # 🔧 3. 企业网盘 API（包含所有文档编辑相关接口）

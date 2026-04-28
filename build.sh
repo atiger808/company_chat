@@ -74,6 +74,9 @@ $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/share_deta
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/share_expired.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/share_not_found.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/share_password.html" ${VERSION}
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/cloud_login.html" ${VERSION}
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/cloud_settings.html" ${VERSION}
+
 
 
 # 5. 重启服务
@@ -90,3 +93,5 @@ echo "   构建时间: $(date '+%Y-%m-%d %H:%M:%S')"
 echo ""
 echo "💡 用户将在 5 分钟内自动检测到新版本"
 echo "💡 清除浏览器缓存或访问 ?cacheBust=$(date +%s) 强制刷新"
+
+$CONDA_ENV_PATH/bin/python update_static_versions.py ${BUILD_TIME} ${VERSION} "update_log"

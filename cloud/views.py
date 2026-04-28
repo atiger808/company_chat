@@ -5,10 +5,15 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from rest_framework.filters import SearchFilter
+from django_filters.rest_framework import DjangoFilterBackend
+
+from django.core.cache import cache
 from django.db.models import Q, Sum, Count, F
 from django.db import models
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework import serializers
 from django.http import FileResponse, HttpResponse, JsonResponse, HttpResponseForbidden, HttpResponseServerError
 from django.shortcuts import render, redirect, get_object_or_404
 from django.db import transaction
@@ -23,17 +28,25 @@ from django.db import connection
 from .models import (
     Folder, CloudFile, FileShare, FileComment, FileOperationLog,
     FileCollaboration, FileVersion,
-    DocumentVersion, DocumentEditLock, DocumentCollaboration
-
+    DocumentVersion, DocumentEditLock, DocumentCollaboration,
+    UploadSession, CloudSystemConfig
 )
+from accounts.models import CustomUser, Department
+from chat.models import FileUpload, upload_to
+
 from .serializers import (
     FolderSerializer, FolderListSerializer,
     CloudFileSerializer, FileShareSerializer,
     FileCommentSerializer, FileOperationLogSerializer,
-    FileVersionSerializer
+    FileVersionSerializer, UploadSessionSerializer,
+    ChunkUploadSerializer,
+    MergeChunksSerializer,
+    CloudSystemConfigSerializer, SystemConfigCategorySerializer
 )
 from .permissions import OnlyOfficeCallbackPermission  # 🔧 导入自定义权限
-from accounts.models import CustomUser, Department
+from .pagination import CloudPagination, SharePagination
+from .filters import CloudFileFilter, FileShareFilter
+
 from utils.request_util import get_request_ip
 from urllib.parse import quote
 import zipfile
@@ -43,6 +56,7 @@ import re
 import time
 import hashlib
 import uuid
+import shutil
 from loguru import logger
 from datetime import timedelta
 import requests
@@ -544,7 +558,7 @@ class FolderViewSet(viewsets.ModelViewSet):
                 folder_id = folder.id
 
                 # 递归物理删除
-                self._physical_delete_folder(folder)
+                self._physical_delete_folder(folder, user=request.user)
 
                 # 🔧 记录操作日志
                 FileOperationLog.objects.create(
@@ -612,14 +626,14 @@ class FolderViewSet(viewsets.ModelViewSet):
 
         return associations if associations else False
 
-    def _physical_delete_folder(self, folder_obj):
+    def _physical_delete_folder(self, folder_obj, user=None):
         """
         🔧 递归物理删除文件夹及其内容
         """
 
         # 🔧 1. 删除子文件夹（递归）
         for child_folder in folder_obj.children.filter(deleted_at__isnull=False):
-            self._physical_delete_folder(child_folder)
+            self._physical_delete_folder(child_folder, user=user)
 
         # 🔧 2. 删除文件
         for file_obj in CloudFile.objects.filter(folder=folder_obj, deleted_at__isnull=False):
@@ -628,14 +642,22 @@ class FolderViewSet(viewsets.ModelViewSet):
                 try:
                     file_size = os.path.getsize(file_path)
                     os.remove(file_path)
-                    logger.info(f'已删除物理文件：{file_path} ({file_size} bytes)')
+                    logger.info(f'user: {user} 已删除物理文件：{file_path} ({file_size} bytes)')
                 except Exception as e:
-                    logger.warning(f'删除物理文件失败 {file_path}: {e}')
+                    logger.warning(f'user: {user} 删除物理文件失败 {file_path}: {e}')
+
+            # 恢复聊天文件的同步状态
+            upload_file = FileUpload.objects.filter(md5=file_obj.md5, uploaded_by=user,
+                                                    is_sync_to_cloud=True)
+            if upload_file:
+                upload_file.update(is_sync_to_cloud=False)
+                logger.info(f'user: {user} 已恢复文件同步状态：{upload_file}')
+
             file_obj.delete()
 
         # 🔧 3. 删除文件夹本身
         folder_obj.delete()
-        logger.info(f'已删除文件夹：{folder_obj.id}')
+        logger.info(f'user: {user} 已删除文件夹：{folder_obj.id}')
 
     # cloud/views.py - FolderViewSet.download 方法修复版
 
@@ -651,6 +673,15 @@ class FolderViewSet(viewsets.ModelViewSet):
         3. 支持大文件下载（流式处理）
         4. 记录详细操作日志
         """
+
+        try:
+            config = CloudSystemConfig.objects.filter(key='system.download_enabled').first()
+            if config:
+                download_enabled = config.get_value('system.download_enabled')
+                if not download_enabled:
+                    return Response({'error': '下载功能已禁用'}, status=status.HTTP_403_FORBIDDEN)
+        except Exception as e:
+            logger.error(f"Error: {e}")
 
         try:
             # 🔧 1. 验证文件夹权限
@@ -1009,15 +1040,27 @@ class FolderViewSet(viewsets.ModelViewSet):
 
 # cloud/views.py
 class CloudFileViewSet(viewsets.ModelViewSet):
-    """云文件视图集"""
+    """云文件视图集 - 支持分片上传/断点续传/秒传"""
+
     queryset = CloudFile.objects.filter(deleted_at__isnull=True)
     serializer_class = CloudFileSerializer
     # permission_classes = [permissions.IsAuthenticated, IsCloudOwnerOrShared]
     permission_classes = [permissions.IsAuthenticated]
     # 🔧 关键修复：同时支持表单上传和 JSON 请求
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+    pagination_class = CloudPagination
 
-    def get_queryset(self):
+    # 🔧 新增：注册过滤后端
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+    filterset_class = CloudFileFilter
+    search_fields = ['name', 'original_name', 'description', 'tags']
+
+    # 配置参数
+    CHUNK_SIZE = 5 * 1024 * 1024  # 默认分片大小: 5MB
+    SESSION_EXPIRE_HOURS = 24  # 会话过期时间: 24小时
+    TEMP_UPLOAD_DIR = 'temp_uploads'  # 临时上传目录
+
+    def get_queryset_v1(self):
         """
            🔧 关键修复：支持文件夹钻取的查询逻辑
            - 返回当前文件夹下的所有文件和子文件夹
@@ -1054,6 +1097,22 @@ class CloudFileViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(Q(name__icontains=search) | Q(original_name__icontains=search))
 
         return queryset.order_by('-updated_at')
+
+    def get_queryset(self):
+        """基础查询集：仅当前用户可见的文件"""
+        user = self.request.user
+        # 注意：具体的 trash/folder/starred 过滤交由 CloudFileFilter 处理，
+        # 此处仅做基础权限隔离与默认排序，避免与 filter_backends 冲突
+        queryset = CloudFile.objects.select_related('owner', 'folder').filter(owner=user).order_by('-updated_at')
+
+        folder_id = self.request.query_params.get('folder', '')
+        if folder_id and folder_id.lower() != 'null':
+            queryset = queryset.filter(folder_id=folder_id)
+        else:
+            queryset = queryset.filter(folder__isnull=True)
+
+        return queryset
+
 
     @action(detail=False, methods=['get'])
     def trash_items(self, request, *args, **kwargs):
@@ -1096,7 +1155,7 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    def list(self, request, *args, **kwargs):
+    def list_v1(self, request, *args, **kwargs):
         """
         🔧 重写 list 方法：混合返回文件夹和文件
         """
@@ -1119,15 +1178,11 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                     deleted_at__isnull=True
                 )
 
-            # 🔧 序列化文件夹（标记为 is_folder=true）
             folder_data = FolderListSerializer(subfolders, many=True, context={'request': request}).data
-            for item in folder_data:
-                item['is_folder'] = True  # 🔧 标记为文件夹
+            for item in folder_data: item['is_folder'] = True
 
-            # 序列化文件
             file_data = self.get_serializer(page, many=True, context={'request': request}).data
-            for item in file_data:
-                item['is_folder'] = False  # 🔧 标记为文件
+            for item in file_data: item['is_folder'] = False
 
             # 🔧 合并并排序：文件夹在前
             combined = folder_data + file_data
@@ -1158,6 +1213,42 @@ class CloudFileViewSet(viewsets.ModelViewSet):
         combined.sort(key=lambda x: (not x['is_folder'], x['name'].lower()))
 
         return Response(combined)
+
+    def list(self, request, *args, **kwargs):
+        """🔧 重写 list：混合返回文件夹 + 文件（保持原有逻辑并接入过滤链）"""
+        # 1. 获取基础 queryset
+        queryset = self.get_queryset()
+        # 2. 应用所有 filter_backends (CloudFileFilter + SearchFilter)
+        queryset = self.filter_queryset(queryset)
+
+        # 3. 分页处理
+        page = self.paginate_queryset(queryset)
+        folder_id = request.query_params.get('folder', '')
+
+        if page is not None:
+            # 🔧 查询当前层级子文件夹（不受文件过滤器影响）
+            if folder_id and folder_id.lower() != 'null':
+                subfolders = Folder.objects.filter(
+                    parent_id=folder_id, owner=request.user, deleted_at__isnull=True
+                )
+            else:
+                subfolders = Folder.objects.filter(
+                    parent__isnull=True, owner=request.user, deleted_at__isnull=True
+                )
+
+            folder_data = FolderListSerializer(subfolders, many=True, context={'request': request}).data
+            for item in folder_data: item['is_folder'] = True
+
+            file_data = self.get_serializer(queryset, many=True, context={'request': request}).data
+            for item in file_data: item['is_folder'] = False
+
+            combined = folder_data + file_data
+            combined.sort(key=lambda x: (not x['is_folder'], x.get('name', '').lower()))
+
+            return self.get_paginated_response(combined)
+
+        # 无分页时的降级处理（保持向后兼容）
+        return super().list(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         """🔧 关键修复：确保 owner 被设置"""
@@ -1229,7 +1320,7 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                     file=new_file,
                     user=request.user,
                     operation='upload',
-                    description=f'秒传文件：{new_file.original_name}',
+                    description=f'秒传文件：{new_file.name}',
                     ip_address=get_request_ip(request),
                     extra_data={
                         'original_file_id': str(existing_file.id),
@@ -1291,6 +1382,641 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                 {'error': f'上传失败：{str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    # =================== 分片上传开始 ===================
+
+    def get_temp_upload_path(self, session_id):
+        """获取临时上传目录路径"""
+        return os.path.join(
+            settings.MEDIA_ROOT,
+            self.TEMP_UPLOAD_DIR,
+            str(session_id)
+        )
+
+    def _calculate_md5(self, file_obj, chunk_size=8192):
+        """计算文件/文件流的MD5"""
+        md5 = hashlib.md5()
+        if isinstance(file_obj, str):
+            # 文件路径
+            with open(file_obj, 'rb') as f:
+                while chunk := f.read(chunk_size):
+                    md5.update(chunk)
+        else:
+            # 文件对象/内存流
+            file_obj.seek(0)
+            while chunk := file_obj.read(chunk_size):
+                md5.update(chunk)
+            file_obj.seek(0)
+        return md5.hexdigest()
+
+    def _ensure_temp_dir(self, session_id):
+        """确保临时目录存在"""
+        temp_dir = self.get_temp_upload_path(session_id)
+        os.makedirs(temp_dir, exist_ok=True)
+        return temp_dir
+
+    def _cleanup_temp_files(self, session):
+        """清理临时文件"""
+        temp_dir = self.get_temp_upload_path(session.id)
+        if os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+                logger.info(f"清理临时目录: {temp_dir}")
+            except Exception as e:
+                logger.warning(f"清理临时目录失败 {temp_dir}: {e}")
+
+    @action(detail=False, methods=['post'])
+    def init_upload(self, request):
+        """
+        🔧 初始化上传会话 (重构版)
+        POST /api/cloud/files/init_upload/
+
+        逻辑优化：
+        1. 参数校验与清洗
+        2. 秒传检查 (全局去重)
+        3. 断点续传检查 (用户级会话恢复)
+        4. 创建新会话 (原子性操作)
+        """
+        try:
+            # 1. 获取并清洗参数
+            file_name = request.data.get('file_name', '').strip()
+            file_size = request.data.get('file_size')
+            file_md5 = request.data.get('file_md5', '').lower().strip()
+            chunk_size = request.data.get('chunk_size', self.CHUNK_SIZE)
+
+            # 可选参数
+            folder_id = request.data.get('folder')
+            description = request.data.get('description', '')
+            tags = request.data.get('tags', '')
+
+            # 2. 基础参数校验
+            if not all([file_name, file_size, file_md5]):
+                return Response(
+                    {'error': '缺少必要参数: file_name, file_size, file_md5'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # MD5 格式校验
+            if not re.match(r'^[a-f0-9]{32}$', file_md5):
+                return Response(
+                    {'error': '无效的MD5格式，应为32位十六进制字符串'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 文件大小校验
+            try:
+                file_size = int(file_size)
+                chunk_size = int(chunk_size)
+                if file_size <= 0 or chunk_size <= 0:
+                    raise ValueError
+            except (ValueError, TypeError):
+                return Response(
+                    {'error': 'file_size 和 chunk_size 必须为正整数'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 3. 秒传检查 (全局范围，只要文件存在且未删除即可秒传)
+            existing_file = CloudFile.objects.filter(
+                md5=file_md5,
+                deleted_at__isnull=True
+            ).first()
+
+            if existing_file:
+                logger.info(f"user: {request.user}, 文件已存在: {file_md5}, 秒传成功")
+                # 直接创建记录（不使用 serializer，避免 file 字段验证）
+                new_file = CloudFile.objects.create(
+                    owner=request.user,
+                    folder_id=folder_id if folder_id else None,
+                    description=description,
+                    tags=tags,
+                    md5=file_md5,
+                    name=file_name if file_name else existing_file.name,
+                    original_name=file_name if file_name else existing_file.original_name,
+                    size=existing_file.size,
+                    mime_type=existing_file.mime_type,
+                    file=existing_file.file,  # 🔧 关键：复用同一物理文件路径
+                )
+
+                # 记录操作日志
+                FileOperationLog.objects.create(
+                    file=new_file,
+                    user=request.user,
+                    operation='upload',
+                    description=f'秒传文件：{new_file.name}',
+                    ip_address=get_request_ip(request),
+                    extra_data={
+                        'original_file_id': str(existing_file.id),
+                        'file_md5': file_md5,
+                        'quick_upload': True,
+                    }
+                )
+
+                serializer = self.get_serializer(existing_file)
+                return Response({
+                    'status': 'quick_upload',
+                    'message': '文件已存在，秒传成功',
+                    'file': serializer.data,
+                    'exists': True
+                }, status=status.HTTP_200_OK)
+
+            # 4. 断点续传检查 (查找当前用户未完成的同名/同MD5会话)
+            existing_session = UploadSession.objects.filter(
+                file_md5=file_md5,
+                user=request.user,
+                is_completed=False,
+                expires_at__gt=timezone.now()
+            ).order_by('-created_at').first()
+
+            if existing_session:
+                # 如果找到旧会话，检查是否需要更新元数据（如文件夹ID），这里暂保持原会话信息
+                serializer = UploadSessionSerializer(existing_session)
+                return Response({
+                    'status': 'resume_upload',
+                    'message': '发现未完成的上传会话，支持断点续传',
+                    'session': serializer.data,
+                    'missing_chunks': existing_session.get_missing_chunks(),
+                    'exists': False
+                }, status=status.HTTP_200_OK)
+
+            # 5. 创建新的上传会话
+            # 计算总分片数
+            total_chunks = (file_size + chunk_size - 1) // chunk_size
+
+            with transaction.atomic():
+                session = UploadSession.objects.create(
+                    user=request.user,
+                    file_md5=file_md5,
+                    file_name=file_name,
+                    file_size=file_size,
+                    total_chunks=total_chunks,
+                    chunk_size=chunk_size,
+                    expires_at=timezone.now() + timedelta(hours=self.SESSION_EXPIRE_HOURS),
+                    # 临时路径先设为空或占位，ID生成后更新
+                    temp_path=''
+                )
+
+                # 更新临时路径 (依赖 session.id)
+                temp_path = self.get_temp_upload_path(session.id)
+                session.temp_path = temp_path
+                session.save(update_fields=['temp_path'])
+
+                # 确保物理目录存在
+                self._ensure_temp_dir(session.id)
+
+            logger.info(
+                f"创建上传会话成功: session_id={session.id}, "
+                f"user={request.user.username}, file={file_name}, "
+                f"size={file_size}, chunks={total_chunks}"
+            )
+
+            serializer = UploadSessionSerializer(session)
+            return Response({
+                'status': 'need_upload',
+                'message': '请开始上传分片',
+                'session': serializer.data,
+                'missing_chunks': list(range(total_chunks)),
+                'chunk_size': chunk_size,
+                'exists': False
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            logger.error(f"初始化上传失败: {e}", exc_info=True)
+            return Response(
+                {'error': f'初始化上传失败: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    # 🔧 显式指定只支持 multipart
+    @action(detail=False, methods=['post'], parser_classes=[MultiPartParser, FormParser])
+    @transaction.atomic  # 🔧 关键修复：添加事务装饰器
+    def upload_chunk(self, request):
+        """
+        🔧 上传单个分片
+        POST /api/cloud/files/upload_chunk/
+        Content-Type: multipart/form-data
+
+        请求参数:
+        - session_id: UUID (表单字段)
+        - chunk_index: int (表单字段)
+        - chunk_md5: string (表单字段, 分片内容的MD5)
+        - chunk: file (表单字段, 分片文件)
+
+        响应:
+        {
+            "success": true,
+            "chunk_index": 0,
+            "progress": 20.5,  // 上传进度百分比
+            "message": "分片上传成功"
+        }
+        """
+        try:
+            chunk_index = request.data.get('chunk_index')
+
+            # 🔧 参数校验
+            if chunk_index is None:
+                return Response({'error': '缺少 chunk_index 参数'}, status=400)
+
+            try:
+                chunk_index = int(chunk_index)
+                if chunk_index < 0:
+                    raise ValueError()
+            except (ValueError, TypeError):
+                return Response({'error': f'无效的 chunk_index: {chunk_index}'}, status=400)
+
+            # serializer = ChunkUploadSerializer(
+            #     data=request.data,
+            #     context={'request': request}
+            # )
+            # serializer.is_valid(raise_exception=True)
+            #
+            # session_id = serializer.validated_data['session_id']
+            # chunk_index = serializer.validated_data['chunk_index']
+            # chunk_md5 = serializer.validated_data['chunk_md5'].lower()
+            # chunk_file = serializer.validated_data['chunk']
+
+            session_id = request.data.get('session_id')
+            chunk_index = int(request.data.get('chunk_index'))
+            chunk_md5 = request.data.get('chunk_md5').lower()
+            chunk_file = request.FILES.get('chunk')
+
+            # 获取上传会话
+            try:
+                session = UploadSession.objects.select_for_update().get(
+                    id=session_id,
+                    user=request.user,
+                    is_completed=False
+                )
+            except UploadSession.DoesNotExist:
+                return Response(
+                    {'error': '上传会话不存在或已完成'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # 检查会话是否过期
+            if session.is_expired():
+                session.delete()
+                return Response(
+                    {'error': '上传会话已过期，请重新初始化'},
+                    status=status.HTTP_410_GONE
+                )
+
+            # 验证分片索引
+            if chunk_index < 0 or chunk_index >= session.total_chunks:
+                return Response(
+                    {'error': f'分片索引 {chunk_index} 超出范围(0-{session.total_chunks - 1})'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 🔧 检查分片是否已上传(支持重复上传的幂等性)
+            if session.is_chunk_uploaded(chunk_index):
+                logger.info(f"分片 {chunk_index} 已上传，跳过")
+                return Response({
+                    'success': True,
+                    'chunk_index': chunk_index,
+                    'progress': session.get_upload_progress(),
+                    'message': '分片已存在，跳过上传',
+                    'skipped': True
+                }, status=status.HTTP_200_OK)
+
+            # 🔧 验证分片MD5
+            chunk_md5_calculated = self._calculate_md5(chunk_file)
+            if chunk_md5_calculated != chunk_md5:
+                return Response(
+                    {'error': f'分片MD5校验失败: 期望{chunk_md5}, 实际{chunk_md5_calculated}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 🔧 保存分片到临时目录
+            temp_dir = self._ensure_temp_dir(session.id)
+            chunk_filename = f"chunk_{chunk_index:05d}"  # 00000, 00001, ...
+            chunk_path = os.path.join(temp_dir, chunk_filename)
+
+            # 保存文件
+            with open(chunk_path, 'wb') as f:
+                for chunk in chunk_file.chunks():
+                    f.write(chunk)
+
+            # 🔧 更新会话进度
+            session.add_uploaded_chunk(chunk_index)
+
+            logger.info(
+                f"分片上传成功: session={session.id}, chunk={chunk_index}, "
+                f"progress={session.get_upload_progress()}%"
+            )
+
+            # 检查是否所有分片都已上传
+            if len(session.uploaded_chunks) == session.total_chunks:
+                return Response({
+                    'success': True,
+                    'chunk_index': chunk_index,
+                    'progress': 100.0,
+                    'message': '所有分片已上传完成，请调用 merge_chunks 合并',
+                    'all_chunks_uploaded': True
+                }, status=status.HTTP_200_OK)
+
+            return Response({
+                'success': True,
+                'chunk_index': chunk_index,
+                'progress': session.get_upload_progress(),
+                'message': '分片上传成功',
+                'next_chunk': session.get_missing_chunks()[0] if session.get_missing_chunks() else None
+            }, status=status.HTTP_200_OK)
+
+        except serializers.ValidationError as e:
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"分片上传失败: {e}", exc_info=True)
+            return Response(
+                {'error': f'分片上传失败: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['post'])
+    @transaction.atomic  # 🔧 关键修复：添加事务装饰器
+    def merge_chunks(self, request):
+        """
+        🔧 合并所有分片并完成上传
+        POST /api/cloud/files/merge_chunks/
+
+        请求参数:
+        {
+            "session_id": "uuid-xxx",
+            "folder": "uuid-xxx",  // 可选
+            "description": "",     // 可选
+            "tags": ""            // 可选
+        }
+
+        响应:
+        {
+            "success": true,
+            "file": {...},  // 创建的云文件信息
+            "message": "文件上传成功"
+        }
+        """
+        try:
+
+            # 🔧 兼容处理：空字符串转 null
+            data = request.data.copy()
+            if data.get('description') == '':
+                data['description'] = None
+            if data.get('tags') == '':
+                data['tags'] = None
+
+            # 使用兼容后的数据创建序列化器
+            serializer = MergeChunksSerializer(data=data)
+            serializer.is_valid(raise_exception=True)
+
+            session_id = serializer.validated_data['session_id']
+            folder_id = serializer.validated_data.get('folder')
+            description = serializer.validated_data.get('description')
+            tags = serializer.validated_data.get('tags')
+
+            # 获取上传会话
+            try:
+                session = UploadSession.objects.select_for_update().get(
+                    id=session_id,
+                    user=request.user,
+                    is_completed=False
+                )
+            except UploadSession.DoesNotExist:
+                return Response(
+                    {'error': '上传会话不存在或已完成'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # 检查是否所有分片都已上传
+            if len(session.uploaded_chunks) != session.total_chunks:
+                missing = session.get_missing_chunks()
+                return Response(
+                    {
+                        'error': f'还有 {len(missing)} 个分片未上传',
+                        'missing_chunks': missing[:10]  # 只返回前10个
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 🔧 合并分片
+            temp_dir = session.temp_path
+            merged_file_path = os.path.join(temp_dir, 'merged_file')
+
+            logger.info(f"开始合并分片: session={session.id}, 总分片={session.total_chunks}")
+
+            with open(merged_file_path, 'wb') as merged_file:
+                for chunk_index in range(session.total_chunks):
+                    chunk_path = os.path.join(temp_dir, f"chunk_{chunk_index:05d}")
+                    if not os.path.exists(chunk_path):
+                        raise FileNotFoundError(f"分片文件不存在: {chunk_path}")
+
+                    with open(chunk_path, 'rb') as chunk_file:
+                        shutil.copyfileobj(chunk_file, merged_file)
+
+            # 🔧 验证合并后文件的MD5
+            merged_md5 = self._calculate_md5(merged_file_path)
+            if merged_md5 != session.file_md5:
+                # 清理临时文件
+                self._cleanup_temp_files(session)
+                return Response(
+                    {'error': f'文件完整性校验失败: 期望MD5={session.file_md5}, 实际={merged_md5}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 🔧 创建云文件记录
+            with transaction.atomic():
+                # 确定目标文件夹
+                target_folder = None
+                if folder_id:
+                    try:
+                        target_folder = Folder.objects.get(
+                            id=folder_id,
+                            owner=request.user,
+                            deleted_at__isnull=True
+                        )
+                    except Folder.DoesNotExist:
+                        return Response(
+                            {'error': '目标文件夹不存在'},
+                            status=status.HTTP_404_NOT_FOUND
+                        )
+
+                # 创建 CloudFile 记录
+                cloud_file = CloudFile.objects.create(
+                    owner=request.user,
+                    folder=target_folder,
+                    name=session.file_name,
+                    original_name=session.file_name,
+                    size=session.file_size,
+                    md5=session.file_md5,
+                    description=description[:500] if description else '',  # 🔧 截断 + 兜底
+                    tags=tags[:200] if tags else '',  # 🔧 截断 + 兜底
+                    # file 字段会在下面保存
+                )
+
+                # 保存文件到存储后端
+                with open(merged_file_path, 'rb') as f:
+                    content = ContentFile(f.read())
+                    cloud_file.file.save(
+                        session.file_name,
+                        content,
+                        save=True
+                    )
+
+                # 标记会话为完成
+                session.is_completed = True
+                session.save(update_fields=['is_completed', 'updated_at'])
+
+                # 记录操作日志
+                FileOperationLog.objects.create(
+                    file=cloud_file,
+                    user=request.user,
+                    operation='upload',
+                    description=f'分片上传文件: {session.file_name}',
+                    ip_address=get_request_ip(request),
+                    extra_data={
+                        'upload_method': 'chunked',
+                        'total_chunks': session.total_chunks,
+                        'chunk_size': session.chunk_size,
+                        'file_md5': session.file_md5,
+                        'session_id': str(session.id)
+                    }
+                )
+
+            # 🔧 清理临时文件
+            self._cleanup_temp_files(session)
+
+            logger.info(f"文件合并成功: {cloud_file.id}, {session.file_name}")
+
+            # 返回文件信息
+            file_serializer = self.get_serializer(cloud_file)
+            return Response({
+                'success': True,
+                'message': '文件上传成功',
+                'file': file_serializer.data,
+                'session_id': str(session.id)
+            }, status=status.HTTP_201_CREATED)
+
+        except serializers.ValidationError as e:
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+        except FileNotFoundError as e:
+            logger.error(f"合并分片失败 - 文件不存在: {e}")
+            return Response(
+                {'error': f'合并失败: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            logger.error(f"合并分片失败: {e}", exc_info=True)
+            # 尝试清理
+            if 'session' in locals():
+                self._cleanup_temp_files(session)
+            return Response(
+                {'error': f'合并失败: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['get'])
+    def check_session(self, request):
+        """
+        🔧 检查上传会话状态
+        GET /api/cloud/files/check_session/?session_id=xxx
+
+        响应:
+        {
+            "exists": true,
+            "progress": 45.5,
+            "missing_chunks": [5, 6, 7],
+            "is_completed": false,
+            "expires_at": "2026-04-23T10:00:00Z"
+        }
+        """
+        session_id = request.query_params.get('session_id')
+        if not session_id:
+            return Response(
+                {'error': '缺少 session_id 参数'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            session = UploadSession.objects.get(
+                id=session_id,
+                user=request.user
+            )
+
+            # 检查是否过期
+            if session.is_expired():
+                session.delete()
+                return Response({
+                    'exists': False,
+                    'message': '会话已过期'
+                }, status=status.HTTP_410_GONE)
+
+            serializer = UploadSessionSerializer(session)
+            return Response({
+                'exists': True,
+                'session': serializer.data,
+                'missing_chunks': session.get_missing_chunks(),
+                'is_completed': session.is_completed
+            })
+
+        except UploadSession.DoesNotExist:
+            return Response({'exists': False}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=False, methods=['delete'])
+    @transaction.atomic  # 🔧 关键修复：添加事务装饰器
+    def cancel_upload(self, request):
+        """
+        🔧 取消上传会话
+        DELETE /api/cloud/files/cancel_upload/?session_id=xxx
+        """
+        session_id = request.query_params.get('session_id')
+        if not session_id:
+            return Response(
+                {'error': '缺少 session_id 参数'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            session = UploadSession.objects.get(
+                id=session_id,
+                user=request.user,
+                is_completed=False
+            )
+
+            # 清理临时文件
+            self._cleanup_temp_files(session)
+
+            # 删除会话
+            session.delete()
+
+            logger.info(f"取消上传会话: {session_id}")
+            return Response({'message': '上传已取消'}, status=status.HTTP_200_OK)
+
+        except UploadSession.DoesNotExist:
+            return Response({'error': '会话不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+    # 🔧 定期清理过期会话的任务 (可在 management command 或 celery 中调用)
+    @staticmethod
+    def cleanup_expired_sessions():
+        """清理过期的上传会话和临时文件"""
+        expired_sessions = UploadSession.objects.filter(
+            expires_at__lt=timezone.now()
+        )
+
+        cleaned_count = 0
+        for session in expired_sessions:
+            try:
+                # 清理临时文件
+                temp_dir = session.temp_path
+                if temp_dir and os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                    logger.info(f"清理过期会话临时目录: {temp_dir}")
+
+                session.delete()
+                cleaned_count += 1
+            except Exception as e:
+                logger.error(f"清理过期会话失败 {session.id}: {e}")
+
+        logger.info(f"清理完成: {cleaned_count} 个过期上传会话")
+        return cleaned_count
+
+    # =================== 分片上传结束 ===================
 
     # cloud/views.py - 添加协作接口
     @action(detail=True, methods=['post'])
@@ -1418,6 +2144,16 @@ class CloudFileViewSet(viewsets.ModelViewSet):
         GET /api/cloud/files/{id}/download/
         """
         logger.info(f"{request.user} Downloading file pk: {pk}")
+
+        try:
+            config = CloudSystemConfig.objects.filter(key='system.download_enabled').first()
+            if config:
+                download_enabled = config.get_value('system.download_enabled')
+                if not download_enabled:
+                    return Response({'error': '下载功能已禁用'}, status=status.HTTP_403_FORBIDDEN)
+        except Exception as e:
+            logger.error(f"Error: {e}")
+
         try:
             file_obj = CloudFile.objects.get(id=pk, owner=request.user, deleted_at__isnull=True)
         except CloudFile.DoesNotExist:
@@ -1747,7 +2483,7 @@ class CloudFileViewSet(viewsets.ModelViewSet):
 
             if has_associations:
                 # 🔧 4. 有关联：逻辑清空（保留记录，标记永久删除）
-                logger.info(f"文件 {pk} 有活跃关联，执行逻辑清空")
+                logger.info(f"user: {request.user} 文件 {pk} 有活跃关联，执行逻辑清空")
 
                 # 标记为永久删除（如果模型有该字段）
                 if hasattr(file_obj, 'permanently_deleted'):
@@ -1770,7 +2506,7 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                 md5 = file_obj.md5
                 # 引用计数大于 0，无法删除
                 logger.warning(
-                    f"文件 {pk} 引用计数大于 1，无法永久删除, reference_count: {reference_count} total_reference_file_count：{total_reference_file_count}")
+                    f"user: {request.user} 文件 {pk} 引用计数大于 1，无法永久删除, reference_count: {reference_count} total_reference_file_count：{total_reference_file_count}")
                 file_obj.delete()
                 return Response(
                     {
@@ -1785,7 +2521,7 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                 )
             else:
                 # 🔧 5. 无关联：物理清空
-                logger.info(f"文件 {pk} 无关联，执行物理清空")
+                logger.info(f"user: {request.user} 文件 {pk} 无关联，执行物理清空")
 
                 # 获取文件路径
                 file_path = file_obj.file.path if file_obj.file else None
@@ -1796,12 +2532,19 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                     try:
                         file_size = os.path.getsize(file_path)
                         os.remove(file_path)
-                        logger.info(f'已删除物理文件：{file_path} ({file_size} bytes)')
+                        logger.info(f'user: {request.user} 已删除物理文件：{file_path} ({file_size} bytes)')
                     except Exception as e:
-                        logger.warning(f'删除物理文件失败 {file_path}: {e}')
+                        logger.warning(f'user: {request.user} 删除物理文件失败 {file_path}: {e}')
 
                 # 获取文件 ID 用于日志
                 file_id = file_obj.id
+
+                # 恢复聊天文件的同步状态
+                upload_file = FileUpload.objects.filter(md5=file_obj.md5, uploaded_by=request.user,
+                                                        is_sync_to_cloud=True)
+                if upload_file:
+                    upload_file.update(is_sync_to_cloud=False)
+                    logger.info(f'user: {request.user} 已恢复文件同步状态：{upload_file}')
 
                 # 删除数据库记录
                 file_obj.delete()
@@ -1829,7 +2572,7 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                 })
 
         except Exception as e:
-            logger.error(f'永久删除文件失败：{e}', exc_info=True)
+            logger.error(f'user: {request.user} 永久删除文件失败：{e}', exc_info=True)
             return Response(
                 {'error': f'删除失败：{str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -1976,8 +2719,6 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    
-    
     @action(detail=False, methods=['post'])
     def sync_file_from_chat(self, request, *args, **kwargs):
         """
@@ -1988,7 +2729,7 @@ class CloudFileViewSet(viewsets.ModelViewSet):
         :return:
         """
         user = request.user
-        
+
         # 🔧 优化1：使用 get_or_create 返回的元组解包，确保获取的是对象实例而不是 (obj, created) 元组
         safe_folder_name = '文档（来自聊天室）'
         root_folder, _ = Folder.objects.get_or_create(
@@ -2002,14 +2743,13 @@ class CloudFileViewSet(viewsets.ModelViewSet):
         )
 
         from chat.models import FileUpload
-        
 
         # ✅ 正确写法
         no_sync_files = FileUpload.objects.filter(
             uploaded_by=user,
             is_sync_to_cloud=False
         )
-        
+
         sync_count = 0
         error_count = 0
         skipped_count = 0
@@ -2032,12 +2772,12 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                 lookup_kwargs = {
                     'owner': user,
                     'folder': root_folder,
-                    'md5': file_obj.md5 if file_obj.md5 else None, # 如果 md5 为空，可能需要其他策略
+                    'md5': file_obj.md5 if file_obj.md5 else None,  # 如果 md5 为空，可能需要其他策略
                 }
-                
+
                 # 如果 md5 为空，回退到文件名匹配（需谨慎，同名不同内容会被覆盖或跳过）
                 if not file_obj.md5:
-                     lookup_kwargs['name'] = file_obj.filename[:255]
+                    lookup_kwargs['name'] = file_obj.filename[:255]
 
                 # 尝试获取现有文件，如果存在则跳过或更新（视业务逻辑而定，这里假设如果存在则跳过物理复制但标记同步）
                 cloud_file, created = CloudFile.objects.get_or_create(
@@ -2056,7 +2796,7 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                 if created or not cloud_file.file or not os.path.exists(cloud_file.file.path):
                     with open(file_obj.file.path, 'rb') as f:
                         content = f.read()
-                    
+
                     content_file = ContentFile(content)
                     # 使用 save 方法保存文件到存储后端
                     # 注意：save 方法会触发 save() 调用，除非指定 save=False
@@ -2065,7 +2805,7 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                         content_file,
                         save=True
                     )
-                    
+
                     # 更新大小信息（如果之前未知）
                     if not cloud_file.size:
                         cloud_file.size = len(content)
@@ -2082,12 +2822,12 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                 continue
 
         total_processed = sync_count + skipped_count
-        
+
         stats = {
             'user': user.username,
             'folder_id': str(root_folder.id),
             'folder_name': root_folder.name,
-            'total_scanned': no_sync_files.count(), # 注意：如果在循环中修改了状态，这里的 count 可能需要重新查询或缓存
+            'total_scanned': no_sync_files.count(),  # 注意：如果在循环中修改了状态，这里的 count 可能需要重新查询或缓存
             'sync_success': sync_count,
             'skipped_invalid': skipped_count,
             'errors': error_count,
@@ -2101,7 +2841,7 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                 user=user,
                 operation='sync_to_cloud',
                 description=f'从聊天室同步文件: 成功 {sync_count}, 跳过 {skipped_count}, 错误 {error_count}',
-                ip_address=get_request_ip(request), # 🔧 修复：使用传入的 request 而不是 self.request
+                ip_address=get_request_ip(request),  # 🔧 修复：使用传入的 request 而不是 self.request
                 extra_data={'stats': stats}
             )
         except Exception as log_err:
@@ -2359,68 +3099,6 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                 'file_id': existing_file.id
             })
         return Response({'exists': False})
-
-    @action(detail=False, methods=['post'], parser_classes=[MultiPartParser])
-    def upload_chunk(self, request):
-        """上传文件分片"""
-        md5 = request.data.get('md5')
-        chunk_index = int(request.data.get('chunk_index'))
-        total_chunks = int(request.data.get('total_chunks'))
-        chunk_file = request.FILES.get('file')
-
-        # 存储分片到临时目录
-        temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp_uploads', md5)
-        os.makedirs(temp_dir, exist_ok=True)
-
-        chunk_path = os.path.join(temp_dir, f"{chunk_index}.part")
-        with open(chunk_path, 'wb+') as f:
-            for chunk in chunk_file.chunks():
-                f.write(chunk)
-
-        return Response({'status': 'success', 'chunk': chunk_index})
-
-    @action(detail=False, methods=['post'])
-    def merge_chunks(self, request):
-        """合并分片并创建文件记录"""
-        md5 = request.data.get('md5')
-        filename = request.data.get('filename')
-        total_chunks = int(request.data.get('total_chunks'))
-
-        temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp_uploads', md5)
-
-        # 验证所有分片是否存在
-        for i in range(total_chunks):
-            if not os.path.exists(os.path.join(temp_dir, f"{i}.part")):
-                return Response({'error': f'缺少分片 {i}'}, status=400)
-
-        # 合并文件
-        final_filename = f"{md5}_{filename}"
-        final_path = os.path.join(settings.MEDIA_ROOT, 'cloud_files', final_filename)
-        os.makedirs(os.path.dirname(final_path), exist_ok=True)
-
-        with open(final_path, 'wb') as final_file:
-            for i in range(total_chunks):
-                chunk_path = os.path.join(temp_dir, f"{i}.part")
-                with open(chunk_path, 'rb') as f:
-                    final_file.write(f.read())
-                os.remove(chunk_path)  # 删除分片
-
-        os.rmdir(temp_dir)  # 删除临时目录
-
-        # 创建数据库记录
-        file_obj = CloudFile.objects.create(
-            owner=request.user,
-            name=filename,
-            original_name=filename,
-            file=f'cloud_files/{final_filename}',
-            md5=md5,
-            size=os.path.getsize(final_path),
-            # mime_type 可通过 python-magic 库获取，此处简化
-        )
-
-        return Response({'message': '合并成功', 'file_id': file_obj.id})
-
-    # cloud/views.py - CloudFileViewSet 中添加
 
     @action(detail=False, methods=['post'])
     def batch_delete(self, request):
@@ -2753,13 +3431,21 @@ class FileShareViewSet(viewsets.ModelViewSet):
     serializer_class = FileShareSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    pagination_class = SharePagination
+
+    # 🔧 注册过滤与搜索后端
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+    filterset_class = FileShareFilter
+    # ✅ 修复：仅保留模型实际存在的关联字段
+    search_fields = ['share_code', 'file__name', 'folder__name']
+
     def get_serializer_context(self):
         """🔧 关键修复：确保 request 传递到序列化器"""
         context = super().get_serializer_context()
         context.update({'request': self.request})
         return context
 
-    def get_queryset(self):
+    def get_queryset_v1(self):
         user = self.request.user
         # 基础查询集：只查询有效的分享
         queryset = FileShare.objects.select_related('owner', 'file', 'folder').filter(is_active=True)
@@ -2787,6 +3473,27 @@ class FileShareViewSet(viewsets.ModelViewSet):
             return filtered_qs.distinct().order_by('-created_at', '-id')
 
         return queryset.filter(owner=user).order_by('-created_at', '-id')
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = FileShare.objects.select_related('owner', 'file', 'folder').filter(is_active=True)
+
+        # 🔧 路由逻辑：优先处理自定义视图参数
+        owner_param = self.request.query_params.get('owner')
+        if owner_param == 'me':
+            return queryset.filter(owner=user).order_by('-created_at', '-id')
+
+        shared_with_me = self.request.query_params.get('shared_with_me')
+        if shared_with_me == 'true':
+            q_allowed_user = Q(allowed_users=user)
+            q_allowed_dept = Q()
+            if hasattr(user, 'department') and user.department:
+                q_allowed_dept = Q(allowed_departments=user.department)
+            return queryset.filter(q_allowed_user | q_allowed_dept).distinct().order_by('-created_at', '-id')
+
+        # 默认返回当前用户的分享
+        return queryset.filter(owner=user).order_by('-created_at', '-id')
+
 
     def create(self, request, *args, **kwargs):
         """🔧 关键修复：处理分享创建"""
@@ -3205,11 +3912,26 @@ class CloudDashboardViewSet(viewsets.ViewSet):
         user = request.user
 
         # 用户文件统计
-        total_files = CloudFile.objects.filter(owner=user, deleted_at__isnull=True).count()
+        total_count = CloudFile.objects.filter(owner=user, deleted_at__isnull=True).count()
         total_size = CloudFile.objects.filter(
             owner=user,
             deleted_at__isnull=True
         ).aggregate(total=Sum('size'))['total'] or 0
+
+        # 回收站统计
+
+        # 协作文档统计
+        collab_file_ids = FileCollaboration.objects.filter(
+            is_active=True
+        ).filter(Q(user=user) | Q(file__owner=user)).values_list('file_id', flat=True)
+        query_condition = Q(id__in=collab_file_ids)
+        # 基础查询：文档类型 + 联合权限条件
+        queryset = CloudFile.objects.filter(
+            # deleted_at__isnull=True,
+            is_document=True
+        ).filter(query_condition).distinct()
+        collab_count = queryset.count()
+
 
         # 最近文件
         recent_files = CloudFile.objects.filter(
@@ -3228,14 +3950,19 @@ class CloudDashboardViewSet(viewsets.ViewSet):
         storage_used_percent = (total_size / storage_quota * 100) if storage_quota > 0 else 0
 
         return Response({
-            'total_files': total_files,
             'total_size': total_size,
             'total_size_formatted': self.format_size(total_size),
+            'total_count': total_count,
+            'collab_count': collab_count,
+            'starred_count': CloudFile.objects.filter(owner=user, is_starred=True).count(),
+            'shared_count': FileShare.objects.filter(owner=user, is_active=True).count(),
+            'trash_count': CloudFile.objects.filter(owner=user, deleted_at__isnull=False).count(),
+
+
             'storage_quota': storage_quota,
             'storage_quota_formatted': self.format_size(storage_quota),
             'storage_used_percent': round(storage_used_percent, 2),
-            'starred_files': CloudFile.objects.filter(owner=user, is_starred=True).count(),
-            'shared_files': FileShare.objects.filter(owner=user, is_active=True).count(),
+
             'recent_files': CloudFileSerializer(recent_files, many=True, context={'request': request}).data,
             'recent_shares': FileShareSerializer(recent_shares, many=True, context={'request': request}).data
         })
@@ -3994,1379 +4721,6 @@ class CloudFileDownloadView(APIView):
             logger.info(f"⚠️  记录下载日志失败：{e}")
 
 
-# cloud/views.py - DocumentEditorViewSet
-
-class DocumentEditorViewSet_v1(viewsets.ViewSet):
-    """
-    🔧 OnlyOffice 文档编辑器视图集（修复版）
-    """
-    # authentication_classes = []  # 不进行任何认证
-    permission_classes = []  # 不检查权限
-    parser_classes = [MultiPartParser, FormParser, JSONParser]
-
-    # 🔧 关键修复：从 settings 读取配置
-    @property
-    def doc_server_url(self):
-        return settings.ONLYOFFICE.get('DOCUMENT_SERVER_URL', 'http://192.168.1.122:8000')
-
-    @property
-    def server_url(self):
-        return settings.ONLYOFFICE.get('SERVER_URL', 'http://192.168.1.130:10900')
-
-    @property
-    def jwt_secret(self):
-        return settings.ONLYOFFICE.get('JWT_SECRET', '')
-
-    @property
-    def jwt_enabled(self):
-        return settings.ONLYOFFICE.get('JWT_ENABLED', True)
-
-    @property
-    def supported_formats(self):
-        return {
-            'word': settings.ONLYOFFICE.get('WORD_FORMATS', []),
-            'excel': settings.ONLYOFFICE.get('EXCEL_FORMATS', []),
-            'ppt': settings.ONLYOFFICE.get('PPT_FORMATS', []),
-            'pdf': settings.ONLYOFFICE.get('PDF_FORMATS', []),
-        }
-
-    def _get_document_type(self, filename):
-        """根据文件名判断文档类型（返回 OnlyOffice 支持的类型）"""
-        if not filename:
-            return None
-        ext = f'.{filename.split(".")[-1].lower()}'
-
-        # 🔧 关键修复：返回 OnlyOffice 支持的 documentType
-        if ext in self.supported_formats.get('word', []):
-            return 'word'
-        elif ext in self.supported_formats.get('excel', []):
-            return 'cell'  # 🔧 OnlyOffice 使用 'cell' 而不是 'excel'
-        elif ext in self.supported_formats.get('ppt', []):
-            return 'slide'  # 🔧 OnlyOffice 使用 'slide' 而不是 'ppt'
-        elif ext in self.supported_formats.get('pdf', []):
-            return 'word'  # 🔧 PDF 只读，使用 'word' 类型
-        return None
-
-    def _generate_download_token(self, file_obj, expires_in=300):
-        """生成文件下载 token，有效期 5 分钟"""
-        timestamp = int(time.time()) + expires_in
-        # 🔧 关键修复：使用 Django SECRET_KEY 保持一致
-        secret = settings.SECRET_KEY  # ✅ 与 _verify_download_token 一致
-        token = hashlib.sha256(
-            f"{file_obj.id}{timestamp}{secret}".encode()
-        ).hexdigest()
-        return f"{timestamp}:{token}"
-
-    def _get_file_url(self, file_obj):
-        """
-        🔧 关键修复：构建文件访问 URL
-        必须是 OnlyOffice 服务器能访问的地址
-        """
-        # 使用配置的 SERVER_URL 而不是 request.build_absolute_uri
-        # 避免 OnlyOffice 无法访问 localhost 或内网地址
-        """构建带 token 的文件访问 URL"""
-        token = self._generate_download_token(file_obj)
-        return f"{self.server_url}/api/cloud/cloudfiles/{file_obj.id}/download_file/?token={token}"
-
-    def _get_callback_url(self, file_id):
-        """构建回调 URL"""
-        return f"{self.server_url}/api/cloud/documents/{file_id}/callback/"
-
-    def _generate_jwt_token_v1(self, payload):
-        """生成 OnlyOffice JWT Token"""
-        if not self.jwt_secret:
-            logger.warning('JWT_SECRET not configured')
-            return None
-
-        # 🔧 确保 payload 格式正确
-        payload['iat'] = int(datetime.now().timestamp())
-
-        # 🔧 使用 HS256 算法
-        token = jwt.encode(payload, self.jwt_secret, algorithm='HS256')
-
-        # 🔧 关键修复：Python 3.7+ jwt.encode 返回字符串，不需要解码
-        if isinstance(token, bytes):
-            token = token.decode('utf-8')
-
-        logger.info(f'Generated JWT jwt_secret: {self.jwt_secret} token: {token[:50]}...')
-        return token
-
-    def _generate_jwt_token(self, payload):
-        """生成 OnlyOffice JWT Token"""
-        if not self.jwt_secret:
-            logger.warning('JWT_SECRET not configured')
-            return None
-
-        try:
-            # 🔧 关键修复 1: 确保 payload 格式正确（只包含 document 部分）
-            token_payload = payload
-            token_payload['iat'] = int(datetime.now().timestamp())
-
-            # 🔧 关键修复 2: 使用 HS256 算法
-            token = jwt.encode(token_payload, self.jwt_secret, algorithm='HS256')
-
-            # 🔧 关键修复 3: Python 3.7+ jwt.encode 返回字符串
-            if isinstance(token, bytes):
-                token = token.decode('utf-8')
-
-            logger.info(f'✅ JWT token generated: {token[:50]}...')
-            return token
-
-        except Exception as e:
-            logger.error(f'❌ Failed to generate JWT token: {e}', exc_info=True)
-            return None
-
-    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
-    def edit(self, request, pk=None):
-        """获取文档编辑配置"""
-        try:
-
-            logger.info(
-                f"📝 获取文档编辑配置：{pk}, user: {request.user}, authenticated: {request.user.is_authenticated}")
-
-            # 🔧 关键修复 1: 放宽文件访问权限
-            # 允许文件所有者或协作者访问
-            try:
-                file_obj = CloudFile.objects.select_related('owner').get(id=pk)
-            except CloudFile.DoesNotExist:
-                logger.error(f'❌ 文件不存在: {pk}')
-                return Response({'error': '文件不存在'}, status=404)
-
-            # 🔧 关键修复 2: 验证访问权限（所有者或协作者）
-            if request.user.is_authenticated:
-                # 情况1: 文件所有者
-                if file_obj.owner == request.user:
-                    logger.info(f'✅ 文件所有者访问: {request.user.username}')
-                else:
-                    logger.warning(f'⚠️ 非文件所有者访问: {request.user.username}')
-                    # 情况2: 协作者
-                    try:
-                        collaboration = DocumentCollaboration.objects.get(
-                            file=file_obj,
-                            user=request.user,
-                        )
-                        logger.info(f'✅ 协作者访问: {request.user.username}, 权限: {collaboration.permission}')
-                    except DocumentCollaboration.DoesNotExist:
-                        logger.error(f'❌ 无权访问: user={request.user.username}, file_owner={file_obj.owner.username}')
-                        return Response(
-                            {'error': '您没有权限编辑该文件'},
-                            status=status.HTTP_403_FORBIDDEN
-                        )
-            else:
-                # 情况3: 未登录用户（通过分享链接或 OnlyOffice 回调）
-                logger.warning(f'⚠️ 未登录用户访问文件: {pk}')
-                # 🔧 可选：允许未登录用户访问（通过 token 验证）
-                # 或者返回 401
-                return Response({'error': '请先登录'}, status=401)
-
-            # 🔧 关键修复 1: 获取文件扩展名（用于 document.fileType）
-            file_ext = file_obj.original_name.split('.')[-1].lower() if file_obj.original_name else ''
-
-            # 🔧 关键修复 2: 获取 OnlyOffice 文档类型（用于 documentType）
-            doc_type = self._get_document_type(file_obj.original_name)
-            if not doc_type:
-                return Response({'error': '不支持的文档格式'}, status=400)
-
-            logger.info(
-                f"User {request.user.id} - owner: {file_obj.owner.id}, is_owner: {file_obj.owner == request.user}")
-            can_edit = False
-            if file_obj.owner == request.user:
-                can_edit = True
-            else:
-                try:
-                    collaboration = FileCollaboration.objects.get(file=file_obj, user=request.user, is_active=True)
-                    can_edit = collaboration.permission in ['write', 'admin']
-                    logger.info(f"Collaboration found: permission={collaboration.permission}")
-                except FileCollaboration.DoesNotExist:
-                    pass
-
-            # 🔧 关键修复 3: 构建文件访问 URL（确保 OnlyOffice 能访问）
-            file_url = self._get_file_url(file_obj)
-            callback_url = self._get_callback_url(pk)
-
-            # 构建用户信息
-            user_info = {
-                'id': str(request.user.id) if request.user.is_authenticated else 'anonymous',
-                'name': request.user.real_name or request.user.username if request.user.is_authenticated else 'Anonymous',
-                'email': request.user.email or '' if request.user.is_authenticated else '',
-            }
-
-            # 🔧 关键修复 4: 构建正确的 config 对象
-            config = {
-                'document': {
-                    # 🔧 fileType 必须是文件扩展名（小写，不带点）
-                    'fileType': file_ext,  # ✅ 如 'xlsx', 'docx', 'pptx'
-                    'key': f"{file_obj.id}_{file_obj.md5 or str(file_obj.id)}_{int(timezone.now().timestamp())}",
-                    # ✅ 添加时间戳确保唯一
-                    'title': file_obj.name or file_obj.original_name,
-                    'url': file_url,
-                    'permissions': {
-                        'comment': True,
-                        'copy': True,
-                        'download': True,
-                        'edit': True,
-                        'fillForms': True,
-                        'modifyContentControl': True,
-                        'modifyFilter': True,
-                        'print': True,
-                        'review': True,
-                    },
-                },
-                # 🔧 documentType 必须是 OnlyOffice 支持的类型
-                'documentType': doc_type,  # ✅ 如 'cell', 'word', 'slide'
-                'editorConfig': {
-                    'callbackUrl': callback_url,
-                    'user': user_info,
-                    # 🔧 关键修复：设置中文语言
-                    'lang': 'zh-CN',  # ✅ 中文界面
-                    'customization': {
-                        'autosave': True,  # ✅ 启用自动保存
-                        'chat': True,
-                        'comments': True,
-                        'feedback': False,
-                        'forcesave': True,  # ✅ 启用强制保存按钮
-                        'goback': {
-                            'blank': False,
-                            'requestClose': False,
-                            'text': '返回网盘',
-                            'url': f'{self.server_url}/cloud/',
-                        },
-                        'logo': {
-                            'image': f'{self.server_url}/media/avatars/cloud-green.svg',
-                            'imageEmbedded': True,
-                        },
-                        'mentionShare': True,
-                        'reviewDisplay': 'original',
-                        'spellcheck': True,
-                        'uiTheme': 'theme-light',
-
-                        # 🔧 添加中文本地化配置
-                        'forcesaveButton': True,  # 显示强制保存按钮
-                        'compactToolbar': False,  # 完整工具栏
-                    },
-                    # 🔧 关键修复：协同编辑配置
-                    'coEditing': {
-                        'mode': 'strict',  # strict: 严格模式（实时保存），fast: 快速模式
-                        'change': True,
-                    },
-                    'recent': self._get_recent_documents(request.user) if request.user.is_authenticated else [],
-                },
-                'height': '100%',
-                'width': '100%',
-                'type': 'desktop',
-            }
-
-            # 🔧 关键修复 7: 添加 JWT Token
-            if self.jwt_enabled and self.jwt_secret:
-                try:
-                    token = self._generate_jwt_token(config)
-                    if token:
-                        config['token'] = token
-                        logger.info(f'✅ JWT Token generated: {token[:50]}...')
-                except Exception as e:
-                    logger.error(f'❌ Failed to generate JWT token: {e}')
-
-            logger.info(f'✅ Edit config generated successfully')
-            return Response(config)
-
-        except CloudFile.DoesNotExist:
-            return Response({'error': '文件不存在'}, status=404)
-        except Exception as e:
-            logger.error(f'Get edit config failed: {e}', exc_info=True)
-            return Response({'error': f'获取编辑配置失败：{str(e)}'}, status=500)
-
-    def _check_edit_lock(self, file_obj, user):
-        """检查并获取编辑锁"""
-        # 清理过期锁
-        DocumentEditLock.objects.filter(
-            file=file_obj,
-            expires_at__lt=timezone.now()
-        ).update(is_active=False)
-
-        # 检查是否有活跃锁
-        active_lock = DocumentEditLock.objects.filter(
-            file=file_obj,
-            is_active=True,
-            expires_at__gt=timezone.now()
-        ).select_related('user').first()
-
-        if active_lock:
-            # 如果是当前用户，延长锁时间
-            if active_lock.user == user:
-                active_lock.expires_at = timezone.now() + timedelta(
-                    minutes=settings.ONLYOFFICE.get('EDIT_LOCK_EXPIRE_MINUTES', 30)
-                )
-                active_lock.save(update_fields=['expires_at'])
-                return active_lock
-            # 如果是其他用户，拒绝
-            logger.info(f'Document {file_obj.id} locked by user {active_lock.user.id}')
-            return None
-
-        # 创建新锁
-        lock = DocumentEditLock.objects.create(
-            file=file_obj,
-            user=user,
-            expires_at=timezone.now() + timedelta(
-                minutes=settings.ONLYOFFICE.get('EDIT_LOCK_EXPIRE_MINUTES', 30)
-            )
-        )
-
-        # 更新文件编辑用户
-        file_obj.editing_user = user
-        file_obj.save(update_fields=['editing_user'])
-
-        return lock
-
-    def _get_active_collaborators(self, file_obj):
-        """获取活跃协同用户"""
-        collaborators = DocumentCollaboration.objects.filter(
-            file=file_obj,
-            status='editing',
-            last_activity__gt=timezone.now() - timedelta(minutes=5)
-        ).select_related('user')
-
-        return [
-            {
-                'id': str(c.user.id),
-                'name': c.user.username,
-                'email': c.user.email or '',
-            }
-            for c in collaborators
-        ]
-
-    def _record_collaboration(self, file_obj, user, status):
-        """记录协作状态"""
-        collab, created = DocumentCollaboration.objects.get_or_create(
-            file=file_obj,
-            user=user,
-            defaults={'status': status}
-        )
-
-        if not created:
-            collab.status = status
-            collab.last_activity = timezone.now()
-            if status == 'closed':
-                collab.left_at = timezone.now()
-            collab.save(update_fields=['status', 'last_activity', 'left_at'])
-
-    def _get_recent_documents(self, user):
-        """获取用户最近编辑的文档"""
-        recent = CloudFile.objects.filter(
-            owner=user,
-            deleted_at__isnull=True,
-            # is_document=True,
-            # 🔧 替代方案：按文件扩展名过滤
-            original_name__iregex=r'\.(doc|docx|xls|xlsx|ppt|pptx|pdf)$'
-        ).order_by('-updated_at')[:10]
-
-        return [
-            {
-                'url': self._get_file_url(f),
-                'title': f.name,
-            }
-            for f in recent
-        ]
-
-    @action(detail=True, methods=['post'], authentication_classes=[])
-    def callback(self, request, pk=None):
-        """
-        🔧 OnlyOffice 回调接口
-        POST /api/cloud/documents/{id}/callback/
-        注意：此接口允许未认证访问，但会验证 JWT Token
-        状态码含义：
-        0 - 无操作
-        1 - 文档正在编辑
-        2 - 文档已保存
-        3 - 文档关闭
-        4 - 强制保存
-        5 - 协同编辑者已连接
-        6 - 协同编辑者已断开
-        """
-        try:
-            # 🔧 记录请求信息用于调试
-            logger.info(f'Callback received: file_id={pk}, data={request.data}, ip={request.META.get("REMOTE_ADDR")}')
-
-            # 🔧 调试日志
-            logger.info(f'=== Callback Debug Start ===')
-            logger.info(f'Method: {request.method}')
-            logger.info(f'User: {request.user}')
-            logger.info(f'Is authenticated: {request.user.is_authenticated}')
-            logger.info(f'Data keys: {list(request.data.keys()) if hasattr(request, "data") else "N/A"}')
-            logger.info(f'Content-Type: {request.content_type}')
-            logger.info(f'Headers: {dict(request.headers)}')
-            logger.info(f'=== Callback Debug End ===')
-
-            # 🔧 关键修复：从 request.data 或 headers 获取 token
-            token = request.data.get('token')
-            if not token:
-                # 🔧 尝试从 Authorization header 获取
-                auth_header = request.headers.get('Authorization', '')
-                if auth_header.startswith('Bearer '):
-                    token = auth_header[7:].strip()
-
-            # 🔧 验证 JWT Token（如果启用）
-            if self.jwt_enabled and self.jwt_secret and token:
-                try:
-                    # 🔧 关键修复：确保 token 格式正确
-                    token = token.strip()
-                    if token.count('.') == 2:  # 三段式
-                        jwt.decode(token, self.jwt_secret, algorithms=['HS256'])
-                        logger.info('✅ JWT token verified in callback')
-                    else:
-                        logger.warning(f'❌ Invalid JWT format in callback')
-                except jwt.InvalidTokenError as e:
-                    logger.warning(f'❌ Invalid JWT token in callback: {e}')
-                    return Response({'error': 1}, status=status.HTTP_403_FORBIDDEN)
-
-            # 获取回调数据
-            # 🔧 关键修复：处理不同状态码
-            body = request.data
-            status_code = body.get('status')
-            url = body.get('url')
-            users = body.get('users', [])
-
-            logger.info(f'Callback status: {status_code}, url: {url}, users: {users}')
-
-            # 🔧 获取文件（不验证 owner，因为回调可能来自协同编辑）
-            try:
-                file_obj = CloudFile.objects.select_related('owner').get(id=pk)
-            except CloudFile.DoesNotExist:
-                logger.error(f'Callback: Document {pk} not found')
-                return Response({'error': 1}, status=status.HTTP_404_NOT_FOUND)
-
-            # 🔧 状态 2: 文档已保存（用户点击保存）
-            # 🔧 状态 4: 强制保存（用户关闭文档或超时）
-            if status_code in [2, 4]:
-                if url:
-                    logger.info(f'💾 Saving document from: {url}')
-                    try:
-                        # 🔧 关键：添加重试逻辑
-                        max_retries = 3
-                        for attempt in range(max_retries):
-                            try:
-                                response = requests.get(url, timeout=60, verify=False)
-                                response.raise_for_status()
-                                break
-                            except requests.RequestException as e:
-                                if attempt == max_retries - 1:
-                                    raise
-                                logger.warning(f'⚠️ Download attempt {attempt + 1} failed: {e}')
-                                time.sleep(2 ** attempt)  # 指数退避
-
-                        content = response.content
-                        content_hash = hashlib.md5(content).hexdigest()[:8]
-                        logger.info(f'✅ Downloaded {len(content)} bytes, hash={content_hash}')
-
-                        # 🔧 关键修复 5: 保存文件（使用事务确保原子性）
-                        with transaction.atomic():
-
-                            content_file = ContentFile(content)
-
-                            # 🔧 关键修复：保存版本（每次保存都创建版本）
-                            version = self._save_document_version(
-                                file_obj,
-                                content,
-                                users[0] if users else None
-                            )
-                            logger.info(f'✅ Version saved: v{version.version_number}, hash={content_hash}')
-
-                            # 更新原文件
-                            file_obj.file.save(
-                                file_obj.original_name,
-                                content_file,
-                                save=True
-                            )
-                            file_obj.size = len(content)
-                            file_obj.current_version = version  # 🔧 更新当前版本
-                            file_obj.save(update_fields=['size', 'updated_at', 'current_version'])
-
-                            # 记录操作日志
-                            FileOperationLog.objects.create(
-                                file=file_obj,
-                                user=file_obj.owner,
-                                operation='edit',
-                                description=f'在线编辑保存：{file_obj.name} (v{version.version_number})',
-                                ip_address=get_request_ip(request),
-                                extra_data={
-                                    'version_number': version.version_number,
-                                    'file_size': len(content),
-                                    'content_hash': content_hash,
-                                    'status_code': status_code,
-                                }
-                            )
-
-                        logger.info(f'✅ Document {file_obj.id} saved successfully (v{version.version_number})')
-
-                    except requests.RequestException as e:
-                        logger.error(f'Failed to download saved document from OnlyOffice: {e}')
-                        return Response({'error': 1}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-                    except Exception as e:
-                        logger.error(f'Failed to save document version: {e}', exc_info=True)
-                        return Response({'error': 1}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-            # 🔧 状态 3：文档关闭
-            elif status_code == 3:
-                # 释放编辑锁
-                DocumentEditLock.objects.filter(
-                    file=file_obj,
-                    user__id__in=users,
-                    is_active=True
-                ).update(is_active=False)
-
-                # 更新协作状态
-                for user_id in users:
-                    try:
-                        user = CustomUser.objects.get(id=user_id)
-                        self._record_collaboration(file_obj, user, 'closed')
-                    except CustomUser.DoesNotExist:
-                        logger.warning(f'User {user_id} not found for collaboration update')
-
-                # 如果没有活跃编辑者，清除编辑用户
-                active_locks = DocumentEditLock.objects.filter(
-                    file=file_obj,
-                    is_active=True,
-                    expires_at__gt=timezone.now()
-                )
-                if not active_locks.exists():
-                    file_obj.editing_user = None
-                    file_obj.save(update_fields=['editing_user'])
-
-            # 🔧 状态 5：协同编辑者已连接
-            elif status_code == 5:
-                for user_id in users:
-                    try:
-                        user = CustomUser.objects.get(id=user_id)
-                        self._record_collaboration(file_obj, user, 'editing')
-                    except CustomUser.DoesNotExist:
-                        pass
-
-            # 🔧 状态 6：协同编辑者已断开
-            elif status_code == 6:
-                for user_id in users:
-                    try:
-                        user = CustomUser.objects.get(id=user_id)
-                        self._record_collaboration(file_obj, user, 'viewing')
-                    except CustomUser.DoesNotExist:
-                        pass
-
-            return Response({'error': 0})
-
-        except Exception as e:
-            logger.error(f'Document callback error: {e}', exc_info=True)
-            return Response({'error': 1}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    def _save_document_version(self, file_obj, content, user_id):
-        """保存文档版本（每次保存都创建新版本）"""
-
-        with transaction.atomic():
-            # 🔧 关键修复 1: 获取下一个版本号
-            last_version = DocumentVersion.objects.filter(
-                file=file_obj
-            ).order_by('-version_number').first()
-
-            version_number = (last_version.version_number + 1) if last_version else 1
-            logger.info(f'📝 Creating version v{version_number} for file {file_obj.id}')
-
-            # 🔧 关键修复 2: 清理旧版本（保留最近 N 个）
-            keep_count = settings.ONLYOFFICE.get('VERSION_KEEP_COUNT', 10)
-            old_versions = DocumentVersion.objects.filter(
-                file=file_obj
-            ).order_by('-version_number')[keep_count:]
-
-            for old_ver in old_versions:
-                try:
-                    if os.path.exists(old_ver.file_path):
-                        os.remove(old_ver.file_path)
-                        logger.info(f'🗑️ Deleted old version file: {old_ver.file_path}')
-                    old_ver.delete()
-                    logger.info(f'🗑️ Deleted old version record: v{old_ver.version_number}')
-                except Exception as e:
-                    logger.warning(f'⚠️ Failed to delete old version {old_ver.id}: {e}')
-
-            # 🔧 关键修复 3: 保存版本文件
-            version_dir = os.path.join(
-                settings.MEDIA_ROOT,
-                'document_versions',
-                str(file_obj.id)
-            )
-            os.makedirs(version_dir, exist_ok=True)
-
-            version_path = os.path.join(
-                version_dir,
-                f'v{version_number}_{file_obj.name or file_obj.original_name}'
-            )
-
-            try:
-                # 🔧 关键修复：写入文件并验证
-                with open(version_path, 'wb') as f:
-                    f.write(content)
-
-                # 🔧 验证写入的内容是否正确
-                with open(version_path, 'rb') as f:
-                    verify_content = f.read()
-                if verify_content != content:
-                    logger.error(f'❌ Version file content mismatch: {version_path}')
-                    raise ValueError('Version file content verification failed')
-
-                file_size = os.path.getsize(version_path)
-                logger.info(f'✅ Version file saved: {version_path} ({file_size} bytes)')
-
-            except Exception as e:
-                logger.error(f'❌ Failed to save version file: {e}', exc_info=True)
-                raise
-
-            # 🔧 关键修复 4: 获取创建者
-            user = None
-            if user_id:
-                try:
-                    user = CustomUser.objects.get(id=user_id)
-                    logger.info(f'👤 Version created by user: {user.username}')
-                except CustomUser.DoesNotExist:
-                    logger.warning(f'⚠️ User {user_id} not found')
-
-            # 🔧 关键修复 5: 创建版本记录
-            try:
-                content_hash = hashlib.md5(content).hexdigest()
-                version = DocumentVersion.objects.create(
-                    file=file_obj,
-                    version_number=version_number,
-                    file_path=version_path,
-                    file_size=file_size,
-                    created_by=user,
-                    content_hash=content_hash,
-                    comment=f'自动保存 v{version_number}',  # 🔧 添加备注
-                    is_current=True  # 🔧 标记为当前版本
-                )
-                logger.info(f'✅ Version record created: v{version_number} (id={version.id})')
-
-            except Exception as e:
-                logger.error(f'❌ Failed to create version record: {e}', exc_info=True)
-                raise
-
-            # 🔧 关键修复 6: 更新之前版本为非当前
-            DocumentVersion.objects.filter(
-                file=file_obj
-            ).exclude(id=version.id).update(is_current=False)
-
-            logger.info(f'✅ Version v{version_number} saved successfully')
-            return version
-
-    @action(detail=False, methods=['post'], url_path='custom-create')
-    def custom_create(self, request):
-        """
-        🔧 创建新文档
-        POST /api/cloud/documents/custom-create/
-        """
-        try:
-            doc_type = request.data.get('type')  # word, excel, ppt
-            title = request.data.get('title', '未命名文档')
-            folder_id = request.data.get('folder')
-
-            # 文件扩展名映射
-            ext_map = {
-                'word': '.docx',
-                'excel': '.xlsx',
-                'ppt': '.pptx',
-            }
-
-            if doc_type not in ext_map:
-                return Response(
-                    {'error': '不支持的文档类型'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # 生成文件名
-            filename = f'{title}{ext_map[doc_type]}'
-
-            # 🔧 创建空文档内容（使用真实模板或最小有效文件）
-            empty_content = self._get_empty_document_content(doc_type)
-
-            # 创建文件记录
-            folder = None
-            if folder_id:
-                try:
-                    folder = Folder.objects.get(id=folder_id, owner=request.user)
-                except Folder.DoesNotExist:
-                    return Response(
-                        {'error': '目标文件夹不存在'},
-                        status=status.HTTP_404_NOT_FOUND
-                    )
-
-            file_obj = CloudFile.objects.create(
-                owner=request.user,
-                folder=folder,
-                name=filename,
-                original_name=filename,
-                file=BytesIO(empty_content),
-                size=len(empty_content),
-                is_document=True,
-                document_type=doc_type,
-                md5='',  # 空文档不计算 MD5
-            )
-
-            logger.info(f'Created new {doc_type} document: {file_obj.id}')
-            return Response({
-                'fileType': doc_type,
-                'url': self._get_file_url(file_obj),
-                'file_id': str(file_obj.id),
-            })
-
-        except Exception as e:
-            logger.error(f'Create document error: {e}', exc_info=True)
-            return Response(
-                {'error': f'创建文档失败：{str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-    def _get_empty_document_content(self, doc_type):
-        """获取空文档内容"""
-        # 🔧 使用真实的最小有效文档内容
-        # 这里返回的是对应格式的最小有效文件头
-        templates = {
-            'word': b'PK\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00!\x00',  # DOCX 最小头
-            'excel': b'PK\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00!\x00',  # XLSX 最小头
-            'ppt': b'PK\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00!\x00',  # PPTX 最小头
-        }
-        return templates.get(doc_type, b'')
-
-    @action(detail=True, methods=['get'])
-    def versions(self, request, pk=None):
-        """获取文档版本列表"""
-        try:
-            file_obj = CloudFile.objects.get(id=pk, owner=request.user)
-
-            versions = DocumentVersion.objects.filter(
-                file=file_obj
-            ).select_related('created_by').order_by('-version_number')
-
-            data = [
-                {
-                    'id': str(v.id),
-                    'version_number': v.version_number,
-                    'file_size': v.file_size,
-                    'file_size_formatted': self._format_size(v.file_size),
-                    'created_by': v.created_by.username if v.created_by else '系统',
-                    'created_at': v.created_at.isoformat(),
-                    'comment': v.comment,
-                    'is_current': v.is_current,
-                    'download_url': f'/api/cloud/documents/versions/{v.id}/download/',  # 版本下载接口
-                }
-                for v in versions
-            ]
-
-            return Response({'versions': data})
-
-        except CloudFile.DoesNotExist:
-            return Response(
-                {'error': '文件不存在'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-    # cloud/views.py - DocumentEditorViewSet
-
-    @action(detail=False, methods=['get'], url_path='versions/(?P<version_id>[^/.]+)/download')
-    def version_download(self, request, version_id=None):
-        """下载指定版本的文件"""
-        try:
-            # 🔧 验证版本归属（通过 file__owner 确保只能下载自己的文件版本）
-            version = DocumentVersion.objects.select_related('file__owner').get(
-                id=version_id,
-                file__owner=request.user
-            )
-
-            if not os.path.exists(version.file_path):
-                return Response({'error': '版本文件不存在'}, status=404)
-
-            # 🔧 构建响应
-            original_name = version.file.name or version.file.original_name or 'download'
-            safe_filename = self._sanitize_filename(f'{original_name}_v{version.version_number}')
-
-            response = FileResponse(
-                open(version.file_path, 'rb'),
-                as_attachment=True,
-                filename=safe_filename
-            )
-            response['Content-Length'] = version.file_size
-            response['X-Content-Type-Options'] = 'nosniff'
-
-            # 🔧 记录下载日志
-            from .models import FileOperationLog
-            FileOperationLog.objects.create(
-                file=version.file,
-                user=request.user,
-                operation='version_download',
-                description=f'下载历史版本：{original_name} v{version.version_number}',
-                ip_address=get_request_ip(request)
-            )
-
-            return response
-
-        except DocumentVersion.DoesNotExist:
-            return Response({'error': '版本不存在'}, status=404)
-        except Exception as e:
-            logger.error(f'Version download error: {e}', exc_info=True)
-            return Response({'error': f'下载失败：{str(e)}'}, status=500)
-
-    @action(detail=True, methods=['post'])
-    def restore_version(self, request, pk=None):
-        """恢复文档版本"""
-        try:
-            file_obj = CloudFile.objects.get(id=pk, owner=request.user)
-            version_id = request.data.get('version_id')
-            # 🔧 新增参数：是否创建恢复前备份（默认 True）
-            create_backup = request.data.get('create_backup', False)
-            version = DocumentVersion.objects.get(id=version_id, file=file_obj)
-
-            # 🔧 关键修复 1: 验证版本文件存在
-            if not os.path.exists(version.file_path):
-                logger.error(f'❌ Version file not found: {version.file_path}')
-                return Response(
-                    {'error': '版本文件不存在，可能已被清理'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-
-            # 🔧 关键修复 2: 读取版本文件内容并验证
-            with open(version.file_path, 'rb') as f:
-                content = f.read()
-
-            # 🔧 验证读取的内容
-            if not content:
-                logger.error(f'❌ Version file is empty: {version.file_path}')
-                return Response(
-                    {'error': '版本文件内容为空'},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-
-            content_hash = hashlib.md5(content).hexdigest()[:8]
-            logger.info(f'📖 Read version file: {version.file_path} ({len(content)} bytes, hash={content_hash})')
-
-            logger.info(f'恢复版本：file_id={pk}, version_id={version_id}, size={len(content)} bytes')
-
-            # 恢复文件（使用事务）
-            with transaction.atomic():
-
-                # 🔧 修复 1: 使用 ContentFile 包装 bytes 对象
-                content_file = ContentFile(content)
-
-                # 🔧 关键修复：仅在 create_backup=True 时创建新版本
-                if create_backup:
-                    # 保存当前状态为新版本（作为备份）
-                    last_version = DocumentVersion.objects.filter(file=file_obj).order_by('-version_number').first()
-                    new_version_number = (last_version.version_number + 1) if last_version else 1
-
-                    current_version_path = os.path.join(
-                        settings.MEDIA_ROOT, 'document_versions', str(file_obj.id),
-                        f'v{new_version_number}_{file_obj.name}'
-                    )
-                    os.makedirs(os.path.dirname(current_version_path), exist_ok=True)
-
-                    # 🔧 关键修复：正确读取当前文件内容
-                    if file_obj.file and os.path.exists(file_obj.file.path):
-                        with open(file_obj.file.path, 'rb') as f:
-                            current_content = f.read()
-                        with open(current_version_path, 'wb') as f:
-                            f.write(current_content)
-
-                        DocumentVersion.objects.create(
-                            file=file_obj,
-                            version_number=new_version_number,
-                            file_path=current_version_path,
-                            file_size=len(current_content),
-                            created_by=request.user,
-                            content_hash=hashlib.md5(current_content).hexdigest(),
-                            comment=f'恢复前备份（恢复到版本 {version.version_number}）',
-                            is_current=False
-                        )
-                        logger.info(f'✅ Backup version created: v{new_version_number}')
-
-                # 恢复目标版本内容
-                file_obj.file.save(
-                    file_obj.original_name,
-                    content_file,  # ✅ 使用 ContentFile 而不是 raw bytes
-                    save=True
-                )
-                file_obj.current_version = version
-                file_obj.size = len(content)  # ✅ 使用实际内容大小
-                file_obj.save(update_fields=['current_version', 'size', 'updated_at'])
-
-                # 更新版本状态
-                DocumentVersion.objects.filter(file=file_obj).exclude(id=version.id).update(is_current=False)
-                version.is_current = True
-                version.save(update_fields=['is_current'])
-
-            # 🔧 记录操作日志
-            FileOperationLog.objects.create(
-                file=file_obj,
-                user=request.user,
-                operation='restore_version',
-                description=f'恢复文档版本：{file_obj.name} v{version.version_number}',
-                ip_address=get_request_ip(request),
-                extra_data={
-                    'version_id': str(version.id),
-                    'version_number': version.version_number,
-                    'content_hash': content_hash,
-                }
-            )
-
-            logger.info(f'✅ Version restored successfully: v{version.version_number}')
-
-            return Response({
-                'message': '版本恢复成功',
-                'version': version.version_number,
-                'content_hash': content_hash,  # 🔧 返回哈希用于前端验证
-            })
-
-
-        except CloudFile.DoesNotExist:
-            logger.error(f'❌ File not found: {pk}')
-            return Response({'error': '文件不存在'}, status=404)
-        except DocumentVersion.DoesNotExist:
-            logger.error(f'❌ Version not found: {version_id}')
-            return Response({'error': '版本不存在'}, status=404)
-        except Exception as e:
-            logger.error(f'❌ Restore version error: {e}', exc_info=True)
-            return Response(
-                {'error': f'恢复版本失败：{str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
-    def collaborators_v1(self, request, pk=None):
-        """获取文档协同编辑者"""
-        try:
-            file_obj = CloudFile.objects.get(id=pk, owner=request.user)
-
-            collaborators = DocumentCollaboration.objects.filter(
-                file=file_obj,
-                status='editing',
-                last_activity__gt=timezone.now() - timedelta(minutes=5)
-            ).select_related('user')
-
-            data = [
-                {
-                    'id': str(c.user.id),
-                    'username': c.user.username,
-                    'real_name': c.user.real_name or c.user.username,
-                    'avatar': getattr(c.user, 'avatar_url', None),
-                    'status': c.status,
-                    'last_activity': c.last_activity.isoformat(),
-                }
-                for c in collaborators
-            ]
-
-            return Response({'collaborators': data})
-
-        except CloudFile.DoesNotExist:
-            return Response(
-                {'error': '文件不存在'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-    # cloud/views.py - 在 DocumentEditorViewSet 类中添加
-
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
-    def add_collaborator(self, request, pk=None):
-        """
-        🔧 添加文档协同编辑者
-        POST /api/cloud/documents/{id}/add_collaborator/
-        {
-            "user_id": 123,
-            "permission": "write",  // read/write/admin
-            "notify": true  // 是否发送通知
-        }
-        """
-        try:
-            file_obj = CloudFile.objects.get(id=pk, owner=request.user)
-        except CloudFile.DoesNotExist:
-            return Response({'error': '文档不存在'}, status=status.HTTP_404_NOT_FOUND)
-
-        user_id = request.data.get('user_id')
-        permission = request.data.get('permission', 'read')
-        notify = request.data.get('notify', True)
-
-        if not user_id:
-            return Response({'error': '请指定协同用户'}, status=status.HTTP_400_BAD_REQUEST)
-
-        if permission not in ['read', 'write', 'admin']:
-            return Response({'error': '权限类型无效'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            collaborator = CustomUser.objects.get(id=user_id)
-        except CustomUser.DoesNotExist:
-            return Response({'error': '用户不存在'}, status=status.HTTP_404_NOT_FOUND)
-
-        # 不能添加自己为协作者
-        if collaborator.id == request.user.id:
-            return Response({'error': '不能添加自己为协作者'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # 创建或更新协作关系
-        doc_collab, created = DocumentCollaboration.objects.update_or_create(
-            file=file_obj,
-            user=collaborator,
-            defaults={
-                'permission': permission,
-                'is_active': True,
-                'added_by': request.user,
-            }
-        )
-
-        # 🔧 发送通知（如果启用）
-        if notify and created:
-            self._send_collaboration_notification(file_obj, collaborator, request.user, permission)
-
-        # 记录操作日志
-        FileOperationLog.objects.create(
-            file=file_obj,
-            user=request.user,
-            operation='add_collaborator',
-            description=f'添加协作者：{collaborator.username}（权限：{permission}）',
-            ip_address=get_request_ip(request),
-            extra_data={
-                'collaborator_id': str(collaborator.id),
-                'collaborator_username': collaborator.username,
-                'permission': permission,
-                'created': created,
-            }
-        )
-
-        return Response({
-            'message': '协作者添加成功',
-            'collaborator': {
-                'id': collaborator.id,
-                'username': collaborator.username,
-                'real_name': collaborator.real_name,
-                'avatar': collaborator.get_avatar_url(),
-                'permission': permission,
-                'is_active': True,
-                'added_at': doc_collab.added_at.isoformat(),
-            }
-        }, status=status.HTTP_201_CREATED)
-
-    @action(detail=True, methods=['put'], permission_classes=[permissions.IsAuthenticated],
-            url_path='update_collaborator/(?P<user_id>[^/.]+)')
-    def update_collaborator(self, request, pk=None):
-        """
-        🔧 修改文档协同编辑者权限
-        PUT /api/cloud/documents/{id}/update_collaborator/{user_id}/
-        {
-            "permission": "write",  // read/write/admin
-            "is_active": true  // 启用/禁用
-        }
-        """
-        try:
-            file_obj = CloudFile.objects.get(id=pk, owner=request.user)
-        except CloudFile.DoesNotExist:
-            return Response({'error': '文档不存在'}, status=status.HTTP_404_NOT_FOUND)
-
-        collaborator_id = self.kwargs.get('user_id') or request.data.get('user_id')
-        if not collaborator_id:
-            return Response({'error': '请指定协同用户'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            doc_collab = DocumentCollaboration.objects.get(
-                file=file_obj,
-                user_id=collaborator_id
-            )
-        except DocumentCollaboration.DoesNotExist:
-            return Response({'error': '协作者关系不存在'}, status=status.HTTP_404_NOT_FOUND)
-
-        # 验证权限：只有文档所有者或管理员可以修改
-        if request.user.id != file_obj.owner_id and request.user.user_type not in ['admin', 'super_admin']:
-            return Response({'error': '无权修改协作者权限'}, status=status.HTTP_403_FORBIDDEN)
-
-        logger.info(f'{request.user.username} 修改文档 {file_obj.name} 协作者 {doc_collab.user.username} 权限')
-        permission = request.data.get('permission')
-        is_active = request.data.get('is_active')
-
-        if permission and permission not in ['read', 'write', 'admin']:
-            return Response({'error': '权限类型无效'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # 更新协作关系
-        if permission:
-            doc_collab.permission = permission
-        if is_active is not None:
-            doc_collab.is_active = is_active
-            if not is_active:
-                doc_collab.status = 'disabled'
-            elif doc_collab.status == 'disabled':
-                doc_collab.status = 'active'
-
-        doc_collab.updated_at = timezone.now()
-        doc_collab.save()
-
-        # 记录操作日志
-        FileOperationLog.objects.create(
-            file=file_obj,
-            user=request.user,
-            operation='update_collaborator',
-            description=f'修改协作者 {doc_collab.user.username} 权限',
-            ip_address=get_request_ip(request),
-            extra_data={
-                'old_permission': doc_collab.permission,
-                'new_permission': permission or doc_collab.permission,
-                'is_active': is_active if is_active is not None else doc_collab.is_active,
-            }
-        )
-
-        return Response({
-            'message': '协作者权限更新成功',
-            'collaborator': {
-                'id': doc_collab.user.id,
-                'username': doc_collab.user.username,
-                'real_name': doc_collab.user.real_name,
-                'permission': doc_collab.permission,
-                'is_active': doc_collab.is_active,
-                'updated_at': doc_collab.updated_at.isoformat(),
-            }
-        })
-
-    @action(detail=True, methods=['delete'], permission_classes=[permissions.IsAuthenticated])
-    def remove_collaborator(self, request, pk=None):
-        """
-        🔧 删除文档协同编辑者
-        DELETE /api/cloud/documents/{id}/collaborators/{user_id}/
-        """
-        try:
-            file_obj = CloudFile.objects.get(id=pk, owner=request.user)
-        except CloudFile.DoesNotExist:
-            return Response({'error': '文档不存在'}, status=status.HTTP_404_NOT_FOUND)
-
-        collaborator_id = self.kwargs.get('user_id')
-        if not collaborator_id:
-            return Response({'error': '请指定协同用户'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            doc_collab = DocumentCollaboration.objects.get(
-                file=file_obj,
-                user_id=collaborator_id
-            )
-        except DocumentCollaboration.DoesNotExist:
-            return Response({'error': '协作者关系不存在'}, status=status.HTTP_404_NOT_FOUND)
-
-        # 验证权限
-        if request.user.id != file_obj.owner_id and request.user.user_type not in ['admin', 'super_admin']:
-            return Response({'error': '无权删除协作者'}, status=status.HTTP_403_FORBIDDEN)
-
-        collaborator_username = doc_collab.user.username
-        doc_collab.delete()
-
-        # 记录操作日志
-        FileOperationLog.objects.create(
-            file=file_obj,
-            user=request.user,
-            operation='remove_collaborator',
-            description=f'移除协作者：{collaborator_username}',
-            ip_address=get_request_ip(request),
-            extra_data={
-                'collaborator_id': collaborator_id,
-                'collaborator_username': collaborator_username,
-            }
-        )
-
-        return Response({'message': '协作者已移除'})
-
-    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
-    def collaborators(self, request, pk=None):
-        """
-        🔧 获取文档协同编辑者列表
-        GET /api/cloud/documents/{id}/collaborators/
-        """
-        try:
-            file_obj = CloudFile.objects.get(id=pk)
-        except CloudFile.DoesNotExist:
-            return Response({'error': '文档不存在'}, status=status.HTTP_404_NOT_FOUND)
-
-        # 权限验证：所有者、协作者或管理员可访问
-        if not self._can_access_document(file_obj, request.user):
-            return Response({'error': '无权访问该文档'}, status=status.HTTP_403_FORBIDDEN)
-
-        # 获取活跃协作者（含在线状态）
-        collaborators = DocumentCollaboration.objects.filter(
-            file=file_obj,
-            status='editing',
-        ).select_related('user').order_by('-last_activity')
-
-        data = []
-        for collab in collaborators:
-            user = collab.user
-            data.append({
-                'id': user.id,
-                'username': user.username,
-                'real_name': user.real_name or user.username,
-                'avatar': user.get_avatar_url(),
-                'status': collab.status,  # active/editing/viewing/disabled
-                'joined_at': collab.joined_at.isoformat(),
-                'left_at': collab.left_at.isoformat() if collab.left_at else None,
-                'last_activity': collab.last_activity.isoformat() if collab.last_activity else None,
-                'is_online': getattr(user, 'is_online', False),
-                'is_owner': user.id == file_obj.owner.id,
-            })
-
-        return Response({'collaborators': data, 'total': len(data)})
-
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
-    def update_collaboration_status(self, request, pk=None):
-        """
-        🔧 更新协同编辑状态（心跳/活动上报）
-        POST /api/cloud/documents/{id}/collaboration/status/
-        {
-            "status": "editing",  // viewing/editing/closed
-            "cursor_position": {"line": 10, "column": 5}  // 可选：光标位置
-        }
-        """
-        try:
-            file_obj = CloudFile.objects.get(id=pk)
-        except CloudFile.DoesNotExist:
-            return Response({'error': '文档不存在'}, status=status.HTTP_404_NOT_FOUND)
-
-        if not self._can_access_document(file_obj, request.user):
-            return Response({'error': '无权访问该文档'}, status=status.HTTP_403_FORBIDDEN)
-
-        status = request.data.get('status', 'viewing')
-        cursor_position = request.data.get('cursor_position')
-
-        if status not in ['viewing', 'editing', 'closed']:
-            return Response({'error': '状态类型无效'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # 更新或创建协作记录
-        doc_collab, _ = DocumentCollaboration.objects.get_or_create(
-            file=file_obj,
-            user=request.user,
-            defaults={'permission': 'read', 'is_active': True}
-        )
-
-        doc_collab.status = status
-        doc_collab.last_activity = timezone.now()
-        if cursor_position:
-            doc_collab.cursor_position = cursor_position
-        doc_collab.save()
-
-        # 🔧 广播状态变更给其他协作者（通过 WebSocket）
-        self._broadcast_collaboration_status(file_obj, request.user, status)
-
-        return Response({'message': '状态已更新', 'status': status})
-
-    # 🔧 辅助方法：发送协同通知
-    def _send_collaboration_notification(self, file_obj, collaborator, inviter, permission):
-        """发送协同编辑邀请通知"""
-        try:
-            from notifications.models import Notification  # 假设有通知模型
-
-            Notification.objects.create(
-                recipient=collaborator,
-                actor=inviter,
-                verb='invited_to_collaborate',
-                target=file_obj,
-                level='info',
-                description=f'{inviter.real_name or inviter.username} 邀请您协同编辑文档 "{file_obj.name}"',
-                extra_data={
-                    'file_id': str(file_obj.id),
-                    'file_name': file_obj.name,
-                    'permission': permission,
-                    'action_url': f'/cloud/editor/?id={file_obj.id}',
-                }
-            )
-        except ImportError:
-            logger.warning('Notification model not found, skip sending notification')
-        except Exception as e:
-            logger.error(f'Failed to send collaboration notification: {e}')
-
-    # 🔧 辅助方法：广播协同状态
-    def _broadcast_collaboration_status(self, file_obj, user, status):
-        """通过 WebSocket 广播协同状态变更"""
-        try:
-            channel_layer = get_channel_layer()
-
-            # 广播到文档专属频道
-            channel_layer.group_send(
-                f'doc_{file_obj.id}_collaboration',
-                {
-                    'type': 'collaboration.status_update',
-                    'user_id': user.id,
-                    'username': user.username,
-                    'real_name': user.real_name,
-                    'avatar': user.get_avatar_url(),
-                    'status': status,
-                    'timestamp': timezone.now().isoformat(),
-                }
-            )
-        except Exception as e:
-            logger.warning(f'Failed to broadcast collaboration status: {e}')
-
-    # 🔧 辅助方法：验证文档访问权限
-    def _can_access_document(self, file_obj, user):
-        """验证用户是否可以访问文档"""
-        # 所有者
-        if file_obj.owner == user:
-            return True
-
-        # 管理员
-        if user.user_type in ['admin', 'super_admin']:
-            return True
-
-        # 协作者
-        if DocumentCollaboration.objects.filter(
-                file=file_obj,
-                user=user,
-                is_active=True
-        ).exists():
-            return True
-
-        # 有分享权限
-        if FileShare.objects.filter(
-                Q(file=file_obj) | Q(folder=file_obj.folder),
-                is_active=True
-        ).filter(
-            Q(allowed_users=user) |
-            Q(share_type='public') |
-            Q(share_type='password')
-        ).exists():
-            return True
-
-        return False
-
-    def _format_size(self, size_bytes):
-        """格式化文件大小"""
-        if size_bytes == 0:
-            return '0 B'
-        units = ['B', 'KB', 'MB', 'GB', 'TB']
-        unit_index = 0
-        size = float(size_bytes)
-        while size >= 1024 and unit_index < len(units) - 1:
-            size /= 1024
-            unit_index += 1
-        return f'{size:.2f} {units[unit_index]}'
-
-    def _sanitize_filename(self, filename):
-        """
-        🔧 安全处理文件名，防止路径遍历攻击和非法字符
-        """
-
-        if not filename:
-            return 'unnamed'
-
-        # 1. 移除路径分隔符，防止路径遍历
-        filename = os.path.basename(str(filename))
-
-        # 2. 移除或替换非法字符（Windows/Linux 兼容）
-        # 保留中文、英文、数字、下划线、点、横杠、空格
-        filename = re.sub(r'[<>:"|?*\\]', '_', filename)
-
-        # 3. 移除首尾空格和点
-        filename = filename.strip('. ')
-
-        # 4. 限制长度（避免超长文件名）
-        if len(filename) > 200:
-            name, ext = os.path.splitext(filename)
-            filename = name[:190] + ext
-
-        # 5. 确保不为空
-        if not filename or filename == '.':
-            filename = 'unnamed_file'
-
-        return filename
-
-
 # cloud/views.py - DocumentEditorViewSet 完整修复版
 
 class DocumentEditorViewSet(viewsets.ViewSet):
@@ -5378,26 +4732,126 @@ class DocumentEditorViewSet(viewsets.ViewSet):
     permission_classes = []
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
-    # 🔧 关键修复：从 settings 读取配置
+    current_config = {}
+
     @property
     def doc_server_url(self):
-        return settings.ONLYOFFICE.get('DOCUMENT_SERVER_URL', 'https://chat.first-iq.com/onlyoffice')
+        """🔧 从系统配置获取 OnlyOffice 文档服务器地址"""
+        return CloudSystemConfig.get_value(
+            'onlyoffice.document_server_url',
+            settings.ONLYOFFICE.get('DOCUMENT_SERVER_URL', 'https://chat.first-iq.com/onlyoffice')
+        )
 
     @property
     def server_url(self):
-        return settings.ONLYOFFICE.get('SERVER_URL', 'https://chat.first-iq.com')
+        """🔧 从系统配置获取回调服务器地址"""
+        return CloudSystemConfig.get_value(
+            'onlyoffice.server_url',
+            settings.ONLYOFFICE.get('SERVER_URL', 'https://chat.first-iq.com')
+        )
+
+    @property
+    def jwt_secret(self):
+        """🔧 从系统配置获取 JWT 密钥"""
+        return CloudSystemConfig.get_value(
+            'onlyoffice.jwt_secret',
+            settings.ONLYOFFICE.get('JWT_SECRET', '')
+        )
+
+    @property
+    def jwt_enabled(self):
+        """🔧 从系统配置获取 JWT 启用状态"""
+        return CloudSystemConfig.get_value(
+            'onlyoffice.jwt_enabled',
+            settings.ONLYOFFICE.get('JWT_ENABLED', True)
+        )
+
+    @property
+    def collaboration_mode(self):
+        """🔧 从系统配置获取协同编辑模式"""
+        return CloudSystemConfig.get_value(
+            'collab.collaboration_mode',
+            10
+        )
+
+    @property
+    def version_keep_count(self):
+        """🔧 从系统配置获取版本保留数量"""
+        return CloudSystemConfig.get_value(
+            'storage.version_keep_count',
+            settings.ONLYOFFICE.get('VERSION_KEEP_COUNT', 10)
+        )
+
+    @property
+    def onlyoffice_configs(self):
+        """🔧 从系统配置获取 OnlyOffice 权限配置"""
+
+        config = CloudSystemConfig.objects.first()
+        if config:
+            return {
+                'document_server_url': config.onlyoffice_document_server_url,
+                'jwt_enabled': config.onlyoffice_jwt_enabled,
+                'jwt_secret': config.onlyoffice_jwt_secret,
+                'language': config.onlyoffice_language,
+                'collaboration_mode': config.onlyoffice_collaboration_mode,
+                'version_keep_count': config.onlyoffice_version_keep_count,
+                'permissions': {
+                    'download': config.onlyoffice_permission_download,
+                    'copy': config.onlyoffice_permission_copy,
+                    'edit': config.onlyoffice_permission_edit,
+                    'print': config.onlyoffice_permission_print,
+                    'comment': config.onlyoffice_permission_comment,
+                    'chat': config.onlyoffice_permission_chat,
+                    'review': config.onlyoffice_permission_review,
+                    'fill_forms': config.onlyoffice_permission_fill_forms,
+                    'modify_content_control': config.onlyoffice_permission_modify_content_control,
+                    'modify_filter': config.onlyoffice_permission_modify_filter,
+                },
+                'ui': {
+                    'show_chat': config.onlyoffice_show_chat,
+                    'show_comments': config.onlyoffice_show_comments,
+                    'show_review': config.onlyoffice_show_review,
+                    'show_spellcheck': config.onlyoffice_show_spellcheck,
+                    'forcesave': config.onlyoffice_forcesave,
+                    'compact_toolbar': config.onlyoffice_compact_toolbar,
+                    'ui_theme': config.onlyoffice_ui_theme,
+                },
+            }
+
+        return {
+            'document_server_url': CloudSystemConfig.get_value('onlyoffice_document_server_url'),
+            'jwt_enabled': CloudSystemConfig.get_value('onlyoffice_jwt_enabled', True),
+            'jwt_secret': CloudSystemConfig.get_value('onlyoffice_jwt_secret', ''),
+            'language': CloudSystemConfig.get_value('onlyoffice_language', 'zh-CN'),
+            'collaboration_mode': CloudSystemConfig.get_value('onlyoffice_collaboration_mode', 'fast'),
+            'permissions': {
+                'download': CloudSystemConfig.get_value('onlyoffice_permission_download', True),
+                'copy': CloudSystemConfig.get_value('onlyoffice_permission_copy', True),
+                'edit': CloudSystemConfig.get_value('onlyoffice_permission_edit', True),
+                'print': CloudSystemConfig.get_value('onlyoffice_permission_print', True),
+                'comment': CloudSystemConfig.get_value('onlyoffice_permission_comment', True),
+                'chat': CloudSystemConfig.get_value('onlyoffice_permission_chat', True),
+                'review': CloudSystemConfig.get_value('onlyoffice_permission_review', True),
+                'fillForms': CloudSystemConfig.get_value('onlyoffice_permission_fill_forms', True),
+                'modifyContentControl': CloudSystemConfig.get_value('onlyoffice_permission_modify_content_control',
+                                                                    True),
+                'modifyFilter': CloudSystemConfig.get_value('onlyoffice_permission_modify_filter', True),
+            },
+            'ui': {
+                'show_chat': CloudSystemConfig.get_value('onlyoffice_show_chat', True),
+                'show_comments': CloudSystemConfig.get_value('onlyoffice_show_comments', True),
+                'show_review': CloudSystemConfig.get_value('onlyoffice_show_review', True),
+                'show_spellcheck': CloudSystemConfig.get_value('onlyoffice_show_spellcheck', True),
+                'forcesave': CloudSystemConfig.get_value('onlyoffice_forcesave', True),
+                'compact_toolbar': CloudSystemConfig.get_value('onlyoffice_compact_toolbar', False),
+                'ui_theme': CloudSystemConfig.get_value('onlyoffice_ui_theme', 'theme-light'),
+            },
+            'version_keep_count': CloudSystemConfig.get_value('onlyoffice_version_keep_count', 10),
+        }
 
     @property
     def CLOUD_SERVER_URL(self):
         return settings.ONLYOFFICE.get('CLOUD_SERVER_URL', 'https://chat.first-iq.com/cloud/')
-
-    @property
-    def jwt_secret(self):
-        return settings.ONLYOFFICE.get('JWT_SECRET', '')
-
-    @property
-    def jwt_enabled(self):
-        return settings.ONLYOFFICE.get('JWT_ENABLED', True)
 
     @property
     def supported_formats(self):
@@ -5452,8 +4906,14 @@ class DocumentEditorViewSet(viewsets.ViewSet):
         try:
             token_payload = payload
             token_payload['iat'] = int(datetime.now().timestamp())
+
+            # 🔧 添加过期时间（可选，建议 24 小时）
+            # token_payload['exp'] = int(datetime.now().timestamp()) + 86400
+
+            # 🔧 使用 HS256 算法
             token = jwt.encode(token_payload, self.jwt_secret, algorithm='HS256')
 
+            # 🔧 Python 3.7+ jwt.encode 返回字符串
             if isinstance(token, bytes):
                 token = token.decode('utf-8')
 
@@ -5538,164 +4998,247 @@ class DocumentEditorViewSet(viewsets.ViewSet):
     @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def edit(self, request, pk=None):
         """
-        🔧 获取文档编辑配置
+        🔧 获取文档编辑配置（集成系统配置 + 协同编辑优化）
         GET /api/cloud/documents/{id}/edit/
+
+        核心功能：
+        1. 验证文档访问/编辑权限
+        2. 动态加载系统配置（OnlyOffice 参数）
+        3. 生成稳定的 document key（支持多人协同）
+        4. 构建 JWT Token（如果启用）
+        5. 记录协作状态
         """
         try:
             logger.info(f"📝 获取文档编辑配置：{pk}, user: {request.user}")
 
-            # 1. 获取文件
+            # ==================== 1. 获取文件对象 ====================
             try:
                 file_obj = CloudFile.objects.select_related('owner').get(id=pk)
             except CloudFile.DoesNotExist:
                 logger.error(f'❌ 文件不存在：{pk}')
-                return Response({'error': '文件不存在'}, status=404)
+                return Response({'error': '文件不存在'}, status=status.HTTP_404_NOT_FOUND)
 
-            # 2. 验证访问权限
+            # ==================== 2. 权限验证 ====================
+            # 2.1 访问权限验证
             if not self._can_access_document(file_obj, request.user):
-                logger.error(f'❌ 无权访问：user={request.user.username}')
+                logger.warning(f'⚠️ 无权访问：user={request.user.username}, file={pk}')
                 return Response(
                     {'error': '您没有权限访问该文件'},
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-            # 3. 验证编辑权限
-            can_edit = self._can_edit_document(file_obj, request.user)
-            if not can_edit:
-                logger.warning(f'⚠️ 只读权限：user={request.user.username}')
+            self.current_config = self.onlyoffice_configs.copy()
+            base_permissions = self.current_config.get('permissions', {})
 
-            # 4. 获取文件扩展名和文档类型
+            # 2.2 编辑权限验证（决定编辑器模式）
+            can_edit = base_permissions.get('edit') or self._can_edit_document(file_obj, request.user)
+            if not can_edit:
+                logger.info(f'👁️ 只读模式：user={request.user.username}')
+
+            # ==================== 3. 基础信息准备 ====================
+            # 3.1 文件扩展名和文档类型
             file_ext = file_obj.original_name.split('.')[-1].lower() if file_obj.original_name else ''
             doc_type = self._get_document_type(file_obj.original_name)
             if not doc_type:
-                return Response({'error': '不支持的文档格式'}, status=400)
+                return Response(
+                    {'error': f'不支持的文档格式：.{file_ext}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-            # 5. 构建文件访问 URL 和回调 URL
+            # 3.2 URL 构建
             file_url = self._get_file_url(file_obj)
             callback_url = self._get_callback_url(pk)
 
-            # 6. 构建用户信息
+            # ==================== 4. 权限配置（动态加载系统配置）====================
+            # 4.1 基础权限模板（从系统配置加载）
+
+
+            # 4.2 根据编辑权限调整
+            if not can_edit:
+                # 只读模式：禁用编辑相关权限
+                restricted_permissions = {
+                    'edit': False,
+                    'comment': base_permissions.get('comment', False),  # 可配置是否允许评论
+                    'download': base_permissions.get('download', False),
+                    'copy': base_permissions.get('copy', False),
+                    'print': base_permissions.get('print', False),
+                    'fillForms': False,
+                    'modifyContentControl': False,
+                    'modifyFilter': False,
+                }
+                permissions = {**base_permissions, **restricted_permissions}
+            else:
+                permissions = base_permissions
+
+            # ==================== 5. 用户信息 ====================
             user_info = {
                 'id': str(request.user.id),
                 'name': request.user.real_name or request.user.username,
                 'email': request.user.email or '',
             }
 
-            collaboration_mode = 'fast' # strict: 严格模式（实时保存），fast: 快速模式
+            # ==================== 6. Document Key 生成（协同编辑关键）====================
+            # 🔧 关键：使用稳定的 key，确保同一文档的多用户能进入同一协同会话
+            # 格式：{file_id}_{md5}_{updated_timestamp}
+            # - file_id: 文件唯一标识
+            # - md5: 文件内容哈希，内容变化时重置协同会话
+            # - updated_timestamp: 秒级时间戳，文件修改后协同会话才会重置
 
-            # 7. 构建 OnlyOffice 配置
+            md5_value = file_obj.md5 or str(file_obj.id)
+            updated_ts = int(file_obj.updated_at.timestamp()) if file_obj.updated_at else int(
+                timezone.now().timestamp())
+            document_key = f"{file_obj.id}_{md5_value}_{updated_ts}"
+
+            logger.debug(f'🔑 Document Key: {document_key[:50]}...')
+
+            # ==================== 7. 构建 OnlyOffice 配置 ====================
             config = {
+                # ── 文档核心配置 ──
                 'document': {
                     'fileType': file_ext,
-                    # 'key': f"{file_obj.id}_{file_obj.md5 or str(file_obj.id)}_{int(timezone.now().timestamp())}",
-                    'key': f"{file_obj.id}_{file_obj.md5 or str(file_obj.id)}",
-                    'title': file_obj.name or file_obj.original_name,
+                    'key': document_key,  # ✅ 稳定的 key 支持协同编辑
+                    'title': file_obj.name or file_obj.original_name or '未命名文档',
                     'url': file_url,
-                    'permissions': {
-                        'comment': can_edit,
-                        'copy': can_edit,
-                        'download': can_edit,
-                        'edit': can_edit,  # 🔧 根据权限控制编辑
-                        'fillForms': can_edit,
-                        'modifyContentControl': can_edit,
-                        'modifyFilter': can_edit,
-                        'print': can_edit,
-                        'review': can_edit,
-                    },
+                    'permissions': permissions,
+                    # 🔧 可选：添加文档信息（用于前端展示）
+                    'info': {
+                        'owner': file_obj.owner.username,
+                        'created': file_obj.created_at.isoformat() if file_obj.created_at else None,
+                        'modified': file_obj.updated_at.isoformat() if file_obj.updated_at else None,
+                    }
                 },
-                'documentType': doc_type,
+
+                # ── 编辑器类型 ──
+                'documentType': doc_type,  # word/cell/slide
+
+                # ── 编辑器配置 ──
                 'editorConfig': {
                     'callbackUrl': callback_url,
                     'user': user_info,
-                    'lang': 'zh-CN',
+
+                    # 语言和本地化
+                    'lang': self.current_config.get('language', 'zh-CN'),
+                    'region': self.current_config.get('language', 'zh-CN'),
+
+                    # 编辑模式
                     'mode': 'edit' if can_edit else 'view',
+
+                    # 🔧 自定义配置（从系统配置动态加载）
                     'customization': {
-                        'autosave': True,
-                        'chat': True,
-                        'comments': True,
-                        'feedback': False,
-                        'forcesave': True,
+                        # 自动保存
+                        'autosave': CloudSystemConfig.get_value('onlyoffice.autosave', True),
+
+                        # 功能开关
+                        'chat': CloudSystemConfig.get_value('onlyoffice.features.chat', True),
+                        'comments': CloudSystemConfig.get_value('onlyoffice.features.comments', True),
+                        'spellcheck': CloudSystemConfig.get_value('onlyoffice.features.spellcheck', True),
+                        'mentionShare': CloudSystemConfig.get_value('onlyoffice.features.mention_share', True),
+
+                        # 反馈和帮助
+                        'feedback': False,  # 生产环境建议关闭
+                        'help': CloudSystemConfig.get_value('onlyoffice.features.help', False),
+
+                        # 强制保存按钮
+                        'forcesave': CloudSystemConfig.get_value('onlyoffice.features.forcesave', True),
+                        'forcesaveButton': can_edit and CloudSystemConfig.get_value(
+                            'onlyoffice.features.forcesave_button', True),
+
+                        # 返回按钮配置
                         'goback': {
                             'blank': False,
                             'requestClose': False,
-                            'text': '返回网盘',
-                            'url': f'{self.server_url}/cloud/',
-                        },
-                        # 'logo': {
-                        #     'image': f'{self.server_url}/media/avatars/cloud-green.svg',
-                        #     'imageEmbedded': True,
-                        # },
-                        # 替换顶部 Logo（支持 URL 或 Base64）
-                        'logo':f'{self.server_url}/media/avatars/cloud-green.svg',
-
-                        # 控制左侧“关于”按钮（社区版仅支持隐藏，无法修改内容）
-                        "about": False,
-
-                        "customer": {
-                            "name": "企业网盘",
-                            "mail": "ole211@qq.com",
-                            "www": f"{self.CLOUD_SERVER_URL}",
-                            "info": "内部协同办公平台 v1.0"
+                            'text': CloudSystemConfig.get_value('onlyoffice.goback_text', '返回网盘'),
+                            'url': f'{self.CLOUD_SERVER_URL}',
                         },
 
-                        "help": False,              # 隐藏右侧帮助菜单
-                        "feedback": False,          # 隐藏反馈按钮
-                        "hideRightMenu": False,     # 默认展开右侧工具栏
-                        "toolbarNoTabs": False,      # 工具栏显示标签页
+                        # 品牌定制
+                        'logo': {
+                            'image': f'{self.server_url}/media/avatars/cloud-green.svg',
+                            'imageEmbedded': True,
+                        },
+                        'about': False,  # 隐藏"关于"按钮
+                        'customer': {
+                            'name': CloudSystemConfig.get_value('cloud.name', '企业网盘'),
+                            'mail': CloudSystemConfig.get_value('cloud.contact_email', 'support@company.com'),
+                            'www': self.CLOUD_SERVER_URL,
+                            'info': CloudSystemConfig.get_value('cloud.description', '内部协同办公平台'),
+                        },
 
+                        # 界面布局
+                        'hideRightMenu': self.current_config.get('ui', {}).get('hide_right_menu', False),
+                        'toolbarNoTabs': self.current_config.get('ui', {}).get('toolbar_no_tabs', False),
+                        'compactToolbar': self.current_config.get('ui', {}).get('compact_toolbar', False),
+                        'uiTheme': self.current_config.get('ui', {}).get('ui_theme', 'theme-light'),
 
-                        'mentionShare': True,
-                        'reviewDisplay': 'original',
-                        'spellcheck': True,
-                        'uiTheme': 'theme-light',
-                        'forcesaveButton': can_edit,
-                        'compactToolbar': False,
+                        # 审阅显示模式
+                        'reviewDisplay': self.current_config.get('ui', {}).get('show_review', True),
+
+                        # 🔧 协同编辑模式配置
                         'collaboration': {
-                            "mode": collaboration_mode  # 或 "strict"
+                            'mode': self.current_config.get('collaboration_mode', 'fast'),  # fast/strict
                         },
                     },
-                    'permissions': {  # 新版权限位置
-                        'chat': True,
-                        'review': {
-                            'display': 'original',
-                        },
-                        'spellcheck': True,
-                        'comment': can_edit,
-                        'copy': can_edit,
-                        'download': can_edit,
-                        'edit': can_edit,  # 🔧 根据权限控制编辑
-                        'fillForms': can_edit,
-                        'modifyContentControl': can_edit,
-                        'modifyFilter': can_edit,
-                        'print': can_edit,
-                        'review': can_edit,
-                    },
+
+                    # 🔧 权限配置（新版 OnlyOffice 要求）
+                    'permissions': permissions,
+
+                    # 🔧 协同编辑配置
                     'coEditing': {
-                        'mode': collaboration_mode,  # strict: 严格模式（实时保存），fast: 快速模式
-                        'change': can_edit,
+                        'mode': self.current_config.get('collaboration_mode', 'fast'),
+                        'change': can_edit,  # 只读用户不能触发变更
                     },
+
+                    # 最近文档（仅编辑模式显示）
                     'recent': self._get_recent_documents(request.user) if can_edit else [],
                 },
+
+                # ── 编辑器尺寸和类型 ──
                 'height': '100%',
                 'width': '100%',
-                'type': 'desktop',
+                'type': 'desktop',  # desktop/mobile/embedded
             }
 
-            # 8. 添加 JWT Token
+            # ==================== 8. JWT Token 集成 ====================
             if self.jwt_enabled and self.jwt_secret:
-                token = self._generate_jwt_token(config)
-                if token:
-                    config['token'] = token
+                try:
+                    jwt_token = self._generate_jwt_token(config)
+                    if jwt_token:
+                        config['token'] = jwt_token
+                        logger.debug('✅ JWT Token 生成成功')
+                    else:
+                        logger.warning('⚠️ JWT Token 生成返回 None')
+                except Exception as jwt_err:
+                    logger.error(f'❌ JWT Token 生成异常: {jwt_err}', exc_info=True)
+                    # JWT 失败不影响编辑器加载，继续返回配置
+            else:
+                logger.info('ℹ️ JWT 未启用或 JWT_SECRET 未配置')
 
-            # 9. 记录协作状态（DocumentCollaboration）
-            self._record_collaboration(file_obj, request.user, 'editing')
+            # ==================== 9. 记录协作状态 ====================
+            try:
+                self._record_collaboration(file_obj, request.user, 'editing')
+            except Exception as collab_err:
+                logger.warning(f'⚠️ 记录协作状态失败: {collab_err}')
+                # 协作记录失败不影响编辑器加载
 
-            logger.info(f'✅ Edit config generated successfully')
+            # ==================== 10. 返回配置 ====================
+            logger.info(
+                f'✅ Edit config generated: file={pk}, user={request.user.username}, mode={"edit" if can_edit else "view"}')
             return Response(config)
 
+        except CloudFile.DoesNotExist:
+            logger.error(f'❌ 文档不存在: {pk}')
+            return Response({'error': '文档不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+        except PermissionError as e:
+            logger.warning(f'⚠️ 权限拒绝: {e}')
+            return Response({'error': '权限不足'}, status=status.HTTP_403_FORBIDDEN)
+
         except Exception as e:
-            logger.error(f'Get edit config failed: {e}', exc_info=True)
-            return Response({'error': f'获取编辑配置失败：{str(e)}'}, status=500)
+            logger.error(f'❌ Get edit config failed: {e}', exc_info=True)
+            return Response(
+                {'error': f'获取编辑配置失败：{str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     def _record_collaboration(self, file_obj, user, status):
         """
@@ -5800,7 +5343,7 @@ class DocumentEditorViewSet(viewsets.ViewSet):
 
             # 基础查询：文档类型 + 未删除 + 联合权限条件
             queryset = CloudFile.objects.filter(
-                deleted_at__isnull=True,
+                # deleted_at__isnull=True,
                 is_document=True
             ).filter(query_condition).distinct()
 
@@ -6849,18 +6392,28 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                         return Response({'error': 1}, status=500)
 
             elif status_code == 3:  # 文档关闭
+                # 🔧 状态 3：文档关闭 - 清理编辑锁
+
+                logger.info(f'📝 文档 {pk} 已关闭，清理编辑锁')
+
+                # 清理编辑锁
                 DocumentEditLock.objects.filter(
                     file=file_obj,
-                    user__id__in=users,
+                    # user__id__in=users,
                     is_active=True
                 ).update(is_active=False)
 
+                # 更新协作者状态
                 for user_id in users:
                     try:
                         user = CustomUser.objects.get(id=user_id)
                         self._record_collaboration(file_obj, user, 'closed')
                     except CustomUser.DoesNotExist:
                         logger.warning(f'User {user_id} not found')
+
+                # 清除编辑用户
+                file_obj.editing_user = None
+                file_obj.save(update_fields=['editing_user', 'updated_at'])
 
                 active_locks = DocumentEditLock.objects.filter(
                     file=file_obj,
@@ -6904,7 +6457,7 @@ class DocumentEditorViewSet(viewsets.ViewSet):
             logger.info(f'📝 Creating version v{version_number}')
 
             # 清理旧版本
-            keep_count = settings.ONLYOFFICE.get('VERSION_KEEP_COUNT', 10)
+            keep_count = self.current_config.get('version_keep_count',  settings.ONLYOFFICE.get('VERSION_KEEP_COUNT', 10))
             old_versions = DocumentVersion.objects.filter(
                 file=file_obj
             ).order_by('-version_number')[keep_count:]
@@ -7210,3 +6763,886 @@ class DocumentEditorViewSet(viewsets.ViewSet):
             'pdf': 'fa-file-pdf'
         }
         return icon_map.get(doc_type, 'fa-file')
+
+
+# cloud/views.py - 系统配置视图集（适配 CloudSystemConfig 模型）
+
+class IsCloudAdmin(permissions.BasePermission):
+    """🔧 网盘管理员权限"""
+
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and (
+                request.user.is_superuser or
+                request.user.user_type in ['admin', 'super_admin']
+        )
+
+
+class CloudSystemSettingsViewSet(viewsets.ViewSet):
+    """
+    🔧 企业网盘系统配置视图集
+    支持 OnlyOffice、文件上传、存储、协同编辑等配置管理
+    适配 CloudSystemConfig 模型（含专用字段）
+    """
+
+    permission_classes = [permissions.IsAuthenticated, IsCloudAdmin]
+
+    CACHE_PREFIX = 'company_chat:config:'
+
+    # 🔧 预定义配置项（与模型 CATEGORY_CHOICES 对齐）
+    PREDEFINED_CONFIGS = {
+        # ==================== 存储设置 ====================
+        'storage.quota_gb': {
+            'name': '用户存储配额',
+            'value_type': 'integer',
+            'default': '10',
+            'description': '每个用户的默认存储配额（GB）',
+            'category': 'storage',
+            'is_public': True,
+            'validation': {'min': 1, 'max': 1000}
+        },
+        'storage.version_keep_count': {
+            'name': '版本保留数量',
+            'value_type': 'integer',
+            'default': '10',
+            'description': '文档历史版本保留的最大数量',
+            'category': 'storage',
+            'is_editable': True,
+            'validation': {'min': 1, 'max': 100}
+        },
+
+        # ==================== 安全设置 ====================
+        'security.token_expire_hours': {
+            'name': '令牌过期时间',
+            'value_type': 'integer',
+            'default': '24',
+            'description': '访问令牌过期时间（小时）',
+            'category': 'security',
+            'is_editable': True,
+            'validation': {'min': 1, 'max': 168}
+        },
+        'security.download_token_expire_minutes': {
+            'name': '下载令牌过期时间',
+            'value_type': 'integer',
+            'default': '5',
+            'description': '文件下载令牌过期时间（分钟）',
+            'category': 'security',
+            'is_editable': True,
+            'validation': {'min': 1, 'max': 60}
+        },
+        'security.share_password_min_length': {
+            'name': '分享密码最小长度',
+            'value_type': 'integer',
+            'default': '4',
+            'description': '分享链接密码最小长度',
+            'category': 'security',
+            'is_editable': True,
+            'validation': {'min': 4, 'max': 20}
+        },
+
+        # ==================== 上传设置 ====================
+        'upload.max_file_size_mb': {
+            'name': '文件上传总上限',
+            'value_type': 'integer',
+            'default': '50',
+            'description': '单个文件允许的最大上传大小（MB）',
+            'category': 'upload',
+            'is_public': True,
+            'validation': {'min': 1, 'max': 500}
+        },
+        'upload.image_max_size_mb': {
+            'name': '图片大小上限',
+            'value_type': 'integer',
+            'default': '20',
+            'description': '图片文件允许的最大大小（MB）',
+            'category': 'upload',
+            'is_public': True,
+            'validation': {'min': 1, 'max': 100}
+        },
+        'upload.video_max_size_mb': {
+            'name': '视频大小上限',
+            'value_type': 'integer',
+            'default': '100',
+            'description': '视频文件允许的最大大小（MB）',
+            'category': 'upload',
+            'is_public': True,
+            'validation': {'min': 10, 'max': 500}
+        },
+        'upload.audio_max_size_mb': {
+            'name': '音频大小上限',
+            'value_type': 'integer',
+            'default': '30',
+            'description': '音频文件允许的最大大小（MB）',
+            'category': 'upload',
+            'is_public': True,
+            'validation': {'min': 1, 'max': 100}
+        },
+        'upload.allowed_types': {
+            'name': '允许的文件类型',
+            'value_type': 'json',
+            'default': '["image", "video", "audio", "file"]',
+            'description': '允许上传的文件类型列表',
+            'category': 'upload',
+            'is_public': True,
+            'validation': {'is_array': True}
+        },
+        'upload.chunk_size_mb': {
+            'name': '分片上传大小',
+            'value_type': 'integer',
+            'default': '5',
+            'description': '分片上传时每片的大小（MB）',
+            'category': 'upload',
+            'is_editable': True,
+            'validation': {'min': 1, 'max': 50}
+        },
+        'upload.concurrent_chunks': {
+            'name': '并发分片数',
+            'value_type': 'integer',
+            'default': '3',
+            'description': '分片上传时并发上传的分片数量',
+            'category': 'upload',
+            'is_editable': True,
+            'validation': {'min': 1, 'max': 10}
+        },
+
+        # ==================== 分享设置 ====================
+        'share.default_expire_days': {
+            'name': '分享默认有效期',
+            'value_type': 'integer',
+            'default': '7',
+            'description': '创建分享链接时的默认有效期（天）',
+            'category': 'share',
+            'is_editable': True,
+            'is_public': True,
+            'validation': {'min': 1, 'max': 365}
+        },
+        'share.allow_public': {
+            'name': '允许公开分享',
+            'value_type': 'boolean',
+            'default': 'true',
+            'description': '是否允许创建无需密码的公开分享链接',
+            'category': 'share',
+            'is_public': True,
+            'is_editable': True
+        },
+        'share.max_downloads': {
+            'name': '分享最大下载次数',
+            'value_type': 'integer',
+            'default': '100',
+            'description': '单个分享链接允许的最大下载次数（0 表示无限制）',
+            'category': 'share',
+            'is_editable': True,
+            'is_public': True,
+            'validation': {'min': 0, 'max': 10000}
+        },
+
+        # ==================== 协同设置 ====================
+        'collab.max_collaborators': {
+            'name': '最大协作者数',
+            'value_type': 'integer',
+            'default': '50',
+            'description': '单个文档允许的最大协作者数量',
+            'category': 'collaboration',
+            'is_editable': True,
+            'validation': {'min': 1, 'max': 500}
+        },
+        'collab.heartbeat_interval': {
+            'name': '心跳间隔',
+            'value_type': 'integer',
+            'default': '10',
+            'description': '协同编辑心跳间隔（秒）',
+            'category': 'collaboration',
+            'is_editable': True,
+            'validation': {'min': 5, 'max': 60}
+        },
+        'collab.cursor_expire_time': {
+            'name': '光标过期时间',
+            'value_type': 'integer',
+            'default': '30',
+            'description': '远程光标显示的过期时间（秒）',
+            'category': 'collaboration',
+            'is_editable': True,
+            'validation': {'min': 10, 'max': 120}
+        },
+        'collab.auto_save_interval': {
+            'name': '自动保存间隔',
+            'value_type': 'integer',
+            'default': '30',
+            'description': '文档自动保存间隔（秒）',
+            'category': 'collaboration',
+            'is_editable': True,
+            'validation': {'min': 10, 'max': 300}
+        },
+
+        # ==================== 系统设置 ====================
+        'system.maintenance_mode': {
+            'name': '维护模式',
+            'value_type': 'boolean',
+            'default': 'false',
+            'description': '开启后用户仅可查看，不可上传/编辑/删除',
+            'category': 'system',
+            'is_editable': True
+        },
+        'system.user_registration_enabled': {
+            'name': '允许用户注册',
+            'value_type': 'boolean',
+            'default': 'false',
+            'description': '是否开放新用户注册功能',
+            'category': 'system',
+            'is_editable': True
+        },
+        'system.download_enabled': {
+            'name': '允许文件下载',
+            'value_type': 'boolean',
+            'default': 'false',
+            'description': '是否允许文件下载',
+            'category': 'system',
+            'is_public': True,
+            'is_editable': True
+        },
+        'system.default_language': {
+            'name': '默认界面语言',
+            'value_type': 'string',
+            'default': 'zh-CN',
+            'description': '新用户默认界面语言',
+            'category': 'system',
+            'is_editable': True,
+            'validation': {'pattern': r'^[a-z]{2}-[A-Z]{2}$'}
+        },
+
+        # ==================== 通知设置 ====================
+        'notification.email_enabled': {
+            'name': '邮件通知',
+            'value_type': 'boolean',
+            'default': 'true',
+            'description': '是否启用邮件通知',
+            'category': 'notification',
+            'is_editable': True
+        },
+        'notification.collab_invite': {
+            'name': '协作邀请通知',
+            'value_type': 'boolean',
+            'default': 'true',
+            'description': '协作者邀请时是否发送通知',
+            'category': 'notification',
+            'is_editable': True
+        },
+        'notification.upload_complete': {
+            'name': '上传完成通知',
+            'value_type': 'boolean',
+            'default': 'false',
+            'description': '大文件上传完成后是否发送通知',
+            'category': 'notification',
+            'is_editable': True
+        },
+
+        # ==================== 审计日志 ====================
+        'audit.log_retention_days': {
+            'name': '日志保留天数',
+            'value_type': 'integer',
+            'default': '90',
+            'description': '操作日志保留的天数',
+            'category': 'audit',
+            'is_editable': True,
+            'validation': {'min': 7, 'max': 3650}
+        },
+        'audit.log_sensitive_operations': {
+            'name': '记录敏感操作',
+            'value_type': 'boolean',
+            'default': 'true',
+            'description': '是否记录删除、导出等敏感操作详情',
+            'category': 'audit',
+            'is_editable': True
+        },
+    }
+
+    # 🔧 配置分类定义（与模型 CATEGORY_CHOICES 对齐）
+    CONFIG_CATEGORIES = [
+        {'key': 'system', 'name': '系统设置', 'icon': 'fas fa-cog', 'order': 6},
+        {'key': 'collaboration', 'name': '协同设置', 'icon': 'fas fa-users', 'order': 5},
+        {'key': 'storage', 'name': '存储设置', 'icon': 'fas fa-hdd', 'order': 1},
+        {'key': 'security', 'name': '安全设置', 'icon': 'fas fa-shield-alt', 'order': 2},
+        {'key': 'upload', 'name': '上传设置', 'icon': 'fas fa-cloud-upload-alt', 'order': 3},
+        {'key': 'share', 'name': '分享设置', 'icon': 'fas fa-share-alt', 'order': 4},
+        {'key': 'notification', 'name': '通知设置', 'icon': 'fas fa-bell', 'order': 7},
+        {'key': 'audit', 'name': '审计日志', 'icon': 'fas fa-clipboard-list', 'order': 8},
+    ]
+
+    @action(detail=False, methods=['get'])
+    def categories(self, request):
+        """📋 获取配置分类列表（含统计）"""
+        order = request.query_params.get('order', '')
+        categories = []
+        for cat in self.CONFIG_CATEGORIES:
+            count = CloudSystemConfig.objects.filter(category=cat['key']).count()
+            categories.append({
+                **cat,
+                'count': count
+            })
+        # 按 order 排序
+        if order == 'desc':
+            categories.sort(key=lambda x: x['order']).reverse()
+        elif order == 'asc':
+            categories.sort(key=lambda x: x['order'])
+
+        return Response({'categories': categories})
+
+    @action(detail=False, methods=['get'])
+    def list_configs(self, request):
+        """📋 获取所有系统配置（支持分类/搜索过滤）"""
+        category = request.query_params.get('category', '')
+        search = request.query_params.get('search', '').strip()
+        is_public = request.query_params.get('is_public', None)
+
+        queryset = CloudSystemConfig.objects.all()
+
+        # 分类过滤
+        if category:
+            queryset = queryset.filter(category=category)
+
+        # 搜索过滤
+        if search:
+            queryset = queryset.filter(
+                models.Q(key__icontains=search) |
+                models.Q(name__icontains=search) |
+                models.Q(description__icontains=search)
+            )
+
+        # 公开配置过滤
+        if is_public is not None:
+            queryset = queryset.filter(is_public=is_public.lower() == 'true')
+
+        # 序列化
+        serializer = CloudSystemConfigSerializer(
+            queryset.order_by('category', 'key'),
+            many=True,
+            context={'request': request}
+        )
+
+        return Response({
+            'configs': serializer.data,
+            'total': queryset.count(),
+            'categories': self.CONFIG_CATEGORIES
+        })
+
+    @action(detail=False, methods=['get'])
+    def get_config(self, request):
+        """🔍 获取单个配置项详情"""
+        key = request.query_params.get('key')
+        if not key:
+            return Response({'error': '配置键不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            config = CloudSystemConfig.objects.get(key=key)
+            serializer = CloudSystemConfigSerializer(config, context={'request': request})
+            return Response(serializer.data)
+        except CloudSystemConfig.DoesNotExist:
+            # 返回预定义配置（未创建过）
+            if key in self.PREDEFINED_CONFIGS:
+                predefined = self.PREDEFINED_CONFIGS[key]
+                return Response({
+                    'key': key,
+                    'name': predefined['name'],
+                    'value': predefined.get('default'),
+                    'typed_value': predefined.get('default'),
+                    'value_type': predefined['value_type'],
+                    'category': predefined['category'],
+                    'description': predefined.get('description', ''),
+                    'default_value': predefined.get('default'),
+                    'is_public': predefined.get('is_public', False),
+                    'is_editable': predefined.get('is_editable', True),
+                    'is_default': True,
+                    'category_info': self._get_category_info(predefined['category'])
+                })
+            return Response({'error': '配置项不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=False, methods=['get'])
+    def public_configs(self, request):
+        """🌐 获取公开配置（前端初始化使用）"""
+        configs = CloudSystemConfig.objects.filter(is_public=True)
+        result = {}
+        for config in configs:
+            result[config.key] = config.get_typed_value()
+        return Response({'configs': result})
+
+    @action(detail=False, methods=['post'])
+    def update_config(self, request):
+        """✏️ 更新单个配置项"""
+        key = request.data.get('key')
+        value = request.data.get('value')
+
+        if not key or value is None:
+            return Response({'error': '配置键和值不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 验证配置项是否存在于预定义列表中
+        if key not in self.PREDEFINED_CONFIGS:
+            return Response({'error': f'无效的配置项：{key}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        predefined = self.PREDEFINED_CONFIGS[key]
+
+        # 检查是否可编辑
+        if not predefined.get('is_editable', True) and not request.user.is_superuser:
+            return Response({'error': '该配置项不可编辑'}, status=status.HTTP_403_FORBIDDEN)
+
+        value_type = predefined['value_type']
+
+        # 🔧 类型验证和转换
+        try:
+            if value_type == 'integer':
+                value = int(value)
+                self._validate_integer(value, predefined.get('validation'))
+            elif value_type == 'float':
+                value = float(value)
+            elif value_type == 'boolean':
+                value = str(value).lower() in ('true', '1', 'yes')
+            elif value_type == 'json':
+                if isinstance(value, str):
+                    value = json.loads(value)
+                self._validate_json(value, predefined.get('validation'))
+                value = json.dumps(value, ensure_ascii=False)
+            elif value_type == 'password':
+                if len(str(value)) < predefined.get('validation', {}).get('min_length', 0):
+                    raise ValueError(f'密码长度不能小于{predefined.get("validation", {}).get("min_length")}字符')
+            elif value_type == 'string':
+                value = str(value).strip()
+                self._validate_string(value, predefined.get('validation'))
+        except (ValueError, json.JSONDecodeError) as e:
+            return Response({'error': f'值验证失败：{str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 🔧 业务规则验证
+        try:
+            self._validate_business_rules(key, value)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 🔧 更新配置（事务）
+        with transaction.atomic():
+            config, created = CloudSystemConfig.objects.update_or_create(
+                key=key,
+                defaults={
+                    'name': predefined['name'],
+                    'value': str(value) if value_type != 'json' else value,
+                    'value_type': value_type,
+                    'description': predefined.get('description', ''),
+                    'category': predefined['category'],
+                    'default_value': predefined.get('default', ''),
+                    'is_public': predefined.get('is_public', False),
+                    'is_editable': predefined.get('is_editable', True),
+                    'updated_by': request.user
+                }
+            )
+
+            # 🔧 清除缓存
+            cache.delete(f'cloud_config:{key}')
+            cache.delete('cloud_config:all')
+
+            # 🔧 特殊配置处理（OnlyOffice 配置变更需要重载）
+            if key.startswith('onlyoffice.'):
+                self._reload_onlyoffice_config()
+
+        logger.info(f'配置更新：{key} = {value} by {request.user.username}')
+
+        return Response({
+            'message': '配置更新成功',
+            'config': CloudSystemConfigSerializer(config, context={'request': request}).data
+        })
+
+    @action(detail=False, methods=['post'])
+    def batch_update(self, request):
+        """📦 批量更新配置"""
+        configs = request.data.get('configs', [])
+        if not configs:
+            return Response({'error': '配置列表不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+        results = []
+        errors = []
+
+        with transaction.atomic():
+            for item in configs:
+                key = item.get('key')
+                value = item.get('value')
+
+                if not key or key not in self.PREDEFINED_CONFIGS:
+                    errors.append({'key': key, 'error': '无效的配置项'})
+                    continue
+
+                try:
+                    predefined = self.PREDEFINED_CONFIGS[key]
+                    if not predefined.get('is_editable', True):
+                        errors.append({'key': key, 'error': '该配置项不可编辑'})
+                        continue
+
+                    # 类型转换
+                    value_type = predefined['value_type']
+                    if value_type == 'integer':
+                        value = int(value)
+                    elif value_type == 'boolean':
+                        value = str(value).lower() in ('true', '1', 'yes')
+                    elif value_type == 'json':
+                        if isinstance(value, str):
+                            value = json.loads(value)
+                        value = json.dumps(value, ensure_ascii=False)
+
+                    config, _ = CloudSystemConfig.objects.update_or_create(
+                        key=key,
+                        defaults={
+                            'name': predefined['name'],
+                            'value': str(value) if value_type != 'json' else value,
+                            'value_type': value_type,
+                            'category': predefined['category'],
+                            'updated_by': request.user
+                        }
+                    )
+                    cache.delete(f'cloud_config:{key}')
+                    results.append({'key': key, 'status': 'success'})
+
+                except Exception as e:
+                    errors.append({'key': key, 'error': str(e)})
+
+        return Response({
+            'message': f'批量更新完成：{len(results)} 成功，{len(errors)} 失败',
+            'results': results,
+            'errors': errors
+        })
+
+    @action(detail=False, methods=['post'])
+    def reset_to_default(self, request):
+        """🔄 重置配置为默认值"""
+        key = request.data.get('key')
+        if not key:
+            return Response({'error': '配置键不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if key not in self.PREDEFINED_CONFIGS:
+            return Response({'error': '无效的配置项'}, status=status.HTTP_400_BAD_REQUEST)
+
+        predefined = self.PREDEFINED_CONFIGS[key]
+
+        with transaction.atomic():
+            config, created = CloudSystemConfig.objects.update_or_create(
+                key=key,
+                defaults={
+                    'name': predefined['name'],
+                    'value': predefined.get('default', ''),
+                    'value_type': predefined['value_type'],
+                    'category': predefined['category'],
+                    'default_value': predefined.get('default', ''),
+                    'updated_by': request.user
+                }
+            )
+            cache.delete(f'cloud_config:{key}')
+
+        return Response({
+            'message': '配置已重置为默认值',
+            'config': CloudSystemConfigSerializer(config, context={'request': request}).data
+        })
+
+    @action(detail=False, methods=['get'])
+    def export_configs(self, request):
+        """📤 导出系统配置"""
+        import csv
+        from django.http import HttpResponse
+
+        export_format = request.query_params.get('fmt', 'csv').lower()
+        category = request.query_params.get('category', '')
+
+        queryset = CloudSystemConfig.objects.all()
+        if category:
+            queryset = queryset.filter(category=category)
+
+        queryset = queryset.order_by('category', 'key')
+
+        if export_format == 'json':
+            configs = []
+            for config in queryset:
+                configs.append({
+                    'key': config.key,
+                    'name': config.name,
+                    'value': config.get_typed_value(),
+                    'value_type': config.value_type,
+                    'category': config.category,
+                    'description': config.description,
+                    'default_value': config.default_value,
+                    'updated_at': config.updated_at.isoformat() if config.updated_at else None,
+                })
+
+            response = HttpResponse(
+                json.dumps(configs, ensure_ascii=False, indent=2),
+                content_type='application/json; charset=utf-8'
+            )
+            filename = f'cloud_configs_{timezone.now().strftime("%Y%m%d_%H%M%S")}.json'
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
+
+        else:
+            response = HttpResponse(content_type='text/csv; charset=utf-8')
+            filename = f'cloud_configs_{timezone.now().strftime("%Y%m%d_%H%M%S")}.csv'
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            response.write('\ufeff')  # BOM for Excel
+
+            writer = csv.writer(response)
+            writer.writerow([
+                '配置键', '配置名称', '配置值', '值类型', '分类',
+                '描述', '默认值', '更新时间', '更新人'
+            ])
+
+            for config in queryset:
+                writer.writerow([
+                    config.key,
+                    config.name,
+                    config.get_typed_value(),
+                    config.value_type,
+                    config.get_category_display(),
+                    config.description or '',
+                    config.default_value or '',
+                    config.updated_at.strftime('%Y-%m-%d %H:%M:%S') if config.updated_at else '',
+                    config.updated_by.username if config.updated_by else ''
+                ])
+
+            return response
+
+    @action(detail=False, methods=['get'])
+    def system_info(self, request):
+        """💻 获取系统信息"""
+        import platform
+        import django
+        from django.db import connection
+        from django.conf import settings
+
+        # OnlyOffice 状态检查
+        onlyoffice_status = self._check_onlyoffice_status()
+
+        return Response({
+            'server': {
+                'hostname': platform.node(),
+                'os': f'{platform.system()} {platform.release()}',
+                'python_version': platform.python_version(),
+                'django_version': django.get_version()
+            },
+            'onlyoffice': onlyoffice_status,
+            'timestamp': timezone.now().isoformat()
+        })
+
+    @action(detail=False, methods=['post'])
+    def clear_cache(self, request):
+        """🗑️ 清除系统缓存"""
+        cache_type = request.data.get('type', 'all')
+
+        if cache_type == 'all':
+            cache.clear()
+            message = '所有缓存已清除'
+        elif cache_type == 'config':
+            keys = cache.keys('cloud_config:*')
+            for key in keys:
+                cache.delete(key)
+            message = '配置缓存已清除'
+        elif cache_type == 'onlyoffice':
+            keys = cache.keys('onlyoffice:*')
+            for key in keys:
+                cache.delete(key)
+            message = 'OnlyOffice 缓存已清除'
+        else:
+            return Response({'error': '无效的缓存类型'}, status=status.HTTP_400_BAD_REQUEST)
+
+        logger.info(f'缓存清除：{cache_type} by {request.user.username}')
+        return Response({'message': message})
+
+    # ==================== OnlyOffice 专用配置接口 ====================
+
+    @action(detail=False, methods=['get'])
+    def onlyoffice_configs(self, request):
+        """⚙️ 获取 OnlyOffice 专用配置（模型字段方式）"""
+        config = CloudSystemConfig.objects.first()  # 取第一条或按业务逻辑获取
+
+        if not config:
+            config = CloudSystemConfig.objects.create(
+                key='onlyoffice.main',
+                name='OnlyOffice 主配置',
+                category='collaboration'
+            )
+
+        # 提取 OnlyOffice 相关字段
+        data = {
+            'document_server_url': config.onlyoffice_document_server_url,
+            'jwt_enabled': config.onlyoffice_jwt_enabled,
+            'jwt_secret': config.onlyoffice_jwt_secret,
+            'language': config.onlyoffice_language,
+            'collaboration_mode': config.onlyoffice_collaboration_mode,
+            'permissions': {
+                'download': config.onlyoffice_permission_download,
+                'copy': config.onlyoffice_permission_copy,
+                'edit': config.onlyoffice_permission_edit,
+                'print': config.onlyoffice_permission_print,
+                'comment': config.onlyoffice_permission_comment,
+                'chat': config.onlyoffice_permission_chat,
+                'review': config.onlyoffice_permission_review,
+                'fill_forms': config.onlyoffice_permission_fill_forms,
+                'modify_content_control': config.onlyoffice_permission_modify_content_control,
+                'modify_filter': config.onlyoffice_permission_modify_filter,
+            },
+            'ui': {
+                'show_chat': config.onlyoffice_show_chat,
+                'show_comments': config.onlyoffice_show_comments,
+                'show_review': config.onlyoffice_show_review,
+                'show_spellcheck': config.onlyoffice_show_spellcheck,
+                'forcesave': config.onlyoffice_forcesave,
+                'compact_toolbar': config.onlyoffice_compact_toolbar,
+                'ui_theme': config.onlyoffice_ui_theme,
+            },
+            'version_keep_count': config.onlyoffice_version_keep_count,
+        }
+
+        return Response(data)
+
+    @action(detail=False, methods=['put'])
+    def update_onlyoffice_configs(self, request):
+        """⚙️ 更新 OnlyOffice 专用配置"""
+        with transaction.atomic():
+            config = CloudSystemConfig.objects.first()
+            if not config:
+                config = CloudSystemConfig.objects.create(
+                    key='onlyoffice.main',
+                    name='OnlyOffice 主配置',
+                    category='collaboration'
+                )
+
+            # 更新服务器配置
+            if 'document_server_url' in request.data:
+                config.onlyoffice_document_server_url = request.data['document_server_url']
+            if 'jwt_enabled' in request.data:
+                config.onlyoffice_jwt_enabled = request.data['jwt_enabled']
+            if 'jwt_secret' in request.data:
+                config.onlyoffice_jwt_secret = request.data['jwt_secret']
+            if 'language' in request.data:
+                config.onlyoffice_language = request.data['language']
+            if 'collaboration_mode' in request.data:
+                config.onlyoffice_collaboration_mode = request.data['collaboration_mode']
+
+            # 更新权限配置
+            perms = request.data.get('permissions', {})
+            for perm_key, field_name in [
+                ('download', 'onlyoffice_permission_download'),
+                ('copy', 'onlyoffice_permission_copy'),
+                ('edit', 'onlyoffice_permission_edit'),
+                ('print', 'onlyoffice_permission_print'),
+                ('comment', 'onlyoffice_permission_comment'),
+                ('chat', 'onlyoffice_permission_chat'),
+                ('review', 'onlyoffice_permission_review'),
+                ('fill_forms', 'onlyoffice_permission_fill_forms'),
+                ('modify_content_control', 'onlyoffice_permission_modify_content_control'),
+                ('modify_filter', 'onlyoffice_permission_modify_filter'),
+            ]:
+                if perm_key in perms:
+                    setattr(config, field_name, perms[perm_key])
+
+            # 更新界面配置
+            ui = request.data.get('ui', {})
+            if 'show_chat' in ui:
+                config.onlyoffice_show_chat = ui['show_chat']
+            if 'show_comments' in ui:
+                config.onlyoffice_show_comments = ui['show_comments']
+            if 'show_review' in ui:
+                config.onlyoffice_show_review = ui['show_review']
+            if 'show_spellcheck' in ui:
+                config.onlyoffice_show_spellcheck = ui['show_spellcheck']
+            if 'forcesave' in ui:
+                config.onlyoffice_forcesave = ui['forcesave']
+            if 'compact_toolbar' in ui:
+                config.onlyoffice_compact_toolbar = ui['compact_toolbar']
+            if 'ui_theme' in ui:
+                config.onlyoffice_ui_theme = ui['ui_theme']
+
+            # 版本控制
+            if 'version_keep_count' in request.data:
+                config.onlyoffice_version_keep_count = request.data['version_keep_count']
+
+            config.updated_by = request.user
+            config.save()
+
+            # 清除缓存
+            cache.delete('onlyoffice:config')
+
+        logger.info(f'OnlyOffice 配置更新 by {request.user.username}')
+        return Response({
+            'message': 'OnlyOffice 配置更新成功',
+            'config': self.onlyoffice_configs(request).data
+        })
+
+    # ==================== 辅助方法 ====================
+
+    def _get_category_info(self, category):
+        """获取分类的详细信息"""
+        category_info = {
+            'storage': {'icon': 'fas fa-hdd', 'desc': '存储空间、配额、清理策略等设置', 'color': '#409EFF'},
+            'security': {'icon': 'fas fa-shield-alt', 'desc': '访问权限、加密、水印等安全设置', 'color': '#67C23A'},
+            'upload': {'icon': 'fas fa-cloud-upload-alt', 'desc': '文件上传限制、分片、秒传等设置', 'color': '#E6A23C'},
+            'share': {'icon': 'fas fa-share-alt', 'desc': '分享链接、密码、有效期等设置', 'color': '#F56C6C'},
+            'collaboration': {'icon': 'fas fa-users', 'desc': '在线编辑、协同权限、版本控制等', 'color': '#909399'},
+            'system': {'icon': 'fas fa-cog', 'desc': '系统基础参数、维护模式等', 'color': '#606266'},
+            'notification': {'icon': 'fas fa-bell', 'desc': '消息通知、邮件、企业微信集成', 'color': '#909399'},
+            'audit': {'icon': 'fas fa-clipboard-list', 'desc': '操作日志、审计追踪、合规设置', 'color': '#909399'},
+        }
+        return category_info.get(category, {'icon': 'fas fa-cog', 'desc': '系统配置项', 'color': '#909399'})
+
+    def _validate_integer(self, value, validation):
+        if not validation:
+            return
+        if 'min' in validation and value < validation['min']:
+            raise ValueError(f'值不能小于 {validation["min"]}')
+        if 'max' in validation and value > validation['max']:
+            raise ValueError(f'值不能大于 {validation["max"]}')
+
+    def _validate_string(self, value, validation):
+        import re
+        if not validation:
+            return
+        if 'min_length' in validation and len(value) < validation['min_length']:
+            raise ValueError(f'长度不能小于 {validation["min_length"]} 字符')
+        if 'max_length' in validation and len(value) > validation['max_length']:
+            raise ValueError(f'长度不能大于 {validation["max_length"]} 字符')
+        if 'pattern' in validation and not re.match(validation['pattern'], value):
+            raise ValueError('格式不符合要求')
+
+    def _validate_json(self, value, validation):
+        if not validation:
+            return
+        if validation.get('is_array') and not isinstance(value, list):
+            raise ValueError('必须是数组格式')
+
+    def _validate_business_rules(self, key, value):
+        rules = {
+            'upload.max_file_size_mb': lambda v: v <= 500 or '文件上传大小不能超过 500MB',
+            'upload.image_max_size_mb': lambda v: v <= 100 or '图片大小不能超过 100MB',
+            'upload.video_max_size_mb': lambda v: v <= 500 or '视频大小不能超过 500MB',
+            'storage.quota_gb': lambda v: v <= 1000 or '存储配额不能超过 1000GB',
+            'collab.max_collaborators': lambda v: 1 <= v <= 500 or '协作者数必须在 1-500 之间',
+            'security.token_expire_hours': lambda v: 1 <= v <= 168 or '令牌过期时间必须在 1-168 小时之间',
+        }
+        if key in rules:
+            result = rules[key](value)
+            if result is not True:
+                raise ValueError(result)
+
+    def _check_onlyoffice_status(self):
+        """检查 OnlyOffice 服务状态"""
+        doc_server_url = CloudSystemConfig.get_value(
+            'onlyoffice.document_server_url',
+            settings.ONLYOFFICE.get('DOCUMENT_SERVER_URL', '')
+        )
+        doc_server_url = doc_server_url.rstrip('/') + '/healthcheck'
+        try:
+            response = requests.get(doc_server_url, timeout=5)
+            if response.status_code == 200:
+                return {
+                    'status': 'online',
+                    'url': doc_server_url,
+                    'response_time': response.elapsed.total_seconds()
+                }
+            else:
+                return {'status': 'error', 'url': doc_server_url, 'error': f'HTTP {response.status_code}'}
+        except requests.RequestException as e:
+            return {'status': 'offline', 'url': doc_server_url, 'error': str(e)}
+
+    def _reload_onlyoffice_config(self):
+        """重载 OnlyOffice 配置"""
+        cache.delete('onlyoffice:config')
+        cache.delete('onlyoffice:jwt_secret')
+        logger.info('OnlyOffice 配置已重载')

@@ -8,9 +8,12 @@
 
 from django.conf import settings
 from rest_framework import serializers
-from .models import Folder, CloudFile, FileShare, FileComment, FileOperationLog, FileVersion
+from .models import Folder, CloudFile, UploadSession, FileShare, FileComment, FileOperationLog, FileVersion, CloudSystemConfig
 from accounts.models import CustomUser, Department
+from accounts.serializers import UserDetailSerializer
 from loguru import logger
+import json
+
 
 
 class FolderListSerializer(serializers.ModelSerializer):
@@ -142,6 +145,20 @@ class CloudFileSerializer(serializers.ModelSerializer):
     size_formatted = serializers.SerializerMethodField()
     is_document = serializers.SerializerMethodField()
 
+    # 🔧 修改 description 和 tags 字段配置
+    description = serializers.CharField(
+        required=False,  # 非必填
+        allow_blank=True,  # 允许空字符串
+        allow_null=True,  # 允许 null
+        default=''  # 默认值
+    )
+    tags = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        default=''
+    )
+
     _physical_file_path = serializers.CharField(write_only=True, required=False)
 
 
@@ -163,6 +180,9 @@ class CloudFileSerializer(serializers.ModelSerializer):
 
     def get_extension(self, obj):
         return obj.get_extension()
+
+    def get_icon_class(self, obj):
+        return obj.get_icon_class()
 
     def get_file_url(self, obj):
         request = self.context.get('request')
@@ -189,24 +209,6 @@ class CloudFileSerializer(serializers.ModelSerializer):
                 return f'{size:.2f} {unit}'
             size /= 1024
         return f'{size:.2f} PB'
-
-    def get_icon_class(self, obj):
-        if obj.mime_type.startswith('image/'):
-            return 'fa-file-image'
-        elif obj.mime_type.startswith('video/'):
-            return 'fa-file-video'
-        elif obj.mime_type.startswith('audio/'):
-            return 'fa-file-audio'
-        elif 'pdf' in obj.mime_type:
-            return 'fa-file-pdf'
-        elif 'word' in obj.mime_type or obj.mime_type.endswith('doc'):
-            return 'fa-file-word'
-        elif 'excel' in obj.mime_type or obj.mime_type.endswith('xls'):
-            return 'fa-file-excel'
-        elif 'powerpoint' in obj.mime_type or obj.mime_type.endswith('ppt'):
-            return 'fa-file-powerpoint'
-        else:
-            return 'fa-file'
 
 
     def get_is_document(self, obj):
@@ -275,6 +277,65 @@ class CloudFileSerializer(serializers.ModelSerializer):
             instance.save(update_fields=['file'])
 
         return instance
+
+
+# cloud/serializers.py - 新增上传会话序列化器
+
+class UploadSessionSerializer(serializers.ModelSerializer):
+    progress = serializers.SerializerMethodField()
+    missing_chunks = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UploadSession
+        fields = [
+            'id', 'file_md5', 'file_name', 'file_size',
+            'total_chunks', 'uploaded_chunks', 'chunk_size',
+            'uploaded_size', 'is_completed', 'expires_at',
+            'progress', 'missing_chunks', 'created_at', 'updated_at'
+        ]
+        read_only_fields = [
+            'id', 'uploaded_chunks', 'uploaded_size',
+            'is_completed', 'progress', 'missing_chunks'
+        ]
+
+    def get_progress(self, obj):
+        return obj.get_upload_progress()
+
+    def get_missing_chunks(self, obj):
+        return obj.get_missing_chunks()
+
+
+class ChunkUploadSerializer(serializers.Serializer):
+    """分片上传请求序列化器"""
+    session_id = serializers.UUIDField(help_text='上传会话ID')
+    chunk_index = serializers.IntegerField(min_value=0, help_text='分片索引(从0开始)')
+    chunk_md5 = serializers.CharField(max_length=32, help_text='分片MD5')
+    chunk = serializers.FileField(help_text='分片文件内容')
+
+    def validate_chunk_index(self, value):
+        session = self.context.get('session')
+        if session and value >= session.total_chunks:
+            raise serializers.ValidationError('分片索引超出范围')
+        return value
+
+
+class MergeChunksSerializer(serializers.Serializer):
+    """合并分片请求序列化器"""
+    session_id = serializers.UUIDField(help_text='上传会话ID')
+    folder = serializers.UUIDField(required=False, allow_null=True)
+    # 🔧 修改 description 和 tags 字段配置
+    description = serializers.CharField(
+        required=False,  # 非必填
+        allow_blank=True,  # 允许空字符串
+        allow_null=True,  # 允许 null
+        default=''  # 默认值
+    )
+    tags = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        default=''
+    )
 
 
 class FileShareSerializer(serializers.ModelSerializer):
@@ -383,10 +444,10 @@ class FileShareSerializer(serializers.ModelSerializer):
                 'folder': '不能同时分享文件和文件夹'
             })
 
-        # 生成分享码
+        # 生成分享码 (缩短为8位)
         import uuid
         if 'share_code' not in validated_data:
-            validated_data['share_code'] = uuid.uuid4().hex[:16]
+            validated_data['share_code'] = uuid.uuid4().hex[:8]
 
         # 执行创建
         instance = super().create(validated_data)
@@ -449,3 +510,187 @@ class FileVersionSerializer(serializers.ModelSerializer):
                 return f'{size:.2f} {unit}'
             size /= 1024
         return f'{size:.2f} PB'
+
+
+# cloud/serializers.py
+
+class CloudSystemConfigSerializer(serializers.ModelSerializer):
+    """🔧 系统配置序列化器（支持类型转换和预定义配置）"""
+
+    # 🔧 额外字段
+    typed_value = serializers.SerializerMethodField()
+    validation_rules = serializers.SerializerMethodField()
+    is_default = serializers.SerializerMethodField()
+
+    # 🔧 分类显示字段
+    category_display = serializers.SerializerMethodField()
+    category_info = serializers.SerializerMethodField()
+    value_display = serializers.SerializerMethodField()
+
+
+    class Meta:
+        model = CloudSystemConfig
+        fields = [
+            'id', 'key', 'name', 'value', 'value_type', 'category',
+            'description', 'default_value', 'is_public', 'is_editable',
+            'typed_value', 'validation_rules', 'is_default',
+            'created_at', 'updated_at', 'updated_by',
+            'category_display', 'category_info', 'value_display',
+            # 🔧 OnlyOffice 专用字段
+            'onlyoffice_document_server_url',
+            'onlyoffice_jwt_enabled',
+            'onlyoffice_jwt_secret',
+            'onlyoffice_permission_download',
+            'onlyoffice_permission_copy',
+            'onlyoffice_permission_edit',
+            'onlyoffice_permission_print',
+            'onlyoffice_permission_comment',
+            'onlyoffice_permission_chat',
+            'onlyoffice_permission_review',
+            'onlyoffice_permission_fill_forms',
+            'onlyoffice_permission_modify_content_control',
+            'onlyoffice_permission_modify_filter',
+            'onlyoffice_language',
+            'onlyoffice_collaboration_mode',
+            'onlyoffice_show_chat',
+            'onlyoffice_show_comments',
+            'onlyoffice_show_review',
+            'onlyoffice_show_spellcheck',
+            'onlyoffice_forcesave',
+            'onlyoffice_compact_toolbar',
+            'onlyoffice_ui_theme',
+            'onlyoffice_version_keep_count',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'updated_by', 'typed_value', 'is_default']
+
+    def get_typed_value(self, obj):
+        """🔧 获取类型化的值"""
+        return obj.get_typed_value()
+
+    def get_validation_rules(self, obj):
+        """🔧 获取预定义配置的验证规则"""
+        from cloud.views import CloudSystemSettingsViewSet
+        predefined = CloudSystemSettingsViewSet.PREDEFINED_CONFIGS.get(obj.key, {})
+        return predefined.get('validation', {})
+
+    def get_is_default(self, obj):
+        """🔧 判断是否为默认值"""
+        from cloud.views import CloudSystemSettingsViewSet
+        predefined = CloudSystemSettingsViewSet.PREDEFINED_CONFIGS.get(obj.key, {})
+        default = predefined.get('default')
+        current = obj.get_typed_value()
+
+        if isinstance(default, bool):
+            return current == (str(default).lower() in ('true', '1', 'yes'))
+        elif isinstance(default, (int, float)):
+            try:
+                return float(current) == float(default)
+            except (ValueError, TypeError):
+                return False
+        elif isinstance(default, (list, dict)):
+            try:
+                return json.loads(obj.value) == default if isinstance(obj.value, str) else obj.value == default
+            except:
+                return False
+        return str(current) == str(default)
+
+    def get_category_display(self, obj):
+        """🔧 获取分类中文名称"""
+        return obj.get_category_display()
+
+    def get_category_info(self, obj):
+        """🔧 获取分类详细信息"""
+        return obj.get_category_info()
+
+    def get_value_display(self, obj):
+        """🔧 获取值的显示格式"""
+        value = obj.get_typed_value()
+        if obj.value_type == 'password':
+            return '••••••••'
+        elif obj.value_type == 'boolean':
+            return '是' if value else '否'
+        elif obj.value_type == 'json':
+            try:
+                return json.dumps(value, ensure_ascii=False, indent=2) if isinstance(value, (dict, list)) else str(
+                    value)
+            except:
+                return str(value)
+        return str(value)
+
+    def validate_value(self, value):
+        """🔧 值验证（根据 value_type）"""
+        value_type = self.instance.value_type if self.instance else self.initial_data.get('value_type', 'string')
+
+        if value_type == 'integer':
+            try:
+                return int(value)
+            except (ValueError, TypeError):
+                raise serializers.ValidationError('必须是整数')
+        elif value_type == 'float':
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                raise serializers.ValidationError('必须是数字')
+        elif value_type == 'boolean':
+            if isinstance(value, bool):
+                return value
+            return str(value).lower() in ('true', '1', 'yes', 'on')
+        elif value_type == 'json':
+            if isinstance(value, (dict, list)):
+                return json.dumps(value, ensure_ascii=False)
+            try:
+                json.loads(value)
+                return value
+            except json.JSONDecodeError:
+                raise serializers.ValidationError('必须是有效的 JSON 格式')
+        return value
+
+    def validate(self, data):
+        """🔧 整体验证"""
+        from cloud.views import CloudSystemSettingsViewSet
+
+        key = data.get('key') or (self.instance.key if self.instance else None)
+        value = data.get('value')
+
+        if key and key in CloudSystemSettingsViewSet.PREDEFINED_CONFIGS:
+            predefined = CloudSystemSettingsViewSet.PREDEFINED_CONFIGS[key]
+
+            # 检查是否可编辑
+            if not predefined.get('is_editable', True) and not self.context['request'].user.is_superuser:
+                raise serializers.ValidationError('该配置项不可编辑')
+
+            # 应用验证规则
+            validation = predefined.get('validation', {})
+            value_type = predefined.get('value_type', 'string')
+
+            if value_type == 'integer' and isinstance(value, (int, str)):
+                try:
+                    val = int(value)
+                    if 'min' in validation and val < validation['min']:
+                        raise serializers.ValidationError(f'值不能小于 {validation["min"]}')
+                    if 'max' in validation and val > validation['max']:
+                        raise serializers.ValidationError(f'值不能大于 {validation["max"]}')
+                except ValueError:
+                    raise serializers.ValidationError('必须是整数')
+
+            elif value_type == 'string' and isinstance(value, str):
+                if 'min_length' in validation and len(value) < validation['min_length']:
+                    raise serializers.ValidationError(f'长度不能小于 {validation["min_length"]} 字符')
+                if 'max_length' in validation and len(value) > validation['max_length']:
+                    raise serializers.ValidationError(f'长度不能大于 {validation["max_length"]} 字符')
+                if 'pattern' in validation:
+                    import re
+                    if not re.match(validation['pattern'], value):
+                        raise serializers.ValidationError('格式不符合要求')
+
+        return data
+
+
+class SystemConfigCategorySerializer(serializers.Serializer):
+    """🔧 配置分类序列化器"""
+    key = serializers.CharField()
+    name = serializers.CharField()
+    icon = serializers.CharField()
+    count = serializers.IntegerField()
+    order = serializers.IntegerField()
+    color = serializers.CharField(required=False)
