@@ -323,6 +323,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
         quote_timestamp = data.get('quote_timestamp')
         quote_message_type = data.get('quote_message_type')
 
+        mentioned_user_ids = data.get('mentioned_users', [])
+        if isinstance(mentioned_user_ids, str):
+            try:
+                mentioned_user_ids = json.loads(mentioned_user_ids)
+            except:
+                mentioned_user_ids = []
+
         # 🔧 关键修复 4: 保存消息时使用正确的 room_name
         message = await self.save_message(
             content,
@@ -334,7 +341,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             quote_sender=quote_sender,
             quote_sender_id=quote_sender_id,
             quote_timestamp=quote_timestamp,
-            quote_message_type=quote_message_type
+            quote_message_type=quote_message_type,
+            mentioned_user_ids=mentioned_user_ids  # 🔧 传入
         )
         logger.info(
             f'user: {self.user} file_id: {file_id} message_type: {message_type} '
@@ -366,6 +374,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'message_type': message_type,
                 'file_info': message.get_file_info() if file_id else None,
                 'timestamp': message.timestamp.isoformat(),
+                'mentioned_users': mentioned_user_ids,
                 'temp_id': temp_id,
                 # 🔧 完整广播引用字段（接收端需要这些字段渲染引用内容）
                 'quote_message_id': message.quote_message_id,
@@ -374,6 +383,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'quote_sender_id': message.quote_sender_id,
                 'quote_timestamp': message.quote_timestamp.isoformat() if message.quote_timestamp else None,
                 'quote_message_type': message.quote_message_type,
+                'quote_file_info': data.get('quote_file_info'),  # 🔧 新增
                 # 🔧 广播语音精确时长
                 'voice_duration': message.voice_duration if hasattr(message, 'voice_duration') else None,
             }
@@ -388,6 +398,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'sender_name': self.user.username,
             'sender_id': self.user.id,
             'message_type': message_type,
+            'mentioned_users': mentioned_user_ids,
             'file_info': message.get_file_info() if file_id else None,
             'timestamp': message.timestamp.isoformat(),
             'temp_id': temp_id,
@@ -398,6 +409,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'quote_sender_id': message.quote_sender_id,
             'quote_timestamp': message.quote_timestamp.isoformat() if message.quote_timestamp else None,
             'quote_message_type': message.quote_message_type,
+            'quote_file_info': data.get('quote_file_info'),  # 🔧 新增
             # 🔧 广播语音精确时长
             'voice_duration': message.voice_duration if hasattr(message, 'voice_duration') else None,
         })
@@ -524,6 +536,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'quote_sender_id': event.get('quote_sender_id'),
                 'quote_timestamp': event.get('quote_timestamp'),
                 'quote_message_type': event.get('quote_message_type'),
+                'quote_file_info': event.get('quote_file_info'),  # 🔧 新增
             }))
 
     async def user_typing(self, event):
@@ -558,7 +571,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                      room_name=None,  # 🔧 新增参数
                      quote_message_id=None, quote_content=None,
                      quote_sender=None, quote_sender_id=None,
-                     quote_timestamp=None, quote_message_type=None):
+                     quote_timestamp=None, quote_message_type=None,
+                     mentioned_user_ids=None):
 
         # 🔧 关键修复：使用传入的 room_name 或默认的 self.room_name
         target_room_name = room_name if room_name else self.room_name
@@ -611,6 +625,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         if quote_message_type:
             message.quote_message_type = quote_message_type
+
+        # 🔧 新增：保存@提及用户（严格校验：必须是当前聊天室成员）
+        if mentioned_user_ids and isinstance(mentioned_user_ids, list):
+            # 过滤出有效的、且属于该聊天室的用户ID
+            valid_users = chat_room.members.filter(id__in=mentioned_user_ids)
+            message.mentioned_users.set(valid_users)
+            logger.info(f"Message {message.id} mentioned users: {list(valid_users.values_list('id', flat=True))}")
 
         # 如果提供了 file_id，则关联 FileUpload
         if file_id:
@@ -785,6 +806,7 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             'sender_id': event['sender_id'],
             'message_type': event.get('message_type', 'text'),
             'file_info': event.get('file_info'),
+            'mentioned_users': event.get('mentioned_users', []),
             'timestamp': event['timestamp'],
         }))
 

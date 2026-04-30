@@ -1116,11 +1116,16 @@ class CloudApp {
             return;
         }
 
-        // 🔧 排序：文件夹在前，按名称排序
+        // 🔧 排序：文件夹在前，按修改时间倒序排序（新的在前）
         data.sort((a, b) => {
+            // 1. 文件夹优先于文件
             if (a.is_folder && !b.is_folder) return -1;
             if (!a.is_folder && b.is_folder) return 1;
-            return a.name.localeCompare(b.name);
+
+            // 2. 同类型之间，按更新时间倒序排列（最新的在前）
+            const dateA = new Date(a.updated_at || a.created_at).getTime();
+            const dateB = new Date(b.updated_at || b.created_at).getTime();
+            return dateB - dateA;
         });
 
         // 🔧 列表视图渲染
@@ -2266,7 +2271,7 @@ class CloudApp {
         }
     }
 
-    updateCount(count, view, isHidden=false) {
+    updateCount(count, view, isHidden = false) {
         let elementId = '';
         switch (view) {
             case 'files':
@@ -4750,10 +4755,17 @@ class CloudApp {
         const defaultMaxDownloads = window.frontendCloudConfig?.get('share.max_downloads', 0);
 
         // 🔧 2. 计算默认过期时间 (当前时间 + 配置天数)
+        // 修复时区问题：使用本地时间构建字符串，避免 toISOString() 强制转为 UTC 导致的 8 小时偏差
         const now = new Date();
         now.setDate(now.getDate() + defaultExpireDays);
-        // 转换为 <input type="datetime-local"> 标准格式: YYYY-MM-DDTHH:mm
-        const defaultExpireTime = now.toISOString().slice(0, 16);
+
+        // 手动格式化为 YYYY-MM-DDTHH:mm (本地时间)
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        const defaultExpireTime = `${year}-${month}-${day}T${hours}:${minutes}`;
 
 
         // 🔧 3. 重置表单并预填默认值
@@ -4851,8 +4863,10 @@ class CloudApp {
 
             const share = await response.json();
             const baseUrl = window.location.origin;
+
+            // 替换为：
             let shortUrl = share.share_url || `${baseUrl}/s/${share.share_code}/`;
-            if (share.password) shortUrl += `?提取码=${share.password}`;
+            if (share.password) shortUrl += `?pwd=${share.password}`; // 🔧 使用短参数避免二维码溢出
 
             // 🔧 根据分享方式显示不同内容
             if (shareMethod === 'link') {
@@ -4883,13 +4897,14 @@ class CloudApp {
 
         // 使用 qrcode.js 库生成二维码
         if (typeof QRCode !== 'undefined') {
+            // 替换为：
             new QRCode(container, {
                 text: url,
-                width: 200,
-                height: 200,
+                width: 300,              // 🔧 增大尺寸，允许生成更高 Version 的二维码
+                height: 300,
                 colorDark: '#000000',
                 colorLight: '#ffffff',
-                correctLevel: QRCode.CorrectLevel.H
+                correctLevel: QRCode.CorrectLevel.M  // 🔧 改为 M 级，数据容量提升约 30%
             });
         } else {
             // 降级方案：显示链接

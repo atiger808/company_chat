@@ -320,6 +320,33 @@ body {
     font-weight: bold;
 }
 
+/* ==================== @提及未读提示样式 ==================== */
+/*.chat-item-subtitle {*/
+/*    display: flex;*/
+/*    align-items: center;*/
+/*    gap: 4px; !* 调整提示与文本间距 *!*/
+/*}*/
+
+.mention-hint {
+    color: #ff4d4f;
+    font-weight: 600;
+    font-size: 13px;
+    flex-shrink: 0; /* 防止被截断 */
+    animation: mentionPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes mentionPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+    .mention-hint {
+        font-size: 12px;
+    }
+}
+
 /* 置顶图标 */
 .pinned-icon {
     color: #ff9800;
@@ -6107,6 +6134,60 @@ input:checked + .toggle-slider:before {
     font-size: 13px;
 }
 
+
+
+/* ==================== 引用消息富媒体渲染样式 ==================== */
+.message-quote .quote-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+/* 文本/表情引用 */
+.message-quote .quote-text-content {
+    color: var(--text-primary);
+    font-size: 0.9em;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* 图片引用缩略图 */
+.message-quote .quote-image-preview {
+    max-width: 100px;
+    max-height: 80px;
+    object-fit: cover;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid var(--border-color);
+    transition: transform 0.2s ease;
+    display: block;
+}
+.message-quote .quote-image-preview:hover {
+    transform: scale(1.02);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+/* 文件/视频/语音 引用图标容器 */
+.message-quote .quote-icon-wrapper {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    font-size: 0.85em;
+    line-height: 1.4;
+    padding: 2px 0;
+}
+.message-quote .quote-icon-wrapper i {
+    opacity: 0.7;
+    font-size: 0.9em;
+    min-width: 16px;
+    text-align: center;
+}
+
+
+
 .quote-header {
     display: flex;
     align-items: center;
@@ -8370,7 +8451,7 @@ body.pwa-mode .chat-input-area {
     background: #fff;
     border-radius: 12px;
     width: 90%;
-    max-width: 500px;
+    max-width: 800px;
     max-height: 80vh;
     display: flex;
     flex-direction: column;

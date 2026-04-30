@@ -80,6 +80,19 @@ class VersionManager {
             });
 
             if (!response.ok) {
+                if (response.status === 401) {
+                    try {
+                        await API.logout();
+                    } catch (error) {
+                        console.error('登出失败:', error);
+                    } finally {
+                        localStorage.removeItem('access_token');
+                        localStorage.removeItem('user_id')
+                        localStorage.removeItem('user_type')
+                        window.location.href = '/login/';
+                    }
+                    return null;
+                }
                 throw new Error(`HTTP ${response.status}`);
             }
 
@@ -359,12 +372,18 @@ class ChatClient {
         this.notificationQueue = [];
         this.isNotificationVisible = false;
 
+        // 🔧 新增：用户交互标志（用于震动/音频等需要用户授权的功能）
+        this.userHasInteracted = false;
+
         // 当前引用的消息
         this.currentQuoteMessage = null;
 
         // 当前@面板状态
         this.isAtPanelOpen = false;
         this.atPanelPosition = null;
+
+        // 🔧 新增：当前输入框中 @提及的用户ID集合
+        this.currentMentions = new Set();
 
         // 防止重复创建聊天室的状态
         this.creatingChatMap = new Map(); // userId -> {timestamp, roomId}
@@ -754,6 +773,9 @@ class ChatClient {
 
             this.setupVideoMessageListerners()
 
+            this.setupUserInteractionListener();
+
+
             // 🔧 关键修复：监听页面卸载事件
             window.addEventListener('beforeunload', () => {
                 this.beforeUnload();
@@ -936,6 +958,14 @@ class ChatClient {
                 sender: data.sender
             };
             room.updated_at = data.timestamp;
+
+            // 🔧 新增：检测@提及并标记聊天室（需后端在广播消息时携带 mentioned_users 字段）
+            if (data.mentioned_users && Array.isArray(data.mentioned_users)) {
+
+                if (data.mentioned_users.includes(this.currentUser.id.toLocaleString())) {
+                    room.has_unread_mention = true; // 标记为有未读@消息
+                }
+            }
 
             // 仅当不是当前聊天室时增加未读数
             if (!this.currentRoomId || parseInt(this.currentRoomId) !== parseInt(data.chat_room)) {
@@ -1289,6 +1319,8 @@ class ChatClient {
                 quote_sender_id: data.quote_sender_id,
                 quote_timestamp: data.quote_timestamp,
                 quote_message_type: data.quote_message_type,
+                // 🔧 新增：接收后端广播的文件信息，用于富媒体渲染
+                quote_file_info: data.quote_file_info || null,
                 is_temp: false
             };
             this.messages.push(fullMessage);
@@ -1928,19 +1960,60 @@ class ChatClient {
             return;
         }
 
+        // 🔧 关键修复1: 检查用户是否已交互
+        if (!this.userHasInteracted) {
+            // 未交互时不震动，避免浏览器拦截
+            console.warn('未交互时不震动，避免浏览器拦截');
+            return;
+        }
+
         // 检查是否启用震动提醒
         const vibrateEnabled = localStorage.getItem('vibrateNotifications') !== 'false';
         if (!vibrateEnabled) {
             return;
         }
 
-        // 🔧 关键修复：锁屏震动模式（长-短-长）
-        // 即使锁屏也能通过震动感知新消息
-        navigator.vibrate([300, 100, 300]);
+        try {
+            // 🔧 关键修复2: 使用 try-catch 包裹，避免报错中断
+            // 锁屏震动模式（长-短-长）
+            navigator.vibrate([300, 100, 300]);
+        } catch (error) {
+            // 静默失败，不影响其他功能
+            console.warn('震动失败:', error);
+            // 🔧 降级方案：视觉反馈替代震动
+            this.visualNotificationHint();
+        }
 
         // 短震动提示（300ms）
         // 降级：简单震动
         // navigator.vibrate(300);
+    }
+
+    // 🔧 新增：视觉通知提示（震动不可用时的降级方案）
+    visualNotificationHint() {
+        // 创建临时视觉提示
+        const hint = document.createElement('div');
+        hint.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: rgba(64, 158, 255, 0.9);
+        color: white;
+        padding: 8px 16px;
+        border-radius: 20px;
+        font-size: 13px;
+        z-index: 9999;
+        animation: slideIn 0.3s ease, fadeOut 0.5s ease 2s forwards;
+        pointer-events: none;
+    `;
+        hint.innerHTML = '🔔 新消息';
+        document.body.appendChild(hint);
+
+        setTimeout(() => {
+            if (hint.parentNode) {
+                hint.parentNode.removeChild(hint);
+            }
+        }, 3000);
     }
 
 
@@ -2357,6 +2430,7 @@ class ChatClient {
             file_id: actualContent?.file_id,
             file_info: actualContent?.file_info,
             chat_room: parseInt(roomId),  // 🔧 使用正确的 roomId
+            mentioned_users: Array.from(this.currentMentions),
             is_temp: true
         };
 
@@ -2371,8 +2445,8 @@ class ChatClient {
             messageData.quote_sender_id = this.currentQuoteMessage.sender?.id || this.currentQuoteMessage.sender_id;
             messageData.quote_timestamp = this.currentQuoteMessage.timestamp;
             messageData.quote_message_type = this.currentQuoteMessage.message_type || 'text';
+            messageData.quote_file_info = this.currentQuoteMessage.file_info || null;
         }
-
         // 保存到本地消息列表
         this.messages.push(messageData);
 
@@ -2388,8 +2462,9 @@ class ChatClient {
                 message_type: messageData.message_type,
                 file_id: messageData.file_id,
                 file_info: messageData.file_info,
+                chat_room: parseInt(roomId),  // 🔧 确保携带正确的聊天室 ID
+                mentioned_users: Array.from(this.currentMentions),
                 temp_id: tempMessageId,
-                chat_room: parseInt(roomId)  // 🔧 确保携带正确的聊天室 ID
             };
 
             // 传递引用信息给后端
@@ -2400,6 +2475,7 @@ class ChatClient {
                 wsMessage.quote_sender_id = messageData.quote_sender_id;
                 wsMessage.quote_timestamp = messageData.quote_timestamp;
                 wsMessage.quote_message_type = messageData.quote_message_type;
+                wsMessage.quote_file_info = this.currentQuoteMessage.file_info || null;
             }
             console.log('通过 WebSocket 发送消息:', wsMessage);
             this.ws.send(JSON.stringify(wsMessage));
@@ -2411,6 +2487,7 @@ class ChatClient {
                 message_type: messageData.message_type,
                 file_id: messageData.file_id,
                 file_info: messageData.file_info,
+                mentioned_users: Array.from(this.currentMentions),
                 temp_id: tempMessageId
             };
 
@@ -2421,8 +2498,9 @@ class ChatClient {
                 queueMessage.quote_sender_id = messageData.quote_sender_id;
                 queueMessage.quote_timestamp = messageData.quote_timestamp;
                 queueMessage.quote_message_type = messageData.quote_message_type;
-            }
+                queueMessage.quote_file_info = this.currentQuoteMessage.file_info || null;
 
+            }
             this.messageQueue.push(queueMessage);
             this.showError('网络连接不稳定，消息将在连接恢复后发送');
         }
@@ -2432,6 +2510,7 @@ class ChatClient {
 
         // 发送成功后清除引用（避免影响下一条消息）
         this.clearQuoteMessage();
+        this.clearMentions(); // 🔧 新增调用
 
         // 清空当前聊天室的草稿
         if (this.currentRoomId === roomId) {
@@ -2824,6 +2903,76 @@ class ChatClient {
         });
     }
 
+    // 通过消息ID跳转到目标消息位置（支持平滑滚动和高亮闪烁）
+    async jumpToMessage(messageId) {
+        try {
+            const messagesList = document.getElementById('messagesList');
+            if (!messagesList) return;
+
+            // 1. 尝试查找当前已渲染的消息元素
+            let messageElement = document.querySelector(`.message-wrapper[data-message-id="${messageId}"]`);
+
+            // 2. 如果未找到，且还有更多历史消息，尝试加载更早的消息
+            // 注意：这里简单尝试加载一次，实际场景中可能需要循环加载直到找到或无更多消息
+            if (!messageElement && this.hasMoreMessages && this.currentRoomId) {
+                console.log(`消息 ${messageId} 未在视图中，尝试加载更多历史消息...`);
+
+                // 记录加载前的最旧消息ID，用于判断是否加载了新内容
+                const oldOldestId = this.oldestMessageId;
+
+                // 加载更早的消息
+                await this.loadChatHistory(this.currentRoomId, {
+                    beforeId: this.oldestMessageId,
+                    append: true,
+                    page_size: 50
+                });
+
+                // 再次尝试查找
+                messageElement = document.querySelector(`.message-wrapper[data-message-id="${messageId}"]`);
+            }
+
+            // 3. 如果仍然找不到，提示用户或退出
+            if (!messageElement) {
+                console.warn(`未找到消息ID: ${messageId}`);
+                // 可选：显示 Toast 提示 "消息可能已被删除或过于久远"
+                this.showError('消息可能已被删除或过于久远');
+                return;
+            }
+
+            // 4. 执行平滑滚动
+            // 使用 scrollIntoView 比直接设置 scrollTop 更可靠，尤其是处理边界情况时
+            messageElement.scrollIntoView({
+                behavior: 'smooth',
+                block: 'center' // 将消息滚动到视图中间
+            });
+
+            // 5. 添加高亮闪烁效果，帮助用户定位
+            this.highlightMessage(messageElement);
+
+        } catch (error) {
+            console.error('跳转消息失败:', error);
+            this.showError('跳转消息失败');
+        }
+    }
+
+    // 高亮闪烁消息元素
+    highlightMessage(element) {
+        if (!element) return;
+
+        // 添加高亮类
+        element.classList.add('message-highlight');
+
+        // 移除之前的定时器（防止快速连续调用导致样式错乱）
+        if (this.highlightTimeout) {
+            clearTimeout(this.highlightTimeout);
+        }
+
+        // 2秒后移除高亮
+        this.highlightTimeout = setTimeout(() => {
+            element.classList.remove('message-highlight');
+        }, 2000);
+    }
+
 
     // 加载更多历史消息
     async loadMoreHistory() {
@@ -3125,6 +3274,10 @@ class ChatClient {
             let roomAvatar, isOnline, isOnline_html = '', username = '',
                 lastMessageText = lastMessage.content || '暂无消息';
             let otherUserId = null; // 🔧 新增：存储对方用户ID
+            // 🔧 新增：检查是否有未读的@提及标记
+            const hasUnreadMention = room.has_unread_mention === true;
+            const mentionHint = hasUnreadMention ? '<span class="mention-hint">[有人@我]</span> ' : '';
+
 
             if (room.room_type === 'private') {
                 // 🔧 获取对方用户（排除当前用户）
@@ -3186,7 +3339,7 @@ class ChatClient {
                         ${room.is_muted ? '<i class="fas fa-volume-mute muted-icon"></i>' : ''}
                         ${roomName}
                     </div>
-                    <div class="chat-item-subtitle">${lastMessageText}</div>
+                    <div class="chat-item-subtitle">${mentionHint}${lastMessageText}</div>
                 </div>
                 <div class="chat-item-meta">
                     ${unreadCount > 0 ? `<div class="chat-item-unread-count">${unreadCount > 99 ? '99+' : unreadCount}</div>` : ''}
@@ -3234,7 +3387,7 @@ class ChatClient {
     }
 
     // 判断是否需要显示时间戳
-    shouldShowTimestamp(prevMessage, currMessage) {
+    shouldShowTimestamp(prevMessage, currMessage, diffMinutes = 5) {
         if (!prevMessage || !currMessage) return true;
 
         const prevTime = new Date(prevMessage.timestamp);
@@ -3247,34 +3400,9 @@ class ChatClient {
         }
 
         // 超过5分钟显示时间
-        return timeDiff > 5 * 60 * 1000;
+        return timeDiff > diffMinutes * 60 * 1000;
     }
 
-
-    // 渲染时间戳
-    renderTimeStamp_v1(timestamp) {
-        const template = document.getElementById('timeStampTemplate');
-        if (!template) return null;
-
-        const timeElement = template.content.cloneNode(true);
-        const timeSpan = timeElement.querySelector('span');
-
-        if (timeSpan) {
-            timeSpan.textContent = Utils.formatTime(timestamp);
-        }
-
-        return timeElement;
-    }
-
-
-    // 渲染时间戳
-    renderTimeStamp_2(timestamp) {
-        const timeElement = document.createElement('div');
-        timeElement.className = 'message-time-divider';
-        let label = Utils.formatTime(timestamp);
-        timeElement.innerHTML = `<span class="message-date-label">${label}</span>`;
-        return timeElement;
-    }
 
     // 渲染时间戳
     renderTimeStamp(timestamp) {
@@ -3283,22 +3411,62 @@ class ChatClient {
 
         const date = new Date(timestamp);
         const now = new Date();
+        
+        // 获取具体时间字符串 (HH:mm)
+        const timeStr = date.toLocaleTimeString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
 
-        // 判断是否是今天
-        const isToday = date.toDateString() === now.toDateString();
-        const isYesterday = new Date(now.setDate(now.getDate() - 1)).toDateString() === date.toDateString();
+        // 重置 now 为当前时间，避免 setDate 修改原对象影响后续判断
+        const currentNow = new Date();
+        
+        // 计算时间差
+        const diffTime = currentNow.getTime() - date.getTime();
+        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+        
+        // 判断是否是今天 (0天)
+        const isToday = currentNow.toDateString() === date.toDateString();
+        
+        // 判断是否是昨天 (1天)
+        const yesterday = new Date(currentNow);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const isYesterday = yesterday.toDateString() === date.toDateString();
+
+        // 判断是否是前天 (2天)
+        const dayBeforeYesterday = new Date(currentNow);
+        dayBeforeYesterday.setDate(dayBeforeYesterday.getDate() - 2);
+        const isDayBeforeYesterday = dayBeforeYesterday.toDateString() === date.toDateString();
 
         let label;
         if (isToday) {
-            label = '今天';
+            label = `今天 ${timeStr}`;
         } else if (isYesterday) {
-            label = '昨天';
+            label = `昨天 ${timeStr}`;
+        } else if (isDayBeforeYesterday) {
+            label = `前天 ${timeStr}`;
+        } else if (diffDays < 7) {
+            // 最近一周内（不含今天、昨天、前天），显示星期几 + 时间
+            const weekDays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+            const weekDay = weekDays[date.getDay()];
+            label = `${weekDay} ${timeStr}`;
         } else {
-            label = date.toLocaleDateString('zh-CN', {
-                year: 'numeric',
-                month: 'short',
-                day: 'numeric'
-            });
+            const currentYear = currentNow.getFullYear();
+            const messageYear = date.getFullYear();
+            
+            if (messageYear === currentYear) {
+                // 同一年但超过一周，显示月日 + 时间
+                const month = date.getMonth() + 1;
+                const day = date.getDate();
+                label = `${month}月${day}日 ${timeStr}`;
+            } else {
+                // 超过一年，显示年月日 + 时间
+                const year = date.getFullYear();
+                const month = date.getMonth() + 1;
+                const day = date.getDate();
+                label = `${year}年${month}月${day}日 ${timeStr}`;
+            }
         }
 
         timeElement.innerHTML = `<span class="message-date-label">${label}</span>`;
@@ -3376,7 +3544,7 @@ class ChatClient {
             headerElement.className = 'message-header';
             headerElement.innerHTML = `
             <span class="message-sender">${message.sender?.real_name || message.sender?.username || message.sender_name || '未知用户'}</span>
-            <span class="message-time">${Utils.formatTime(message.timestamp)}</span>
+            <span class="message-time" style="display:none">${Utils.formatTime(message.timestamp)}</span>
             `;
 
             // 创建消息内容元素
@@ -3386,11 +3554,6 @@ class ChatClient {
             <div class="message-text"></div>
             `;
 
-            // const headerElement_2 = document.createElement('div');
-            // headerElement_2.className = 'message-header';
-            // headerElement_2.innerHTML = `
-            // <span class="message-time">${Utils.formatTime(message.timestamp)}</span>
-            // `;
 
             // 设置消息内容
             const messageContent = contentElement.querySelector('.message-text');
@@ -3421,7 +3584,7 @@ class ChatClient {
             const headerElement = document.createElement('div');
             headerElement.className = 'message-header';
             headerElement.innerHTML = `
-            <span class="message-time">${Utils.formatTime(message.timestamp)}</span>
+            <span class="message-time" style="display:none">${Utils.formatTime(message.timestamp)}</span>
             `;
 
             // 创建消息内容元素
@@ -3660,9 +3823,14 @@ class ChatClient {
         const container = document.getElementById('forwardList');
         if (!container) return;
 
-        // 过滤掉当前聊天室和已删除的聊天室
+        // // 过滤掉当前聊天室和已删除的聊天室
+        // const targets = this.chatRooms.filter(room => {
+        //     return room.id !== this.currentRoomId && !room.is_deleted;
+        // });
+
+        // 🔧 修改：允许转发给当前聊天室（移除 room.id !== this.currentRoomId 判断）
         const targets = this.chatRooms.filter(room => {
-            return room.id !== this.currentRoomId && !room.is_deleted;
+            return !room.is_deleted;
         });
 
         let html = '';
@@ -4125,6 +4293,50 @@ class ChatClient {
     }
 
 
+    // 🔧 新增：根据引用消息类型生成 HTML
+    renderQuotedContent(type, content, fileInfo = null, messageId = null) {
+        const escape = (str) => this.escapeHtml(str || '');
+
+        // 生成点击跳转的处理函数，如果 messageId 存在则跳转，否则阻止冒泡
+        const getClickHandler = () => {
+            if (messageId) {
+                return `event.stopPropagation(); chatClient.jumpToMessage('${messageId}')`;
+            }
+            return 'event.stopPropagation()';
+        };
+
+        switch (type) {
+            case 'text':
+            case 'emoji':
+                return `<span class="quote-text-content">${escape(content) || '[文本]'}</span>`;
+
+            case 'image':
+                // 优先使用 fileInfo.url，兼容 content 直接存 URL 的旧数据
+                const imgUrl = (content.startsWith('http') || content.startsWith('/')) ? content : (fileInfo?.url || '');
+                return imgUrl
+                    ? `<img src="${escape(imgUrl)}" class="quote-image-preview" alt="引用图片" onclick="event.stopPropagation(); chatClient.previewImage('${escape(imgUrl)}')" title="点击预览" />`
+                    : `<span class="quote-icon-wrapper"><i class="fas fa-image"></i> [图片]</span>`;
+
+            case 'video':
+                return `<span class="quote-icon-wrapper" style="cursor: pointer;" onclick="${getClickHandler()}" title="点击跳转"><i class="fas fa-video"></i> ${escape(content || '[视频]')}</span>`;
+
+            case 'file':
+                return `<span class="quote-icon-wrapper" style="cursor: pointer;" onclick="${getClickHandler()}" title="点击跳转"><i class="fas fa-file-alt"></i> ${escape(fileInfo?.name || content || '[文件]')}</span>`;
+
+            case 'voice':
+            case 'audio':
+                const dur = fileInfo?.duration ? `${Math.floor(fileInfo.duration)}"` : '';
+                return `<span class="quote-icon-wrapper" style="cursor: pointer;" onclick="${getClickHandler()}" title="点击跳转"><i class="fas fa-microphone"></i> ${escape(content || '[语音]')} ${dur}</span>`;
+
+            case 'location':
+                return `<span class="quote-icon-wrapper"><i class="fas fa-map-marker-alt"></i> [位置]</span>`;
+
+            default:
+                return `<span class="quote-text-content">${escape(content) || '[未知类型]'}</span>`;
+        }
+    }
+
+
     // chat.js - ChatClient 类中的 renderMessageContent 方法
 
     // 🔧 修复：渲染不同类型的消息内容
@@ -4252,26 +4464,32 @@ class ChatClient {
         }
 
         // 🔧 关键修复 4: 渲染引用消息（必须在内容之后）
-        if (message.quote_message_id || message.quote_content) {
+        if (message.quote_message_id || message.quote_file_info) {
             const quoteElement = document.createElement('div');
             quoteElement.className = 'message-quote';
+
             // 引用头部
             const quoteHeader = document.createElement('div');
             quoteHeader.className = 'quote-header';
-            quoteHeader.innerHTML = `
-            <i class="fas fa-quote-left"></i>
-            <span class="quote-sender">${this.escapeHtml(message.quote_sender || '引用')}：</span>
-        `;
-            // 引用内容
+            quoteHeader.innerHTML = `<i class="fas fa-quote-left"></i> <span class="quote-sender">${this.escapeHtml(message.quote_sender || '引用')}：</span>`;
+
+            // 引用内容容器
             const quoteContent = document.createElement('div');
             quoteContent.className = 'quote-text';
-            quoteContent.innerHTML = this.escapeHtml(message.quote_content || '[引用内容]');
-            // 添加到引用容器
+
+            // 🔧 核心：根据消息类型动态渲染引用内容（支持图片/视频/语音/文件等）
+            quoteContent.innerHTML = this.renderQuotedContent(
+                message.quote_message_type || 'text',
+                message.quote_message_type === 'file' ? message.quote_file_info?.name || message.quote_content || '' : message.quote_content || '',
+                message.quote_file_info || null,
+                message.quote_message_id || message.quote_info?.id || null
+            );
+
             quoteElement.appendChild(quoteHeader);
             quoteElement.appendChild(quoteContent);
-            // 添加到消息容器
             container.appendChild(quoteElement);
         }
+
     }
 
 
@@ -4752,6 +4970,10 @@ class ChatClient {
                     lastMessageText = lastMessage.content || '暂无消息';
                 }
 
+                // 🔧 新增：检查是否有未读的@提及标记
+                const hasUnreadMention = group.has_unread_mention === true;
+                const mentionHint = hasUnreadMention ? '<span class="mention-hint">[有人@我]</span> ' : '';
+
                 // 🔧 关键修复：群聊头像不添加输入指示器
                 const avatarHtml = `<img src="${group.avatar || '/static/images/group-avatar.png'}" alt="${group.display_name}">`;
 
@@ -4763,7 +4985,7 @@ class ChatClient {
                     </div>
                     <div class="group-info">
                         <div class="group-title">${group.display_name}</div>
-                        <div class="group-subtitle">${lastMessageText || '暂无消息'}</div>
+                        <div class="group-subtitle">${mentionHint}${lastMessageText || '暂无消息'}</div>
                     </div>
                     <div class="group-meta">
                         <div class="group-time">${lastMessage.timestamp ? Utils.formatTime(lastMessage.timestamp) : ''}</div>
@@ -4931,6 +5153,10 @@ class ChatClient {
     selectChatRoom(roomId) {
         console.log('选择聊天室:', roomId);
 
+        // 🔧 新增：进入聊天室时清除未读@提及标记
+        const targetRoom = this.chatRooms.find(r => r.id === parseInt(roomId));
+        if (targetRoom) targetRoom.has_unread_mention = false;
+
         // 🔧 关键修复 1: 保存当前聊天室的草稿
         if (this.currentRoomId) {
             this.saveInputDraft(this.currentRoomId);
@@ -4941,6 +5167,7 @@ class ChatClient {
 
         // 清除引用
         this.clearQuoteMessage();
+        this.clearMentions(roomId); // 🔧 切换聊天室时清空提及
 
         // 隐藏侧边栏
         if (this.isShowingSidebar) {
@@ -8563,6 +8790,19 @@ class ChatClient {
         }
     }
 
+    // 🔧 新增：清空提及状态
+    clearMentions(roomId) {
+        this.currentMentions.clear();
+        // 清空提及状态
+        const chatItem = document.querySelector(`.chat-item[data-room-id="${roomId}"]`);
+        if (chatItem) {
+            const mentionHintElement = chatItem.querySelector('.mention-hint');
+            if (mentionHintElement) {
+                mentionHintElement.textContent = ''
+            }
+        }
+    }
+
     // 转义 HTML 特殊字符，防止 XSS 攻击
     escapeHtml(text) {
         if (!text) return '';
@@ -8656,7 +8896,8 @@ class ChatClient {
                 e.stopPropagation();
                 const userId = item.dataset.userId;
                 const username = item.dataset.username;
-                this.insertAtMention(username);
+                // 🔧 传递 userId 给 insertAtMention
+                this.insertAtMention(username, userId);
             });
         });
     }
@@ -8673,7 +8914,7 @@ class ChatClient {
     }
 
     // 插入@提及
-    insertAtMention(username) {
+    insertAtMention(username, userId) {
         const messageInput = document.getElementById('messageInput');
         if (!messageInput) return;
 
@@ -8690,6 +8931,9 @@ class ChatClient {
         const newCursorPos = startPos + username.length + 2;
         messageInput.setSelectionRange(newCursorPos, newCursorPos);
         messageInput.focus();
+
+        // 🔧 关键：记录被提及的用户ID（防止重复）
+        if (userId) this.currentMentions.add(userId);
 
         // 关闭@面板
         this.closeAtPanel();
@@ -9993,6 +10237,25 @@ class ChatClient {
 
         document.addEventListener('click', resumeAudioOnInteraction, {once: true});
         document.addEventListener('touchstart', resumeAudioOnInteraction, {once: true});
+    }
+
+
+    // 🔧 监听用户首次交互，解锁震动/音频等权限
+    setupUserInteractionListener() {
+        const unlockFeatures = () => {
+            if (!this.userHasInteracted) {
+                this.userHasInteracted = true;
+                console.log('✅ 用户已交互，解锁震动/音频功能');
+            }
+            // 只执行一次
+            document.removeEventListener('click', unlockFeatures);
+            document.removeEventListener('touchstart', unlockFeatures);
+            document.removeEventListener('keydown', unlockFeatures);
+        };
+
+        document.addEventListener('click', unlockFeatures, {passive: true});
+        document.addEventListener('touchstart', unlockFeatures, {passive: true});
+        document.addEventListener('keydown', unlockFeatures, {passive: true});
     }
 
 

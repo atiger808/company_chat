@@ -23,13 +23,15 @@ class ChatRoomSerializer(serializers.ModelSerializer):
     display_name = serializers.SerializerMethodField()
     creator_info = UserListSerializer(source='creator', read_only=True)
 
+    has_unread_mention = serializers.SerializerMethodField()
+
     class Meta:
         model = ChatRoom
         fields = [
             'id', 'name', 'room_type', 'members', 'display_name',
             'last_message', 'unread_count', 'is_pinned', 'is_muted',
             'creator', 'creator_info', 'created_at', 'updated_at',
-            'is_deleted', 'deleted_at'
+            'is_deleted', 'deleted_at', 'has_unread_mention',
         ]
 
     def get_display_name(self, obj):
@@ -102,6 +104,44 @@ class ChatRoomSerializer(serializers.ModelSerializer):
             return 0  # 返回默认值，避免服务崩溃
 
 
+    def get_has_unread_mention(self, obj):
+        """获取是否有未读的@消息"""
+        try:
+            request = self.context.get('request')
+            if not request or not hasattr(request, 'user'):
+                logger.warning("Request or user not found in context.")
+                return False
+            
+            user = request.user
+
+            # 构建已删除消息的ID子查询
+            deleted_message_ids = MessageDeleteStatus.objects.filter(
+                is_deleted=True,
+                user=user
+            ).values_list('message_id', flat=True)
+
+            # 构建已读消息的ID子查询
+            read_message_ids = MessageReadStatus.objects.filter(
+                user=user
+            ).values_list('message_id', flat=True)
+
+            # 查询是否存在符合条件的未读@消息
+            has_unread_mention = Message.objects.filter(
+                chat_room=obj,
+                is_deleted=False,
+                mentioned_users=user
+            ).exclude(
+                id__in=deleted_message_ids
+            ).exclude(
+                id__in=read_message_ids
+            ).exists()
+            
+            return has_unread_mention
+        except Exception as e:
+            logger.error(f"Error in get_has_unread_mention: {e}")
+            return False
+
+
 class MessageSerializer(serializers.ModelSerializer):
     """消息序列化器"""
     sender = UserListSerializer(read_only=True)
@@ -112,8 +152,12 @@ class MessageSerializer(serializers.ModelSerializer):
 
     # 🔧 新增：引用消息字段
     quote_info = serializers.SerializerMethodField()
+    quote_file_info = serializers.SerializerMethodField()
     # 🔧 新增：语音精确时长字段
     voice_duration = serializers.FloatField(read_only=True)
+
+    # 🔧 新增：序列化提及的用户列表（仅读）
+    mentioned_users = UserListSerializer(many=True, read_only=True)
 
     def create(self, validated_data):
         file_id = validated_data.pop('file_id', None)
@@ -135,11 +179,11 @@ class MessageSerializer(serializers.ModelSerializer):
             'file_id',  # ✅ 添加到 fields 列表中
             # 🔧 引用字段
             'quote_message', 'quote_content', 'quote_sender', 'quote_sender_id',
-            'quote_timestamp', 'quote_message_type', 'quote_info',
+            'quote_timestamp', 'quote_message_type', 'quote_info', 'quote_file_info',
             # 🔧 添加语音时长字段
-            'voice_duration',
+            'voice_duration', 'mentioned_users',  # 🔧 加入列表
         ]
-        read_only_fields = ['id', 'timestamp', 'is_read', 'is_deleted', 'deleted_at', 'sender', 'sender_id', 'sender_name', 'voice_duration']
+        read_only_fields = ['id', 'timestamp', 'is_read', 'is_deleted', 'deleted_at', 'sender', 'sender_id', 'sender_name', 'voice_duration', 'mentioned_users']
 
     def get_file_info(self, obj):
 
@@ -195,6 +239,12 @@ class MessageSerializer(serializers.ModelSerializer):
                 'timestamp': obj.quote_timestamp.isoformat() if obj.quote_timestamp else None,
                 'message_type': obj.quote_message_type
             }
+        return None
+
+
+    def get_quote_file_info(self, obj):
+        if obj.quote_message_id:
+            return obj.quote_message.get_file_info()
         return None
 
     def create(self, validated_data):

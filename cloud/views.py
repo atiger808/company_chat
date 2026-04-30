@@ -679,7 +679,7 @@ class FolderViewSet(viewsets.ModelViewSet):
             if config:
                 download_enabled = config.get_value('system.download_enabled')
                 if not download_enabled:
-                    return Response({'error': '下载功能已禁用'}, status=status.HTTP_403_FORBIDDEN)
+                    return Response({'error': '下载功能已禁用，请联系管理员！'}, status=status.HTTP_403_FORBIDDEN)
         except Exception as e:
             logger.error(f"Error: {e}")
 
@@ -2150,7 +2150,7 @@ class CloudFileViewSet(viewsets.ModelViewSet):
             if config:
                 download_enabled = config.get_value('system.download_enabled')
                 if not download_enabled:
-                    return Response({'error': '下载功能已禁用'}, status=status.HTTP_403_FORBIDDEN)
+                    return Response({'error': '下载功能已禁用，请联系管理员！'}, status=status.HTTP_403_FORBIDDEN)
         except Exception as e:
             logger.error(f"Error: {e}")
 
@@ -5098,6 +5098,7 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                     'fileType': file_ext,
                     'key': document_key,  # ✅ 稳定的 key 支持协同编辑
                     'title': file_obj.name or file_obj.original_name or '未命名文档',
+                    'version_number': file_obj.current_version.version_number if file_obj.current_version else '' ,
                     'url': file_url,
                     'permissions': permissions,
                     # 🔧 可选：添加文档信息（用于前端展示）
@@ -6559,6 +6560,15 @@ class DocumentEditorViewSet(viewsets.ViewSet):
     def version_download(self, request, version_id=None):
         """下载指定版本的文件"""
         try:
+            try:
+                config = CloudSystemConfig.objects.filter(key='system.download_enabled').first()
+                if config:
+                    download_enabled = config.get_value('system.download_enabled')
+                    if not download_enabled:
+                        return Response({'error': '下载功能已禁用，请联系管理员！'}, status=status.HTTP_403_FORBIDDEN)
+            except Exception as e:
+                logger.error(f"Error: {e}")
+
             # 🔧 验证版本归属（通过 file__owner 确保只能下载自己的文件版本）
             version = DocumentVersion.objects.select_related('file__owner').get(
                 id=version_id,

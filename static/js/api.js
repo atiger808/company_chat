@@ -26,6 +26,11 @@ class TokenManager {
             'Authorization': `Bearer ${token}`
         };
     }
+
+    static refreshToken() {
+        console.log('refresh token')
+    }
+
 }
 
 // API 调用封装

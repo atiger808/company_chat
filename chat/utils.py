@@ -37,7 +37,8 @@ def schedule_message():
 
     # 计算截止时间
     now = datetime.now()
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    # today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = now
     cutoff_time = today_start - timedelta(days=last_days)
 
     # 查询需要清理的消息

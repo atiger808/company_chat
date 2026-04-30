@@ -95,30 +95,25 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
 
         close_old_connections()
 
-        # 获取用户参与的所有聊天室
-        all_rooms = ChatRoom.objects.filter(members=user)
+        # 获取用户参与的聊天室ID列表
+        user_room_ids = ChatRoom.objects.filter(members=user).values_list('id', flat=True)
 
-        # 过滤已删除的聊天室
-        filtered_rooms = []
-        for room in all_rooms:
-            if room.room_type == 'private':
-                # 私聊：检查用户个人删除状态
-                try:
-                    status_obj = ChatRoomDeleteStatus.objects.get(chat_room=room, user=user)
-                    if not status_obj.is_deleted:
-                        filtered_rooms.append(room)
-                except ChatRoomDeleteStatus.DoesNotExist:
-                    filtered_rooms.append(room)
-            else:
-                # 群聊：检查全局删除状态
-                try:
-                    status_obj = ChatRoomDeleteStatus.objects.get(chat_room=room, user=user)
-                    if not status_obj.is_deleted:
-                        filtered_rooms.append(room)
-                except ChatRoomDeleteStatus.DoesNotExist:
-                    filtered_rooms.append(room)
+        if not user_room_ids:
+            return ChatRoom.objects.none()
 
-        return filtered_rooms
+        # 获取该用户在这些聊天室中的删除状态
+        # 如果 is_deleted=False 或者记录不存在，则表示未删除
+        deleted_room_ids = ChatRoomDeleteStatus.objects.filter(
+            chat_room_id__in=user_room_ids,
+            user=user,
+            is_deleted=True
+        ).values_list('chat_room_id', flat=True)
+
+        # 计算未删除的聊天室ID：在用户参与的房间中，排除已标记为删除的房间
+        active_room_ids = set(user_room_ids) - set(deleted_room_ids)
+
+        # 返回未删除的聊天室 queryset，并进行优化查询
+        return ChatRoom.objects.filter(id__in=active_room_ids).select_related('creator').prefetch_related('members')
 
     @action(detail=True, methods=['delete'])
     def soft_delete(self, request, pk=None):
@@ -611,6 +606,12 @@ class MessageViewSet(viewsets.ModelViewSet):
 
         # 创建消息实例
         message = Message.objects.create(**data)
+
+        # 🔧 处理 REST API 发送的提及
+        mentioned_user_ids = self.request.data.get('mentioned_users', [])
+        if mentioned_user_ids:
+            valid_users = message.chat_room.members.filter(id__in=mentioned_user_ids)
+            message.mentioned_users.set(valid_users)
 
         # 🔧 保存引用字段
         quote_message_id = data.get('quote_message_id')

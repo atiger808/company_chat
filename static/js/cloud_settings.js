@@ -336,6 +336,18 @@ class CloudSettingsApp {
             version_keep_count: parseInt(document.getElementById('oo_version_count')?.value) || 10,
         };
 
+        if (payload.jwt_enabled) {
+            if (!payload.jwt_secret) {
+                this.showError('请输入 JWT 密钥');
+                return;
+            }
+            if (payload.jwt_secret.length !== 32) {
+                this.showError('JWT 密钥长度必须为 32 个字符');
+            }
+            // payload.jwt_secret = btoa(payload.jwt_secret);
+        }
+
+
         try {
             const response = await fetch('/api/cloud/settings/update_onlyoffice_configs/', {
                 method: 'PUT',

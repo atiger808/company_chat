@@ -173,8 +173,9 @@ class DocumentEditorApp {
     // 🔧 初始化时设置文档链接
     updatePageInfo() {
         if (!this.config?.document) return;
-        document.title = `${this.config.document.title} - 在线编辑`;
-        document.getElementById('docTitle').textContent = this.config.document.title;
+        let version_number = this.config.document?.version_number
+        document.title = version_number ? `${this.config.document.title} - v${version_number} - 在线编辑` : `${this.config.document.title} - 在线编辑`;
+        document.getElementById('docTitle').textContent = version_number ? `${this.config.document.title} - v${version_number}` : `${this.config.document.title}`;
 
         // 🔧 设置协作文档链接
         const docLinkInput = document.getElementById('docShareLink');
@@ -1423,7 +1424,10 @@ class DocumentEditorApp {
                 headers: TokenManagerCustom.getHeaders()
             });
 
-            if (!response.ok) throw new Error('下载失败');
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || '下载失败');
+            }
 
             const blob = await response.blob();
             const url = URL.createObjectURL(blob);
@@ -1436,7 +1440,8 @@ class DocumentEditorApp {
             setTimeout(() => URL.revokeObjectURL(url), 100);
 
         } catch (error) {
-            this.showError('下载版本失败：' + error.message);
+            console.error(error);
+            this.showError('下载版本失败: ' + error.message || error.error || error);
         }
     }
 
