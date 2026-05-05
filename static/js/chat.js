@@ -359,6 +359,8 @@ class ChatClient {
         this.heartbeatCount = 0;
         this.lastHeartbeatTime = null;
 
+        this.markReadTimers = {}; // 新增：按聊天室存储防抖定时器
+
         // 消息加载状态
         // 🔧 无限滚动状态
         this.isInitialLoad = true;      // 是否为首次加载
@@ -384,6 +386,7 @@ class ChatClient {
 
         // 🔧 新增：当前输入框中 @提及的用户ID集合
         this.currentMentions = new Set();
+        this.mentionedAll = false
 
         // 防止重复创建聊天室的状态
         this.creatingChatMap = new Map(); // userId -> {timestamp, roomId}
@@ -560,8 +563,16 @@ class ChatClient {
         if (!roomId) return;
         const messageInput = document.getElementById('messageInput');
         if (!messageInput) return;
+        if (!messageInput.value) {
+            let hasDraft = this.inputDrafts.get(parseInt(roomId))
+            if (hasDraft) {
+                this.inputDrafts.delete(parseInt(roomId));
+            }
+            return
+        }
+        ;
 
-        this.inputDrafts.set(roomId, {
+        this.inputDrafts.set(parseInt(roomId), {
             content: messageInput.value,
             cursorPosition: messageInput.selectionStart,
             quoteMessage: this.currentQuoteMessage ? {...this.currentQuoteMessage} : null,
@@ -574,8 +585,8 @@ class ChatClient {
         const messageInput = document.getElementById('messageInput');
         if (!messageInput) return;
 
-        const draft = this.inputDrafts.get(roomId);
-
+        const draft = this.inputDrafts.get(parseInt(roomId));
+        console.log('恢复草稿 roomId:', roomId, ' draft: ', draft);
         if (draft) {
             messageInput.value = draft.content || '';
             this.adjustTextareaHeight(messageInput);
@@ -598,6 +609,7 @@ class ChatClient {
             console.log('恢复草稿 roomId:', roomId);
 
         } else {
+            console.log('恢复草稿 roomId:', roomId, ' 无草稿');
             // 新聊天室，清空输入框
             messageInput.value = '';
             this.adjustTextareaHeight(messageInput);
@@ -629,7 +641,7 @@ class ChatClient {
 
             // 🔧 关键修复：监听页面可见性变化
             document.addEventListener('visibilitychange', () => {
-                console.log(`页面可见性变化: ${document.visibilityState}`);
+                // console.log(`页面可见性变化: ${document.visibilityState}`);
 
                 // 页面变为可见时，清除角标闪烁
                 if (document.visibilityState === 'visible') {
@@ -639,10 +651,11 @@ class ChatClient {
                     const totalUnread = this.chatRooms.reduce((sum, r) => sum + (r.unread_count || 0), 0);
                     this.updateAppBadge(totalUnread);
 
-                    // 页面恢复可见时，标记当前聊天室消息为已读
-                    if (this.currentRoomId) {
-                        this.markMessagesAsRead(this.currentRoomId);
-                    }
+                    // // 页面恢复可见时，标记当前聊天室消息为已读
+                    // if (this.currentRoomId) {
+                    //     console.log('页面恢复可见时, 标记当前聊天室消息为已读');
+                    //     this.markMessagesAsRead(this.currentRoomId);
+                    // }
                 }
                 // 页面变为隐藏时，停止音频播放（可选优化）
                 else if (document.visibilityState === 'hidden') {
@@ -676,7 +689,6 @@ class ChatClient {
 
             // 获取当前用户信息
             this.currentUser = await API.getCurrentUser();
-            console.log('获取当前用户成功:', this.currentUser);
             this.renderCurrentUser();
 
             // 检查是否为管理员，显示控制台按钮
@@ -939,9 +951,13 @@ class ChatClient {
         }
     }
 
+
     // 处理新消息通知（全局WebSocket）
     handleNewGlobalMessage(data) {
         console.log('Received global message:', data);
+
+        const roomId = parseInt(data.chat_room);
+        const isCurrentRoom = this.currentRoomId && parseInt(this.currentRoomId) === roomId;
 
         // 🔧 关键修复1: 检查页面是否可见/聚焦，决定是否显示桌面通知
         const isPageVisible = document.visibilityState === 'visible';
@@ -949,7 +965,8 @@ class ChatClient {
         const shouldShowDesktopNotification = !isPageVisible || !isPageFocused;
 
         // 🔧 更新聊天室列表中的未读数和最后一条消息
-        const room = this.chatRooms.find(r => parseInt(r.id) === parseInt(data.chat_room));
+        let room = this.chatRooms.find(r => parseInt(r.id) === roomId);
+
         if (room) {
             // 更新最后一条消息
             room.last_message = {
@@ -959,73 +976,54 @@ class ChatClient {
             };
             room.updated_at = data.timestamp;
 
-            // 🔧 新增：检测@提及并标记聊天室（需后端在广播消息时携带 mentioned_users 字段）
-            if (data.mentioned_users && Array.isArray(data.mentioned_users)) {
+            // 🔧 新增：检测@提及并标记聊天室
+            const currentUserIdStr = this.currentUser?.id?.toLocaleString();
 
-                if (data.mentioned_users.includes(this.currentUser.id.toLocaleString())) {
-                    room.has_unread_mention = true; // 标记为有未读@消息
+            // 1. 处理 @我
+            if (data.mentioned_users && Array.isArray(data.mentioned_users)) {
+                if (currentUserIdStr && data.mentioned_users.includes(currentUserIdStr)) {
+                    room.has_unread_mention = true;
                 }
             }
 
-            // 仅当不是当前聊天室时增加未读数
-            if (!this.currentRoomId || parseInt(this.currentRoomId) !== parseInt(data.chat_room)) {
-                room.unread_count = (room.unread_count || 0) + 1;
+            // 2. 处理 @所有人 (优先后端标记，其次内容匹配)
+            if (data.is_mention_all === true || (data.content && data.content.includes('@所有人'))) {
+                room.has_mention_all = true;
+                room.has_unread_mention = true; // 保持触发渲染逻辑
+            } else if (data.mentioned_all) {
+                // 兼容旧字段或特定标记
+                this.has_mention_all = true; // 注意：这里似乎是想设置全局状态，但通常应设置在 room 上
+                room.has_mention_all = true;
             }
 
-            // 🔧 关键修复：直接使用后端返回的未读数
-            // 注意：这里我们不直接增加未读数，而是重新获取
-            this.fetchUnreadCountForRoom(data.chat_room);
+            // 🔧 关键修复：异步获取后端准确的未读数，避免前端计数误差
+            this.fetchUnreadCountForRoom(roomId).then(unreadCount => {
+                // 重新渲染聊天室列表
+                this.renderChatRooms();
+                this.renderGroups();
+            });
 
-            // 重新渲染聊天室列表
-            this.renderChatRooms();
-            this.renderGroups();
+
         } else {
             // 聊天室不存在，重新加载列表
             this.loadChatRooms();
+            return; // 如果房间不存在，后续逻辑可能无法准确执行，提前返回或继续取决于需求，这里选择继续执行通知逻辑
         }
 
         // 🔧 关键修复2: 播放提示音（全局）
         if (this.shouldPlayNotificationSound()) {
-            console.log('播放提示音');
             this.playNotificationSound();
         }
 
-        // 🔧 关键修复3: 页面不可见时强制显示通知（移动端增强）
-        if (shouldShowDesktopNotification) {
-            // 检查通知权限
-            if (Notification.permission === 'granted') {
-                this.showNotification(
-                    data.sender?.real_name || data.sender?.username || '新消息',
-                    {
-                        body: data.content,
-                        icon: data.sender?.avatar_url || '/static/images/default-avatar.png',
-                        data: data,
-                        // 🔧 关键修复4: 移动端锁屏通知必需参数
-                        requireInteraction: Utils.isMobile() ? false : true,
-                        silent: false,  // 强制播放系统通知声音
-                        tag: `chat-${data.chat_room}-${Date.now()}`  // 防止重复通知
-                    }
-                );
-            }
-            // 权限未请求，等待用户交互后自动请求
-            else if (Notification.permission === 'default' && !this.notificationPermissionRequested) {
-                this.requestNotificationPermission();
-            }
-        }
-
-
-        // 关键修复3: 非当前聊天室处理
-        if (!this.currentRoomId || parseInt(this.currentRoomId) !== parseInt(data.chat_room)) {
+        // 🔧 关键修复3: 非当前聊天室处理（震动、未读数、通知）
+        if (!isCurrentRoom) {
             // 触发震动（移动端）
             this.vibrateOnNewMessage();
 
-            // 更新未读数
-            const room = this.chatRooms.find(r => parseInt(r.id) === parseInt(data.chat_room));
+            // 更新本地未读数（作为后端数据返回前的临时展示，或者如果后端不返回精确未读数时的兜底）
+            // 注意：fetchUnreadCountForRoom 是异步的，这里先+1保证UI即时反馈，随后会被后端数据覆盖修正
             if (room) {
-                // 🔧 关键修复4: 仅当不是当前聊天室时才增加未读数
-                if (!this.currentRoomId || parseInt(this.currentRoomId) !== parseInt(data.chat_room)) {
-                    room.unread_count = (room.unread_count || 0) + 1;
-                }
+                room.unread_count = (room.unread_count || 0) + 1;
                 this.renderChatRooms();
                 this.renderGroups();
 
@@ -1034,31 +1032,47 @@ class ChatClient {
                 this.updateAppBadge(totalUnread);
             }
 
-            // 🔧 关键修复5: 页面不可见时显示桌面通知
+            // 决定显示哪种通知
             if (shouldShowDesktopNotification && this.shouldShowDesktopNotification()) {
-                console.log('页面不可见，显示桌面通知');
+                // 场景A: 页面不可见/失焦 -> 显示系统桌面通知
+                console.log('页面不可见/失焦，显示桌面通知');
                 this.showNotification(
                     data.sender?.real_name || data.sender?.username || data.sender_name || '新消息',
                     {
                         data: data,
                         body: data.content,
                         icon: data.sender?.avatar_url || '/static/images/default-avatar.png',
-                        requireInteraction: true // 保持通知直到用户交互
+                        requireInteraction: Utils.isMobile() ? false : true, // 移动端不强制交互，PC端强制
+                        silent: false,
+                        tag: `chat-${roomId}-${Date.now()}`
                     }
                 );
-            }
-            // 页面可见但非当前聊天室，显示页面内通知
-            else if (!shouldShowDesktopNotification) {
+            } else {
+                // 场景B: 页面可见且聚焦 -> 显示页面内通知横幅
                 this.showMessageNotification(data, {
-                    chat_room_id: data.chat_room,
+                    chat_room_id: roomId,
                     sender_name: data.sender?.real_name || data.sender?.username || '未知用户',
                     avatar_url: data.sender?.avatar_url,
                     is_current_room: false,
                     room_type: data.room_type || 'private'
                 });
             }
+        } else {
+            // 场景C: 是当前聊天室
+            // 如果页面不可见（例如最小化但当前选中的是这个房间），依然可能需要系统通知提醒用户有新消息
+            if (shouldShowDesktopNotification && this.shouldShowDesktopNotification()) {
+                this.showNotification(
+                    '新消息',
+                    {
+                        data: data,
+                        body: data.content,
+                        icon: data.sender?.avatar_url || '/static/images/default-avatar.png',
+                        requireInteraction: false
+                    }
+                );
+            }
+            // 如果页面可见，通常不需要额外通知，因为消息会直接渲染在聊天窗口中
         }
-
     }
 
 
@@ -1080,13 +1094,27 @@ class ChatClient {
     }
 
     // 处理聊天室更新
+    // 🔧 替换原有的 handleRoomUpdated 方法
     handleRoomUpdated(data) {
         const roomIndex = this.chatRooms.findIndex(r => parseInt(r.id) === parseInt(data.room_id));
-        if (roomIndex !== -1) {
-            this.chatRooms[roomIndex] = {...this.chatRooms[roomIndex], ...data.room};
-            this.renderChatRooms();
-            this.renderGroups();
-        }
+        if (roomIndex === -1) return;
+
+        let currentRoom = this.chatRooms[roomIndex];
+        const updatedData = data.room || {};
+
+        currentRoom.unread_count = Math.max(currentRoom.unread_count - 1, 0);
+
+        // 🔑 关键修复：保留本地未读数，防止被跨用户上下文的序列化值覆盖（如撤回、更新群名等操作）
+        const preservedUnread = currentRoom.unread_count || 0;
+
+        this.chatRooms[roomIndex] = {
+            ...currentRoom,
+            ...updatedData,
+            unread_count: preservedUnread, // 强制覆盖可能错误的未读数
+        };
+
+        this.renderChatRooms();
+        this.renderGroups();
     }
 
 
@@ -1126,7 +1154,6 @@ class ChatClient {
         if (token) {
             wsUrl += `?token=${encodeURIComponent(token)}`;
         }
-        console.log('Attempting to connect WebSocket:', wsUrl);
 
         try {
             this.ws = new WebSocket(wsUrl);
@@ -1416,6 +1443,7 @@ class ChatClient {
         // 如果是当前聊天室的消息，滚动到底部
         if (this.currentRoomId && parseInt(data.chat_room) === currentRoomIdInt) {
             Utils.scrollToBottom(document.getElementById('messagesList'));
+            console.log('如果是当前聊天室的消息，滚动到底部, 标记消息为已读');
             this.markMessagesAsRead(this.currentRoomId);
         }
 
@@ -1553,7 +1581,8 @@ class ChatClient {
         } catch (error) {
             console.error('更新撤回后最后消息失败:', error);
             // 降级：重新加载整个列表
-            this.loadChatRooms();
+            await this.loadChatRooms();
+
         }
     }
 
@@ -1812,50 +1841,6 @@ class ChatClient {
         }
     }
 
-
-    // 增强桌面通知，添加震动反馈和声音
-    async showNotification_v1(title, options) {
-        console.log('showNotification:', title, options);
-        console.log('Notification.permission: ', Notification.permission)
-        // 创建通知
-        const notification = new Notification(title, options);
-
-        // 通知点击事件
-        notification.onclick = () => {
-            window.focus();
-            this.stopTitleBlink();
-
-            // 如果有指定的聊天室，切换到该聊天室
-            const chatRoomId = options.data?.chat_room_id || options.data?.chat_room;
-            if (chatRoomId) {
-                this.selectChatRoom(chatRoomId);
-            }
-
-            notification.close();
-        };
-
-        // 通知关闭后清除角标
-        notification.onclose = () => {
-            const totalUnread = this.chatRooms.reduce((sum, r) => sum + (r.unread_count || 0), 0);
-            this.updateAppBadge(totalUnread);
-        };
-
-        // 播放提示音
-        console.log('播放提示音');
-        this.playNotificationSound();
-
-        // 触发震动（移动端）
-        console.log('触发震动');
-        this.vibrateOnNewMessage();
-
-        console.log('显示消息通知弹窗（页面内通知）');
-        this.showMessageNotification(options.data || options, {
-            chat_room_id: options.data?.chat_room_id || options.data?.chat_room,
-            sender_name: options.data?.sender?.real_name || options.data?.sender?.username || '未知用户',
-            avatar_url: options.icon,
-            is_current_room: false
-        });
-    }
 
 
     // 增强桌面通知，支持锁屏通知（移动端），添加震动反馈和声音
@@ -2229,7 +2214,6 @@ class ChatClient {
     // 处理用户在线状态变化
     handleUserOnlineStatus(data) {
         const {user_id, is_online, chat_room_id} = data;
-        console.log('handleUserOnlineStatus', data)
 
         // 🔧 关键修复：用户离线时，隐藏输入指示器
         if (!is_online) {
@@ -2431,6 +2415,7 @@ class ChatClient {
             file_info: actualContent?.file_info,
             chat_room: parseInt(roomId),  // 🔧 使用正确的 roomId
             mentioned_users: Array.from(this.currentMentions),
+            mentioned_all: this.mentionedAll,
             is_temp: true
         };
 
@@ -2464,6 +2449,7 @@ class ChatClient {
                 file_info: messageData.file_info,
                 chat_room: parseInt(roomId),  // 🔧 确保携带正确的聊天室 ID
                 mentioned_users: Array.from(this.currentMentions),
+                mentioned_all: this.mentionedAll,
                 temp_id: tempMessageId,
             };
 
@@ -2488,6 +2474,7 @@ class ChatClient {
                 file_id: messageData.file_id,
                 file_info: messageData.file_info,
                 mentioned_users: Array.from(this.currentMentions),
+                mentioned_all: this.mentionedAll,
                 temp_id: tempMessageId
             };
 
@@ -2513,8 +2500,11 @@ class ChatClient {
         this.clearMentions(); // 🔧 新增调用
 
         // 清空当前聊天室的草稿
-        if (this.currentRoomId === roomId) {
-            this.inputDrafts.delete(roomId);
+        const hasDraft = this.inputDrafts.has(parseInt(roomId));
+        console.log('清除聊天室草稿 roomId:', roomId, ' hasDraft: ', hasDraft);
+        if (hasDraft) {
+            this.inputDrafts.delete(parseInt(roomId));
+            this.renderChatRooms(); // ✅ 立即更新侧边栏状态
         }
 
         // this.loadChatRooms();
@@ -2612,35 +2602,51 @@ class ChatClient {
         }
     }
 
-    // 处理粘贴事件
     handlePaste(e) {
-
         if (!this.currentRoomId) {
-            console.error('请先选择一个聊天对象')
             this.showError('请先选择一个聊天对象');
             return;
         }
 
         const clipboardData = e.clipboardData || window.clipboardData;
-        if (!clipboardData) return;
 
-        const items = clipboardData.items;
-        if (!items) return;
-
-        // 检查是否有图片
-        for (let i = 0; i < items.length; i++) {
-            if (items[i].type.indexOf('image') !== -1) {
-                e.preventDefault(); // 阻止默认粘贴
-
-                const blob = items[i].getAsFile();
-                if (blob) {
-                    // 上传并发送图片
-                    this.sendImageFromClipboard(blob);
+        // 只处理图片，其他内容交给浏览器默认处理
+        if (clipboardData?.items) {
+            for (let item of clipboardData.items) {
+                if (item.type?.indexOf('image') !== -1) {
+                    e.preventDefault();
+                    const blob = item.getAsFile();
+                    if (blob) this.sendImageFromClipboard(blob);
+                    return;
                 }
-                break;
             }
         }
+
+        // 🔑 关键：纯文本不阻止默认行为，保证兼容性
+        // 可选：异步处理@提及
+        setTimeout(() => {
+            const text = clipboardData?.getData?.('text/plain');
+            if (text?.includes('@')) this.checkMentionsInPastedText(text);
+        }, 0);
     }
+
+
+    // 🔧 新增：检查粘贴文本中的@提及
+    checkMentionsInPastedText(text) {
+        if (!text || !this.currentRoomId) return;
+
+        // 获取当前聊天室成员
+        const room = this.chatRooms.find(r => r.id === parseInt(this.currentRoomId));
+        if (!room || !room.members) return;
+
+        // 简单检测是否包含@符号
+        if (text.includes('@')) {
+            // 可以在此处触发@面板或高亮提示
+            // 注意：不要自动插入，避免干扰用户粘贴体验
+            console.log('粘贴内容包含@，可触发提示');
+        }
+    }
+
 
     // 从剪切板发送图片
     async sendImageFromClipboard(blob) {
@@ -2756,6 +2762,7 @@ class ChatClient {
                 this.messages = [...reversedMessages, ...this.messages];
 
                 // 🔧 关键修复4: 标记新加载的消息为已读
+                console.log('标记新加载的消息为已读')
                 this.markMessagesAsRead(roomId, reversedMessages);
 
             } else if (!append && newMessages.length > 0) {
@@ -2769,6 +2776,7 @@ class ChatClient {
                 this.oldestMessageId = newMessages[newMessages.length - 1].id;
 
                 // 标记消息为已读
+                console.log('首次加载消息标记为已读')
                 this.markMessagesAsRead(roomId);
             } else if (newMessages.length === 0) {
                 // 🔧 关键修复6: 没有更多消息，停止加载
@@ -2781,7 +2789,7 @@ class ChatClient {
             console.log('this.hasMoreMessages:', this.hasMoreMessages);
 
             // 渲染消息
-            this.renderChatHistory();
+            this.renderChatHistory(append);
 
             const messagesList = document.getElementById('messagesList');
             // 如果没有更多消息，显示没有更多消息指示器
@@ -2804,10 +2812,6 @@ class ChatClient {
                 }
             }
 
-            // 首次加载滚动到底部
-            if (!append) {
-                Utils.scrollToBottom(document.getElementById('messagesList'));
-            }
 
         } catch (error) {
             console.error('加载聊天历史失败:', error);
@@ -2816,6 +2820,10 @@ class ChatClient {
         } finally {
             this.isLoadingMore = false; // 🔧 恢复加载状态
             this.hideLoading();
+            // 首次加载滚动到底部
+            if (!append) {
+                Utils.scrollToBottom(document.getElementById('messagesList'));
+            }
         }
     }
 
@@ -3008,13 +3016,15 @@ class ChatClient {
             // 恢复滚动位置（考虑加载指示器高度）
             if (messagesList) {
                 const currentScrollTop = document.querySelector(`.message-wrapper[data-message-id="${currentOldestMessageId}"]`).offsetTop
+                let targetScrollTop = currentScrollTop - loadingIndicatorOffset;
                 console.log('currentScrollTop: ', currentScrollTop)
-                console.log('loadingIndicator.offsetHeight: ', loadingIndicator.offsetHeight)
-                messagesList.scrollTop = currentScrollTop - loadingIndicatorOffset;
+                console.log('targetScrollTop: ', targetScrollTop)
 
-                // setTimeout(() => {
-                //     messagesList.scrollTop = currentScrollTop - loadingIndicatorOffset;
-                // }, 100);
+                messagesList.scrollTop = targetScrollTop;
+
+                setTimeout(() => {
+                    messagesList.scrollTop = targetScrollTop;
+                }, 100);
             }
 
         } catch (error) {
@@ -3054,7 +3064,8 @@ class ChatClient {
             const isScrollingUp = scrollTop < lastScrollTop;
 
             // 仅当向上滚动且距离底部超过150px时显示按钮
-            const shouldShowButton = isScrollingUp && distanceFromBottom > 150;
+            // const shouldShowButton = isScrollingUp && distanceFromBottom > 150;
+            const shouldShowButton = distanceFromBottom > 150;
 
             if (shouldShowButton) {
                 if (!showTimeout) {
@@ -3120,6 +3131,7 @@ class ChatClient {
 
             // 标记所有消息为已读
             if (this.currentRoomId) {
+                console.log('滚动到底部标记所有消息为已读');
                 this.markMessagesAsRead(this.currentRoomId);
             }
         });
@@ -3138,8 +3150,10 @@ class ChatClient {
         const room = this.chatRooms.find(r => parseInt(r.id) === parseInt(this.currentRoomId));
         if (room && room.unread_count > 0) {
             this.unreadCountBadge.textContent = room.unread_count > 99 ? '99+' : room.unread_count;
+            this.unreadCountBadge.style.display = 'block';
             this.unreadCountBadge.classList.add('show');
         } else {
+            this.unreadCountBadge.style.display = 'none';
             this.unreadCountBadge.classList.remove('show');
         }
     }
@@ -3266,17 +3280,30 @@ class ChatClient {
         }
 
         sortedRooms.forEach(room => {
-            console.log('render room: ', room);
-            const lastMessage = room.last_message || {};
+            let lastMessage = room.last_message || {};
             const unreadCount = room.unread_count || 0;
             let roomName = room.display_name || '未知聊天室';
 
-            let roomAvatar, isOnline, isOnline_html = '', username = '',
-                lastMessageText = lastMessage.content || '暂无消息';
-            let otherUserId = null; // 🔧 新增：存储对方用户ID
-            // 🔧 新增：检查是否有未读的@提及标记
+            // 🔧 修改：优先判断 @所有人，其次判断 @我
+            const hasMentionAll = room.has_mention_all === true;
             const hasUnreadMention = room.has_unread_mention === true;
-            const mentionHint = hasUnreadMention ? '<span class="mention-hint">[有人@我]</span> ' : '';
+            let mentionHint = '';
+
+            if (hasMentionAll) {
+                mentionHint = '<span class="mention-hint">[@所有人] </span>';
+            } else if (hasUnreadMention) {
+                mentionHint = '<span class="mention-hint">[有人@我] </span>';
+            }
+
+            // 🔧 新增：检测草稿状态
+            const hasDraft = this.inputDrafts.has(room.id);
+            const draftHint = hasDraft ? ' <span class="draft-hint">[草稿]</span> ' : '';
+
+
+            let roomAvatar, isOnline, isOnline_html = '', username = '',
+                lastMessageText = lastMessage.content || '暂无消息',
+                lastMessageTimestamp = lastMessage.timestamp || '';
+            let otherUserId = null; // 🔧 新增：存储对方用户ID
 
 
             if (room.room_type === 'private') {
@@ -3313,6 +3340,13 @@ class ChatClient {
             }
 
 
+            if (hasDraft) {
+                let draft = this.inputDrafts.get(room.id)
+                lastMessageText = draft.content
+                lastMessageTimestamp = draft.timestamp
+            }
+
+
             // 🔧 关键修复：为私聊头像添加包装器和输入指示器
             const avatarHtml = room.room_type === 'private'
                 ? `<div class="chat-item-avatar-wrapper">
@@ -3339,12 +3373,12 @@ class ChatClient {
                         ${room.is_muted ? '<i class="fas fa-volume-mute muted-icon"></i>' : ''}
                         ${roomName}
                     </div>
-                    <div class="chat-item-subtitle">${mentionHint}${lastMessageText}</div>
+                    <div class="chat-item-subtitle">${mentionHint}${draftHint}${lastMessageText}</div>
                 </div>
                 <div class="chat-item-meta">
                     ${unreadCount > 0 ? `<div class="chat-item-unread-count">${unreadCount > 99 ? '99+' : unreadCount}</div>` : ''}
                     ${isOnline_html}
-                    <div class="chat-item-time">${lastMessage.timestamp ? Utils.formatTime(lastMessage.timestamp) : ''}</div>
+                    <div class="chat-item-time">${lastMessageTimestamp ? Utils.formatLastmessageTimeStamp(lastMessageTimestamp) : ''}</div>
                 </div>
             </div>
         `;
@@ -3355,7 +3389,7 @@ class ChatClient {
 
 
     // 重新渲染整个消息历史（用于消息更新/撤回等场景）
-    renderChatHistory() {
+    renderChatHistory(append=false) {
         const messagesList = document.getElementById('messagesList');
         if (!messagesList) return;
 
@@ -3381,9 +3415,11 @@ class ChatClient {
             this.renderMessage(message, type);
         });
 
+        if (!append) {
+            // 滚动到底部
+            Utils.scrollToBottom(messagesList);
+        }
 
-        // 滚动到底部
-        Utils.scrollToBottom(messagesList);
     }
 
     // 判断是否需要显示时间戳
@@ -3411,7 +3447,7 @@ class ChatClient {
 
         const date = new Date(timestamp);
         const now = new Date();
-        
+
         // 获取具体时间字符串 (HH:mm)
         const timeStr = date.toLocaleTimeString('zh-CN', {
             hour: '2-digit',
@@ -3421,14 +3457,14 @@ class ChatClient {
 
         // 重置 now 为当前时间，避免 setDate 修改原对象影响后续判断
         const currentNow = new Date();
-        
+
         // 计算时间差
         const diffTime = currentNow.getTime() - date.getTime();
         const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-        
+
         // 判断是否是今天 (0天)
         const isToday = currentNow.toDateString() === date.toDateString();
-        
+
         // 判断是否是昨天 (1天)
         const yesterday = new Date(currentNow);
         yesterday.setDate(yesterday.getDate() - 1);
@@ -3446,7 +3482,7 @@ class ChatClient {
             label = `昨天 ${timeStr}`;
         } else if (isDayBeforeYesterday) {
             label = `前天 ${timeStr}`;
-        } else if (diffDays < 7) {
+        } else if (diffDays < 6) {
             // 最近一周内（不含今天、昨天、前天），显示星期几 + 时间
             const weekDays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
             const weekDay = weekDays[date.getDay()];
@@ -3454,7 +3490,7 @@ class ChatClient {
         } else {
             const currentYear = currentNow.getFullYear();
             const messageYear = date.getFullYear();
-            
+
             if (messageYear === currentYear) {
                 // 同一年但超过一周，显示月日 + 时间
                 const month = date.getMonth() + 1;
@@ -4127,171 +4163,6 @@ class ChatClient {
         }
     }
 
-    // 渲染不同类型的消息内容
-    renderMessageContent_v1(message, container) {
-        container.innerHTML = '';
-
-        if (message?.uploading_id) {
-            // 添加属性
-            container.setAttribute('uploading_id', message.uploading_id);
-            container.title = message?.content || '正在上传文件';
-        }
-
-
-        // 🔧 关键修复11: 处理已撤销消息
-        if (message.is_deleted && message.content === '[消息已撤销]') {
-            container.innerHTML = '<span class="revoked-message">[消息已撤销]</span>';
-            container.classList.add('message-revoked');
-            return;
-        }
-
-
-        switch (message.message_type) {
-            case 'text':
-                // container.textContent = message.content;
-                container.innerHTML += message.content || '';
-                break;
-
-            case 'image':
-                if (message.file_info?.url) {
-                    const img = document.createElement('img');
-                    img.src = message.file_info.url;
-                    img.className = 'message-image';
-                    img.onclick = () => this.previewImage(message.file_info.url);
-                    container.appendChild(img);
-                } else {
-                    container.textContent = '[图片加载失败]';
-                }
-                break;
-
-            case 'file':
-                if (message.file_info?.url) {
-                    const fileLink = document.createElement('div');
-                    fileLink.className = 'message-file';
-                    const iconClass = Utils.getFileIconClass(message.file_info.mime_type, message.file_info.name);
-                    fileLink.innerHTML = `
-                        <i class="${iconClass}"></i>
-                        <span class="file-name">${message.file_info.name}</span>
-                        <span class="file-size">(${Utils.formatFileSize(message.file_info.size)})</span>
-                    `;
-                    fileLink.onclick = () => window.open(message.file_info.url, '_blank');
-                    container.appendChild(fileLink);
-                } else {
-                    container.textContent = '[文件信息缺失]';
-                }
-                break;
-
-            case 'video':
-                if (message.file_info?.url) {
-                    const videoContainer = document.createElement('div');
-                    videoContainer.className = 'message-video-container';
-
-                    const video = document.createElement('video');
-                    video.src = message.file_info.url;
-                    video.controls = true;
-                    video.className = 'message-video';
-
-                    const playBtn = document.createElement('div');
-                    playBtn.className = 'video-play-btn';
-                    playBtn.innerHTML = '<i class="fas fa-play"></i>';
-                    playBtn.onclick = () => {
-                        video.play();
-                        playBtn.style.display = 'none';
-                    };
-
-                    videoContainer.appendChild(video);
-                    videoContainer.appendChild(playBtn);
-                    container.appendChild(videoContainer);
-
-                } else {
-                    container.textContent = '[视频加载失败]';
-                }
-                break;
-
-            case 'voice':
-                this.renderVoiceMessage(message, container);
-                break
-
-            case 'audio':
-                if (message.file_info?.url) {
-                    const audio = document.createElement('audio');
-                    audio.src = message.file_info.url;
-                    audio.controls = true;
-                    audio.className = 'message-audio';
-                    container.appendChild(audio);
-                } else {
-                    container.textContent = '[语音加载失败]';
-                }
-                break;
-
-
-            case 'location':
-                if (message.file_info?.url) {
-                    const locationLink = document.createElement('div');
-                    locationLink.className = 'message-location';
-                    locationLink.innerHTML = `
-                        <i class="fas fa-map-marker-alt"></i>
-                        <span>${message.file_info.name}</span>
-                    `;
-                    locationLink.onclick = () => window.open(message.file_info.url)
-                    container.appendChild(locationLink);
-                } else {
-                    container.textContent = '[位置信息缺失]';
-                }
-                break;
-
-            case 'audio':
-                if (message.file_info?.url) {
-                    const audio = document.createElement('audio');
-                    audio.src = message.file_info.url;
-                    audio.controls = true;
-                    audio.onerror = () => {
-                        container.textContent = '[语音加载失败]';
-                    };
-                    container.appendChild(audio);
-                } else {
-                    container.textContent = '[无效的语音信息]';
-                }
-                break;
-
-            case 'emoji':
-                container.innerHTML = message.content;
-                break;
-
-            default:
-                // container.textContent = message.content || '[未知消息类型]';
-                container.innerHTML += message.content || '[未知消息类型]';
-        }
-
-        // 🔧 关键修复: 渲染引用消息（必须在内容之前）
-        if (message.quote_message_id || message.quote_content) {
-            const quoteElement = document.createElement('div');
-            quoteElement.className = 'message-quote';
-
-            // 引用头部
-            const quoteHeader = document.createElement('div');
-            quoteHeader.className = 'quote-header';
-            quoteHeader.innerHTML = `
-            <i class="fas fa-quote-left"></i>
-            <span class="quote-sender">${this.escapeHtml(message.quote_sender || '引用')}：</span>
-        `;
-
-            // 引用内容
-            const quoteContent = document.createElement('div');
-            quoteContent.className = 'quote-text';
-            quoteContent.innerHTML = this.escapeHtml(message.quote_content || '[引用内容]');
-
-            // 添加到引用容器
-            quoteElement.appendChild(quoteHeader);
-            quoteElement.appendChild(quoteContent);
-
-            // 添加到消息容器
-            container.appendChild(quoteElement);
-        }
-
-
-    }
-
 
     // 🔧 新增：根据引用消息类型生成 HTML
     renderQuotedContent(type, content, fileInfo = null, messageId = null) {
@@ -4905,9 +4776,6 @@ class ChatClient {
 
         let html = '';
         users.forEach(user => {
-            console.log('user', user);
-            console.log('user.id', user.id);
-            console.log('this.currentUser.id', this.currentUser.id);
 
             if (user.id === this.currentUser.id) return; // 排除自己
 
@@ -4970,9 +4838,16 @@ class ChatClient {
                     lastMessageText = lastMessage.content || '暂无消息';
                 }
 
-                // 🔧 新增：检查是否有未读的@提及标记
+                // 🔧 修改：优先判断 @所有人，其次判断 @我
+                const hasMentionAll = group.has_mention_all === true;
                 const hasUnreadMention = group.has_unread_mention === true;
-                const mentionHint = hasUnreadMention ? '<span class="mention-hint">[有人@我]</span> ' : '';
+                let mentionHint = '';
+
+                if (hasMentionAll) {
+                    mentionHint = '<span class="mention-hint">[@所有人] </span> ';
+                } else if (hasUnreadMention) {
+                    mentionHint = '<span class="mention-hint">[有人@我] </span> ';
+                }
 
                 // 🔧 关键修复：群聊头像不添加输入指示器
                 const avatarHtml = `<img src="${group.avatar || '/static/images/group-avatar.png'}" alt="${group.display_name}">`;
@@ -4988,7 +4863,7 @@ class ChatClient {
                         <div class="group-subtitle">${mentionHint}${lastMessageText || '暂无消息'}</div>
                     </div>
                     <div class="group-meta">
-                        <div class="group-time">${lastMessage.timestamp ? Utils.formatTime(lastMessage.timestamp) : ''}</div>
+                        <div class="group-time">${lastMessage.timestamp ? Utils.formatLastmessageTimeStamp(lastMessage.timestamp) : ''}</div>
                         ${unreadCount > 0 ? `<div class="group-unread-count">${unreadCount > 99 ? '99+' : unreadCount}</div>` : ''}
                     </div>
                 </div>
@@ -5151,15 +5026,20 @@ class ChatClient {
 
     // 选择聊天室
     selectChatRoom(roomId) {
-        console.log('选择聊天室:', roomId);
+        console.log('选择聊天室 roomId:', roomId, ' this.currentRoomId: ', this.currentRoomId);
 
         // 🔧 新增：进入聊天室时清除未读@提及标记
         const targetRoom = this.chatRooms.find(r => r.id === parseInt(roomId));
-        if (targetRoom) targetRoom.has_unread_mention = false;
+        if (targetRoom) {
+            targetRoom.has_unread_mention = false;
+            targetRoom.has_mention_all = false; // 🔧 同步清除 @所有人 标记
+        }
 
         // 🔧 关键修复 1: 保存当前聊天室的草稿
         if (this.currentRoomId) {
             this.saveInputDraft(this.currentRoomId);
+            this.renderChatRooms(); // ✅ 立即更新侧边栏状态
+
         }
 
         // 🔧 关键修复 2: 清除所有输入指示器
@@ -5214,26 +5094,21 @@ class ChatClient {
             page_size: 50,
             append: false
         }).then(() => {
-            // 标记消息为已读
-            console.log('标记消息为已读 roomId:', roomId);
-            this.markMessagesAsRead(roomId).then(() => {
-                // 更新聊天室列表中的未读消息数
-                const chatItem = document.querySelector(`.chat-item[data-room-id="${roomId}"]`);
-                if (chatItem) {
-                    const unreadCountElement = chatItem.querySelector('.chat-item-unread-count');
-                    if (unreadCountElement) {
-                        unreadCountElement.remove();
-                    }
+
+            // 更新聊天室未读数
+            const chatItem = document.querySelector(`.chat-item[data-room-id="${roomId}"]`);
+            if (chatItem) {
+                const unreadCountElement = chatItem.querySelector('.chat-item-unread-count');
+                if (unreadCountElement) {
+                    unreadCountElement.remove();
                 }
-            }).catch(error => {
-                console.error('标记消息为已读失败:', error);
-            });
+            }
 
             // 设置滚动监听器（无限滚动）
             this.setupInfiniteScroll();
 
-            // 滚动到底部并标记已读
-            this.scrollToBottomAndMarkRead();
+            // 滚动到底部并标记已读, ✅ 保留这一处调用即可（内部已包含 markMessagesAsRead）
+            // this.scrollToBottomAndMarkRead();
 
             // 初始化直达底部按钮（初始隐藏）
             this.initScrollToBottomButton();
@@ -5252,6 +5127,9 @@ class ChatClient {
         const messagesList = document.getElementById('messagesList');
         if (messagesEmpty) messagesEmpty.style.display = 'none';
         if (messagesList) messagesList.style.display = 'block';
+
+        // 滚动到底部
+        Utils.scrollToBottom(messagesList);
 
         // 更新聊天头部
         const room = this.chatRooms.find(r => r.id === parseInt(roomId));
@@ -5316,6 +5194,7 @@ class ChatClient {
 
             }
         }
+
 
     }
 
@@ -5482,58 +5361,6 @@ class ChatClient {
             this.showError('创建群聊失败: ' + (error.error || error.message || '未知错误'));
             await this.checkLoginStatus();
         }
-    }
-
-    // 修复：返回按钮点击处理
-    handleBackButtonClick_v1() {
-        console.log('返回按钮被点击');
-
-        // 清空当前聊天室
-        this.currentRoomId = null;
-
-        // 隐藏消息区域，显示空状态
-        const messagesEmpty = document.getElementById('messagesEmpty');
-        const messagesList = document.getElementById('messagesList');
-        if (messagesEmpty) messagesEmpty.style.display = 'flex';
-        if (messagesList) {
-            messagesList.style.display = 'none';
-            messagesList.innerHTML = '';
-        }
-
-        // 重置聊天头部
-        const chatTitle = document.getElementById('chatTitle');
-        const chatAvatar = document.getElementById('chatAvatar');
-        const chatSubtitle = document.getElementById('chatSubtitle');
-
-        if (chatTitle) {
-            chatTitle.textContent = '选择聊天';
-        }
-        if (chatAvatar) {
-            chatAvatar.src = '/static/images/default-avatar.png';
-            // 移除所有事件监听
-            const newAvatar = chatAvatar.cloneNode(true);
-            chatAvatar.parentNode.replaceChild(newAvatar, chatAvatar);
-        }
-        if (chatSubtitle) {
-            this.updateConnectionStatus(false, 'chatSubtitle');
-        }
-
-        // 移除所有聊天项的active状态
-        document.querySelectorAll('.chat-item').forEach(item => {
-            item.classList.remove('active');
-        });
-
-        // 返回聊天列表
-        if (this.isShowingSidebar) {
-            console.log('Hiding sidebar')
-            this.hideSidebar()
-        } else {
-            console.log('show sidebar')
-            this.showSidebar()
-        }
-
-
-        console.log('已返回聊天列表');
     }
 
 
@@ -5801,6 +5628,7 @@ class ChatClient {
                 this.adjustTextareaHeight(messageInput);
             });
 
+            // 在 setupEventListeners 方法中，确认粘贴事件绑定无误
             messageInput.addEventListener('paste', (e) => this.handlePaste(e));
 
         }
@@ -8574,7 +8402,7 @@ class ChatClient {
                     }
                 });
 
-                // 更新聊天室未读数
+
                 const room = this.chatRooms.find(r => parseInt(r.id) === parseInt(roomId));
                 if (room) {
                     room.unread_count = 0;
@@ -8793,6 +8621,7 @@ class ChatClient {
     // 🔧 新增：清空提及状态
     clearMentions(roomId) {
         this.currentMentions.clear();
+        this.mentionedAll = false;
         // 清空提及状态
         const chatItem = document.querySelector(`.chat-item[data-room-id="${roomId}"]`);
         if (chatItem) {
@@ -8831,7 +8660,7 @@ class ChatClient {
             atPanel.style.display = 'block';
             // atPanel.style.top = `${position.top}px`;
             // atPanel.style.left = `${position.left}px`;
-            atPanel.style.bottom = `80px`;
+            atPanel.style.bottom = `150px`;
             atPanel.style.left = `auto`;
 
             // 加载当前聊天室的成员
@@ -8867,6 +8696,17 @@ class ChatClient {
         html += '<div class="at-panel-search"><input type="text" id="atSearch" placeholder="搜索成员..."></div>';
         html += '<div class="at-panel-list">';
 
+        // 🔧 新增：@所有人 选项（始终置顶）
+        html += `
+            <div class="at-member-item at-all-item" data-user-id="all" data-username="所有人">
+                <img src="/static/images/group-avatar.png" alt="所有人">
+                <div class="at-member-info">
+                    <div class="at-member-name">所有人</div>
+                    <div class="at-member-username">@所有人</div>
+                </div>
+            </div>
+        `;
+
         members.forEach(member => {
             html += `
             <div class="at-member-item" data-user-id="${member.id}" data-username="${member.real_name || member.username}">
@@ -8896,6 +8736,23 @@ class ChatClient {
                 e.stopPropagation();
                 const userId = item.dataset.userId;
                 const username = item.dataset.username;
+
+                // 🔧 修复：处理 @所有人
+                if (userId === 'all') {
+                    const messageInput = document.getElementById('messageInput');
+                    const start = messageInput.selectionStart;
+                    const end = messageInput.selectionEnd; // ✅ 正确定义 end 变量
+                    const currentValue = messageInput.value;
+
+                    messageInput.value = currentValue.substring(0, start) + `所有人 ` + currentValue.substring(end);
+                    messageInput.setSelectionRange(start + 4, start + 4); // 4 为 "所有人 " 的长度
+                    messageInput.focus();
+                    this.mentionedAll = true
+                    this.closeAtPanel();
+                    return;
+                }
+
+                // 处理普通用户 @
                 // 🔧 传递 userId 给 insertAtMention
                 this.insertAtMention(username, userId);
             });
@@ -9555,7 +9412,7 @@ class ChatClient {
             // OS 设备优先使用 MP3 格式（如果后端已提供）
             if (isIOS && message.file_info?.mp3_url) {
                 audioUrl = message.file_info.mp3_url;
-                console.log('iOS设备使用MP3格式:', audioUrl);
+                console.log('iOS设备使用MP3格式');
             }
             // iOS 设备但只有 WebM，尝试请求 MP3 格式（触发后端转码）
             else if (isMobible && audioUrl.includes('.webm')) {
@@ -9788,86 +9645,6 @@ class ChatClient {
     }
 
 
-    // 切换语音播放（增强错误处理）
-    toggleVoicePlay_v1(voiceElement, audioElement, playBtn, message) {
-        // 暂停其他正在播放的语音
-        this.voicePlayers.forEach((player, key) => {
-            if (player !== audioElement && !player.paused) {
-                player.pause();
-                const otherBtn = document.querySelector(`.message-voice[data-message-id="${key}"] .voice-play-btn`);
-                if (otherBtn) {
-                    otherBtn.classList.remove('playing');
-                    const otherProgress = document.querySelector(`.message-voice[data-message-id="${key}"] .voice-progress-bar`);
-                    if (otherProgress) otherProgress.style.width = '0%';
-                }
-            }
-        });
-
-        if (!audioElement.paused) {
-            audioElement.pause();
-            playBtn.classList.remove('playing');
-            return;
-        }
-
-        // 暂停其他音频
-        this.voicePlayers.forEach((player) => {
-            if (player !== audioElement) player.pause();
-        });
-
-
-        // iOS 专用：确保 AudioContext 已恢复（如果使用 Web Audio）
-        if (Utils.isIOS() && this.audioContextForMobile) {
-            if (this.audioContextForMobile.state === 'suspended') {
-                this.audioContextForMobile.resume().catch(console.warn);
-            }
-        }
-
-
-        // 尝试播放
-        const attemptPlay = () => {
-            audioElement.play().catch(err => {
-                console.error('播放失败:', err);
-                // 根据错误类型给出提示
-                if (err.name === 'NotSupportedError') {
-                    this.showToast('您的设备不支持此音频格式', 'error');
-                    // 提供下载按钮
-                    this.offerAudioDownload(message);
-                } else if (err.name === 'NotAllowedError') {
-                    this.showToast('请先与页面交互后再试', 'error');
-                } else {
-                    // 通用重试
-                    setTimeout(() => {
-                        audioElement.load();
-                        audioElement.play().catch(err2 => {
-                            console.error('重试播放失败:', err2);
-                            this.showToast('播放失败，请检查网络或稍后重试', 'error');
-                            this.offerAudioDownload(message);
-                        });
-                    }, 500);
-                }
-            });
-        };
-
-        // 智能加载策略 如果音频已加载元数据，直接播放；否则等待
-        if (audioElement.readyState >= HTMLMediaElement.HAVE_METADATA) {
-            attemptPlay();
-        } else {
-            audioElement.addEventListener('loadedmetadata', attemptPlay, {once: true});
-            audioElement.load(); // 强制加载
-
-            // 超时处理
-            setTimeout(() => {
-                audioElement.removeEventListener('loadedmetadata', attemptPlay);
-                attemptPlay(); // 超时后强制尝试
-            }, 3000);
-        }
-
-        playBtn.classList.add('playing');
-        const messageId = voiceElement.dataset.messageId;
-        this.voicePlayers.set(messageId, audioElement);
-
-
-    }
 
     // 🔧 修复：切换语音播放/暂停（支持点击切换）
     toggleVoicePlay(voiceElement, audioElement, playBtn, message) {

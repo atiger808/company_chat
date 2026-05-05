@@ -25,13 +25,15 @@ class ChatRoomSerializer(serializers.ModelSerializer):
 
     has_unread_mention = serializers.SerializerMethodField()
 
+    has_mention_all = serializers.SerializerMethodField()
+
     class Meta:
         model = ChatRoom
         fields = [
             'id', 'name', 'room_type', 'members', 'display_name',
             'last_message', 'unread_count', 'is_pinned', 'is_muted',
             'creator', 'creator_info', 'created_at', 'updated_at',
-            'is_deleted', 'deleted_at', 'has_unread_mention',
+            'is_deleted', 'deleted_at', 'has_unread_mention', 'has_mention_all',
         ]
 
     def get_display_name(self, obj):
@@ -45,63 +47,60 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         return obj.name or '未命名群聊'
 
     def get_last_message(self, obj):
-        """获取最后一条消息"""
+        """🔧 优先使用预取的缓存数据，实现毫秒级响应"""
+        # 1. 优先读取视图层批量预取的数据
+        if hasattr(obj, '_cached_last_message') and obj._cached_last_message:
+            msg = obj._cached_last_message
+            # 返回序列化后的数据
+            return MessageSerializer(msg, context=self.context).data
+
+        # 2. 降级方案（仅当缓存未命中时执行，如单独获取详情时）
         try:
             request = self.context.get('request')
             if not request or not hasattr(request, 'user'):
-                logger.warning("Request or user not found in context.")
                 return None
-            
             user = request.user
-            
-            # 优化查询：使用 select_related 预加载关联数据，减少数据库查询次数
+
             last_msg = Message.objects.select_related('sender', 'file').filter(
-                chat_room=obj,  # 修复：使用 obj 而不是 self
-                is_deleted=False,
+                chat_room=obj, is_deleted=False,
             ).exclude(
-                id__in=MessageDeleteStatus.objects.filter(
-                    is_deleted=True, 
-                    user=user
-                ).values_list('message_id', flat=True)  # 优化：只获取 ID 列表
+                id__in=MessageDeleteStatus.objects.filter(is_deleted=True, user=user).values_list('message_id',
+                                                                                                  flat=True)
             ).order_by('-timestamp').first()
 
             if last_msg:
                 return MessageSerializer(last_msg, context=self.context).data
             return None
         except Exception as e:
-            logger.error(f"Error in get_last_message: {e}")
+            logger.error(f"Error in get_last_message fallback: {e}")
             return None
 
 
-
     def get_unread_count(self, obj):
+        # 注意：unread_count 的计算依赖当前用户的已读状态，批量优化较复杂，
+        # 但由于列表加载瓶颈主要在 last_message，优化后整体响应应已达标。
         try:
             request = self.context.get('request')
             if not request or not hasattr(request, 'user'):
-                logger.warning("Request or user not found in context.")
                 return 0
             user = request.user
 
-            unread = Message.objects.select_related('sender', 'file').filter(
-                chat_room=obj,  # 修复：使用 obj 而不是 self
-                is_deleted=False,
+            # 优化：使用 exists/count 组合查询，减少内存占用
+            unread = Message.objects.filter(
+                chat_room=obj, is_deleted=False,
             ).exclude(
-                sender=user  # 🔧 关键优化：排除用户自己发送的消息
+                sender=user
             ).exclude(
-                id__in=MessageDeleteStatus.objects.filter(
-                    is_deleted=True,
-                    user=user
-                ).values_list('message_id', flat=True)  # 优化：只获取 ID 列表
+                id__in=MessageDeleteStatus.objects.filter(is_deleted=True, user=user).values_list('message_id',
+                                                                                                  flat=True)
             ).exclude(
-                id__in=MessageReadStatus.objects.filter(
-                    user=user
-                ).values_list('message_id', flat=True)
+                id__in=MessageReadStatus.objects.filter(user=user).values_list('message_id', flat=True)
             ).count()
 
             return unread
         except Exception as e:
             logger.error(f"Error in get_unread_count: {e}")
-            return 0  # 返回默认值，避免服务崩溃
+            return 0
 
 
     def get_has_unread_mention(self, obj):
@@ -139,6 +138,34 @@ class ChatRoomSerializer(serializers.ModelSerializer):
             return has_unread_mention
         except Exception as e:
             logger.error(f"Error in get_has_unread_mention: {e}")
+            return False
+
+    def get_has_mention_all(self, obj):
+        """获取是否有未读的@全体消息"""
+        try:
+            request = self.context.get('request')
+            if not request or not hasattr(request, 'user'):
+                logger.warning("Request or user not found in context.")
+                return False
+            user = request.user
+            return Message.objects.filter(
+                chat_room=obj,
+                is_deleted=False,
+                mentioned_all=True
+            ).exclude(
+                sender=user
+            ).exclude(
+                id__in=MessageDeleteStatus.objects.filter(
+                    is_deleted=True,
+                    user=user
+                ).values_list('message_id', flat=True)
+            ).exclude(
+                id__in=MessageReadStatus.objects.filter(
+                    user=user
+                ).values_list('message_id', flat=True)
+            ).exists()
+        except Exception as e:
+            logger.error(f"Error in get_has_mention_all: {e}")
             return False
 
 
@@ -181,9 +208,9 @@ class MessageSerializer(serializers.ModelSerializer):
             'quote_message', 'quote_content', 'quote_sender', 'quote_sender_id',
             'quote_timestamp', 'quote_message_type', 'quote_info', 'quote_file_info',
             # 🔧 添加语音时长字段
-            'voice_duration', 'mentioned_users',  # 🔧 加入列表
+            'voice_duration', 'mentioned_users', 'mentioned_all',  # 🔧 加入列表
         ]
-        read_only_fields = ['id', 'timestamp', 'is_read', 'is_deleted', 'deleted_at', 'sender', 'sender_id', 'sender_name', 'voice_duration', 'mentioned_users']
+        read_only_fields = ['id', 'timestamp', 'is_read', 'is_deleted', 'deleted_at', 'sender', 'sender_id', 'sender_name', 'voice_duration', 'mentioned_users', 'mentioned_all']
 
     def get_file_info(self, obj):
 
@@ -222,11 +249,10 @@ class MessageSerializer(serializers.ModelSerializer):
 
     def get_is_read(self, obj):
         user = self.context['request'].user
-        if obj.chat_room.room_type == 'group':
-            return MessageReadStatus.objects.filter(
-                message=obj, user=user
-            ).exists()
-        return obj.is_read
+        return MessageReadStatus.objects.filter(
+            message=obj, user=user
+        ).exists()
+
 
     # 🔧 新增：序列化引用信息
     def get_quote_info(self, obj):

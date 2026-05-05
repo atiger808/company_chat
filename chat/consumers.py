@@ -330,6 +330,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             except:
                 mentioned_user_ids = []
 
+        mentioned_all = data.get('mentioned_all', False)
+
         # 🔧 关键修复 4: 保存消息时使用正确的 room_name
         message = await self.save_message(
             content,
@@ -342,7 +344,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             quote_sender_id=quote_sender_id,
             quote_timestamp=quote_timestamp,
             quote_message_type=quote_message_type,
-            mentioned_user_ids=mentioned_user_ids  # 🔧 传入
+            mentioned_user_ids=mentioned_user_ids,  # 🔧 传入
+            mentioned_all=mentioned_all  # 🔧 传入
         )
         logger.info(
             f'user: {self.user} file_id: {file_id} message_type: {message_type} '
@@ -375,6 +378,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'file_info': message.get_file_info() if file_id else None,
                 'timestamp': message.timestamp.isoformat(),
                 'mentioned_users': mentioned_user_ids,
+                'mentioned_all': message.mentioned_all,
+                'is_mention_all': '@所有人' in content,  # 或判断 mentioned_users 是否覆盖全员
                 'temp_id': temp_id,
                 # 🔧 完整广播引用字段（接收端需要这些字段渲染引用内容）
                 'quote_message_id': message.quote_message_id,
@@ -399,6 +404,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'sender_id': self.user.id,
             'message_type': message_type,
             'mentioned_users': mentioned_user_ids,
+            'mentioned_all': message.mentioned_all,
+            'is_mention_all': '@所有人' in content,  # 或判断 mentioned_users 是否覆盖全员
             'file_info': message.get_file_info() if file_id else None,
             'timestamp': message.timestamp.isoformat(),
             'temp_id': temp_id,
@@ -572,7 +579,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                      quote_message_id=None, quote_content=None,
                      quote_sender=None, quote_sender_id=None,
                      quote_timestamp=None, quote_message_type=None,
-                     mentioned_user_ids=None):
+                     mentioned_user_ids=None, mentioned_all=False):
 
         # 🔧 关键修复：使用传入的 room_name 或默认的 self.room_name
         target_room_name = room_name if room_name else self.room_name
@@ -594,6 +601,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             chat_room=chat_room,
             sender=self.user,
             content=content,
+            mentioned_all=mentioned_all,
             message_type=message_type
         )
 
@@ -807,6 +815,7 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             'message_type': event.get('message_type', 'text'),
             'file_info': event.get('file_info'),
             'mentioned_users': event.get('mentioned_users', []),
+            'mentioned_all': event.get('mentioned_all', False),
             'timestamp': event['timestamp'],
         }))
 

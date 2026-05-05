@@ -56,6 +56,8 @@ class ChatRoom(models.Model):
             models.Index(fields=['room_type', 'updated_at']),
             models.Index(fields=['is_deleted', 'updated_at']),
             models.Index(fields=['creator', '-updated_at']),
+            # 复合索引：加速搜索 + 过滤
+            models.Index(fields=['room_type', 'is_deleted', '-updated_at']),
         ]
 
     def __str__(self):
@@ -262,6 +264,9 @@ class Message(models.Model):
         related_name='mentioned_in_messages',
         verbose_name='被提及的用户'
     )
+
+    # @所有人
+    mentioned_all = models.BooleanField(default=False, verbose_name='是否@全体成员')
 
     # 🔧 新增：语音消息精确时长（秒）
     voice_duration = models.FloatField(null=True, blank=True, verbose_name='语音时长(秒)')

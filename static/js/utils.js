@@ -261,6 +261,74 @@ class Utils {
     }
 
 
+
+    static formatLastmessageTimeStamp(timestamp) {
+
+        const date = new Date(timestamp);
+        const now = new Date();
+
+        // 获取具体时间字符串 (HH:mm)
+        const timeStr = date.toLocaleTimeString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+
+        // 重置 now 为当前时间，避免 setDate 修改原对象影响后续判断
+        const currentNow = new Date();
+
+        // 计算时间差
+        const diffTime = currentNow.getTime() - date.getTime();
+        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+        // 判断是否是今天 (0天)
+        const isToday = currentNow.toDateString() === date.toDateString();
+
+        // 判断是否是昨天 (1天)
+        const yesterday = new Date(currentNow);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const isYesterday = yesterday.toDateString() === date.toDateString();
+
+        // 判断是否是前天 (2天)
+        const dayBeforeYesterday = new Date(currentNow);
+        dayBeforeYesterday.setDate(dayBeforeYesterday.getDate() - 2);
+        const isDayBeforeYesterday = dayBeforeYesterday.toDateString() === date.toDateString();
+
+        let label;
+        if (isToday) {
+            label = `今天 ${timeStr}`;
+        } else if (isYesterday) {
+            label = `昨天 ${timeStr}`;
+        } else if (isDayBeforeYesterday) {
+            label = `前天 ${timeStr}`;
+        } else if (diffDays < 6) {
+            // 最近一周内（不含今天、昨天、前天），显示星期几 + 时间
+            const weekDays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+            const weekDay = weekDays[date.getDay()];
+            label = `${weekDay} ${timeStr}`;
+        } else {
+            const currentYear = currentNow.getFullYear();
+            const messageYear = date.getFullYear();
+
+            if (messageYear === currentYear) {
+                // 同一年但超过一周，显示月日 + 时间
+                const month = date.getMonth() + 1;
+                const day = date.getDate();
+                label = `${month}月${day}日`;
+            } else {
+                // 超过一年，显示年月日 + 时间
+                const year = date.getFullYear();
+                const month = date.getMonth() + 1;
+                const day = date.getDate();
+                label = `${year}年${month}月${day}日`;
+            }
+        }
+
+        return label;
+    }
+
+
+
     // 防抖函数
     static debounce(func, wait) {
         let timeout;
@@ -388,7 +456,10 @@ class Utils {
     // 滚动到底部
     static scrollToBottom(element) {
         if (element) {
-            element.scrollTop = element.scrollHeight;
+            // 使用 requestAnimationFrame 确保在下一帧渲染时执行滚动，避免在某些情况下滚动失效
+            requestAnimationFrame(() => {
+                element.scrollTop = element.scrollHeight;
+            });
         }
     }
 
@@ -421,7 +492,7 @@ class Utils {
 
     // 检测是否为 iOS 设备
     static isIOS() {
-        return /iPad|iPhone|iPod|Mac|Safari/.test(navigator.userAgent) && !window.MSStream;
+        return /iPad|iPhone|iPod|Mac/.test(navigator.userAgent) && !window.MSStream;
     }
 
     // 检测是否为 Android 设备

@@ -5,22 +5,6 @@
     box-sizing: border-box;
 }
 
-/*:root {*/
-/*    --primary-color: #07c160;*/
-/*    --primary-dark: #06a852;*/
-/*    --secondary-color: #9eea6a;*/
-/*    --text-primary: #333;*/
-/*    --text-secondary: #666;*/
-/*    --text-light: #999;*/
-/*    --bg-primary: #ffffff;*/
-/*    --bg-secondary: #f5f5f5;*/
-/*    --border-color: #e7e7e7;*/
-/*    --shadow: 0 2px 10px rgba(0, 0, 0, 0.1);*/
-/*    --transition: all 0.3s ease;*/
-/*    --border-radius-sm: 4px;*/
-/*    --border-radius-md: 8px;*/
-/*    --border-radius-lg: 12px;*/
-/*}*/
 
 :root {
     --primary-color: #409EFF;
@@ -34,6 +18,7 @@
     --bg-primary: #ffffff;
     --bg-secondary: #f5f7fa;
     --border-color: #f3f6fd;
+    --border-secondary-color: #bcc6db;
     --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.1);
     --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.15);
     --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.2);
@@ -336,8 +321,12 @@ body {
 }
 
 @keyframes mentionPulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.6; }
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.6;
+    }
 }
 
 /* 移动端适配 */
@@ -771,7 +760,7 @@ body {
 /* 表情包面板样式 */
 .emoji-panel {
     position: absolute;
-    bottom: 80px;
+    bottom: 160px;
     left: auto;
     background: white;
     border: 1px solid #dcdfe6;
@@ -996,11 +985,11 @@ body {
 
 /* ==================== 输入区域 ==================== */
 .chat-input-area {
-    height: 60px;
-    padding: 0 16px;
+    height: auto;
+    padding: 10px 16px;
     border-top: 1px solid var(--border-color);
     background-color: var(--bg-primary);
-    display: flex;
+    display: block;
     align-items: center;
     gap: 12px;
     flex-shrink: 0;
@@ -1009,17 +998,21 @@ body {
 .input-actions {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 20px;
+    margin-bottom: 2px;
 }
 
 .input-wrapper {
     flex: 1;
     position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px
 }
 
 .input-wrapper textarea {
     width: 100%;
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--border-secondary-color);
     border-radius: 20px;
     padding: 10px 16px;
     font-size: 15px;
@@ -1032,6 +1025,25 @@ body {
 }
 
 .input-wrapper textarea:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(7, 193, 96, 0.1);
+}
+
+.input-wrapper input {
+    width: 100%;
+    border: 1px solid var(--border-secondary-color);
+    border-radius: 20px;
+    padding: 10px 16px;
+    font-size: 15px;
+    resize: none;
+    outline: none;
+    transition: var(--transition);
+    max-height: 120px;
+    min-height: 38px;
+    line-height: 1.5;
+}
+
+.input-wrapper input:focus {
     border-color: var(--primary-color);
     box-shadow: 0 0 0 2px rgba(7, 193, 96, 0.1);
 }
@@ -1075,6 +1087,8 @@ body {
     font-weight: 500;
     transition: var(--transition);
     flex-shrink: 0;
+    right: 10px;
+    position: absolute;
 }
 
 .send-btn:hover {
@@ -1579,8 +1593,8 @@ input:checked + .slider:before {
     }
 
     .messages-list {
-        padding: 24px 12px;
-        margin-bottom: 50px;
+        padding: 30px 12px;
+        margin-bottom: 150px;
     }
 
     .modal-content {
@@ -6135,7 +6149,6 @@ input:checked + .toggle-slider:before {
 }
 
 
-
 /* ==================== 引用消息富媒体渲染样式 ==================== */
 .message-quote .quote-text {
     display: flex;
@@ -6164,9 +6177,10 @@ input:checked + .toggle-slider:before {
     transition: transform 0.2s ease;
     display: block;
 }
+
 .message-quote .quote-image-preview:hover {
     transform: scale(1.02);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 /* 文件/视频/语音 引用图标容器 */
@@ -6179,13 +6193,13 @@ input:checked + .toggle-slider:before {
     line-height: 1.4;
     padding: 2px 0;
 }
+
 .message-quote .quote-icon-wrapper i {
     opacity: 0.7;
     font-size: 0.9em;
     min-width: 16px;
     text-align: center;
 }
-
 
 
 .quote-header {
@@ -6941,7 +6955,7 @@ body.pwa-mode .chat-input-area {
 .scroll-to-bottom-container {
     position: fixed;
     right: 24px;
-    bottom: 90px;
+    bottom: 150px;
     width: 56px;
     height: 56px;
     z-index: 1000; /* 确保容器层级最高 */
@@ -7140,7 +7154,7 @@ body.pwa-mode .chat-input-area {
 @media (max-width: 768px) {
     .scroll-to-bottom-container {
         right: 18px;
-        bottom: 85px;
+        bottom: 100px;
         width: 52px;
         height: 52px;
     }
@@ -7162,7 +7176,7 @@ body.pwa-mode .chat-input-area {
 @media (max-width: 480px) {
     .scroll-to-bottom-container {
         right: 16px;
-        bottom: 80px;
+        bottom: 200px;
         width: 48px;
         height: 48px;
     }
@@ -8063,8 +8077,8 @@ body.pwa-mode .chat-input-area {
     /* 语音按钮放在最左侧，增大点击区域 */
     .input-actions {
         display: flex;
-        gap: 8px;
-        margin-bottom: 10px;
+        gap: 12px;
+        margin-bottom: 2px;
     }
 
     .action-btn {
@@ -8132,14 +8146,36 @@ body.pwa-mode .chat-input-area {
         max-height: 120px;
         padding: 12px 16px;
         padding-right: 60px; /* 为发送按钮留空间 */
-        border: 2px solid var(--border-color);
+        border: 1px solid var(--border-secondary-color);
         border-radius: 24px;
         font-size: 16px; /* 防止 iOS 自动放大 */
         line-height: 1.5;
         resize: none;
         background: white;
         transition: all 0.2s ease;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+
+        /* ✅ 修复iOS跨应用粘贴 */
+        -webkit-user-select: text !important;
+        user-select: text !important;
+        -webkit-user-modify: read-write !important;
+        -webkit-touch-callout: default !important; /* 允许长按菜单 */
+        -webkit-appearance: textarea; /* 保持原生textarea外观 */
+        appearance: textarea;
+
+    }
+
+    /* 🔧 添加 iOS 专用修复样式 */
+    .ios-fix #messageInput {
+        /* 只保留安全区域适配，去掉appearance重置 */
+        padding-bottom: env(safe-area-inset-bottom, 20px);
+        -webkit-appearance: textarea;
+        appearance: textarea;
+        -webkit-touch-callout: default !important;
+    }
+
+    input, textarea, [contenteditable] {
+        -webkit-touch-callout: default !important;
     }
 
     #messageInput:focus {
@@ -8150,10 +8186,12 @@ body.pwa-mode .chat-input-area {
 
     /* 发送按钮优化 */
     .send-btn {
+        /*position: absolute;*/
+        right: 10px;
         position: absolute;
-        right: 8px;
-        bottom: 8px;
-        top: 8px;
+        /*right: 8px;*/
+        /*bottom: 8px;*/
+        /*top: 8px;*/
         width: auto;
         min-width: 60px;
         padding: 0 16px;
@@ -8219,7 +8257,7 @@ body.pwa-mode .chat-input-area {
         min-height: 40px;
         font-size: 15px;
         padding: 10px 14px;
-        padding-right: 56px;
+        /*padding-right: 56px;*/
     }
 
     .send-btn {
@@ -8662,16 +8700,15 @@ body.pwa-mode .chat-input-area {
 }
 
 
-
-
-
 /* ================= 修改密码模态框专属样式 ================= */
 #changePasswordModal .modal-content {
     max-width: 480px;
 }
+
 #changePasswordModal .form-group {
     margin-bottom: 18px;
 }
+
 #changePasswordModal .error-message {
     color: var(--danger-color);
     font-size: 12px;
@@ -8679,6 +8716,7 @@ body.pwa-mode .chat-input-area {
     display: none;
     min-height: 16px;
 }
+
 #changePasswordModal .success-message {
     color: var(--success-color);
     font-size: 13px;
@@ -8689,29 +8727,36 @@ body.pwa-mode .chat-input-area {
     background: rgba(103, 194, 58, 0.1);
     border-radius: 6px;
 }
+
 /* 表单输入框错误高亮 */
 #changePasswordModal .form-control.error {
     border-color: var(--danger-color);
     box-shadow: 0 0 0 2px rgba(245, 108, 108, 0.15);
 }
+
 /* 提交按钮加载状态 */
-#submitChangePasswordBtn.loading .btn-text { display: none; }
-#submitChangePasswordBtn .loading { display: none; }
+#submitChangePasswordBtn.loading .btn-text {
+    display: none;
+}
+
+#submitChangePasswordBtn .loading {
+    display: none;
+}
+
 #submitChangePasswordBtn.loading .loading {
     display: inline-block;
     width: 16px;
     height: 16px;
-    border: 2px solid rgba(255,255,255,0.3);
+    border: 2px solid rgba(255, 255, 255, 0.3);
     border-top-color: #fff;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
 }
+
 #submitChangePasswordBtn:disabled {
     opacity: 0.7;
     cursor: not-allowed;
 }
-
-
 
 
 /* ==================== 用户下拉菜单 ==================== */
@@ -8721,6 +8766,7 @@ body.pwa-mode .chat-input-area {
     align-items: center;
     gap: 8px;
 }
+
 .user-menu-trigger {
     width: 36px;
     height: 36px;
@@ -8735,6 +8781,7 @@ body.pwa-mode .chat-input-area {
     transition: var(--transition);
     font-size: 16px;
 }
+
 .user-menu-trigger:hover {
     background: rgba(255, 255, 255, 0.3);
     transform: scale(1.05);
@@ -8756,6 +8803,7 @@ body.pwa-mode .chat-input-area {
     transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
     border: 1px solid var(--border-color);
 }
+
 .user-dropdown-menu.show {
     opacity: 1;
     visibility: visible;
@@ -8772,18 +8820,22 @@ body.pwa-mode .chat-input-area {
     color: var(--text-secondary);
     font-size: 14px;
 }
+
 .dropdown-item:hover {
     background: var(--bg-secondary);
     color: var(--primary-color);
 }
+
 .dropdown-item i {
     width: 20px;
     text-align: center;
     font-size: 16px;
 }
+
 .dropdown-item.text-danger {
     color: var(--danger-color);
 }
+
 .dropdown-item.text-danger:hover {
     background: var(--danger-bg);
 }
@@ -8802,13 +8854,22 @@ body.pwa-mode .chat-input-area {
     font-size: 13px;
     text-align: center;
 }
-.error-message { background: var(--danger-bg); color: var(--danger-color); }
-.success-message { background: var(--success-bg); color: var(--success-color); }
+
+.error-message {
+    background: var(--danger-bg);
+    color: var(--danger-color);
+}
+
+.success-message {
+    background: var(--success-bg);
+    color: var(--success-color);
+}
+
 .btn .loading {
     display: inline-block;
     width: 16px;
     height: 16px;
-    border: 2px solid rgba(255,255,255,0.3);
+    border: 2px solid rgba(255, 255, 255, 0.3);
     border-top-color: #fff;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
@@ -8825,162 +8886,64 @@ body.pwa-mode .chat-input-area {
 
 
 
-/* 输入区域布局 */
+/* 🔧 强制修复 iOS Safari Textarea 粘贴/编辑能力 */
+#messageInput {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+    -webkit-user-modify: read-write !important;
+    -webkit-tap-highlight-color: transparent;
+    /* 防止父容器 overflow 或 transform 裁剪长按菜单 */
+    position: relative;
+    /* 确保输入容器不遮挡输入法 */
+    z-index: 0;
+}
 
-/*!* ==================== 输入区域核心布局 ==================== *!*/
-/*.chat-input-area {*/
-/*    padding: 12px 16px;*/
-/*    background: var(--bg-primary);*/
-/*    border-top: 1px solid var(--border-color);*/
-/*    display: flex;*/
-/*    flex-direction: column; !* 移动端默认纵向堆叠，体验更佳 *!*/
-/*    gap: 10px;*/
-/*    flex-shrink: 0;*/
-/*    transition: all 0.3s ease;*/
-/*}*/
+/* 确保输入容器不拦截触摸事件 */
+.input-wrapper {
+    pointer-events: auto !important;
+    user-select: none; /* 仅容器不选中，不影响内部 textarea */
+}
 
-/*!* 工具栏 *!*/
-/*.input-toolbar {*/
-/*    display: flex;*/
-/*    align-items: center;*/
-/*    gap: 8px;*/
-/*    min-height: 36px;*/
-/*    flex-wrap: wrap;*/
-/*}*/
 
-/*!* 功能按钮通用样式 *!*/
-/*.action-btn {*/
-/*    width: 36px;*/
-/*    height: 36px;*/
-/*    border-radius: 50%;*/
-/*    border: none;*/
-/*    background: var(--bg-secondary);*/
-/*    color: var(--text-secondary);*/
-/*    cursor: pointer;*/
-/*    display: flex;*/
-/*    align-items: center;*/
-/*    justify-content: center;*/
-/*    transition: all 0.2s ease;*/
-/*    flex-shrink: 0;*/
-/*}*/
-/*.action-btn:hover { background: var(--primary-color); color: white; transform: scale(1.05); }*/
-/*.action-btn.active { background: var(--primary-color); color: white; }*/
 
-/*!* ➕ 展开区域（默认隐藏，平滑过渡） *!*/
-/*.extra-actions {*/
-/*    display: flex;*/
-/*    align-items: center;*/
-/*    gap: 8px;*/
-/*    max-width: 0;*/
-/*    overflow: hidden;*/
-/*    opacity: 0;*/
-/*    transition: max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease, margin 0.3s ease;*/
-/*    margin-left: 0;*/
-/*}*/
-/*.extra-actions.show {*/
-/*    max-width: 120px; !* 根据按钮数量调整 *!*/
-/*    opacity: 1;*/
-/*    margin-left: 4px;*/
-/*}*/
 
-/*!* 输入框容器 *!*/
-/*.input-wrapper {*/
-/*    flex: 1;*/
-/*    position: relative;*/
-/*    min-height: 42px;*/
-/*}*/
+/* ==================== @所有人 专用样式 ==================== */
+.at-all-item {
+    background: linear-gradient(135deg, #e6f7ff 0%, #f0f5ff 100%);
+    border-left: 3px solid var(--primary-color);
+    margin-bottom: 4px;
+}
+.at-all-item:hover {
+    background: #d6eaff;
+    transform: translateX(2px);
+}
+.at-all-item .at-member-name {
+    color: var(--primary-color);
+    font-weight: 700;
+}
 
-/*!* 多行输入框 *!*/
-/*#messageInput {*/
-/*    width: 100%;*/
-/*    min-height: 42px;*/
-/*    max-height: 150px; !* 限制最大高度，超出显示滚动条 *!*/
-/*    padding: 10px 14px;*/
-/*    border: 1px solid var(--border-color);*/
-/*    border-radius: 12px;*/
-/*    font-size: 15px;*/
-/*    line-height: 1.6;*/
-/*    resize: none;*/
-/*    outline: none;*/
-/*    background: var(--bg-secondary);*/
-/*    color: var(--text-primary);*/
-/*    transition: all 0.2s ease;*/
-/*    overflow-y: auto;*/
-/*    font-family: inherit;*/
-/*}*/
-/*#messageInput:focus {*/
-/*    border-color: var(--primary-color);*/
-/*    background: white;*/
-/*    box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.1);*/
-/*}*/
-/*!* 占位符样式 *!*/
-/*#messageInput::placeholder {*/
-/*    color: var(--text-light);*/
-/*    font-size: 14px;*/
-/*}*/
+/* ==================== 草稿提示样式 ==================== */
+.draft-hint {
+    /*color: #e6a23c; !* 警告色，与@我的红色区分 *!*/
+    color: #ff4d4f; /* 警告色，与@我的红色区分 */
+    font-weight: 600;
+    font-size: 13px;
+    flex-shrink: 0; /* 防止被截断 */
+    animation: draftPulse 2s ease-in-out infinite;
+    background: rgba(230, 162, 60, 0.1);
+    padding: 1px 6px;
+    border-radius: 4px;
+}
 
-/*!* 发送按钮 *!*/
-/*.send-btn {*/
-/*    align-self: flex-end;*/
-/*    padding: 8px 16px;*/
-/*    border-radius: 20px;*/
-/*    border: none;*/
-/*    background: var(--primary-color);*/
-/*    color: white;*/
-/*    font-size: 14px;*/
-/*    font-weight: 500;*/
-/*    cursor: pointer;*/
-/*    transition: all 0.2s ease;*/
-/*    display: flex;*/
-/*    align-items: center;*/
-/*    justify-content: center;*/
-/*    gap: 6px;*/
-/*}*/
-/*.send-btn:hover:not(:disabled) {*/
-/*    background: var(--primary-dark);*/
-/*    transform: translateY(-2px);*/
-/*    box-shadow: 0 4px 12px rgba(64, 158, 255, 0.3);*/
-/*}*/
-/*.send-btn:active:not(:disabled) { transform: translateY(0); }*/
-/*.send-btn:disabled {*/
-/*    opacity: 0.4;*/
-/*    cursor: not-allowed;*/
-/*    background: var(--text-light);*/
-/*}*/
+@keyframes draftPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.7; transform: scale(0.98); }
+}
 
-/*!* ==================== 响应式优化 ==================== *!*/
-/*!* 🖥️ 桌面端 (≥769px)：单行布局，工具栏与输入框并列 *!*/
-/*@media (min-width: 769px) {*/
-/*    .chat-input-area {*/
-/*        flex-direction: row;*/
-/*        align-items: flex-end;*/
-/*        padding: 14px 20px;*/
-/*        gap: 12px;*/
-/*    }*/
-/*    .input-toolbar {*/
-/*        flex-direction: row;*/
-/*        align-self: flex-start;*/
-/*        margin-bottom: 4px;*/
-/*    }*/
-/*    .input-wrapper {*/
-/*        margin: 0 8px;*/
-/*        max-height: 120px;*/
-/*    }*/
-/*    .send-btn {*/
-/*        margin-bottom: 2px;*/
-/*        min-width: 60px;*/
-/*    }*/
-/*    .extra-actions.show { max-width: 160px; }*/
-/*}*/
-
-/*!* 📱 移动端 (≤768px)：紧凑布局，防 iOS 放大 *!*/
-/*@media (max-width: 768px) {*/
-/*    .chat-input-area {*/
-/*        padding: 10px 12px;*/
-/*        gap: 8px;*/
-/*    }*/
-/*    .action-btn { width: 32px; height: 32px; font-size: 14px; }*/
-/*    !* 关键：16px 防止 iOS Safari 自动放大输入框 *!*/
-/*    #messageInput { font-size: 16px; padding: 9px 12px; }*/
-/*    .send-btn { padding: 6px 12px; font-size: 13px; }*/
-/*}*/
+/* 移动端适配 */
+@media (max-width: 768px) {
+    .draft-hint {
+        font-size: 12px;
+        padding: 1px 4px;
+    }
+}

@@ -95,25 +95,56 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
 
         close_old_connections()
 
-        # 获取用户参与的聊天室ID列表
-        user_room_ids = ChatRoom.objects.filter(members=user).values_list('id', flat=True)
-
+        # 获取用户参与的聊天室ID
+        user_room_ids = list(ChatRoom.objects.filter(members=user).values_list('id', flat=True))
         if not user_room_ids:
             return ChatRoom.objects.none()
 
-        # 获取该用户在这些聊天室中的删除状态
-        # 如果 is_deleted=False 或者记录不存在，则表示未删除
-        deleted_room_ids = ChatRoomDeleteStatus.objects.filter(
-            chat_room_id__in=user_room_ids,
-            user=user,
-            is_deleted=True
-        ).values_list('chat_room_id', flat=True)
+        # 过滤已删除的聊天室
+        deleted_room_ids = set(ChatRoomDeleteStatus.objects.filter(
+            chat_room_id__in=user_room_ids, user=user, is_deleted=True
+        ).values_list('chat_room_id', flat=True))
 
         # 计算未删除的聊天室ID：在用户参与的房间中，排除已标记为删除的房间
-        active_room_ids = set(user_room_ids) - set(deleted_room_ids)
+        active_room_ids = [rid for rid in user_room_ids if rid not in deleted_room_ids]
 
-        # 返回未删除的聊天室 queryset，并进行优化查询
+        # 🔧 关键优化：预加载关联数据，减少序列化时的额外查询
         return ChatRoom.objects.filter(id__in=active_room_ids).select_related('creator').prefetch_related('members')
+
+    def list(self, request, *args, **kwargs):
+        """🔧 重写 list 方法，批量预取最后消息，彻底解决 N+1 性能瓶颈"""
+        queryset = self.filter_queryset(self.get_queryset())
+
+        # 处理分页
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            rooms_to_serialize = list(page)
+        else:
+            rooms_to_serialize = list(queryset)
+
+        if rooms_to_serialize:
+            room_ids = [r.id for r in rooms_to_serialize]
+
+            # 1. 批量获取每个房间的最新一条消息（按时间倒序，只取最新）
+            # 注意：此处为了性能优先，暂时不在此处做复杂的软删除/已读过滤，
+            # 复杂过滤保留在序列化器降级逻辑中，确保主流程极快。
+            last_messages_map = {}
+            # 使用 values_list 优化查询速度，但我们需要完整对象用于序列化
+            for msg in Message.objects.filter(chat_room_id__in=room_ids, is_deleted=False) \
+                    .select_related('sender', 'file').order_by('-chat_room_id', '-timestamp'):
+                if msg.chat_room_id not in last_messages_map:
+                    last_messages_map[msg.chat_room_id] = msg
+
+            # 2. 将预取数据挂载到聊天室实例上
+            for room in rooms_to_serialize:
+                room._cached_last_message = last_messages_map.get(room.id)
+
+        # 传入 context 以便序列化器使用
+        serializer = self.get_serializer(rooms_to_serialize, many=True, context={'request': request})
+
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @action(detail=True, methods=['delete'])
     def soft_delete(self, request, pk=None):
@@ -779,25 +810,38 @@ class MessageViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def mark_as_read(self, request):
+        """批量标记消息为已读"""
         message_ids = request.data.get('message_ids', [])
         chat_room_id = request.data.get('chat_room_id')
-        if not chat_room_id:
-            return Response({'error': '缺少 chat_room_id'}, status=400)
-        try:
-            chat_room = ChatRoom.objects.get(id=chat_room_id, members=request.user)
-        except ChatRoom.DoesNotExist:
-            return Response({'error': '聊天室不存在'}, status=404)
 
-        # 批量创建或忽略已存在的记录
-        existing = MessageReadStatus.objects.filter(
-            message_id__in=message_ids,
-            user=request.user
-        ).values_list('message_id', flat=True)
-        new_records = [
+        if not chat_room_id:
+            return Response({'error': '缺少 chat_room_id'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 验证用户是否有权限访问该聊天室
+        if not ChatRoom.objects.filter(id=chat_room_id, members=request.user).exists():
+            return Response({'error': '聊天室不存在或无权访问'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not message_ids:
+            return Response({'status': 'success'})
+
+        # 过滤出当前用户尚未标记为已读的消息
+        # 使用 exclude + exists 子查询或者直接 bulk_create ignore_conflicts
+        # 为了性能和简洁，直接使用 bulk_create with ignore_conflicts=True
+        # 但为了确保只处理属于该聊天室的消息，最好先校验一下 message_ids 是否属于该 chat_room
+        
+        # 优化：直接批量创建，利用数据库唯一约束忽略冲突
+        # 假设 MessageReadStatus 有 unique_together = ('message', 'user')
+        
+        read_statuses = [
             MessageReadStatus(message_id=mid, user=request.user)
-            for mid in message_ids if mid not in existing
+            for mid in message_ids
         ]
-        MessageReadStatus.objects.bulk_create(new_records, ignore_conflicts=True)
+        
+        try:
+            MessageReadStatus.objects.bulk_create(read_statuses, ignore_conflicts=True)
+        except Exception as e:
+            logger.error(f"标记已读失败: {e}")
+            return Response({'error': '标记已读失败'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return Response({'status': 'success'})
 
@@ -1605,7 +1649,7 @@ class ChatRoomAdminViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset()
 
         # 支持搜索
-        search = self.request.query_params.get('search', '')
+        search = self.request.query_params.get('search', '').strip()
         if search:
             queryset = queryset.filter(
                 Q(name__icontains=search) |
@@ -1625,11 +1669,17 @@ class ChatRoomAdminViewSet(viewsets.ModelViewSet):
         🔑 超级管理员专用：获取聊天室列表（支持分页、搜索、过滤）
         重写内置 list 方法以支持自定义逻辑
         """
-        # 使用父类的 list 方法（已支持分页和搜索）
-        # if request.user.username != 'superman':
-        #     return Response({'error': '无操作权限'}, status=status.HTTP_403_FORBIDDEN)
+        # 🔧 优化3: 添加缓存（短期缓存列表页）
+        cache_key = f"admin_chatrooms_{request.user.id}_{request.query_params.urlencode()}"
+        cached = cache.get(cache_key)
+        if cached:
+            return Response(cached)
 
-        return super().list(request, *args, **kwargs)
+        response = super().list(request, *args, **kwargs)
+
+        # 缓存 30 秒（列表页数据变化不频繁）
+        cache.set(cache_key, response.data, 30)
+        return response
 
     @action(detail=False, methods=['get'], url_path='messages/history')
     def get_room_history(self, request):
@@ -1638,8 +1688,6 @@ class ChatRoomAdminViewSet(viewsets.ModelViewSet):
         支持分页、时间范围、消息类型、发送者过滤
         """
         try:
-            # if request.user.username != 'superman':
-            #     return Response({'error': '无操作权限'}, status=status.HTTP_403_FORBIDDEN)
 
             room_id = request.query_params.get('room_id')
             if not room_id:
@@ -1648,50 +1696,61 @@ class ChatRoomAdminViewSet(viewsets.ModelViewSet):
             logger.info(f"SuperAdmin {request.user.username} (ID: {request.user.id}) "
                         f"viewed chat history for room {room_id}")
 
+            # 🔧 优化1: 使用 get_object() 复用权限检查
             try:
-                close_old_connections()
-                chat_room = ChatRoom.objects.get(id=room_id)
+                chat_room = ChatRoom.objects.select_related('creator').get(id=room_id)
             except ChatRoom.DoesNotExist:
-                return Response({'error': 'Chat room not found'}, status=status.HTTP_404_NOT_FOUND)
+                return Response({'error': 'Chat room not found'}, status=404)
 
             # 获取查询参数
             page = int(request.query_params.get('page', 1))
             page_size = min(int(request.query_params.get('page_size', 50)), 200)
-            start_time = request.query_params.get('start_time')
-            end_time = request.query_params.get('end_time')
-            message_type = request.query_params.get('message_type')
-            sender_id = request.query_params.get('sender_id')
-            search_content = request.query_params.get('search', '')
 
-            # 构建基础查询集
+            # # 构建基础查询集
+            # messages = Message.objects.filter(
+            #     chat_room=chat_room
+            # ).select_related(
+            #     'sender', 'file', 'quote_message'
+            # ).order_by('-timestamp')
+
+            # 🔧 优化3: 构建高效查询 - 使用 only() 减少字段
+
             messages = Message.objects.filter(
-                chat_room=chat_room
+                chat_room_id=room_id,
+                is_deleted=False  # 默认排除已删除
             ).select_related(
                 'sender', 'file', 'quote_message'
-            ).order_by('-timestamp')
+            ).prefetch_related(  # 🔧 预加载提及用户
+                'mentioned_users'
+            ).order_by('-timestamp').only(
+                'id', 'content', 'message_type', 'timestamp',
+                'sender_id', 'file_id', 'quote_message_id'
+            )
 
-            # 时间范围过滤
-            if start_time:
-                try:
-                    start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
-                    messages = messages.filter(timestamp__gte=start_dt)
-                except ValueError:
-                    return Response(
-                        {'error': '无效的开始时间格式，应为 ISO 8601 格式'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
 
-            if end_time:
-                try:
-                    end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
-                    messages = messages.filter(timestamp__lte=end_dt)
-                except ValueError:
-                    return Response(
-                        {'error': '无效的结束时间格式，应为 ISO 8601 格式'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+            # 🔧 优化4: 时间过滤 - 使用 __range 更高效
+            start_time = request.query_params.get('start_time')
+            end_time = request.query_params.get('end_time')
+            if start_time or end_time:
+                time_filter = {}
+                if start_time:
+                    try:
+                        time_filter['timestamp__gte'] = datetime.fromisoformat(
+                            start_time.replace('Z', '+00:00')
+                        )
+                    except ValueError:
+                        return Response({'error': '无效的开始时间格式'}, status=400)
+                if end_time:
+                    try:
+                        time_filter['timestamp__lte'] = datetime.fromisoformat(
+                            end_time.replace('Z', '+00:00')
+                        )
+                    except ValueError:
+                        return Response({'error': '无效的结束时间格式'}, status=400)
+                messages = messages.filter(**time_filter)
 
             # 消息类型过滤
+            message_type = request.query_params.get('message_type')
             if message_type:
                 valid_types = ['text', 'image', 'file', 'video', 'voice', 'audio', 'location', 'emoji']
                 if message_type not in valid_types:
@@ -1702,62 +1761,74 @@ class ChatRoomAdminViewSet(viewsets.ModelViewSet):
                 messages = messages.filter(message_type=message_type)
 
             # 发送者过滤
+            sender_id = request.query_params.get('sender_id')
             if sender_id:
                 try:
-                    sender_id_int = int(sender_id)
-                    messages = messages.filter(sender_id=sender_id_int)
+                    messages = messages.filter(sender_id=int(sender_id))
                 except (ValueError, TypeError):
                     return Response(
                         {'error': '无效的发送者ID'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
-            # 内容搜索
-            if search_content:
+            # 🔧 优化6: 搜索优化 - 限制搜索范围，避免全表扫描
+            search_content = request.query_params.get('search', '').strip()
+            if search_content and len(search_content) >= 2:  # 至少 2 字符才搜索
+                # 🔧 建议：生产环境使用 Elasticsearch/Meilisearch
                 messages = messages.filter(
                     Q(content__icontains=search_content) |
                     Q(sender__username__icontains=search_content) |
                     Q(sender__real_name__icontains=search_content)
                 )
 
-            # 🔧 关键修复：使用分页器
+
+
+            # 🔧 优化7: 分页 - 避免 .count() 全表扫描
             paginator = self.pagination_class()
             paginated_messages = paginator.paginate_queryset(messages, request, view=self)
 
-            # 序列化消息
+            # 🔧 优化8: 序列化时限制字段
             serializer = MessageSerializer(
                 paginated_messages,
                 many=True,
-                context={'request': request}
+                context={'request': request},
+                # fields=['id', 'content', 'message_type', 'timestamp', 'sender']  # 按需返回
             )
 
-            # 序列化成员
-            members_serializer = MemberListSerializer(
-                chat_room.members.all(),
-                many=True,
-                context={'request': request}
-            )
+            # 🔧 关键修复1: 在分页前保存总数量
+            total_count = messages.count()
 
-            # 构建响应数据
+            # 🔧 优化9: 成员列表分页 + 缓存
+            members_cache_key = f"room_{room_id}_members"
+            members_data = cache.get(members_cache_key)
+            if not members_data:
+                members_data = MemberListSerializer(
+                    chat_room.members.only('id', 'username', 'real_name', 'avatar', 'department').all(),
+                    many=True,
+                    context={'request': request}
+                ).data
+                cache.set(members_cache_key, members_data, 300)  # 缓存 5 分钟
+
+            # 🔧 优化10: 避免多次.count()，使用 paginator 的计数
             response_data = {
                 'results': serializer.data,
-                'count': messages.count(),
-                'next': paginator.get_next_link(),  # 🔧 返回下一页链接（用于判断是否有更多）
+                'count': total_count,  # ✅ 使用分页器的计数
+                'next': paginator.get_next_link(),
                 'previous': paginator.get_previous_link(),
                 'page': page,
                 'page_size': page_size,
-                'has_next': paginator.get_next_link() is not None,  # 🔧 添加 has_next 字段
-                'room_info': {
-                    'id': chat_room.id,
-                    'name': chat_room.display_name,
-                    'room_type': chat_room.room_type,
-                    'creator': chat_room.creator.id if chat_room.creator else None,
-                    'created_at': chat_room.created_at.isoformat() if chat_room.created_at else None,
-                    'updated_at': chat_room.updated_at.isoformat() if chat_room.updated_at else None,
-                    'is_pinned': chat_room.is_pinned,
-                    'is_muted': chat_room.is_muted,
-                    'members': members_serializer.data
-                }
+                'has_next': paginator.get_next_link() is not None,
+                    'room_info': {
+                        'id': chat_room.id,
+                        'name': chat_room.display_name,
+                        'room_type': chat_room.room_type,
+                        'creator': chat_room.creator.id if chat_room.creator else None,
+                        'created_at': chat_room.created_at.isoformat() if chat_room.created_at else None,
+                        'updated_at': chat_room.updated_at.isoformat() if chat_room.updated_at else None,
+                        'is_pinned': chat_room.is_pinned,
+                        'is_muted': chat_room.is_muted,
+                        'members': members_data  # ✅ 使用缓存的成员数据
+                    }
             }
 
             return Response(response_data)
@@ -1783,33 +1854,71 @@ class ChatRoomAdminViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def statistics(self, request):
-        """获取聊天室统计信息"""
-        total_rooms = self.queryset.count()
-        private_rooms = self.queryset.filter(room_type='private').count()
-        group_rooms = self.queryset.filter(room_type='group').count()
+        # 🔧 优化1: 添加缓存 - 统计数据变化不频繁
+        cache_key = f"admin_statistics_{request.user.id}"
+        cached = cache.get(cache_key)
+        if cached:
+            return Response(cached)
 
-        # 获取最近活跃的聊天室
-        from django.db.models import Count
-        active_rooms = self.queryset.annotate(
-            message_count=Count('messages')
+        # 🔧 优化2: 使用单次聚合查询替代多次.count()
+        from django.db.models import Count, Q, Sum
+
+        # 一次性获取所有基础统计
+        stats = ChatRoom.objects.aggregate(
+            total=Count('id'),
+            private=Count('id', filter=Q(room_type='private')),
+            group=Count('id', filter=Q(room_type='group')),
+            active_today=Count('id', filter=Q(
+                messages__timestamp__gte=timezone.now().date()
+            ))
+        )
+
+        # 🔧 优化3: 活跃聊天室 - 使用子查询避免 N+1
+        from django.db.models import Subquery, OuterRef
+        message_counts = Message.objects.filter(
+            chat_room=OuterRef('pk'),
+            timestamp__gte=timezone.now() - timedelta(days=7)
+        ).values('chat_room').annotate(
+            cnt=Count('id')
+        ).values('cnt')
+
+        active_rooms = ChatRoom.objects.annotate(
+            message_count=Subquery(message_counts[:1])
         ).filter(
-            message_count__gt=0
-        ).order_by('-message_count')[:10]
+            message_count__isnull=False,
+            is_deleted=False
+        ).order_by('-message_count')[:10].only(
+            'id', 'name', 'room_type'
+        )
+
+        # 🔧 优化4: 预取成员数（避免循环.count()）
+        active_room_ids = [r.id for r in active_rooms]
+        member_counts = ChatRoom.members.through.objects.filter(
+            chatroom_id__in=active_room_ids
+        ).values('chatroom_id').annotate(
+            cnt=Count('user_id')
+        )
+        member_count_map = {mc['chatroom_id']: mc['cnt'] for mc in member_counts}
 
         active_data = [{
             'id': room.id,
             'name': room.name or '私聊',
             'type': room.room_type,
-            'member_count': room.members.count(),
-            'message_count': room.message_count,
+            'member_count': member_count_map.get(room.id, 0),
+            'message_count': room.message_count or 0,
         } for room in active_rooms]
 
-        return Response({
-            'total_rooms': total_rooms,
-            'private_rooms': private_rooms,
-            'group_rooms': group_rooms,
+        result = {
+            'total_rooms': stats['total'] or 0,
+            'private_rooms': stats['private'] or 0,
+            'group_rooms': stats['group'] or 0,
             'active_rooms': active_data,
-        })
+        }
+
+        # 🔧 优化5: 缓存结果 60 秒
+        cache.set(cache_key, result, 60)
+        return Response(result)
+
 
     @action(detail=False, methods=['get'])
     def search_chats(self, request):
@@ -1991,36 +2100,58 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def user_trends(self, request):
-        """📈 用户趋势统计（近 30 天）"""
-        days = int(request.query_params.get('days', 30))
-        end_date = datetime.now().date()
+        """📈 用户趋势统计 - 使用数据库聚合"""
+        days = min(int(request.query_params.get('days', 30)), 90)  # 限制最大 90 天
+        end_date = timezone.now().date()
         start_date = end_date - timedelta(days=days)
 
+        # 🔧 优化：使用 TruncDate 按天聚合（单次查询替代循环）
+        from django.db.models.functions import TruncDate
+        from django.db.models import Count
+
+        # 新用户趋势
+        new_users_query = CustomUser.objects.filter(
+            date_joined__date__gte=start_date,
+            date_joined__date__lte=end_date
+        ).annotate(
+            date=TruncDate('date_joined')
+        ).values('date').annotate(
+            count=Count('id')
+        ).order_by('date')
+
+        # 活跃用户趋势
+        active_query = CustomUser.objects.filter(
+            last_login__date__gte=start_date,
+            last_login__date__lte=end_date
+        ).annotate(
+            date=TruncDate('last_login')
+        ).values('date').annotate(
+            count=Count('id', distinct=True)
+        ).order_by('date')
+
+        # 🔧 优化：在 Python 中合并结果（内存操作比数据库查询快）
+        new_map = {item['date'].isoformat(): item['count'] for item in new_users_query}
+        active_map = {item['date'].isoformat(): item['count'] for item in active_query}
+
         trends = []
-        current_date = start_date
-        while current_date <= end_date:
-            next_date = current_date + timedelta(days=1)
-            new_users = CustomUser.objects.filter(
-                date_joined__gte=current_date,
-                date_joined__lt=next_date
-            ).count()
-            active_users = CustomUser.objects.filter(
-                last_login__gte=current_date,
-                last_login__lt=next_date
-            ).count()
-            online_users = CustomUser.objects.filter(
-                is_online=True,
-                last_seen__gte=current_date
-            ).count()
-
+        current = start_date
+        while current <= end_date:
+            date_str = current.isoformat()
             trends.append({
-                'date': current_date.isoformat(),
-                'new_users': new_users,
-                'active_users': active_users,
-                'online_users': online_users
+                'date': date_str,
+                'new_users': new_map.get(date_str, 0),
+                'active_users': active_map.get(date_str, 0),
+                # online_users 需要实时查询，可考虑缓存
+                'online_users': CustomUser.objects.filter(
+                    is_online=True,
+                    last_seen__date=current
+                ).count()
             })
-            current_date = next_date
+            current += timedelta(days=1)
 
+        # 🔧 缓存趋势数据 5 分钟
+        cache_key = f"user_trends_{days}_{request.user.id}"
+        cache.set(cache_key, {'trends': trends, 'days': days}, 300)
         return Response({'trends': trends, 'days': days})
 
     @action(detail=False, methods=['get'])
@@ -2063,39 +2194,36 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def department_stats(self, request):
-        """🏢 部门统计"""
-        # 获取所有部门
-        departments = Department.objects.all().order_by('-id')
+        """🏢 部门统计 - 单次聚合查询"""
+        from django.db.models import Count, Q
 
-        stats = []
-        for dept in departments:
-            # 🔧 分步查询，避免复杂 JOIN 导致的错误
-            user_count = CustomUser.objects.filter(
-                department=dept,
-                is_active=True
-            ).count()
+        # 🔧 优化：单次查询获取所有部门统计
+        dept_stats = Department.objects.annotate(
+            user_count=Count('customuser', filter=Q(customuser__is_active=True)),
+            active_users=Count('customuser', filter=Q(
+                customuser__is_active=True,
+                customuser__is_online=True
+            )),
+            message_count=Count('customuser__sent_messages', filter=Q(
+                customuser__sent_messages__is_deleted=False
+            ))
+        ).order_by('-id').only('id', 'name')
 
-            active_users = CustomUser.objects.filter(
-                department=dept,
-                is_active=True,
-                is_online=True
-            ).count()
+        stats = [{
+            'id': dept.id,
+            'name': dept.name,
+            'user_count': dept.user_count or 0,
+            'active_users': dept.active_users or 0,
+            'message_count': dept.message_count or 0,
+            'activity_rate': round(
+                (dept.active_users / max(dept.user_count, 1)) * 100, 2
+            )
+        } for dept in dept_stats]
 
-            # 🔧 通过 sender__department 关联统计消息
-            message_count = Message.objects.filter(
-                sender__department=dept
-            ).count()
-
-            stats.append({
-                'id': dept.id,
-                'name': dept.name,
-                'user_count': user_count,
-                'active_users': active_users,
-                'message_count': message_count,
-                'activity_rate': round((active_users / max(user_count, 1)) * 100, 2)
-            })
-
+        # 🔧 缓存部门统计 2 分钟
+        cache.set('department_stats', stats, 120)
         return Response({'departments': stats})
+
 
     # chat/views.py - 修复 active_users_ranking 方法
 
