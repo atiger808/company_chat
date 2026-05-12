@@ -1053,7 +1053,17 @@ class DocumentEditorApp {
                 headers: TokenManagerCustom.getHeaders()
             });
 
-            if (!response.ok) throw new Error('加载协作者失败');
+            if (!response.ok) {
+                if (response.status === 401) {
+                    if (this.collabHeartbeatTimer) {
+                        clearTimeout(this.collabHeartbeatTimer);
+                        this.collabHeartbeatTimer = null;
+                    };
+                    this.handleAuthError()
+                    return null;
+                }
+                throw new Error('加载协作者失败');
+            }
 
             const data = await response.json();
             this.collaborators = data.collaborators || [];
@@ -2068,7 +2078,7 @@ class DocumentEditorApp {
 
             // 2. 停止心跳
             if (this.collabHeartbeatTimer) {
-                clearInterval(this.collabHeartbeatTimer);
+                clearTimeout(this.collabHeartbeatTimer);
                 this.collabHeartbeatTimer = null;
             }
 
@@ -2208,12 +2218,14 @@ document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
         // 页面隐藏时降低心跳频率到 60 秒
         if (this.collabHeartbeatTimer) {
+            console.log('页面隐藏时降低心跳频率到 60 秒...');
             clearTimeout(this.collabHeartbeatTimer);
             this.collabHeartbeatTimer = setTimeout(() => this.startCollabHeartbeat(), 60000);
         }
     } else {
         try {
             // 页面恢复时立即同步状态
+            console.log('页面恢复时同步状态...');
             this.loadCollaborators();
             this.startCollabHeartbeat();
         } catch (error) {

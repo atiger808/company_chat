@@ -22,7 +22,7 @@ pip install -r requirements.txt
 
 ```
 # 方法1：使用 psql 命令行连接
-psql -U postgres -h localhost -p 5433 -d postgres
+psql -U postgres -h localhost -p 5432 -d postgres
 
 # 方法2：如果宝塔修改了 postgres 用户密码，使用密码连接
 psql -U postgres -h localhost -p 5433 -d postgres -W
@@ -55,13 +55,13 @@ SELECT datname FROM pg_database WHERE datname = 'company_chat';
 
 ```
 -- 1. 创建用户 (密码设为 12345678，请改为你的强密码)
-CREATE ROLE company_chat WITH LOGIN PASSWORD '12345678';
+CREATE ROLE new_company_chat WITH LOGIN PASSWORD '12345678';
 
 -- 2. 创建数据库，并指定所有者为该用户
-CREATE DATABASE company_chat OWNER company_chat;
+CREATE DATABASE new_company_chat OWNER new_company_chat;
 
 -- 3. 授权（防止权限不足）
-GRANT ALL PRIVILEGES ON DATABASE company_chat TO company_chat;
+GRANT ALL PRIVILEGES ON DATABASE new_company_chat TO new_company_chat;
 
 -- 4. 验证
 \l
@@ -106,57 +106,40 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON FUNCTIONS TO c
 
 
 
+
+
+
+
 #### 新数据库new_company_chat
 
 ```
 -- 连接到 new_company_chat 数据库
 \c new_company_chat;
 
--- 授予对 public schema 的 USAGE 权限
-GRANT USAGE ON SCHEMA public TO new_company_chat;
+-- 授予 new_vue3_comany 用户所有权限
+GRANT ALL PRIVILEGES ON DATABASE new_company_chat TO new_company_chat;
+GRANT ALL PRIVILEGES ON SCHEMA public TO new_company_chat;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO new_company_chat;
 
--- 授予在 public schema 中创建对象的权限
-GRANT CREATE ON SCHEMA public TO new_company_chat;
 
--- 授予对所有现有表的完整权限（如果有表的话）
+-- 授予数据库所有权（如果数据库已存在）
+ALTER DATABASE new_company_chat OWNER TO new_company_chat;
+
+-- 授予 schema public 的所有权限
+GRANT ALL PRIVILEGES ON SCHEMA public TO new_company_chat;
+
+-- 授予已存在表的所有权限
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO new_company_chat;
 
--- 授予对所有现有序列的权限
+-- 授予未来新建表的所有权限
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO new_company_chat;
+
+-- 授予序列权限（Django 需要）
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO new_company_chat;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO new_company_chat;
 
--- 设置默认权限，确保将来创建的表自动授予权限
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO new_company_chat;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO new_company_chat;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON FUNCTIONS TO new_company_chat;
-
--- 退出
-\q
-```
-
-
-
-#### 新数据库new_vue3_comany
-
-```
--- 连接到 new_vue3_comany 数据库
-\c new_vue3_comany;
-
--- 授予对 public schema 的 USAGE 权限
-GRANT USAGE ON SCHEMA public TO new_vue3_comany;
-
--- 授予在 public schema 中创建对象的权限
-GRANT CREATE ON SCHEMA public TO new_vue3_comany;
-
--- 授予对所有现有表的完整权限（如果有表的话）
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO new_vue3_comany;
-
--- 授予对所有现有序列的权限
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO new_vue3_comany;
-
--- 设置默认权限，确保将来创建的表自动授予权限
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO new_vue3_comany;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO new_vue3_comany;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON FUNCTIONS TO new_vue3_comany;
+-- 直接让用户成为超级用户：
+ALTER USER new_company_chat WITH SUPERUSER;
 
 -- 退出
 \q
@@ -210,6 +193,10 @@ RestartSec=10
 # 日志重定向（备用）
 StandardOutput=append:/var/log/daphne/out-company_chat.log
 StandardError=append:/var/log/daphne/err-company_chat.log
+
+[Install]
+WantedBy=multi-user.target
+
 ```
 
 

@@ -1106,11 +1106,15 @@ class ChatClient {
 
         // 🔑 关键修复：保留本地未读数，防止被跨用户上下文的序列化值覆盖（如撤回、更新群名等操作）
         const preservedUnread = currentRoom.unread_count || 0;
+        const hasMentionAll = currentRoom.has_mention_all
+        const hasUnreadMention = currentRoom.has_unread_mention
 
         this.chatRooms[roomIndex] = {
             ...currentRoom,
             ...updatedData,
             unread_count: preservedUnread, // 强制覆盖可能错误的未读数
+            has_mention_all: hasMentionAll,
+            has_unread_mention: hasUnreadMention
         };
 
         this.renderChatRooms();

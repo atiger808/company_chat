@@ -1052,6 +1052,7 @@ class FileUploadView(APIView):
                 'duration': existing_file.duration,  # 🔧 返回精确时长
                 'is_ios_compatible': existing_file.mp3_status == 'completed' and bool(existing_file.mp3_file)
             })
+
         except FileUpload.DoesNotExist:
             pass
 

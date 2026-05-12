@@ -1103,7 +1103,8 @@ class CloudFileViewSet(viewsets.ModelViewSet):
         user = self.request.user
         # 注意：具体的 trash/folder/starred 过滤交由 CloudFileFilter 处理，
         # 此处仅做基础权限隔离与默认排序，避免与 filter_backends 冲突
-        queryset = CloudFile.objects.select_related('owner', 'folder').filter(owner=user).order_by('-updated_at')
+        queryset = CloudFile.objects.select_related('owner', 'folder').filter(owner=user, deleted_at__isnull=True).order_by('-updated_at')
+
 
         folder_id = self.request.query_params.get('folder', '')
         if folder_id and folder_id.lower() != 'null':
@@ -5031,9 +5032,13 @@ class DocumentEditorViewSet(viewsets.ViewSet):
             base_permissions = self.current_config.get('permissions', {})
 
             # 2.2 编辑权限验证（决定编辑器模式）
-            can_edit = base_permissions.get('edit') or self._can_edit_document(file_obj, request.user)
+            can_edit = base_permissions.get('edit')
             if not can_edit:
                 logger.info(f'👁️ 只读模式：user={request.user.username}')
+
+            can_edit = self._can_edit_document(file_obj, request.user)
+            if not can_edit:
+                logger.warning(f'⚠️ 无权限编辑：user={request.user.username}, file={pk}')
 
             # ==================== 3. 基础信息准备 ====================
             # 3.1 文件扩展名和文档类型
