@@ -17,6 +17,7 @@ from .views import (
     AdminStatisticsViewSet,
     SystemSettingsViewSet,
     SystemcConfigView,
+    TurnCredentialsView,
 )
 
 router = DefaultRouter()
@@ -37,6 +38,7 @@ urlpatterns = [
     path('version/', VersionView.as_view(), name='version'),
 
     path('system/configs/', SystemcConfigView.as_view(), name='system-config'),
+    path('turn/credentials/', TurnCredentialsView.as_view(), name='turn-credentials'),
 
     # 聊天室相关操作
     # path('rooms/<int:pk>/clear_history/', ChatRoomViewSet.as_view({'delete': 'clear_history'}), name='clear-history'),

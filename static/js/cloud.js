@@ -2174,12 +2174,13 @@ class CloudApp {
                         <button class="btn-action" onclick="event.stopPropagation(); cloudApp.openCollabDoc('${doc.id}')" title="编辑">
                             <i class="fas fa-edit"></i>
                         </button>
-                        <button class="btn-action" onclick="event.stopPropagation(); cloudApp.removeCollabDoc('${doc.id}')" title="删除">
-                            <i class="fas fa-trash"></i>
-                        </button>
                         <button class="btn-action" onclick="event.stopPropagation(); cloudApp.shareFile('${doc.id}', false)" title="分享">
                             <i class="fas fa-share-alt"></i>
                         </button>
+                        <button class="btn-action" onclick="event.stopPropagation(); cloudApp.removeCollabDoc('${doc.id}')" title="删除">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                        
                     </div>
                 </div>
             `;
@@ -2212,7 +2213,7 @@ class CloudApp {
                     </div>
                     
                     <div class="collab-card-footer">
-                        <div class="collab-type">
+                        <div class="collab-type" style="display:none">
                             <span class="doc-type-badge small ${docType}">
                                 ${doc.doc_type_text || this.getDocTypeText(docType)}
                             </span>
@@ -2233,12 +2234,13 @@ class CloudApp {
                             <i class="fas fa-edit"></i>
                         </button>
                         ${isOwner ? `
-                            <button class="btn-icon" onclick="event.stopPropagation(); cloudApp.removeCollabDoc('${doc.id}')" title="删除">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        ` : ''}
+                            
                         <button class="btn-icon" onclick="event.stopPropagation(); cloudApp.shareFile('${doc.id}', false)" title="分享">
                             <i class="fas fa-share-alt"></i>
+                        </button>
+                        ` : ''}
+                        <button class="btn-icon" onclick="event.stopPropagation(); cloudApp.removeCollabDoc('${doc.id}')" title="删除">
+                            <i class="fas fa-trash"></i>
                         </button>
                         
                     </div>
@@ -2944,7 +2946,10 @@ class CloudApp {
                 method: 'DELETE',
                 headers: TokenManager.getHeaders()
             });
-            if (!response.ok) throw new Error('删除失败');
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || '删除失败');
+            }
 
             this.showSuccess('删除成功', '已经删除该协作文档');
             await this.loadCollaborations();

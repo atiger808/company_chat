@@ -649,7 +649,7 @@ PREDEFINED_CONFIGS = {
         'default': '50',
         'description': '单个文件允许的最大上传大小（MB）',
         'category': 'file',
-        'validation': {'min': 1, 'max': 500}
+        'validation': {'min': 1, 'max': 1024}
     },
     'file.image_max_size_mb': {
         'name': '图片大小上限',
@@ -657,7 +657,7 @@ PREDEFINED_CONFIGS = {
         'default': '20',
         'description': '图片文件允许的最大大小（MB）',
         'category': 'file',
-        'validation': {'min': 1, 'max': 100}
+        'validation': {'min': 1, 'max': 500}
     },
     'file.video_max_size_mb': {
         'name': '视频大小上限',
@@ -665,7 +665,7 @@ PREDEFINED_CONFIGS = {
         'default': '100',
         'description': '视频文件允许的最大大小（MB）',
         'category': 'file',
-        'validation': {'min': 10, 'max': 500}
+        'validation': {'min': 10, 'max': 2048}
     },
     'file.audio_max_size_mb': {
         'name': '音频大小上限',
@@ -673,7 +673,7 @@ PREDEFINED_CONFIGS = {
         'default': '30',
         'description': '音频文件允许的最大大小（MB）',
         'category': 'file',
-        'validation': {'min': 1, 'max': 100}
+        'validation': {'min': 1, 'max': 500}
     },
     'file.allowed_types': {
         'name': '允许的文件类型',
@@ -860,3 +860,7 @@ CONFIG_CATEGORIES = [
     {'key': 'notification', 'name': '通知设置', 'icon': 'fas fa-bell', 'order': 6},
     {'key': 'advanced', 'name': '高级设置', 'icon': 'fas fa-sliders-h', 'order': 7},
 ]
+
+
+TURN_SECRET = config('TURN_SECRET')
+TURN_REALM = config('TURN_REALM')

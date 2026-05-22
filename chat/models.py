@@ -229,6 +229,9 @@ class Message(models.Model):
         ('voice', '语音'),
         ('video', '视频'),
         ('emoji', '表情'),
+        # 🔧 新增：通话相关类型
+        ('call_audio', '语音通话'),
+        ('call_video', '视频通话'),
     )
 
     chat_room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='messages', verbose_name='聊天室')
@@ -270,6 +273,14 @@ class Message(models.Model):
 
     # 🔧 新增：语音消息精确时长（秒）
     voice_duration = models.FloatField(null=True, blank=True, verbose_name='语音时长(秒)')
+
+    # 🔧 新增：通话记录字段
+    call_duration = models.IntegerField(null=True, blank=True, verbose_name='通话时长(秒)')
+    call_type = models.CharField(max_length=20, choices=(('audio', '语音通话'), ('video', '视频通话')), 
+                                  null=True, blank=True, verbose_name='通话类型')
+    call_status = models.CharField(max_length=20, 
+                                    choices=(('completed', '已完成'), ('missed', '未接听'), ('rejected', '已拒绝'), ('cancelled', '已取消')),
+                                    default='completed', verbose_name='通话状态')
 
 
     # 关键修改：file 字段改为指向 FileUpload

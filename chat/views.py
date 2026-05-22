@@ -2916,9 +2916,9 @@ class SystemSettingsViewSet(viewsets.ViewSet):
     def _validate_business_rules(self, key, value):
         """业务规则验证"""
         rules = {
-            'file.max_upload_size_mb': lambda v: v <= 500 or '文件上传大小不能超过 500MB',
-            'file.image_max_size_mb': lambda v: v <= 100 or '图片大小不能超过 100MB',
-            'file.video_max_size_mb': lambda v: v <= 500 or '视频大小不能超过 500MB',
+            'file.max_upload_size_mb': lambda v: v <= 2048 or '文件上传大小不能超过 2048MB',
+            'file.image_max_size_mb': lambda v: v <= 200 or '图片大小不能超过 200MB',
+            'file.video_max_size_mb': lambda v: v <= 2048 or '视频大小不能超过 2048MB',
             'voice.max_duration_seconds': lambda v: v <= 300 or '语音时长不能超过 5 分钟',
             'chat.message_retention_days': lambda v: v <= 3650 or '消息保留天数不能超过 10 年',
             'security.login_max_attempts': lambda v: 3 <= v <= 20 or '登录尝试次数必须在 3-20 之间',
@@ -2992,4 +2992,50 @@ class SystemcConfigView(APIView):
         })
 
 
+# chat/views.py - TurnCredentialsView
+class TurnCredentialsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
 
+    def get(self, request):
+        from django.conf import settings
+        import time, hmac, hashlib, base64
+
+        TURN_SECRET = getattr(settings, 'TURN_SECRET', None)
+        TURN_REALM = getattr(settings, 'TURN_REALM', 'turn.first-iq.com')
+
+        # 🔧 关键检查：确保 SECRET 已配置
+        if not TURN_SECRET:
+            logger.error("❌ TURN_SECRET 未配置！")
+            return JsonResponse({'error': 'TURN 配置错误'}, status=500)
+
+        ttl = 86400
+        current_time = int(time.time())
+        username = f"{current_time + ttl}:{request.user.username}"
+
+        # 🔧 调试日志（生产环境建议降级为 debug 级别）
+        logger.info(f"TURN 凭证生成: user={request.user.username}, realm={TURN_REALM}, ttl={ttl}")
+        logger.debug(f"TURN username raw: {username}")
+        logger.debug(f"TURN_SECRET hash: {hashlib.sha256(TURN_SECRET.encode()).hexdigest()[:16]}")
+
+        # HMAC-SHA1（coturn 默认算法）
+        hmac_obj = hmac.new(
+            TURN_SECRET.encode('utf-8'),
+            username.encode('utf-8'),
+            hashlib.sha1
+        )
+        credential = base64.b64encode(hmac_obj.digest()).decode('utf-8')
+
+        return JsonResponse({
+            'username': username,
+            'credential': credential,
+            'credentialType': 'password',
+            'ttl': ttl,
+            'timestamp': current_time,  # 🔧 便于前端调试时间同步
+            'realm': TURN_REALM,
+            'uris': [
+                f'turn:{TURN_REALM}:3478?transport=udp',
+                f'turn:{TURN_REALM}:3478?transport=tcp',
+                f'turns:{TURN_REALM}:5349?transport=tcp',  # 🔧 推荐 TLS
+                f'turns:{TURN_REALM}:5349?transport=udp',
+            ]
+        })

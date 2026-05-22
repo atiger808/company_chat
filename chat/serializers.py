@@ -209,6 +209,7 @@ class MessageSerializer(serializers.ModelSerializer):
             'quote_timestamp', 'quote_message_type', 'quote_info', 'quote_file_info',
             # 🔧 添加语音时长字段
             'voice_duration', 'mentioned_users', 'mentioned_all',  # 🔧 加入列表
+            'call_duration', 'call_type', 'call_status',
         ]
         read_only_fields = ['id', 'timestamp', 'is_read', 'is_deleted', 'deleted_at', 'sender', 'sender_id', 'sender_name', 'voice_duration', 'mentioned_users', 'mentioned_all']
 

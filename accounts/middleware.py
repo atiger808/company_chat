@@ -115,6 +115,7 @@ class ApiLoggingMiddleware(MiddlewareMixin):
             'json_result': {"status_code": response.status_code, "code": response.data.get('code'), "msg": response.data.get('msg'), "data": response.data},
         }
         operation_log, creat = OperationLog.objects.update_or_create(defaults=info, id=log_id)
+        logger.info(f'operation_log: {operation_log} creat: {creat}')
         if not operation_log.request_modular:
             logger.info(f'operation_log.request_modular: {operation_log.request_modular} request_path: {request.request_path}')
             if settings.API_MODEL_MAP.get(request.request_path, None):
@@ -154,8 +155,10 @@ class ApiLoggingMiddleware(MiddlewareMixin):
                         if 'logout' in request.request_path:
                             method_name = ''
 
-                        logger.info(f'method: {request.method} request_modular: {request_modular} method_name: {method_name} request_path: {request.request_path}')
                         if request_modular:
+                            logger.info(
+                                f'method: {request.method} request_modular: {request_modular} method_name: {method_name} request_path: {request.request_path}')
+
                             log = OperationLog(request_modular=request_modular+method_name)
                             log.save()
                             # self.operation_log_id = log.id

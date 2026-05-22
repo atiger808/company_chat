@@ -6813,7 +6813,7 @@ class CloudSystemSettingsViewSet(viewsets.ViewSet):
             'description': '每个用户的默认存储配额（GB）',
             'category': 'storage',
             'is_public': True,
-            'validation': {'min': 1, 'max': 1000}
+            'validation': {'min': 1, 'max': 1024}
         },
         'storage.version_keep_count': {
             'name': '版本保留数量',
@@ -6862,7 +6862,7 @@ class CloudSystemSettingsViewSet(viewsets.ViewSet):
             'description': '单个文件允许的最大上传大小（MB）',
             'category': 'upload',
             'is_public': True,
-            'validation': {'min': 1, 'max': 500}
+            'validation': {'min': 1, 'max': 1024}
         },
         'upload.image_max_size_mb': {
             'name': '图片大小上限',
@@ -6880,7 +6880,7 @@ class CloudSystemSettingsViewSet(viewsets.ViewSet):
             'description': '视频文件允许的最大大小（MB）',
             'category': 'upload',
             'is_public': True,
-            'validation': {'min': 10, 'max': 500}
+            'validation': {'min': 10, 'max': 2048}
         },
         'upload.audio_max_size_mb': {
             'name': '音频大小上限',
@@ -6889,7 +6889,7 @@ class CloudSystemSettingsViewSet(viewsets.ViewSet):
             'description': '音频文件允许的最大大小（MB）',
             'category': 'upload',
             'is_public': True,
-            'validation': {'min': 1, 'max': 100}
+            'validation': {'min': 1, 'max': 1024}
         },
         'upload.allowed_types': {
             'name': '允许的文件类型',
@@ -7624,10 +7624,10 @@ class CloudSystemSettingsViewSet(viewsets.ViewSet):
 
     def _validate_business_rules(self, key, value):
         rules = {
-            'upload.max_file_size_mb': lambda v: v <= 500 or '文件上传大小不能超过 500MB',
-            'upload.image_max_size_mb': lambda v: v <= 100 or '图片大小不能超过 100MB',
-            'upload.video_max_size_mb': lambda v: v <= 500 or '视频大小不能超过 500MB',
-            'storage.quota_gb': lambda v: v <= 1000 or '存储配额不能超过 1000GB',
+            'upload.max_file_size_mb': lambda v: v <= 2048 or '文件上传大小不能超过 2048MB',
+            'upload.image_max_size_mb': lambda v: v <= 200 or '图片大小不能超过 200MB',
+            'upload.video_max_size_mb': lambda v: v <= 2048 or '视频大小不能超过 2048MB',
+            'storage.quota_gb': lambda v: v <= 1024 or '存储配额不能超过 1024GB',
             'collab.max_collaborators': lambda v: 1 <= v <= 500 or '协作者数必须在 1-500 之间',
             'security.token_expire_hours': lambda v: 1 <= v <= 168 or '令牌过期时间必须在 1-168 小时之间',
         }

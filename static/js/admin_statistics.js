@@ -775,7 +775,9 @@ class AdminStatisticsClient {
             'voice': '语音',
             'audio': '音频',
             'emoji': '表情',
-            'location': '位置'
+            'location': '位置',
+            'call_audio': '语音通话',
+            'call_video': '视频通话'
         };
         return map[type] || type;
     }
@@ -790,8 +792,10 @@ class AdminStatisticsClient {
             'voice': '#909399',
             'audio': '#909399',
             'emoji': '#c82577',
-            'location': '#67C23A'
-        };
+            'location': '#a53ac2',
+            'call_audio': '#426aef',
+            'call_video': '#ef404f'
+        }
         return map[type] || '#909399';
     }
 

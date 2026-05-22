@@ -391,6 +391,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'quote_file_info': data.get('quote_file_info'),  # 🔧 新增
                 # 🔧 广播语音精确时长
                 'voice_duration': message.voice_duration if hasattr(message, 'voice_duration') else None,
+                'call_duration': message.call_duration if hasattr(message, 'call_duration') and message.call_type else None,
             }
         )
 
@@ -419,6 +420,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'quote_file_info': data.get('quote_file_info'),  # 🔧 新增
             # 🔧 广播语音精确时长
             'voice_duration': message.voice_duration if hasattr(message, 'voice_duration') else None,
+            'call_duration': message.call_duration if hasattr(message, 'call_duration') and message.call_type else None,
         })
 
         unread_count = await self.get_unread_count(message.chat_room.id, self.user.id)
@@ -544,6 +546,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'quote_timestamp': event.get('quote_timestamp'),
                 'quote_message_type': event.get('quote_message_type'),
                 'quote_file_info': event.get('quote_file_info'),  # 🔧 新增
+                'call_duration': event.get('call_duration'),
             }))
 
     async def user_typing(self, event):
@@ -766,6 +769,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             logger.error(f"Error sending global notification: {e}")
 
 
+# chat/consumers.py
+
 class NotificationConsumer(AsyncWebsocketConsumer):
     """全局通知WebSocket消费者"""
 
@@ -851,7 +856,757 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             'chat_room_id': event.get('chat_room_id')  # 可用于更新特定聊天室的状态
         }))
 
+    async def call_offer(self, event):
+        """处理来电邀请信令"""
+        await self.send(text_data=json.dumps({
+            'type': 'call_offer',
+            'data': event.get('data', {}),
+            'from_user': event.get('from_user'),
+            'room_id': event.get('room_id'),
+            'media_type': event.get('media_type', 'audio'),
+        }))
+
+
+
+    async def call_answer(self, event):
+        """处理接听信令（转发给前端）"""
+        try:
+            await self.send(text_data=json.dumps({
+                'type': 'call_answer',
+                'data': event.get('data', {}),
+                'from_user_id': event.get('from_user_id'),
+                'room_id': event.get('room_id'),
+            }))
+        except Exception as e:
+            logger.error(f"call_answer forward failed: {e}")
+
+    async def call_end(self, event):
+        """处理挂断信令（转发给前端）"""
+        try:
+            from_user_id = event.get('from_user_id')
+                
+            # 🔧 关键修复1：避免处理自己发送的消息（防止死循环）
+            if from_user_id == self.user.id:
+                logger.debug(f"⏭️ 忽略自己发送的 call_end: user={self.user.id}")
+                return
+                
+            # 🔧 关键修复2：如果消息已经被 CallConsumer 处理过，不再重复转发
+            if event.get('_processed_by_call_consumer'):
+                logger.debug(f"⏭️ 消息已被 CallConsumer 处理，跳过: user={self.user.id}")
+                return
+    
+            logger.info(f"🔚 NotificationConsumer 转发 call_end: user={self.user.id}, from={from_user_id}")
+            await self.send(text_data=json.dumps({
+                'type': 'call_end',
+                'from_user_id': from_user_id,
+                'room_id': event.get('room_id'),
+                'data': event.get('data', {}),
+                'reason': event.get('reason', 'ended'),
+            }))
+        except Exception as e:
+            logger.error(f"call_end forward failed: {e}")
+
+    async def call_reject(self, event):
+        """处理拒绝信令（转发给前端）"""
+        try:
+            await self.send(text_data=json.dumps({
+                'type': 'call_reject',
+                'from_user_id': event.get('from_user_id'),
+                'room_id': event.get('room_id'),
+            }))
+        except Exception as e:
+            logger.error(f"call_reject forward failed: {e}")
+
+    async def ice_candidate(self, event):
+        """处理 ICE candidate 信令（转发给前端）"""
+        try:
+            candidate = event.get('candidate')
+            if not candidate:
+                logger.warning(f"⚠️ ice_candidate 事件中缺少 candidate 数据: {event}")
+                return
+
+            await self.send(text_data=json.dumps({
+                'type': 'ice_candidate',
+                'candidate': candidate,  # 🔧 直接传递 candidate 对象
+                'from_user_id': event.get('from_user_id'),
+            }))
+        except Exception as e:
+            logger.error(f"ice_candidate forward failed: {e}", exc_info=True)
 
 
 
 
+# chat/consumers.py - 添加 CallConsumer 类
+
+class CallConsumer(AsyncWebsocketConsumer):
+    """通话信令 WebSocket 消费者"""
+
+    async def connect(self):
+        """建立通话信令连接"""
+        try:
+            logger.info(f"CallConsumer connect attempt: {self.scope}")
+            await sync_to_async(close_old_connections)()
+
+            self.user = self.scope['user']
+            if not self.user or not self.user.is_authenticated:
+                await self.close(code=4001)
+                return
+
+            self.room_id = self.scope['url_route']['kwargs'].get('room_id')
+            if not self.room_id:
+                await self.close(code=4002)
+                return
+
+            # 验证 room_id 格式
+            try:
+                room_id_int = int(self.room_id) if isinstance(self.room_id,
+                                                              str) and self.room_id.isdigit() else self.room_id
+            except (ValueError, TypeError):
+                await self.close(code=4002)
+                return
+
+            # 验证用户权限
+            if not await self.is_user_in_room(room_id_int):
+                await self.send(text_data=json.dumps({
+                    'type': 'error', 'message': '无权访问该通话', 'code': 4003
+                }))
+                await self.close(code=4003)
+                return
+
+            # 🔧 关键修复1: 加入通话信令组（每个用户独立的通话组）
+            self.call_group_name = f'call_{self.user.id}'
+            await self.channel_layer.group_add(self.call_group_name, self.channel_name)
+
+            # 🔧 关键修复2: 【恢复】也加入用户通知组，确保能收到通话信令
+            # 注意：虽然会收到聊天消息，但 CallConsumer 只处理通话相关的消息类型
+            self.notification_group_name = f'user_{self.user.id}_notifications'
+            await self.channel_layer.group_add(self.notification_group_name, self.channel_name)
+
+            await self.accept()
+            logger.info(f"✅ CallConsumer 连接成功: user={self.user.username}, room={self.room_id}")
+
+        except Exception as e:
+            logger.error(f"CallConsumer connect error: {e}", exc_info=True)
+            await self.close(code=4000)
+
+    async def disconnect(self, close_code):
+        """断开连接"""
+        try:
+            # 离开通话信令组
+            if hasattr(self, 'call_group_name'):
+                await self.channel_layer.group_discard(self.call_group_name, self.channel_name)
+
+            # 🔧 关键修复: 【恢复】也离开用户通知组
+            if hasattr(self, 'notification_group_name'):
+                await self.channel_layer.group_discard(self.notification_group_name, self.channel_name)
+
+            logger.info(f"CallConsumer disconnected: user={getattr(self.user, 'username', 'unknown')}")
+        except Exception as e:
+            logger.error(f"CallConsumer disconnect error: {e}")
+
+
+    async def receive(self, text_data):
+        """接收信令消息"""
+        try:
+            data = json.loads(text_data)
+            message_type = data.get('type')
+
+            logger.info(f"📨 收到信令: type={message_type}, from={self.user.id}")
+
+            if message_type == 'call_offer':
+                await self.handle_call_offer(data)
+            elif message_type == 'call_answer':
+                await self.handle_call_answer(data)
+            elif message_type == 'call_end':
+                await self.handle_call_end(data)
+            elif message_type == 'ice_candidate':
+                await self.handle_ice_candidate(data)
+            elif message_type == 'call_reject':
+                await self.handle_call_reject(data)
+            elif message_type == 'call_missed':  # 🔧 新增：处理未接听信令
+                await self.handle_call_missed(data)
+            # 🔧 关键修复：忽略非通话相关的消息（如 new_message, heartbeat 等）
+            # CallConsumer 只处理通话信令，其他消息由 NotificationConsumer 处理
+
+        except json.JSONDecodeError:
+            logger.error("Invalid JSON in CallConsumer")
+        except Exception as e:
+            logger.error(f"CallConsumer receive error: {e}", exc_info=True)
+
+    # 🔧 修复 call_answer 事件处理器 - 确保正确传递 SDP 数据
+    async def call_answer(self, event):
+        """处理接听信令（转发给前端）"""
+        try:
+            data_payload = event.get('data', {})
+
+            # 🔧 关键修复：确保 SDP 数据完整
+            sdp_data = data_payload.get('sdp') if isinstance(data_payload, dict) else None
+            sdp_type = data_payload.get('type') if isinstance(data_payload, dict) else None
+
+            # 如果 SDP 数据无效，记录日志但不发送错误数据
+            if not sdp_data or not sdp_type:
+                logger.warning(f"⚠️ Invalid SDP in call_answer: sdp_type={sdp_type}, has_sdp={bool(sdp_data)}")
+                # 仍发送信令，但标记为无效，让前端处理降级
+                await self.send(text_data=json.dumps({
+                    'type': 'call_answer',
+                    'data': {
+                        'sdp': sdp_data,
+                        'type': sdp_type,
+                    },
+                    'from_user_id': event.get('from_user_id'),
+                    'room_id': event.get('room_id'),
+                    'valid': bool(sdp_data and sdp_type),  # 🔧 新增：标记数据是否有效
+                }))
+                return
+
+            await self.send(text_data=json.dumps({
+                'type': 'call_answer',
+                'data': {
+                    'sdp': sdp_data,
+                    'type': sdp_type,  # 'answer'
+                },
+                'from_user_id': event.get('from_user_id'),
+                'room_id': event.get('room_id'),
+                'valid': True,
+            }))
+        except Exception as e:
+            logger.error(f"❌ call_answer send failed: {e}", exc_info=True)
+            # 发送错误通知
+            await self.send(text_data=json.dumps({
+                'type': 'call_error',
+                'message': '接听信令处理失败',
+                'error': str(e),
+            }))
+
+    # 🔧 同样修复 call_offer 事件处理器
+    async def call_offer(self, event):
+        """处理来电邀请信令（转发给前端）"""
+        try:
+            data_payload = event.get('data', {})
+            sdp_data = data_payload.get('sdp') if isinstance(data_payload, dict) else None
+            sdp_type = data_payload.get('type') if isinstance(data_payload, dict) else None
+
+            await self.send(text_data=json.dumps({
+                'type': 'call_offer',
+                'data': {
+                    'sdp': sdp_data,
+                    'type': sdp_type,  # 'offer'
+                },
+                'from_user': {
+                    'id': event.get('from_user_id'),
+                    'username': event.get('from_username'),
+                    'real_name': event.get('from_real_name'),
+                    'avatar_url': event.get('from_avatar_url'),
+                },
+                'room_id': event.get('room_id'),
+                'media_type': event.get('media_type', 'audio'),
+                'valid': bool(sdp_data and sdp_type),  # 🔧 标记数据有效性
+            }))
+        except Exception as e:
+            logger.error(f"❌ call_offer send failed: {e}", exc_info=True)
+
+    async def call_end(self, event):
+        """处理挂断信令（转发给前端）"""
+        try:
+            from_user_id = event.get('from_user_id')
+            room_id = event.get('room_id')
+
+            # 🔧 关键修复1：避免处理自己发送的消息（防止死循环）
+            if from_user_id == self.user.id:
+                logger.debug(f"⏭️ CallConsumer 忽略自己发送的 call_end: user={self.user.id}")
+                return
+
+            # 🔧 关键修复2：如果消息已经被处理过，不再重复转发
+            if event.get('_processed_by_call_consumer'):
+                logger.debug(f"⏭️ CallConsumer 跳过已处理的消息: user={self.user.id}")
+                return
+
+            logger.info(f"📤 CallConsumer 转发 call_end 到前端: user={self.user.id}, from={from_user_id}")
+
+            # 🔧 关键修复3：直接发送给前端，不再通过 group_send
+            await self.send(text_data=json.dumps({
+                'type': 'call_end',
+                'from_user_id': from_user_id,
+                'room_id': room_id,
+                'data': event.get('data', {}),
+                'reason': event.get('reason', 'ended'),
+            }))
+
+            logger.info(f"✅ call_end 已发送给前端 user={self.user.id}")
+
+        except Exception as e:
+            logger.error(f"❌ call_end send failed: {e}", exc_info=True)
+
+    async def ice_candidate(self, event):
+        """处理 ICE candidate 信令（转发给前端）"""
+        try:
+            candidate = event.get('candidate')
+            if not candidate:
+                logger.warning(f"⚠️ ice_candidate 事件中缺少 candidate 数据: {event}")
+                return
+
+            await self.send(text_data=json.dumps({
+                'type': 'ice_candidate',
+                'candidate': candidate,  # 🔧 直接传递 candidate 对象
+                'from_user_id': event.get('from_user_id'),
+            }))
+        except Exception as e:
+            logger.error(f"ice_candidate send failed: {e}", exc_info=True)
+
+    async def call_reject(self, event):
+        """处理拒绝信令（转发给前端）"""
+        try:
+            await self.send(text_data=json.dumps({
+                'type': 'call_reject',
+                'from_user_id': event.get('from_user_id'),
+            }))
+        except Exception as e:
+            logger.error(f"call_reject send failed: {e}")
+
+    async def call_missed(self, event):  # 🔧 新增：处理未接听信令
+        """处理未接听信令（转发给前端）"""
+        try:
+            await self.send(text_data=json.dumps({
+                'type': 'call_missed',
+                'from_user_id': event.get('from_user_id'),
+            }))
+        except Exception as e:
+            logger.error(f"call_missed send failed: {e}")
+
+    async def new_message(self, event):
+        """🔧 新增：处理新消息事件（避免报错）"""
+        # CallConsumer 不需要处理普通消息，直接忽略
+        # 这些消息应该由 NotificationConsumer 处理
+        logger.debug(f"⏭️ CallConsumer 忽略 new_message 事件")
+        pass
+
+    async def user_online_status(self, event):
+        """🔧 新增：处理用户在线状态事件（避免报错）"""
+        # CallConsumer 不需要处理在线状态，直接忽略
+        # 这些消息应该由 NotificationConsumer 处理
+        logger.debug(f"⏭️ CallConsumer 忽略 user_online_status 事件")
+        pass
+
+    # ============ 信令转发逻辑 ============
+
+    async def handle_call_offer(self, data):
+        """转发来电邀请给目标用户"""
+        target_id = data.get('to')
+        if not target_id or target_id == self.user.id:
+            return
+
+        # 🔧 关键修复：同时发送到通话信令组和通知组，确保用户能收到来电
+        call_group = f'call_{target_id}'
+        notification_group = f'user_{target_id}_notifications'
+
+        logger.info(f"📤 转发 call_offer 到组: {call_group} 和 {notification_group}, to: {target_id}")
+
+        message_data = {
+            'type': 'call_offer',
+            'data': data,
+            'from_user_id': self.user.id,
+            'from_username': self.user.username,
+            'from_real_name': self.user.real_name,
+            'from_avatar_url': self.user.avatar.url if self.user.avatar else None,
+            'from_user': {
+                'id': self.user.id,
+                'username': self.user.username,
+                'real_name': self.user.real_name,
+                'avatar_url': self.user.avatar.url if self.user.avatar else None,
+            },
+            'room_id': self.room_id,
+            'media_type': data.get('media_type', 'audio'),
+            '_from_call_consumer': True,  # 🔧 新增：标记来源，用于前端去重
+        }
+
+        # 🔧 发送到通话信令组
+        await self.channel_layer.group_send(call_group, message_data)
+        logger.info(f"✅ call_offer 已发送到通话组 {call_group}")
+
+        # 🔧 发送到通知组（用于来电提醒，即使 callWs 未连接也能收到）
+        await self.channel_layer.group_send(notification_group, message_data)
+        logger.info(f"✅ call_offer 已发送到通知组 {notification_group}")
+
+    async def handle_call_answer(self, data):
+        target_id = data.get('to')
+        if not target_id or target_id == self.user.id:
+            return
+
+        # 🔧 确保 data 中包含完整的 SDP 对象
+        sdp_payload = data.get('sdp')
+        if not sdp_payload or not isinstance(sdp_payload, dict):
+            logger.error(f"❌ Invalid SDP payload: {sdp_payload}")
+            return
+
+        # 🔧 关键修复：同时发送到通话信令组和通知组
+        call_group = f'call_{target_id}'
+        notification_group = f'user_{target_id}_notifications'
+
+        message_data = {
+            'type': 'call_answer',
+            'data': {
+                'type': sdp_payload.get('type'),  # 必须是 'answer'
+                'sdp': sdp_payload.get('sdp'),  # SDP 字符串
+            },
+            'from_user_id': self.user.id,
+            'room_id': data.get('room_id'),
+        }
+
+        await self.channel_layer.group_send(call_group, message_data)
+        # await self.channel_layer.group_send(notification_group, message_data)
+
+    async def handle_call_end_v1(self, data):
+        """转发挂断信令（修复版）"""
+        target_id = data.get('to')
+        if not target_id or target_id == self.user.id:
+            logger.error(f"❌ 无效的 target_id: {target_id}")
+            return
+
+        logger.info(f"📤 转发 call_end 信令: from={self.user.id} to={target_id}")
+
+        # 🔧 关键修复：转发到目标用户的专属通话信令组
+        await self.channel_layer.group_send(
+            f'call_{target_id}',  # ✅ 必须是 call_{user_id}，与 connect 中注册的组一致
+            {
+                'type': 'call_end',  # ✅ 必须与前端事件处理器方法名一致
+                'from_user_id': self.user.id,
+                'room_id': self.room_id,
+            }
+        )
+        logger.info(f"✅ call_end 已转发给用户 {target_id}")
+
+
+    async def handle_call_end(self, data):
+        """转发挂断信令"""
+        room_id = data.get('room_id')
+        from_user_id = data.get('from_user_id') or self.user.id
+        duration = data.get('duration', 0)
+        media_type = data.get('media_type', 'audio')
+        reason = data.get('reason', 'ended')
+
+        if not room_id:
+            logger.error(f"❌ call_end 缺少 room_id: {data}")
+            return
+
+        # 🔧 关键修复：记录通话时长信息，用于调试
+        logger.info(f"📤 转发 call_end 信令: from={from_user_id}, room={room_id}, duration={duration}s, media_type={media_type}, reason={reason}")
+
+        try:
+            from chat.models import ChatRoom
+            chat_room = await database_sync_to_async(ChatRoom.objects.get)(id=room_id)
+            members = await database_sync_to_async(list)(chat_room.members.exclude(id=from_user_id))
+
+            # 🔧 关键修复：创建通话记录消息（使用实际的发起方）
+            await self.create_call_record_message(
+                room_id=room_id,
+                from_user_id=from_user_id,  # 🔧 确保使用正确的发起方 ID
+                duration=duration,
+                media_type=media_type,
+                reason=reason
+            )
+
+            for member in members:
+                # 🔧 关键修复：同时发送到通话信令组和通知组
+                call_group = f'call_{member.id}'
+                notification_group = f'user_{member.id}_notifications'
+
+                message_data = {
+                    'type': 'call_end',
+                    'from_user_id': from_user_id,
+                    'room_id': room_id,
+                    'reason': data.get('reason', 'ended'),
+                    'data': data.get('data', {})
+                }
+
+                await self.channel_layer.group_send(call_group, message_data)
+                # await self.channel_layer.group_send(notification_group, message_data)
+                # logger.info(f"✅ call_end 已发送到 {call_group} 和 {notification_group}")
+                logger.info(f"✅ call_end 已发送到 {call_group}")
+
+        except Exception as e:
+            logger.error(f"❌ 转发 call_end 失败: {e}", exc_info=True)
+
+    async def handle_ice_candidate(self, data):
+        """转发 ICE candidate"""
+        target_id = data.get('to')
+        if not target_id or target_id == self.user.id:
+            # 🔧 优化日志：只在debug级别记录，避免刷屏
+            logger.debug(f"⏭️ 忽略无效的 ICE candidate 转发: target_id={target_id}, from={self.user.id}")
+            return
+
+        # 🔧 关键修复：提取 candidate 数据
+        candidate = data.get('candidate')
+        if not candidate:
+            logger.warning(f"⚠️ ICE candidate 数据缺失: {data}")
+            return
+
+        logger.info(
+            f"📤 转发 ICE candidate: from={self.user.id} to={target_id}, type={candidate.get('type', 'unknown')}")
+
+        # 🔧 关键修复：同时发送到通话信令组和通知组
+        call_group = f'call_{target_id}'
+        notification_group = f'user_{target_id}_notifications'
+
+        message_data = {
+            'type': 'ice_candidate',
+            'candidate': candidate,  # 🔧 直接传递 candidate 对象
+            'from_user_id': self.user.id,
+        }
+
+        await self.channel_layer.group_send(call_group, message_data)
+        # await self.channel_layer.group_send(notification_group, message_data)
+        logger.info(f"✅ ICE candidate 已转发给用户 {target_id}")
+
+    async def handle_call_reject(self, data):
+        """转发拒绝信令（修复版）"""
+        target_id = data.get('to')
+        from_user_id = data.get('from_user_id') or self.user.id
+        room_id = data.get('room_id') or self.room_id
+        media_type = data.get('media_type', 'audio')  # 🔧 提取media_type
+        
+        if not target_id or target_id == self.user.id:
+            return
+
+        logger.info(f"📤 转发 call_reject 信令: from={from_user_id} to={target_id}, room={room_id}, media_type={media_type}")
+
+        # 🔧 关键修复：创建通话记录消息（已拒绝）- 使用实际的发起方
+        await self.create_call_record_message(
+            room_id=room_id,
+            from_user_id=from_user_id,  # 🔧 确保使用正确的发起方 ID
+            duration=0,  # 拒绝时时长为0
+            media_type=media_type,  # 🔧 使用实际的media_type
+            reason='rejected'
+        )
+
+        # 🔧 关键修复：同时发送到通话信令组和通知组
+        call_group = f'call_{target_id}'
+        notification_group = f'user_{target_id}_notifications'
+
+        message_data = {
+            'type': 'call_reject',
+            'from_user_id': from_user_id,
+            'room_id': room_id,
+        }
+
+        await self.channel_layer.group_send(call_group, message_data)
+        # await self.channel_layer.group_send(notification_group, message_data)
+
+    async def handle_call_missed(self, data):  # 🔧 新增：处理未接听信令
+        """转发未接听信令"""
+        target_id = data.get('to')
+        from_user_id = data.get('from_user_id') or self.user.id
+        room_id = data.get('room_id') or self.room_id
+        media_type = data.get('media_type', 'audio')  # 🔧 提取media_type
+        
+        if not target_id or target_id == self.user.id:
+            return
+
+        logger.info(f"📤 转发 call_missed 信令: from={from_user_id} to={target_id}, room={room_id}, media_type={media_type}")
+
+        # 🔧 关键修复：创建通话记录消息（未接听）- 使用实际的发起方
+        await self.create_call_record_message(
+            room_id=room_id,
+            from_user_id=from_user_id,  # 🔧 确保使用正确的发起方 ID
+            duration=0,  # 未接听时时长为0
+            media_type=media_type,  # 🔧 使用实际的media_type
+            reason='missed'
+        )
+
+        # 🔧 关键修复：同时发送到通话信令组和通知组
+        call_group = f'call_{target_id}'
+        notification_group = f'user_{target_id}_notifications'
+
+        message_data = {
+            'type': 'call_missed',
+            'from_user_id': from_user_id,
+            'room_id': room_id,
+        }
+
+        await self.channel_layer.group_send(call_group, message_data)
+        # await self.channel_layer.group_send(notification_group, message_data)
+
+    async def create_call_record_message(self, room_id, from_user_id, duration=0, media_type='audio', reason='ended'):
+        """🔧 新增：创建通话记录消息（只创建一条）"""
+        try:
+            from chat.models import ChatRoom, Message
+            from django.contrib.auth import get_user_model
+            
+            User = get_user_model()
+            
+            # 🔧 关键修复：记录接收到的参数
+            logger.info(f"📞 创建通话记录: room={room_id}, from={from_user_id}, duration={duration}s, media_type={media_type}, reason={reason}")
+            
+            # 获取聊天室
+            chat_room = await database_sync_to_async(ChatRoom.objects.get)(id=room_id)
+            
+            # 确定通话状态
+            if reason == 'rejected':
+                call_status = 'rejected'
+            elif reason == 'missed':
+                call_status = 'missed'
+            elif reason == 'cancelled':
+                call_status = 'cancelled'
+            else:
+                call_status = 'completed'
+            
+            # 确定消息类型
+            message_type = 'call_video' if media_type == 'video' else 'call_audio'
+            
+            # 🔧 关键修复：只创建一条通话记录消息（而不是为每个成员创建）
+            # 构建消息内容（类似微信的显示格式）
+            if call_status == 'completed':
+                # 已完成的通话，显示时长
+                minutes = duration // 60
+                seconds = duration % 60
+                if minutes > 0:
+                    content = f"{'视频通话' if media_type == 'video' else '语音通话'} {minutes}:{seconds:02d}"
+                else:
+                    content = f"{'视频通话' if media_type == 'video' else '语音通话'} {seconds}秒"
+            elif call_status == 'missed':
+                content = f"未接听{'视频通话' if media_type == 'video' else '语音通话'}"
+            elif call_status == 'rejected':
+                content = f"已拒绝{'视频通话' if media_type == 'video' else '语音通话'}"
+            elif call_status == 'cancelled':
+                content = f"已取消{'视频通话' if media_type == 'video' else '语音通话'}"
+            else:
+                content = f"{'视频通话' if media_type == 'video' else '语音通话'}"
+            
+            # 🔧 创建单条消息记录
+            message = await database_sync_to_async(Message.objects.create)(
+                chat_room=chat_room,
+                sender_id=from_user_id,  # 使用发起通话的用户作为发送者
+                content=content,
+                message_type=message_type,
+                call_duration=duration if call_status == 'completed' else 0,
+                call_type=media_type,
+                call_status=call_status
+            )
+            
+            logger.info(f"✅ 通话记录消息已创建: message_id={message.id}, room={room_id}, status={call_status}, duration={message.call_duration}s")
+            
+            # 广播消息到聊天室
+            sender = await database_sync_to_async(User.objects.get)(id=from_user_id)
+            await self.channel_layer.group_send(
+                f'chat_{room_id}',
+                {
+                    'type': 'chat_message',
+                    'chat_room': room_id,
+                    'message_id': str(message.id),
+                    'is_read': False,
+                    'sender': {
+                        'id': sender.id,
+                        'username': sender.username,
+                        'email': sender.email,
+                        'real_name': sender.real_name,
+                        'avatar': sender.avatar.url if sender.avatar else None,
+                        'is_active': sender.is_active,
+                        'is_online': sender.is_online,
+                    },
+                    'sender_id': from_user_id,
+                    'sender_name': sender.username,
+                    'content': content,
+                    'message_type': message_type,
+                    'file_info': None,
+                    'timestamp': message.timestamp.isoformat(),
+                    'mentioned_users': [],
+                    'mentioned_all': False,
+                    'is_mention_all': False,
+                    'temp_id': None,
+                    'quote_message_id': None,
+                    'quote_content': None,
+                    'quote_sender': None,
+                    'quote_sender_id': None,
+                    'quote_timestamp': None,
+                    'quote_message_type': None,
+                    'quote_file_info': None,
+                    'voice_duration': None,
+                    # 🔧 新增：通话相关字段
+                    'call_duration': message.call_duration,
+                    'call_type': message.call_type,
+                    'call_status': message.call_status,
+                }
+            )
+            
+            # 发送全局通知
+            await self.send_global_notification_for_call(
+                room_id=room_id,
+                message=message,
+                sender=sender,
+                content=content,
+                message_type=message_type
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ 创建通话记录消息失败: {e}", exc_info=True)
+    
+    async def send_global_notification_for_call(self, room_id, message, sender, content, message_type):
+        """🔧 新增：发送通话记录的全局通知"""
+        try:
+            from chat.models import ChatRoom
+            
+            chat_room = await database_sync_to_async(ChatRoom.objects.get)(id=room_id)
+            members = await database_sync_to_async(list)(chat_room.members.exclude(id=sender.id))
+            
+            for member in members:
+                group_name = f'user_{member.id}_notifications'
+                await self.channel_layer.group_send(
+                    group_name,
+                    {
+                        'type': 'new_message',
+                        'chat_room': room_id,
+                        'content': content,
+                        'sender': {
+                            'id': sender.id,
+                            'username': sender.username,
+                            'email': sender.email,
+                            'real_name': sender.real_name,
+                            'avatar': sender.avatar.url if sender.avatar else None,
+                        },
+                        'sender_name': sender.username,
+                        'sender_id': sender.id,
+                        'message_type': message_type,
+                        'file_info': None,
+                        'mentioned_users': [],
+                        'mentioned_all': False,
+                        'is_mention_all': False,
+                        'timestamp': message.timestamp.isoformat(),
+                        'temp_id': None,
+                        'quote_message_id': None,
+                        'quote_content': None,
+                        'quote_sender': None,
+                        'quote_sender_id': None,
+                        'quote_timestamp': None,
+                        'quote_message_type': None,
+                        'quote_file_info': None,
+                        'voice_duration': None,
+                        # 🔧 新增：通话相关字段
+                        'call_duration': message.call_duration,
+                        'call_type': message.call_type,
+                        'call_status': message.call_status,
+                    }
+                )
+        except Exception as e:
+            logger.error(f"❌ 发送通话记录全局通知失败: {e}", exc_info=True)
+
+    @database_sync_to_async
+    def is_user_in_room(self, room_id):
+        """验证用户是否在聊天室中（增强容错）"""
+        try:
+            # 🔧 关键修复：确保 room_id 是整数
+            if isinstance(room_id, str) and room_id.isdigit():
+                room_id = int(room_id)
+            elif isinstance(room_id, str):
+                logger.warning(f"Invalid room_id format: {room_id}")
+                return False
+
+            chat_room = ChatRoom.objects.get(id=room_id)
+            return chat_room.members.filter(id=self.user.id).exists()
+        except ChatRoom.DoesNotExist:
+            logger.warning(f"ChatRoom {room_id} does not exist")
+            return False
+        except (ValueError, TypeError) as e:
+            logger.error(f"Invalid room_id type: {room_id}, error: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Error checking room membership: {e}")
+            return False
