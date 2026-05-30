@@ -29,7 +29,7 @@ from .models import (
     Folder, CloudFile, FileShare, FileComment, FileOperationLog,
     FileCollaboration, FileVersion,
     DocumentVersion, DocumentEditLock, DocumentCollaboration,
-    UploadSession, CloudSystemConfig
+    UploadSession, CloudSystemConfig, UserOnlyOfficePermission
 )
 from accounts.models import CustomUser, Department
 from chat.models import FileUpload, upload_to
@@ -41,7 +41,8 @@ from .serializers import (
     FileVersionSerializer, UploadSessionSerializer,
     ChunkUploadSerializer,
     MergeChunksSerializer,
-    CloudSystemConfigSerializer, SystemConfigCategorySerializer
+    CloudSystemConfigSerializer, SystemConfigCategorySerializer,
+    UserOnlyOfficePermissionSerializer
 )
 from .permissions import OnlyOfficeCallbackPermission  # 🔧 导入自定义权限
 from .pagination import CloudPagination, SharePagination
@@ -4002,6 +4003,12 @@ class ShareAccessView(APIView):
                     'error': '分享已过期'
                 })
 
+            config = CloudSystemConfig.objects.filter(key='system.download_enabled').first()
+            if config:
+                download_enabled = config.get_value('system.download_enabled')
+            else:
+                download_enabled = True
+
             # 获取分享的文件/文件夹信息
             context = {
                 'share': share,
@@ -4015,6 +4022,7 @@ class ShareAccessView(APIView):
                 'expires_at': share.expires_at,
                 'max_downloads': share.max_downloads,
                 'download_count': share.download_count,
+                'download_enabled': download_enabled,
             }
 
             logger.info(f'Share access: {share_code} context: {context}')
@@ -4093,6 +4101,15 @@ class ShareDownloadView(APIView):
             if share.share_type == 'password' and share.password:
                 if not request.session.get(f'share_verified_{share_code}'):
                     return redirect('share-short', share_code=share_code)
+
+            try:
+                config = CloudSystemConfig.objects.filter(key='system.download_enabled').first()
+                if config:
+                    download_enabled = config.get_value('system.download_enabled')
+                    if not download_enabled:
+                        return render(request, 'cloud/share_not_allowed.html')
+            except Exception as e:
+                logger.error(f"Error: {e}")
 
             if share.file:
                 # 更新下载次数
@@ -4850,6 +4867,36 @@ class DocumentEditorViewSet(viewsets.ViewSet):
             'version_keep_count': CloudSystemConfig.get_value('onlyoffice_version_keep_count', 10),
         }
 
+    def _get_user_onlyoffice_permissions(self, user):
+        """
+        🔧 获取用户的 OnlyOffice 权限配置
+        优先级：用户自定义权限 > 全局默认权限
+
+        Args:
+            user: 当前用户对象
+
+        Returns:
+            dict: 权限字典
+        """
+        try:
+            # 尝试获取用户专属权限配置
+            user_perm = UserOnlyOfficePermission.objects.filter(
+                user=user,
+                is_active=True
+            ).first()
+
+            if user_perm:
+                logger.info(f'✅ 使用用户自定义权限：user={user.username}')
+                return user_perm.get_permissions_dict()
+            else:
+                logger.info(f'ℹ️ 使用全局默认权限：user={user.username}')
+                # 返回全局默认权限
+                return self.onlyoffice_configs.get('permissions', {})
+
+        except Exception as e:
+            logger.error(f'❌ 获取用户权限失败：{e}，使用全局默认权限', exc_info=True)
+            return self.onlyoffice_configs.get('permissions', {})
+
     @property
     def CLOUD_SERVER_URL(self):
         return settings.ONLYOFFICE.get('CLOUD_SERVER_URL', 'https://chat.first-iq.com/cloud/')
@@ -5029,7 +5076,8 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                 )
 
             self.current_config = self.onlyoffice_configs.copy()
-            base_permissions = self.current_config.get('permissions', {})
+            # 🔧 关键修复：优先使用用户自定义权限配置
+            base_permissions = self._get_user_onlyoffice_permissions(request.user)
 
             # 2.2 编辑权限验证（决定编辑器模式）
             can_edit = base_permissions.get('edit')
@@ -5054,8 +5102,9 @@ class DocumentEditorViewSet(viewsets.ViewSet):
             file_url = self._get_file_url(file_obj)
             callback_url = self._get_callback_url(pk)
 
-            # ==================== 4. 权限配置（动态加载系统配置）====================
-            # 4.1 基础权限模板（从系统配置加载）
+            # ==================== 4. 权限配置（动态加载系统配置 + 用户自定义权限）====================
+            # 4.1 基础权限模板（已在上文通过 _get_user_onlyoffice_permissions 获取）
+            # base_permissions 已经包含用户自定义权限或全局默认权限
 
 
             # 4.2 根据编辑权限调整
@@ -6792,7 +6841,7 @@ class IsCloudAdmin(permissions.BasePermission):
         )
 
 
-class CloudSystemSettingsViewSet(viewsets.ViewSet):
+class CloudSystemSettingsViewSet(viewsets.GenericViewSet):
     """
     🔧 企业网盘系统配置视图集
     支持 OnlyOffice、文件上传、存储、协同编辑等配置管理
@@ -6800,6 +6849,7 @@ class CloudSystemSettingsViewSet(viewsets.ViewSet):
     """
 
     permission_classes = [permissions.IsAuthenticated, IsCloudAdmin]
+    pagination_class = CloudPagination  # 🔧 添加分页类
 
     CACHE_PREFIX = 'company_chat:config:'
 
@@ -7581,6 +7631,268 @@ class CloudSystemSettingsViewSet(viewsets.ViewSet):
             'config': self.onlyoffice_configs(request).data
         })
 
+
+    # ==================== 用户自定义权限管理 ====================
+
+    @action(detail=False, methods=['get', 'post'], url_path='user-permissions')
+    def user_permissions(self, request):
+        """
+        🔧 用户自定义权限配置接口
+        GET /api/cloud/settings/user-permissions/ - 获取列表
+        POST /api/cloud/settings/user-permissions/ - 创建新配置
+        """
+        if request.method == 'GET':
+            return self._list_user_permissions(request)
+        elif request.method == 'POST':
+            return self._create_user_permission(request)
+
+    def _list_user_permissions(self, request):
+        """获取所有用户的自定义权限配置列表"""
+        try:
+            # 只返回管理员或有权限的用户
+            if not request.user.is_superuser:
+                return Response(
+                    {'error': '权限不足'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            # 获取所有用户的权限配置
+            queryset = UserOnlyOfficePermission.objects.select_related(
+                'user', 'created_by'
+            ).order_by('-updated_at')
+
+            # 支持搜索
+            search = request.query_params.get('search', '').strip()
+            if search:
+                queryset = queryset.filter(
+                    Q(user__username__icontains=search) |
+                    Q(user__real_name__icontains=search)
+                )
+
+            # 分页
+            page = self.paginate_queryset(queryset)
+            if page is not None:
+                serializer = UserOnlyOfficePermissionSerializer(
+                    page, many=True, context={'request': request}
+                )
+                return self.get_paginated_response(serializer.data)
+
+            serializer = UserOnlyOfficePermissionSerializer(
+                queryset, many=True, context={'request': request}
+            )
+            return Response(serializer.data)
+
+        except Exception as e:
+            logger.error(f'获取用户权限列表失败：{e}', exc_info=True)
+            return Response(
+                {'error': f'获取失败：{str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def _create_user_permission(self, request):
+        """创建用户自定义权限配置"""
+        try:
+            if not request.user.is_superuser:
+                return Response(
+                    {'error': '权限不足'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            data = request.data.copy()
+
+            # 转换权限字段
+            permissions = data.pop('permissions', {})
+            for perm_key, field_name in [
+                ('download', 'permission_download'),
+                ('copy', 'permission_copy'),
+                ('edit', 'permission_edit'),
+                ('print', 'permission_print'),
+                ('comment', 'permission_comment'),
+                ('chat', 'permission_chat'),
+                ('review', 'permission_review'),
+                ('fill_forms', 'permission_fill_forms'),
+                ('modify_content_control', 'permission_modify_content_control'),
+                ('modify_filter', 'permission_modify_filter'),
+            ]:
+                if perm_key in permissions:
+                    data[field_name] = permissions[perm_key]
+
+            serializer = UserOnlyOfficePermissionSerializer(
+                data=data,
+                context={'request': request}
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+
+            logger.info(f'创建用户权限配置：{serializer.data["user_info"]["username"]} by {request.user.username}')
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        except serializers.ValidationError as e:
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f'创建用户权限配置失败：{e}', exc_info=True)
+            return Response(
+                {'error': f'创建失败：{str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['put', 'delete'], url_path='user-permissions/(?P<user_id>[^/.]+)')
+    def user_permission_detail(self, request, user_id=None):
+        """
+        🔧 用户自定义权限详情接口
+        PUT /api/cloud/settings/user-permissions/{user_id}/ - 更新配置
+        DELETE /api/cloud/settings/user-permissions/{user_id}/ - 删除配置
+        """
+        if request.method == 'PUT':
+            return self._update_user_permission(request, user_id)
+        elif request.method == 'DELETE':
+            return self._delete_user_permission(request, user_id)
+
+    def _update_user_permission(self, request, user_id=None):
+        """更新用户自定义权限配置"""
+        try:
+            if not request.user.is_superuser:
+                return Response(
+                    {'error': '权限不足'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            # 查找用户权限配置
+            try:
+                perm = UserOnlyOfficePermission.objects.get(user_id=user_id)
+            except UserOnlyOfficePermission.DoesNotExist:
+                return Response(
+                    {'error': '该用户暂无权限配置'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            data = request.data.copy()
+
+            # 转换权限字段
+            permissions = data.pop('permissions', None)
+            if permissions:
+                for perm_key, field_name in [
+                    ('download', 'permission_download'),
+                    ('copy', 'permission_copy'),
+                    ('edit', 'permission_edit'),
+                    ('print', 'permission_print'),
+                    ('comment', 'permission_comment'),
+                    ('chat', 'permission_chat'),
+                    ('review', 'permission_review'),
+                    ('fill_forms', 'permission_fill_forms'),
+                    ('modify_content_control', 'permission_modify_content_control'),
+                    ('modify_filter', 'permission_modify_filter'),
+                ]:
+                    if perm_key in permissions:
+                        data[field_name] = permissions[perm_key]
+
+            serializer = UserOnlyOfficePermissionSerializer(
+                perm,
+                data=data,
+                partial=True,
+                context={'request': request}
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+
+            logger.info(f'更新用户权限配置：{perm.user.username} by {request.user.username}')
+            return Response(serializer.data)
+
+        except UserOnlyOfficePermission.DoesNotExist:
+            return Response(
+                {'error': '该用户暂无权限配置'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f'更新用户权限配置失败：{e}', exc_info=True)
+            return Response(
+                {'error': f'更新失败：{str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def _delete_user_permission(self, request, user_id=None):
+        """删除用户自定义权限配置"""
+        try:
+            if not request.user.is_superuser:
+                return Response(
+                    {'error': '权限不足'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            try:
+                perm = UserOnlyOfficePermission.objects.get(user_id=user_id)
+                username = perm.user.username
+                perm.delete()
+
+                logger.info(f'删除用户权限配置：{username} by {request.user.username}')
+                return Response({'message': '权限配置已删除'})
+
+            except UserOnlyOfficePermission.DoesNotExist:
+                return Response(
+                    {'error': '该用户暂无权限配置'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+        except Exception as e:
+            logger.error(f'删除用户权限配置失败：{e}', exc_info=True)
+            return Response(
+                {'error': f'删除失败：{str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['get'], url_path='users-for-permission')
+    def get_users_for_permission(self, request):
+        """
+        🔧 获取可用于配置权限的用户列表（排除已有配置的用户）
+        GET /api/cloud/settings/users-for-permission/?search=xxx
+        """
+        try:
+            if not request.user.is_superuser:
+                return Response(
+                    {'error': '权限不足'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            # 获取所有用户
+            queryset = CustomUser.objects.filter(is_active=True)
+
+            # 排除已有权限配置的用户
+            configured_users = UserOnlyOfficePermission.objects.values_list('user_id', flat=True)
+            queryset = queryset.exclude(id__in=configured_users)
+
+            # 搜索
+            search = request.query_params.get('search', '').strip()
+            if search:
+                queryset = queryset.filter(
+                    Q(username__icontains=search) |
+                    Q(real_name__icontains=search) |
+                    Q(email__icontains=search)
+                )
+
+            # 限制返回数量
+            queryset = queryset[:50]
+
+            users_data = [
+                {
+                    'id': user.id,
+                    'username': user.username,
+                    'real_name': user.real_name or '',
+                    'email': user.email or '',
+                    'department': user.department.name if hasattr(user, 'department') and user.department else '',
+                }
+                for user in queryset
+            ]
+
+            return Response(users_data)
+
+        except Exception as e:
+            logger.error(f'获取用户列表失败：{e}', exc_info=True)
+            return Response(
+                {'error': f'获取失败：{str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
     # ==================== 辅助方法 ====================
 
     def _get_category_info(self, category):
@@ -7661,3 +7973,8 @@ class CloudSystemSettingsViewSet(viewsets.ViewSet):
         cache.delete('onlyoffice:config')
         cache.delete('onlyoffice:jwt_secret')
         logger.info('OnlyOffice 配置已重载')
+
+
+
+
+

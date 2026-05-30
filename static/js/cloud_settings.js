@@ -221,16 +221,31 @@ class CloudSettingsApp {
                 </div>
             </div>
 
-            <!-- 权限配置 -->
+            <!-- 全局权限配置 -->          
             <div class="config-section">
-                <h4><i class="fas fa-lock"></i> 权限配置</h4>
-                <div class="permission-grid">
+                <h4><i class="fas fa-lock"></i> 全局权限配置</h4>
+                <p class="section-desc">以下配置将应用于所有用户，除非为用户设置了自定义权限</p>
+                <div class="permission-grid config-item">
                     ${Object.entries(oo.permissions).map(([key, val]) => `
                         <label class="permission-item">
                             <input type="checkbox" id="perm_${key}" ${val ? 'checked' : ''}>
                             <span>${this.getPermissionLabel(key)}</span>
                         </label>
                     `).join('')}
+                </div>
+            </div>
+            
+            <!-- 🔧 新增：用户自定义权限管理 -->
+            <div class="config-section">
+                <div class="section-header-with-action">
+                    <h4><i class="fas fa-user-cog"></i> 用户自定义权限</h4>
+                    <button class="btn btn-sm btn-primary" onclick="cloudSettings.showAddUserPermissionModal()">
+                        <i class="fas fa-plus"></i> 添加用户权限
+                    </button>
+                </div>
+                <p class="section-desc">为特定用户设置个性化的文档编辑权限</p>
+                <div id="userPermissionsList" class="config-item">
+                    <div class="loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</div>
                 </div>
             </div>
 
@@ -268,7 +283,7 @@ class CloudSettingsApp {
             <!-- 功能开关 -->
             <div class="config-section">
                 <h4><i class="fas fa-toggle-on"></i> 功能开关</h4>
-                <div class="toggle-grid">
+                <div class="toggle-grid config-item">
                     ${Object.entries(oo.ui).filter(([k]) => k !== 'ui_theme').map(([key, val]) => `
                         <label class="toggle-item">
                             <span>${this.getFeatureLabel(key)}</span>
@@ -302,7 +317,513 @@ class CloudSettingsApp {
                 </button>
             </div>
         `;
+
+        // 加载用户权限列表
+        this.loadUserPermissions();
     }
+
+
+    // 🔧 加载用户权限列表
+    async loadUserPermissions() {
+        const container = document.getElementById('userPermissionsList');
+        if (!container) return;
+
+        try {
+            const response = await fetch('/api/cloud/settings/user-permissions/', {
+                headers: TokenManager.getHeaders()
+            });
+
+            if (!response.ok) {
+                throw new Error('加载失败');
+            }
+
+            const data = await response.json();
+            this.renderUserPermissions(data.results || data);
+
+        } catch (error) {
+            console.error('加载用户权限失败:', error);
+            container.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-exclamation-circle"></i>
+                    <p>加载失败：${error.message}</p>
+                </div>
+            `;
+        }
+    }
+
+    // 🔧 渲染用户权限列表
+    renderUserPermissions(permissions) {
+        const container = document.getElementById('userPermissionsList');
+        if (!container) return;
+
+        if (!permissions || permissions.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-user-slash"></i>
+                    <p>暂无用户自定义权限配置</p>
+                    <button class="btn btn-primary" onclick="cloudSettings.showAddUserPermissionModal()">
+                        <i class="fas fa-plus"></i> 添加第一个用户权限
+                    </button>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = `
+            <div class="user-permissions-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>用户</th>
+                            <th>权限配置</th>
+                            <th>状态</th>
+                            <th>更新时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${permissions.map(perm => `
+                            <tr>
+                                <td>
+                                    <div class="user-info-cell">
+                                        <img src="${perm.user_info.avatar || '/static/images/default-avatar.png'}" 
+                                             alt="${perm.user_info.username}" 
+                                             class="user-avatar-small">
+                                        <div>
+                                            <div class="user-name">${this.escapeHtml(perm.user_info.real_name || perm.user_info.username)}</div>
+                                            <div class="user-username">@${this.escapeHtml(perm.user_info.username)}</div>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="permissions-summary">
+                                        ${this.renderPermissionsSummary(perm.permissions)}
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="status-badge ${perm.is_active ? 'active' : 'inactive'}">
+                                        ${perm.is_active ? '启用' : '禁用'}
+                                    </span>
+                                </td>
+                                <td>${new Date(perm.updated_at).toLocaleString('zh-CN')}</td>
+                                <td>
+                                    <button class="btn btn-sm btn-primary" 
+                                            onclick="cloudSettings.editUserPermission('${perm.user}')">
+                                        <i class="fas fa-edit"></i> 编辑
+                                    </button>
+                                    <button class="btn btn-sm btn-danger" 
+                                            onclick="cloudSettings.deleteUserPermission('${perm.user}')">
+                                        <i class="fas fa-trash"></i> 删除
+                                    </button>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    }
+
+    // 🔧 渲染权限摘要
+    renderPermissionsSummary(permissions) {
+        const enabledPerms = Object.entries(permissions)
+            .filter(([_, val]) => val)
+            .map(([key]) => this.getPermissionLabel(key));
+
+        if (enabledPerms.length === 0) {
+            return '<span class="text-muted">无权限</span>';
+        }
+
+        if (enabledPerms.length <= 3) {
+            return enabledPerms.join('、');
+        }
+
+        return `${enabledPerms.slice(0, 3).join('、')} 等${enabledPerms.length}项`;
+    }
+
+    // 🔧 显示添加用户权限模态框
+    async showAddUserPermissionModal() {
+        // 创建模态框
+        const modal = document.createElement('div');
+        modal.className = 'modal show';
+        modal.id = 'addUserPermissionModal';
+        modal.innerHTML = `
+            <div class="modal-content modal-lg">
+                <div class="modal-header">
+                    <h3><i class="fas fa-user-plus"></i> 添加用户权限配置</h3>
+                    <button class="close-btn">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>选择用户 <span class="required">*</span></label>
+                        <div class="user-search-container">
+                            <input type="text" 
+                                   id="userSearchInput" 
+                                   class="form-control" 
+                                   placeholder="搜索用户名、姓名或邮箱..."
+                                   oninput="cloudSettings.searchUsersForPermission(this.value)">
+                            <div id="userSearchResults" class="user-search-results"></div>
+                        </div>
+                        <input type="hidden" id="selectedUserId">
+                        <div id="selectedUserInfo" class="selected-user-info" style="display:none;"></div>
+                    </div>
+                    
+                    <div class="config-section">
+                        <label>权限配置</label>
+                        <div class="permission-grid">
+                            ${Object.keys(this.onlyofficeConfigs.permissions).map(key => `
+                                <label class="permission-item">
+                                    <input type="checkbox" 
+                                           id="new_perm_${key}" 
+                                           checked>
+                                    <span>${this.getPermissionLabel(key)}</span>
+                                </label>
+                            `).join('')}
+                        </div>
+                    </div>
+                    
+                    <div class="config-section">
+                        <label>启用状态</label>
+                        <label class="switch">
+                            <input type="checkbox" id="new_perm_is_active" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>备注说明</label>
+                        <textarea id="new_perm_description" 
+                                  class="form-control" 
+                                  rows="3" 
+                                  placeholder="可选：说明为何设置此权限..."></textarea>
+                    </div>
+                    
+                    <p id="addUserPermError" class="error-message"></p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="cloudSettings.closeAddUserPermissionModal()">取消</button>
+                    <button class="btn btn-primary" onclick="cloudSettings.saveUserPermission()">保存</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        // 绑定关闭事件
+        modal.querySelector('.close-btn').onclick = () => this.closeAddUserPermissionModal();
+        modal.onclick = (e) => {
+            if (e.target === modal) this.closeAddUserPermissionModal();
+        };
+    }
+
+    // 🔧 关闭添加用户权限模态框
+    closeAddUserPermissionModal() {
+        const modal = document.getElementById('addUserPermissionModal');
+        if (modal) {
+            modal.remove();
+        }
+    }
+
+    // 🔧 搜索用户
+    async searchUsersForPermission(searchText) {
+        const resultsContainer = document.getElementById('userSearchResults');
+        if (!resultsContainer) return;
+
+        if (!searchText) {
+            resultsContainer.innerHTML = '';
+            resultsContainer.style.display = 'none';
+            return;
+        }
+
+        try {
+            const response = await fetch(
+                `/api/cloud/settings/users-for-permission/?search=${encodeURIComponent(searchText)}`,
+                {
+                    headers: TokenManager.getHeaders()
+                }
+            );
+
+            if (!response.ok) {
+                throw new Error('搜索失败');
+            }
+
+            const users = await response.json();
+
+            if (users.length === 0) {
+                resultsContainer.innerHTML = '<div class="search-result-item">未找到用户</div>';
+            } else {
+                resultsContainer.innerHTML = users.map(user => `
+                    <div class="search-result-item" 
+                         onclick="cloudSettings.selectUserForPermission('${user.id}', '${this.escapeHtml(user.username)}', '${this.escapeHtml(user.real_name || '')}')">
+                        <img src="/static/images/default-avatar.png" alt="${user.username}" class="user-avatar-tiny">
+                        <div>
+                            <div class="result-user-name">${this.escapeHtml(user.real_name || user.username)}</div>
+                            <div class="result-user-detail">@${this.escapeHtml(user.username)} ${user.email ? `(${user.email})` : ''}</div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            resultsContainer.style.display = 'block';
+
+        } catch (error) {
+            console.error('搜索用户失败:', error);
+            resultsContainer.innerHTML = '<div class="search-result-item">搜索失败</div>';
+            resultsContainer.style.display = 'block';
+        }
+    }
+
+    // 🔧 选择用户
+    selectUserForPermission(userId, username, realName) {
+        document.getElementById('selectedUserId').value = userId;
+        document.getElementById('userSearchInput').value = '';
+        document.getElementById('userSearchResults').style.display = 'none';
+
+        const userInfoDiv = document.getElementById('selectedUserInfo');
+        userInfoDiv.innerHTML = `
+            <div class="selected-user-badge">
+                <i class="fas fa-user-check"></i>
+                已选择：${this.escapeHtml(realName || username)} (@${this.escapeHtml(username)})
+                <button type="button" onclick="cloudSettings.clearSelectedUser()" class="clear-selection">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        `;
+        userInfoDiv.style.display = 'block';
+    }
+
+    // 🔧 清除选中的用户
+    clearSelectedUser() {
+        document.getElementById('selectedUserId').value = '';
+        document.getElementById('selectedUserInfo').style.display = 'none';
+    }
+
+    // 🔧 保存用户权限
+    async saveUserPermission() {
+        const userId = document.getElementById('selectedUserId').value;
+        if (!userId) {
+            document.getElementById('addUserPermError').textContent = '请先选择一个用户';
+            return;
+        }
+
+        const permissions = {};
+        Object.keys(this.onlyofficeConfigs.permissions).forEach(key => {
+            const checkbox = document.getElementById(`new_perm_${key}`);
+            if (checkbox) {
+                permissions[key] = checkbox.checked;
+            }
+        });
+
+        const payload = {
+            user: userId,
+            permissions: permissions,
+            is_active: document.getElementById('new_perm_is_active').checked,
+            description: document.getElementById('new_perm_description').value.trim()
+        };
+
+        try {
+            const response = await fetch('/api/cloud/settings/user-permissions/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...TokenManager.getHeaders()
+                },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.user || error.error || '保存失败');
+            }
+
+            this.showSuccess('保存成功', '用户权限配置已添加');
+            this.closeAddUserPermissionModal();
+            await this.loadUserPermissions();
+
+        } catch (error) {
+            document.getElementById('addUserPermError').textContent = error.message;
+        }
+    }
+
+    // 🔧 编辑用户权限
+    async editUserPermission(userId) {
+        // 先获取用户权限详情
+        try {
+            const response = await fetch(`/api/cloud/settings/user-permissions/`, {
+                headers: TokenManager.getHeaders()
+            });
+
+            if (!response.ok) {
+                throw new Error('加载失败');
+            }
+
+            const data = await response.json();
+            const perm = (data.results || data).find(p => p.user === parseInt(userId));
+
+            if (!perm) {
+                console.error('找不到该用户的权限配置')
+                this.showError('错误', '找不到该用户的权限配置');
+                return;
+            }
+
+            this.showEditUserPermissionModal(perm);
+
+        } catch (error) {
+            this.showError('加载失败', error.message);
+        }
+    }
+
+    // 🔧 显示编辑用户权限模态框
+    showEditUserPermissionModal(perm) {
+        const modal = document.createElement('div');
+        modal.className = 'modal show';
+        modal.id = 'editUserPermissionModal';
+        modal.innerHTML = `
+            <div class="modal-content modal-lg">
+                <div class="modal-header">
+                    <h3><i class="fas fa-user-edit"></i> 编辑用户权限配置</h3>
+                    <button class="close-btn">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>用户</label>
+                        <div class="readonly-user-info">
+                            <img src="${perm.user_info.avatar || '/static/images/default-avatar.png'}" 
+                                 alt="${perm.user_info.username}" 
+                                 class="user-avatar-small">
+                            <div>
+                                <div>${this.escapeHtml(perm.user_info.real_name || perm.user_info.username)}</div>
+                                <div class="text-muted">@${this.escapeHtml(perm.user_info.username)}</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="config-section">
+                        <label>权限配置</label>
+                        <div class="permission-grid">
+                            ${Object.entries(perm.permissions).map(([key, val]) => `
+                                <label class="permission-item">
+                                    <input type="checkbox" 
+                                           id="edit_perm_${key}" 
+                                           ${val ? 'checked' : ''}>
+                                    <span>${this.getPermissionLabel(key)}</span>
+                                </label>
+                            `).join('')}
+                        </div>
+                    </div>
+                    
+                    <div class="config-section">
+                        <label>启用状态</label>
+                        <label class="switch">
+                            <input type="checkbox" id="edit_perm_is_active" ${perm.is_active ? 'checked' : ''}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>备注说明</label>
+                        <textarea id="edit_perm_description" 
+                                  class="form-control" 
+                                  rows="3">${this.escapeHtml(perm.description || '')}</textarea>
+                    </div>
+                    
+                    <p id="editUserPermError" class="error-message"></p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="cloudSettings.closeEditUserPermissionModal()">取消</button>
+                    <button class="btn btn-primary" onclick="cloudSettings.updateUserPermission('${perm.user}')">更新</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        modal.querySelector('.close-btn').onclick = () => this.closeEditUserPermissionModal();
+        modal.onclick = (e) => {
+            if (e.target === modal) this.closeEditUserPermissionModal();
+        };
+    }
+
+    // 🔧 关闭编辑用户权限模态框
+    closeEditUserPermissionModal() {
+        const modal = document.getElementById('editUserPermissionModal');
+        if (modal) {
+            modal.remove();
+        }
+    }
+
+    // 🔧 更新用户权限
+    async updateUserPermission(userId) {
+        const permissions = {};
+        Object.keys(this.onlyofficeConfigs.permissions).forEach(key => {
+            const checkbox = document.getElementById(`edit_perm_${key}`);
+            if (checkbox) {
+                permissions[key] = checkbox.checked;
+            }
+        });
+
+        const payload = {
+            permissions: permissions,
+            is_active: document.getElementById('edit_perm_is_active').checked,
+            description: document.getElementById('edit_perm_description').value.trim()
+        };
+
+        try {
+            const response = await fetch(`/api/cloud/settings/user-permissions/${userId}/`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...TokenManager.getHeaders()
+                },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || '更新失败');
+            }
+
+            this.showSuccess('更新成功', '用户权限配置已更新');
+            this.closeEditUserPermissionModal();
+            await this.loadUserPermissions();
+
+        } catch (error) {
+            document.getElementById('editUserPermError').textContent = error.message;
+        }
+    }
+
+    // 🔧 删除用户权限
+    async deleteUserPermission(userId) {
+        const confirmed = await this.showConfirmDialog(
+            '删除确认',
+            '确定要删除该用户的自定义权限配置吗？删除后将使用全局权限配置。',
+            'danger'
+        );
+
+        if (!confirmed) return;
+
+        try {
+            const response = await fetch(`/api/cloud/settings/user-permissions/${userId}/`, {
+                method: 'DELETE',
+                headers: TokenManager.getHeaders()
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || '删除失败');
+            }
+
+            this.showSuccess('删除成功', '用户权限配置已删除');
+            await this.loadUserPermissions();
+
+        } catch (error) {
+            this.showError('删除失败', error.message);
+        }
+    }
+
+
+
+
 
     // 🔧 保存 OnlyOffice 配置
     async saveOnlyofficeConfigs() {

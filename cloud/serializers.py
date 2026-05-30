@@ -8,7 +8,7 @@
 
 from django.conf import settings
 from rest_framework import serializers
-from .models import Folder, CloudFile, UploadSession, FileShare, FileComment, FileOperationLog, FileVersion, CloudSystemConfig
+from .models import Folder, CloudFile, UploadSession, FileShare, FileComment, FileOperationLog, FileVersion, CloudSystemConfig, UserOnlyOfficePermission
 from accounts.models import CustomUser, Department
 from accounts.serializers import UserDetailSerializer
 from loguru import logger
@@ -694,3 +694,71 @@ class SystemConfigCategorySerializer(serializers.Serializer):
     count = serializers.IntegerField()
     order = serializers.IntegerField()
     color = serializers.CharField(required=False)
+
+
+class UserOnlyOfficePermissionSerializer(serializers.ModelSerializer):
+    """🔧 用户 OnlyOffice 权限配置序列化器"""
+    user_info = serializers.SerializerMethodField()
+    permissions = serializers.SerializerMethodField()
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+
+    class Meta:
+        model = UserOnlyOfficePermission
+        fields = [
+            'id', 'user', 'user_info', 'permissions',
+            'permission_download', 'permission_copy', 'permission_edit',
+            'permission_print', 'permission_comment', 'permission_chat',
+            'permission_review', 'permission_fill_forms',
+            'permission_modify_content_control', 'permission_modify_filter',
+            'is_active', 'description', 'created_at', 'updated_at',
+            'created_by', 'created_by_name',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
+
+    def get_user_info(self, obj):
+        """获取用户信息"""
+        return {
+            'id': obj.user.id,
+            'username': obj.user.username,
+            'real_name': obj.user.real_name or '',
+            'avatar': obj.user.get_avatar_url() if hasattr(obj.user, 'get_avatar_url') else '',
+        }
+
+    def get_permissions(self, obj):
+        """获取权限字典"""
+        return obj.get_permissions_dict()
+
+    def validate(self, attrs):
+        """验证权限配置"""
+        # 至少需要一个权限为 True
+        permission_fields = [
+            'permission_download', 'permission_copy', 'permission_edit',
+            'permission_print', 'permission_comment', 'permission_chat',
+            'permission_review', 'permission_fill_forms',
+            'permission_modify_content_control', 'permission_modify_filter',
+        ]
+
+        has_any_permission = any(
+            attrs.get(field, getattr(self.instance, field, False))
+            for field in permission_fields
+        )
+
+        if not has_any_permission:
+            raise serializers.ValidationError('至少需要启用一个权限')
+
+        return attrs
+
+    def create(self, validated_data):
+        """创建时自动设置创建者"""
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            validated_data['created_by'] = request.user
+
+        # 检查是否已存在
+        user = validated_data.get('user')
+        if UserOnlyOfficePermission.objects.filter(user=user).exists():
+            raise serializers.ValidationError({
+                'user': '该用户已存在权限配置，请使用更新接口'
+            })
+
+        return super().create(validated_data)

@@ -716,10 +716,10 @@ class ChatClient {
             });
 
             if (this.isShowingSidebar) {
-                this.hideSidebar();
+                this.closeSidebar();
                 this.showSidebar();
             } else {
-                this.hideSidebar();
+                this.closeSidebar();
             }
 
             // 获取当前用户信息
@@ -777,6 +777,7 @@ class ChatClient {
 
             // 设置事件监听
             this.setupEventListeners();
+            this.setupSidebar();
 
             // 初始化用户下拉菜单
             this.initUserDropdown()
@@ -5118,11 +5119,11 @@ class ChatClient {
         this.loadUsersForChat();
     }
 
-
-    // 隐藏侧边栏
-    hideSidebar() {
-        console.log('Hiding sidebar');
+    closeSidebar() {
+        console.log('Close sidebar')
         const sidebar = document.querySelector('.sidebar');
+        const overlay = document.getElementById('sidebarOverlay');
+
         if (sidebar) {
             sidebar.classList.remove('show');
             this.isShowingSidebar = false;
@@ -5130,11 +5131,26 @@ class ChatClient {
             // 🔧 关键修复：移动端显示输入区域
             this.toggleInputAreaVisibility(true);
         }
+
+
+        if (overlay) {
+            overlay.classList.remove('show');
+        }
     }
+
+    openSidebar() {
+        console.log('Open sidebar')
+        const overlay = document.getElementById('sidebarOverlay');
+        if (overlay) {
+            overlay.classList.toggle('show');
+        }
+    }
+
+
 
     // 显示侧边栏
     showSidebar() {
-        console.log('Opening sidebar');
+        console.log('Show sidebar');
         const sidebar = document.querySelector('.sidebar');
         if (sidebar) {
             sidebar.classList.add('show');
@@ -5183,18 +5199,12 @@ class ChatClient {
 
 
     toggleSidebar() {
-        if (this.isShowingSidebar) {
-            this.hideSidebar();
-        } else {
-            this.showSidebar();
-        }
+
+        this.showSidebar();
+        this.openSidebar();
+
     }
 
-    toggleHideSidebar() {
-        if (this.isShowingSidebar) {
-            this.hideSidebar();
-        }
-    }
 
     // 🔧 新增：隐藏所有输入指示器
     hideAllTypingIndicators() {
@@ -5263,7 +5273,7 @@ class ChatClient {
 
         // 隐藏侧边栏
         if (this.isShowingSidebar) {
-            this.hideSidebar();
+            this.closeSidebar();
         }
 
 
@@ -5583,7 +5593,7 @@ class ChatClient {
         // 移动端：隐藏侧边栏并显示输入区域
         if (window.innerWidth <= 768) {
             if (this.isShowingSidebar) {
-                this.hideSidebar();
+                this.closeSidebar();
             } else {
                 // 清空当前聊天室
                 this.currentRoomId = null;
@@ -5811,6 +5821,47 @@ class ChatClient {
         });
     }
 
+
+
+    // ==================== 侧边栏管理 ====================
+    setupSidebar(){
+
+        // 修复：添加返回按钮事件监听
+        const backBtn = document.getElementById('backBtn');
+
+        const closeBtn = document.getElementById('sidebarCloseBtn');
+        const overlay = document.getElementById('sidebarOverlay');
+
+        if (backBtn) {
+            backBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                // this.handleBackButtonClick();
+                this.toggleSidebar()
+            });
+        }
+
+        // 关闭
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => this.closeSidebar());
+        }
+
+        // 遮罩层
+        if (overlay) {
+            overlay.addEventListener('click', () => this.closeSidebar());
+        }
+
+        // 消息容器点击（移动端隐藏侧边栏）
+        const messagesContainer = document.getElementById('messagesContainer');
+        if (messagesContainer) {
+            messagesContainer.addEventListener('click', (e) => {
+                e.preventDefault();
+                // 仅在移动端且侧边栏显示时隐藏
+                if (window.innerWidth <= 768 && this.isShowingSidebar) {
+                    this.closeSidebar();
+                }
+            });
+        }
+    }
 
     // 设置事件监听
     setupEventListeners() {
@@ -6072,36 +6123,6 @@ class ChatClient {
             }, 300));
         }
 
-        // 修复：添加返回按钮事件监听
-        const backBtn = document.getElementById('backBtn');
-        if (backBtn) {
-            backBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                // this.handleBackButtonClick();
-                this.toggleSidebar()
-            });
-        }
-
-        // const messagesContainer = document.getElementById('messagesContainer');
-        // if (messagesContainer) {
-        //     messagesContainer.addEventListener('click', (e) => {
-        //         e.preventDefault();
-        //         this.toggleHideSidebar()
-        //     })
-        // }
-
-
-        // 消息容器点击（移动端隐藏侧边栏）
-        const messagesContainer = document.getElementById('messagesContainer');
-        if (messagesContainer) {
-            messagesContainer.addEventListener('click', (e) => {
-                e.preventDefault();
-                // 仅在移动端且侧边栏显示时隐藏
-                if (window.innerWidth <= 768 && this.isShowingSidebar) {
-                    this.hideSidebar();
-                }
-            });
-        }
 
         // 输入框聚焦时确保输入区域可见
         // const messageInput = document.getElementById('messageInput');

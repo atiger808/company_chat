@@ -2,7 +2,11 @@ from django.contrib import admin
 
 # Register your models here.
 
-from .models import Folder, CloudFile, UploadSession, FileShare, FileComment, FileOperationLog, FileVersion,FileCollaboration, DocumentVersion, DocumentEditLock, DocumentCollaboration, CloudSystemConfig
+from .models import Folder, CloudFile, UploadSession, FileShare, FileComment, FileOperationLog, FileVersion, \
+    FileCollaboration, DocumentVersion, DocumentEditLock, DocumentCollaboration, CloudSystemConfig, \
+    UserOnlyOfficePermission
+
+
 @admin.register(Folder)
 class FolderAdmin(admin.ModelAdmin):
     """文件夹管理"""
@@ -15,30 +19,32 @@ class FolderAdmin(admin.ModelAdmin):
 @admin.register(CloudFile)
 class CloudFileAdmin(admin.ModelAdmin):
     """云文件管理"""
-    list_display = ('id', 'name', 'md5', 'is_document', 'owner', 'reference_count', 'current_version', 'deleted_at', 'description', 'tags', 'is_starred', 'download_count', 'deleted_at', 'created_at', 'updated_at')
+    list_display = ('id', 'name', 'md5', 'is_document', 'owner', 'reference_count', 'current_version', 'deleted_at',
+                    'description', 'tags', 'is_starred', 'download_count', 'deleted_at', 'created_at', 'updated_at')
     list_filter = ('owner', 'folder', 'tags')
     search_fields = ('name', 'original_name', 'id', 'md5')
     list_per_page = 20
 
 
-
 @admin.register(UploadSession)
 class UploadSessionAdmin(admin.ModelAdmin):
     """云文件管理"""
-    list_display = ('id', 'file_md5', 'file_name', 'file_size', 'total_chunks', 'is_completed', 'expires_at', 'updated_at', 'created_at')
+    list_display = ('id', 'file_md5', 'file_name', 'file_size', 'total_chunks', 'is_completed', 'expires_at',
+                    'updated_at', 'created_at')
     list_filter = ('user', 'is_completed')
     search_fields = ('file_md5', 'file_name')
     list_per_page = 20
 
 
-
 @admin.register(FileShare)
 class FileShareAdmin(admin.ModelAdmin):
     """文件分享管理"""
-    list_display = ('id', 'file', 'folder', 'share_type', 'share_code', 'share_type', 'max_downloads', 'download_count', 'expires_at', 'is_active', 'created_at')
+    list_display = ('id', 'file', 'folder', 'share_type', 'share_code', 'share_type', 'max_downloads', 'download_count',
+                    'expires_at', 'is_active', 'created_at')
     list_filter = ('file', 'share_type', 'is_active')
     search_fields = ('id', 'share_code')
     list_per_page = 20
+
 
 @admin.register(FileComment)
 class FileCommentAdmin(admin.ModelAdmin):
@@ -68,7 +74,7 @@ class FileVersionAdmin(admin.ModelAdmin):
 class FileCollaborationAdmin(admin.ModelAdmin):
     """文件版本管理"""
     list_display = ('id', 'file', 'user', 'permission', 'is_active', 'created_at')
-    list_filter = ('file', )
+    list_filter = ('file',)
     list_per_page = 20
 
 
@@ -76,9 +82,10 @@ class FileCollaborationAdmin(admin.ModelAdmin):
 class DocumentVersionAdmin(admin.ModelAdmin):
     """文档版本管理"""
     list_display = ('id', 'file', 'created_by', 'version_number', 'is_current', 'created_at')
-    list_filter = ('file',  'is_current', 'created_by')
+    list_filter = ('file', 'is_current', 'created_by')
     search_fields = ('id', 'version_number')
     list_per_page = 20
+
 
 @admin.register(DocumentEditLock)
 class DocumentEditLockAdmin(admin.ModelAdmin):
@@ -87,6 +94,7 @@ class DocumentEditLockAdmin(admin.ModelAdmin):
     list_filter = ('file', 'user', 'is_active')
     search_fields = ('id', 'user')
     list_per_page = 20
+
 
 @admin.register(DocumentCollaboration)
 class DocumentCollaborationAdmin(admin.ModelAdmin):
@@ -99,7 +107,21 @@ class DocumentCollaborationAdmin(admin.ModelAdmin):
 
 @admin.register(CloudSystemConfig)
 class CloudSystemConfigAdmin(admin.ModelAdmin):
-    list_display = ('id', 'key', 'name', 'value', 'value_type', 'category', 'description', 'is_public', 'created_at', 'updated_at', 'updated_by')
+    list_display = ('id', 'key', 'name', 'value', 'value_type', 'category', 'description', 'is_public', 'created_at',
+                    'updated_at', 'updated_by')
     list_filter = ('is_public',)
     search_fields = ('key', 'name', 'id')
+    list_per_page = 20
+
+
+@admin.register(UserOnlyOfficePermission)
+class UserOnlyOfficePermissionAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'permission_download', 'permission_copy', 'permission_edit',
+                    'permission_print', 'permission_comment', 'permission_chat',
+                    'permission_review', 'permission_fill_forms', 'permission_modify_content_control',
+                    'permission_modify_filter', 'description',
+                    'is_active', 'created_at',
+                    'updated_at', 'created_at', 'created_by')
+    list_filter = ('is_active',)
+    search_fields = ('user', 'id')
     list_per_page = 20

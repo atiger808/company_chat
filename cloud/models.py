@@ -915,6 +915,98 @@ class DocumentCollaboration(models.Model):
         ).update(status='closed', left_at=timezone.now())
 
 
+# 🔧 新增：用户自定义 OnlyOffice 权限配置模型
+class UserOnlyOfficePermission(models.Model):
+    """
+    🔧 用户专属的 OnlyOffice 权限配置
+    允许为特定用户设置个性化的文档编辑权限
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # 关联用户
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='onlyoffice_permissions',
+        verbose_name='用户'
+    )
+
+    # 权限配置
+    permission_download = models.BooleanField(default=True, verbose_name='允许下载')
+    permission_copy = models.BooleanField(default=True, verbose_name='允许复制')
+    permission_edit = models.BooleanField(default=True, verbose_name='允许编辑')
+    permission_print = models.BooleanField(default=True, verbose_name='允许打印')
+    permission_comment = models.BooleanField(default=True, verbose_name='允许评论')
+    permission_chat = models.BooleanField(default=True, verbose_name='允许聊天')
+    permission_review = models.BooleanField(default=True, verbose_name='允许审阅')
+    permission_fill_forms = models.BooleanField(default=True, verbose_name='允许填写表单')
+    permission_modify_content_control = models.BooleanField(default=True, verbose_name='允许修改内容控件')
+    permission_modify_filter = models.BooleanField(default=True, verbose_name='允许修改筛选')
+
+    # 元数据
+    is_active = models.BooleanField(default=True, verbose_name='是否启用')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_onlyoffice_permissions',
+        verbose_name='创建者'
+    )
+
+    # 备注
+    description = models.TextField(blank=True, null=True, verbose_name='备注说明')
+
+    class Meta:
+        verbose_name = '用户 OnlyOffice 权限'
+        verbose_name_plural = verbose_name
+        ordering = ['-updated_at']
+        unique_together = ['user']  # 每个用户只能有一条权限配置
+        indexes = [
+            models.Index(fields=['user', 'is_active']),
+            models.Index(fields=['is_active', '-updated_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.user.username} - OnlyOffice 权限'
+
+    def get_permissions_dict(self):
+        """获取权限字典（用于序列化）"""
+        return {
+            'download': self.permission_download,
+            'copy': self.permission_copy,
+            'edit': self.permission_edit,
+            'print': self.permission_print,
+            'comment': self.permission_comment,
+            'chat': self.permission_chat,
+            'review': self.permission_review,
+            'fill_forms': self.permission_fill_forms,
+            'modify_content_control': self.permission_modify_content_control,
+            'modify_filter': self.permission_modify_filter,
+        }
+
+    @classmethod
+    def get_or_create_default(cls, user):
+        """获取或创建用户的默认权限配置"""
+        perm, created = cls.objects.get_or_create(
+            user=user,
+            defaults={
+                'permission_download': True,
+                'permission_copy': True,
+                'permission_edit': True,
+                'permission_print': True,
+                'permission_comment': True,
+                'permission_chat': True,
+                'permission_review': True,
+                'permission_fill_forms': True,
+                'permission_modify_content_control': True,
+                'permission_modify_filter': True,
+            }
+        )
+        return perm, created
+
+
 # cloud/models.py
 
 class DocumentChatMessage(models.Model):

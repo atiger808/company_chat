@@ -697,44 +697,6 @@ class AdminConsole {
             this.sidebarOpen = sidebar.classList.contains('open');
         }
 
-
-        // if (sidebar && overlay) {
-        //     sidebar.classList.toggle('open');
-        //     overlay.classList.toggle('show');
-        //     this.sidebarOpen = sidebar.classList.contains('open');
-        // }
-        //
-        // // 移动端处理（768px以下）
-        // if (window.innerWidth <= 768) {
-        //     // 切换 open 类
-        //     sidebar.classList.toggle('open');
-        //     return;
-        // }
-        //
-        // // 桌面端处理
-        // if (this.sidebarCollapsed) {
-        //     // 展开侧边栏
-        //     sidebar.classList.remove('collapsed');
-        //     adminMain.classList.remove('full-width');
-        //     this.sidebarCollapsed = false;
-        //
-        //     // 更新按钮图标（可选）
-        //     const toggleBtnIcon = document.querySelector('#sidebarToggleBtn i');
-        //     if (toggleBtnIcon) {
-        //         toggleBtnIcon.className = 'fas fa-bars';
-        //     }
-        // } else {
-        //     // 折叠侧边栏
-        //     sidebar.classList.add('collapsed');
-        //     adminMain.classList.add('full-width');
-        //     this.sidebarCollapsed = true;
-        //
-        //     // 更新按钮图标（可选）
-        //     const toggleBtnIcon = document.querySelector('#sidebarToggleBtn i');
-        //     if (toggleBtnIcon) {
-        //         toggleBtnIcon.className = 'fas fa-indent';
-        //     }
-        // }
     }
 
 

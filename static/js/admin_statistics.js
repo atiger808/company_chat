@@ -793,8 +793,10 @@ class AdminStatisticsClient {
             'audio': '#909399',
             'emoji': '#c82577',
             'location': '#a53ac2',
-            'call_audio': '#426aef',
-            'call_video': '#ef404f'
+            // 'call_audio': '#426aef',
+            'call_audio': '#cc1799',
+            // 'call_video': '#ef404f',
+            'call_video': '#5b5ef7'
         }
         return map[type] || '#909399';
     }

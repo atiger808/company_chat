@@ -36,20 +36,22 @@ def schedule_message():
         return
 
     # 计算截止时间
-    now = datetime.now()
-    # today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_start = now
-    cutoff_time = today_start - timedelta(days=last_days)
+    now = timezone.now()
+    # now = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    cutoff_time = now - timedelta(days=last_days)
 
     # 查询需要清理的消息
     messages_to_delete = Message.objects.filter(timestamp__lt=cutoff_time)
     total_count = messages_to_delete.count()
 
+    # 转换为北京时间用于日志显示
+    cutoff_time_local = timezone.localtime(cutoff_time)
+
     if total_count == 0:
-        logger.info(f"无过期消息需要清理 (截止于: {cutoff_time})")
+        logger.info(f"无过期消息需要清理 (截止于: {cutoff_time_local})")
         return
 
-    logger.info(f"开始清理过期消息 | 截止时间: {cutoff_time} | 保留天数: {last_days} | 总数: {total_count}")
+    logger.info(f"开始清理过期消息 | 截止时间: {cutoff_time_local} | 保留天数: {last_days} | 总数: {total_count}")
 
     success_count = 0
     fail_count = 0
@@ -61,7 +63,7 @@ def schedule_message():
             if file_obj:
                 _delete_file_safe(file_obj.file)
                 _delete_file_safe(file_obj.mp3_file)
-                
+
                 try:
                     file_obj.delete()
                 except Exception as e:
