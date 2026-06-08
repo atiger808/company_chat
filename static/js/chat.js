@@ -78,7 +78,7 @@ class VersionManager {
                 cache: 'no-cache', // 强制从网络获取
                 headers: TokenManager.getHeaders()
             });
-
+            this.statusCode = response.status
             if (!response.ok) {
                 if (response.status === 401) {
                     try {
@@ -87,8 +87,8 @@ class VersionManager {
                         console.error('登出失败:', error);
                     } finally {
                         localStorage.removeItem('access_token');
-                        localStorage.removeItem('user_id')
-                        localStorage.removeItem('user_type')
+                        localStorage.removeItem('user_id');
+                        localStorage.removeItem('user_type');
                         window.location.href = '/login/';
                     }
                     return null;
@@ -337,6 +337,8 @@ class ChatClient {
         this.globalWs = null;  // 全局 WebSocket 连接
         this.roomWs = null;    // 当前聊天室 WebSocket 连接
         this.ws = null;
+        this.statusCode = null;
+        this.chat_login_url = '/login/';
         this.currentRoomId = null;
         this.currentUser = null;
         this.chatRooms = [];
@@ -467,7 +469,7 @@ class ChatClient {
         const token = localStorage.getItem('access_token');
         if (!token) {
             console.log('未找到访问令牌，跳转到登录页');
-            window.location.href = '/login/';
+            window.location.href = this.chat_login_url;
             return;
         }
     }
@@ -868,13 +870,17 @@ class ChatClient {
         } catch (error) {
             console.error('初始化失败:', error);
             this.showError('初始化失败，请重新登录: ' + error);
-            localStorage.removeItem('access_token');
-            localStorage.removeItem('user_id');
-            localStorage.removeItem('user_type');
-            window.location.href = '/login/';
+            this.handleAuthError()
         }
     }
 
+    handleAuthError() {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('user_id');
+        localStorage.removeItem('user_type');
+        localStorage.setItem('redirect_url', window.location.href);
+        window.location.href = this.chat_login_url;
+    }
 
     // 🔧 新增：加载系统配置（使用 FrontendConfigManager）
     async loadSystemConfigs() {
@@ -2522,7 +2528,12 @@ class ChatClient {
             return;
         }
 
-        console.log('content: ', content)
+        if (actualContent && actualContent.length > parseInt(this.maxMessageLength)) {
+            this.showToast(`你输入的文字过长，无法发送`, 'error');
+            return;
+        }
+
+        console.log('actualContent: ', actualContent)
 
         // 清空输入框
         if (messageInput) {
@@ -2864,7 +2875,7 @@ class ChatClient {
             const response = await fetch(`/api/chat/messages/?${params.toString()}`, {
                 headers: TokenManager.getHeaders()
             });
-
+            this.statusCode = response.status;
             if (!response.ok) {
                 throw new Error('加载聊天历史失败');
             }
@@ -2959,6 +2970,9 @@ class ChatClient {
             // 首次加载滚动到底部
             if (!append) {
                 Utils.scrollToBottom(document.getElementById('messagesList'));
+            }
+            if (this.statusCode === 401) {
+                this.handleAuthError();
             }
         }
     }
@@ -3104,7 +3118,7 @@ class ChatClient {
         if (!element) return;
 
         // 添加高亮类
-        element.classList.add('message-highlight');
+        element.classList.add('message-highlighted');
 
         // 移除之前的定时器（防止快速连续调用导致样式错乱）
         if (this.highlightTimeout) {
@@ -3113,7 +3127,7 @@ class ChatClient {
 
         // 2秒后移除高亮
         this.highlightTimeout = setTimeout(() => {
-            element.classList.remove('message-highlight');
+            element.classList.remove('message-highlighted');
         }, 2000);
     }
 
@@ -3872,12 +3886,6 @@ class ChatClient {
         wrapper.innerHTML = '';
         wrapper.appendChild(messageWrapper);
 
-        // 设置消息内容宽度
-        const messageContentElement = messageWrapper.querySelector('.message-content');
-        if (messageContentElement) {
-            messageContentElement.style.maxWidth = '100%';
-            messageContentElement.style.minWidth = '25%';
-        }
 
         // 获取消息列表容器
         const messagesList = document.getElementById('messagesList');
@@ -3899,9 +3907,13 @@ class ChatClient {
     }
 
 
-    // 🔧 新增：显示转发模态框
+    // 🔧 新增：显示转发模态框,如果消息类型是语音则禁止转发
     showForwardModal(message) {
         console.log('forward message: ', message)
+        if (message.message_type === 'voice') {
+            this.showAlert('错误', '语音消息不支持转发');
+            return;
+        }
         // 关闭可能存在的其他模态框
         this.closeAllModals();
 
@@ -4386,7 +4398,14 @@ class ChatClient {
         switch (type) {
             case 'text':
             case 'emoji':
-                return `<span class="quote-text-content">${escape(content) || '[文本]'}</span>`;
+                return `<div class="quoted-file-link" "
+                             onclick="${getClickHandler()}"
+                             title="点击跳转到原消息">
+                            <i class="fas fa-link"></i> 
+                            <span class="quote-text-content" style="color: #909399; font-size: 12px;">${this.escapeHtml(content || '[文本消息]')}</span>
+                            <i class="fas fa-location-arrow" style="color: #909399; font-size: 11px;"></i>
+                        </div>`
+
 
             case 'image':
                 // 优先使用 fileInfo.url，兼容 content 直接存 URL 的旧数据
@@ -4396,15 +4415,69 @@ class ChatClient {
                     : `<span class="quote-icon-wrapper"><i class="fas fa-image"></i> [图片]</span>`;
 
             case 'video':
-                return `<span class="quote-icon-wrapper" style="cursor: pointer;" onclick="${getClickHandler()}" title="点击跳转"><i class="fas fa-video"></i> ${escape(content || '[视频]')}</span>`;
+                return `<div class="quoted-file-link" "
+                             onclick="${getClickHandler()}"
+                             title="点击跳转到原消息">
+                            <i class="fas fa-link"></i> 
+                            <span class="quote-text-content" style="color: #909399; font-size: 12px;"><i class="fas fa-video"></i> ${escape(content || '[视频]')}</span>
+                            <i class="fas fa-location-arrow" style="color: #909399; font-size: 11px;"></i>
+                        </div>`;
+
 
             case 'file':
-                return `<span class="quote-icon-wrapper" style="cursor: pointer;" onclick="${getClickHandler()}" title="点击跳转"><i class="fas fa-file-alt"></i> ${escape(fileInfo?.name || content || '[文件]')}</span>`;
+                const iconClass = Utils.getFileIconClass(fileInfo?.mime_type, fileInfo?.name);
+                return `<div class="quoted-file-link" "
+                             onclick="${getClickHandler()}"
+                             title="点击跳转到原消息">
+                            <i class="fas fa-link"></i> 
+                            <span class="quote-text-content" style="color: #909399; font-size: 12px;"><i class="${iconClass}"></i> ${escape(fileInfo?.name || content || '[文件]')}</span>
+                            <i class="fas fa-location-arrow" style="color: #909399; font-size: 11px;"></i>
+                        </div>`;
 
             case 'voice':
             case 'audio':
                 const dur = fileInfo?.duration ? `${Math.floor(fileInfo.duration)}"` : '';
-                return `<span class="quote-icon-wrapper" style="cursor: pointer;" onclick="${getClickHandler()}" title="点击跳转"><i class="fas fa-microphone"></i> ${escape(content || '[语音]')} ${dur}</span>`;
+                return `<div class="quoted-file-link" "
+                             onclick="${getClickHandler()}"
+                             title="点击跳转到原消息">
+                            <i class="fas fa-link"></i> 
+                            <span class="quote-text-content" style="color: #909399; font-size: 12px;"><i class="fas fa-microphone"></i> ${escape(content || '[语音]')} ${dur}</span>
+                            <i class="fas fa-location-arrow" style="color: #909399; font-size: 11px;"></i>
+                        </div>`;
+
+            // 🔧 新增：渲染通话记录消息
+            case 'call_audio':
+            case 'call_video':
+                // 确定图标
+                let _iconClass = '';
+                let iconColor = '';
+                let statusText = '';
+                const callType = type.replace('call_', '');
+                if (callType === 'video') {
+                    _iconClass = 'fas fa-video';
+                    iconColor = '#5b5ef7'; // 视频用紫色
+                } else {
+                    _iconClass = 'fas fa-phone-alt';
+                    iconColor = '#4caf50'; // 语音用绿色
+                }
+                const callDuration = fileInfo?.call_duration || 0;
+
+                const minutes = Math.floor(callDuration / 60);
+                const seconds = callDuration % 60;
+                if (minutes > 0) {
+                    statusText = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+                } else {
+                    statusText = `${seconds}秒`;
+                }
+
+                return `<div class="quoted-file-link" "
+                             onclick="${getClickHandler()}"
+                             title="点击跳转到原消息">
+                            <i class="fas fa-link"></i> 
+                            <span class="quote-text-content" style="color: #909399; font-size: 12px;"><i class="${_iconClass}" style="color: ${iconColor};"></i> ${callType === 'video' ? '视频通话' : '语音通话'} ${statusText}</span>
+                            <i class="fas fa-location-arrow" style="color: #909399; font-size: 11px;"></i>
+                        </div>`;
+
 
             case 'location':
                 return `<span class="quote-icon-wrapper"><i class="fas fa-map-marker-alt"></i> [位置]</span>`;
@@ -4548,14 +4621,20 @@ class ChatClient {
         }
 
         // 🔧 关键修复 4: 渲染引用消息（必须在内容之后）
-        if (message.quote_message_id || message.quote_file_info) {
+        if (message.quote_message_id || message.quote_info || message.quote_file_info) {
             const quoteElement = document.createElement('div');
             quoteElement.className = 'message-quote';
+
+            // 🔧 获取发送者名称（兼容多种字段）
+            const senderName = message.quote_sender ||
+                              message.quote_info?.sender ||
+                              message.quote_sender_name ||
+                              '引用';
 
             // 引用头部
             const quoteHeader = document.createElement('div');
             quoteHeader.className = 'quote-header';
-            quoteHeader.innerHTML = `<i class="fas fa-quote-left"></i> <span class="quote-sender">${this.escapeHtml(message.quote_sender || '引用')}：</span>`;
+            quoteHeader.innerHTML = `<i class="fas fa-quote-left"></i> <span class="quote-sender">${this.escapeHtml(senderName)}：</span>`;
 
             // 引用内容容器
             const quoteContent = document.createElement('div');
@@ -4564,8 +4643,8 @@ class ChatClient {
             // 🔧 核心：根据消息类型动态渲染引用内容（支持图片/视频/语音/文件等）
             quoteContent.innerHTML = this.renderQuotedContent(
                 message.quote_message_type || 'text',
-                message.quote_message_type === 'file' ? message.quote_file_info?.name || message.quote_content || '' : message.quote_content || '',
-                message.quote_file_info || null,
+                message.quote_message_type === 'file' ? message.quote_file_info?.name || message.quote_content || '' : message.quote_content || message.quote_info?.content || '',
+                 message.quote_file_info || message.quote_info || null,
                 message.quote_message_id || message.quote_info?.id || null
             );
 
@@ -8512,13 +8591,11 @@ class ChatClient {
             } catch (error) {
                 console.error('登出失败:', error);
             } finally {
-                localStorage.removeItem('access_token');
-                localStorage.removeItem('user_id')
-                localStorage.removeItem('user_type')
+
                 if (this.ws) {
                     this.ws.close();
                 }
-                window.location.href = '/login/';
+                this.handleAuthError();
             }
 
         }

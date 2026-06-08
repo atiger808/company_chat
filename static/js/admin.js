@@ -15,6 +15,9 @@ class AdminConsole {
         this.pendingRequests = new Set(); // 跟踪请求状态
         this.sidebarCollapsed = false; // 侧边栏状态
 
+        this.statusCode = null;
+        this.chat_login_url = '/login/';
+
         // 🔧 新增：权限标识
         this.isSuperAdmin = false;
         this.selectedUsers = new Set();  // 🔧 批量操作选择
@@ -44,7 +47,7 @@ class AdminConsole {
             if (!token) {
                 // 保存当前页面链接，登录后跳转到该页面
                 localStorage.setItem('redirect_url', window.location.href);
-                window.location.href = '/login/';
+                window.location.href = this.chat_login_url;
                 return;
             }
 
@@ -749,10 +752,10 @@ class AdminConsole {
             const response = await fetch(`${API_ADMIN_URL}/admin/users/`, {
                 headers: TokenManager.getHeaders()
             });
-
+            this.statusCode = response.status;
             if (!response.ok) {
                 const errorData = await this.parseErrorResponse(response);
-                throw new Error(errorData.message || '加载用户列表失败');
+                throw new Error(errorData.message || errorData.detail || errorData.error || '加载用户列表失败');
             }
 
             const data = await response.json();
@@ -761,71 +764,13 @@ class AdminConsole {
 
         } catch (error) {
             console.error('加载用户失败:', error);
-            this.showError('加载失败', error.message);
+            this.showError('加载失败', error);
+            if (this.statusCode === 401) {
+                this.handleAuthError();
+            }
         } finally {
             this.hideLoading();
         }
-    }
-
-
-    renderUsersTable_v1() {
-        const tbody = document.getElementById('usersTableBody');
-        if (!tbody) return;
-
-        let html = '';
-        this.users.forEach(user => {
-            // 禁用状态样式
-            const rowClass = !user.is_active ? 'user-disabled-row' : '';
-            // 禁用/启用开关状态
-            const toggleChecked = user.is_active ? 'checked' : '';
-            const toggleLabel = user.is_active ? '启用' : '禁用';
-
-            html += `
-        <tr class="${rowClass}">
-            <td>${user.id}</td>
-            <td><img src="${user.avatar_url || '/static/images/default-avatar.png'}" alt="头像"></td>
-            <td>${user.username}</td>
-            <td>${user.real_name || '-'}</td>
-            <td>${user.department_info?.name || user.department || '-'}</td>
-            <td>${user.position || '-'}</td>
-            <td><span class="user-type-badge user-type-${user.user_type}">${this.getUserTypeText(user.user_type)}</span></td>
-            <td>
-                <span class="user-status ${user.is_online ? 'online' : 'offline'}">
-                    <i class="fas fa-${user.is_online ? 'circle' : 'circle'}"></i>
-                    ${user.is_online ? '在线' : '离线'}
-                </span>
-            </td>
-            <td>
-                <div class="toggle-btn-container" onclick="event.stopPropagation()">
-                    <label class="toggle-switch">
-                        <input type="checkbox" 
-                               onchange="adminConsole.toggleUserStatus(${user.id}, this.checked, '${user.username}')" 
-                               ${toggleChecked}>
-                        <span class="toggle-slider"></span>
-                    </label>
-                    <span>${toggleLabel}</span>
-                </div>
-            </td>
-            <td>
-                <div class="action-buttons">
-                    <button class="action-btn" onclick="adminConsole.openEditUserModal(${user.id})" title="编辑">
-                        <i class="fas fa-edit"></i>
-                    </button>
-                    <button class="action-btn delete" onclick="adminConsole.confirmDeleteUser(${user.id}, '${user.username}')" title="删除">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                </div>
-            </td>
-        </tr>
-        `;
-        });
-
-        tbody.innerHTML = html || '<tr><td colspan="10" style="text-align: center; padding: 40px;">暂无用户</td></tr>';
-
-        // 重新检查滚动状态
-        setTimeout(() => {
-            this.initTableScroll();
-        }, 100);
     }
 
 
@@ -2240,7 +2185,7 @@ class AdminConsole {
         localStorage.removeItem('user_id');
         localStorage.removeItem('user_type');
         localStorage.setItem('redirect_url', window.location.href);
-        window.location.href = '/login/';
+        window.location.href = this.chat_login_url;
     }
 
     // 退出登录
@@ -2253,10 +2198,7 @@ class AdminConsole {
             } catch (error) {
                 console.error('登出失败:', error);
             } finally {
-                localStorage.removeItem('access_token');
-                localStorage.removeItem('user_id')
-                localStorage.removeItem('user_type')
-                window.location.href = '/login/';
+                this.handleAuthError();
             }
         }
     }

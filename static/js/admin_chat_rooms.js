@@ -52,6 +52,10 @@ class AdminChatRoomsClient {
         this.setupImageMessageListeners();
 
 
+        // 🔧 新增：注入引用消息样式
+        this.injectQuoteMessageStyles();
+
+
         // 加载聊天室列表
         this.loadChatRooms();
 
@@ -59,6 +63,70 @@ class AdminChatRoomsClient {
         this.setupChatRoomsInfiniteScroll();
 
         this.isInitialized = true;
+    }
+
+    // 🔧 新增：注入引用消息的CSS样式
+    injectQuoteMessageStyles() {
+        const styleId = 'admin-quote-message-styles';
+        if (document.getElementById(styleId)) return; // 避免重复注入
+
+        const style = document.createElement('style');
+        style.id = styleId;
+        style.textContent = `            /* 引用消息样式 */
+            .message-quote-history {
+                margin-bottom: 8px;
+                padding: 8px 10px;
+                background: rgba(0, 0, 0, 0.03);
+                border-left: 3px solid #409EFF;
+                border-radius: 4px;
+                font-size: 13px;
+                color: #606266;
+            }
+            
+            .history-message.sent .message-quote-history {
+                background: rgba(255, 255, 255, 0.15);
+                border-left-color: rgba(255, 255, 255, 0.6);
+            }
+            
+            .quote-header-history {
+                display: flex;
+                align-items: center;
+                margin-bottom: 4px;
+                font-weight: 500;
+            }
+            
+            .quote-header-history i {
+                margin-right: 4px;
+                color: #909399;
+                font-size: 12px;
+            }
+            
+            .history-message.sent .quote-header-history i {
+                color: rgba(255, 255, 255, 0.7);
+            }
+            
+            .quote-sender-history {
+                color: #409EFF;
+                font-weight: 600;
+            }
+            
+            .history-message.sent .quote-sender-history {
+                color: rgba(255, 255, 255, 0.9);
+            }
+            
+            .quote-content-history {
+                line-height: 1.5;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            
+            .quote-content-history i {
+                margin-right: 4px;
+            }
+        `;
+        document.head.appendChild(style);
+        console.log('✅ 引用消息样式已注入');
     }
 
     // 🔧 新增：移动端禁止缩放
@@ -726,7 +794,7 @@ class AdminChatRoomsClient {
         return timeElement;
     }
 
-    // 🔧 核心增强：渲染历史消息（支持所有类型）
+    // 🔧 核心增强：渲染历史消息（支持所有类型，包括引用消息）
     renderHistoryMessage(message, roomInfo) {
         const currentUserId = parseInt(localStorage.getItem('user_id'));
         const isCurrentUser = message.sender?.id === currentUserId;
@@ -829,6 +897,12 @@ class AdminChatRoomsClient {
                 contentHtml = `<div class="message-text">${this.escapeHtml(message.content || '[未知消息类型]')}</div>`;
         }
 
+        // 🔧 关键修复：渲染引用消息
+        if (message.quote_message_id || message.quote_info) {
+            const quoteHtml = this.renderQuotedMessageInHistory(message);
+            contentHtml = quoteHtml + contentHtml;
+        }
+
         let html = '';
         if (showSender) {
             if (messageType === 'sent') {
@@ -857,6 +931,252 @@ class AdminChatRoomsClient {
 
         messageElement.appendChild(contentElement);
         return messageElement;
+    }
+
+    // 🔧 新增：渲染历史消息中的引用消息（支持媒体直接渲染和文件滚动定位）
+    renderQuotedMessageInHistory(message) {
+        // 🔧 获取引用消息的各个字段（兼容多种字段名）
+        const quoteSenderId = message.quote_sender_id || message.quote_info?.sender_id;
+        const quoteSenderName = message.quote_sender ||
+                               message.quote_info?.sender ||
+                               message.quoted_sender ||
+                               '引用';
+        const quoteContent = message.quote_content ||
+                            message.quote_info?.content ||
+                            message.quoted_content ||
+                            '';
+        const quoteMessageType = message.quote_message_type ||
+                                message.quote_info?.message_type ||
+                                'text';
+        const quoteFileInfo = message.quote_file_info ||
+                             message.quote_info?.file_info ||
+                             message.quoted_file_info ||
+                             null;
+        const quoteMessageId = message.quote_message_id || message.quote_info?.id;
+
+        // 🔧 根据引用消息类型渲染不同的内容
+        let quotedContentHtml = '';
+
+        switch (quoteMessageType) {
+            case 'text':
+            case 'emoji':
+                if (quoteMessageId) {
+
+                    quotedContentHtml = `<div class="quoted-file-link" 
+                             onclick="window.adminChatRoomsClient.scrollToQuotedMessage('${quoteMessageId}')"
+                             title="点击跳转到原消息">
+                           <i class="fas fa-link"></i> [引用消息]
+                            <span class="quote-text-content" style="color: #909399; font-size: 12px;">${this.escapeHtml(quoteContent || '[文本消息]')}</span>
+                            <i class="fas fa-location-arrow" style="color: #909399; font-size: 11px;"></i>
+                        </div>`;
+
+                } else {
+                    quotedContentHtml = this.escapeHtml(quoteContent || '[文本消息]');
+                }
+                break;
+
+            case 'image':
+                // 🔧 直接渲染图片
+                if (quoteFileInfo?.url) {
+                    quotedContentHtml = `<div class="quoted-image-preview" style="margin-top: 4px;">
+                            
+                            <img src="${quoteFileInfo.url}" 
+                                 alt="引用的图片" 
+                                 class="quoted-image"
+                                 style="max-width: 150px; max-height: 100px; border-radius: 4px; cursor: pointer;"
+                                 onclick="window.adminChatRoomsClient.previewImage('${quoteFileInfo.url}')">
+                        </div>`;
+                } else {
+                    quotedContentHtml = '<i class="fas fa-image"></i> [图片]';
+                }
+                break;
+
+            case 'video':
+                // 🔧 直接渲染视频播放器
+                if (quoteFileInfo?.url) {
+                    quotedContentHtml = `<div class="quoted-video-preview" style="margin-top: 4px;">
+                            
+                            <video controls preload="metadata" 
+                                   style="max-width: 200px; max-height: 150px; border-radius: 4px;"
+                                   poster="${quoteFileInfo.thumbnail_url || ''}">
+                                <source src="${quoteFileInfo.url}" type="${quoteFileInfo.mime_type || 'video/mp4'}">
+                                您的浏览器不支持视频播放。
+                            </video>
+                        </div>`;
+                } else {
+                    quotedContentHtml = '<i class="fas fa-video"></i> [视频]';
+                }
+                break;
+
+            case 'voice':
+            case 'audio':
+                // 🔧 直接渲染语音播放器
+                const duration = quoteFileInfo?.duration ? Math.floor(quoteFileInfo.duration) : 5;
+                const mm = Math.floor(duration / 60).toString().padStart(2, '0');
+                const ss = (duration % 60).toString().padStart(2, '0');
+
+                let audioUrl = quoteFileInfo?.url || '';
+                if (audioUrl) {
+                    audioUrl = audioUrl.includes('?')
+                        ? `${audioUrl}&t=${Date.now()}`
+                        : `${audioUrl}?t=${Date.now()}`;
+                }
+
+                // 🔧 iOS 设备优先使用 MP3 格式
+                const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+                if (isIOS && quoteFileInfo?.mp3_url) {
+                    audioUrl = quoteFileInfo.mp3_url + `?t=${Date.now()}`;
+                }
+
+                if (audioUrl) {
+                    const voiceId = `quoted-voice-${quoteMessageId}-${Date.now()}`;
+                    quotedContentHtml = `                        <div class="message-voice quoted-voice" data-message-id="${voiceId}" style="margin-top: 4px; min-width: 120px;">
+                            
+                            <button class="voice-play-btn" 
+                                    data-message-id="${voiceId}" 
+                                    title="点击播放"
+                                    onclick="window.adminChatRoomsClient.toggleVoicePlay('${voiceId}', event)">
+                                <i class="fas fa-play"></i>
+                            </button>
+                            <span class="voice-duration">${mm}:${ss}</span>
+                            <div class="voice-progress">
+                                <div class="voice-progress-bar" 
+                                     id="voice-progress-${voiceId}" 
+                                     style="width: 0%"></div>
+                            </div>
+                            <audio class="voice-audio" 
+                                   id="voice-audio-${voiceId}"
+                                   data-message-id="${voiceId}"
+                                   src="${audioUrl}"
+                                   preload="none"></audio>
+                        </div>`;
+                } else {
+                    quotedContentHtml = `<i class="fas fa-microphone"></i> [语音] ${mm}:${ss}`;
+                }
+                break;
+
+            case 'file':
+                // 🔧 文件类型：点击滚动到原消息位置
+                const fileName = quoteFileInfo?.name || quoteContent || '[文件]';
+                if (quoteMessageId) {
+                    quotedContentHtml = `<div class="quoted-file-link" 
+                             style="cursor: pointer; padding: 4px 8px; background: rgba(64, 158, 255, 0.05); border-radius: 4px; display: inline-flex; align-items: center; gap: 6px;"
+                             onclick="window.adminChatRoomsClient.scrollToQuotedMessage('${quoteMessageId}')"
+                             title="点击跳转到原消息">
+                            <i class="fas fa-link"></i> [引用消息]
+                            <i class="fas fa-file" style="color: #409EFF;"></i>
+                            <span style="color: #909399; font-size: 12px;">${this.escapeHtml(fileName)}</span>
+                            <i class="fas fa-location-arrow" style="color: #909399; font-size: 11px;"></i>
+                        </div>`;
+                } else {
+                    quotedContentHtml = `<i class="fas fa-file"></i> ${this.escapeHtml(fileName)}`;
+                }
+                break;
+
+
+            default:
+                quotedContentHtml = this.escapeHtml(quoteContent || '[未知类型]');
+        }
+
+        // 🔧 构建引用消息HTML
+        return `            <div class="message-quote-history">
+                <div class="quote-header-history">
+                    <i class="fas fa-quote-left"></i>
+                    <span class="quote-sender-history">${this.escapeHtml(quoteSenderName)}：</span>
+                </div>
+                <div class="quote-content-history">
+                    ${quotedContentHtml}                </div>
+            </div>
+        `;
+    }
+
+
+    // 🔧 新增：滚动到被引用的消息位置
+    scrollToQuotedMessage(messageId) {
+        if (!messageId) return;
+
+        const messagesList = document.getElementById('messagesHistoryList');
+        if (!messagesList) return;
+
+        // 查找目标消息元素
+        const targetMessage = messagesList.querySelector(`[data-message-id="${messageId}"]`);
+
+        if (targetMessage) {
+            // 高亮显示目标消息
+            targetMessage.classList.add('message-highlighted');
+
+            // 平滑滚动到目标位置
+            targetMessage.scrollIntoView({
+                behavior: 'smooth',
+                block: 'center'
+            });
+
+            // 3秒后移除高亮
+            setTimeout(() => {
+                targetMessage.classList.remove('message-highlighted');
+            }, 3000);
+        } else {
+            // 如果消息不在当前视图中，可能需要加载更多消息
+            console.log('目标消息不在当前加载中，尝试加载...');
+            this.showToast('目标消息不在当前加载范围内', 'info');
+        }
+    }
+
+    // 🔧 新增：打开图片预览
+    openImagePreview(imageUrl) {
+        if (!imageUrl) return;
+
+        // 创建模态框
+        const modal = document.createElement('div');
+        modal.className = 'image-preview-modal';
+        modal.style.cssText = `            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        `;
+
+        modal.innerHTML = `            <div class="image-preview-content" style="position: relative; max-width: 90vw; max-height: 90vh;">
+                <img src="${imageUrl}" 
+                     style="max-width: 100%; max-height: 90vh; border-radius: 8px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);"
+                     alt="预览图片">
+                <button class="close-preview" 
+                        style="position: absolute; top: -40px; right: 0; color: white; font-size: 32px; cursor: pointer; background: none; border: none; padding: 8px;"
+                        onclick="this.closest('.image-preview-modal').remove()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        // 触发动画
+        setTimeout(() => {
+            modal.classList.add('show');
+        }, 10);
+
+        // 点击背景关闭
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+
+        // ESC键关闭
+        const escHandler = (e) => {
+            if (e.key === 'Escape') {
+                modal.remove();
+                document.removeEventListener('keydown', escHandler);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
     }
 
 

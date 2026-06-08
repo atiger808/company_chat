@@ -29,7 +29,8 @@ from .models import (
     Folder, CloudFile, FileShare, FileComment, FileOperationLog,
     FileCollaboration, FileVersion,
     DocumentVersion, DocumentEditLock, DocumentCollaboration,
-    UploadSession, CloudSystemConfig, UserOnlyOfficePermission
+    UploadSession, CloudSystemConfig, UserOnlyOfficePermission,
+    FolderCollaboration,
 )
 from accounts.models import CustomUser, Department
 from chat.models import FileUpload, upload_to
@@ -64,6 +65,157 @@ import requests
 import json
 import jwt
 from io import BytesIO
+
+class UtilsTools(object):
+    """
+    工具函数
+    """
+
+    def _is_owner_for_folder(self, folder, user):
+        return folder and folder.owner == user
+
+    def _is_owner_for_file(self, file, user):
+        return file and file.owner == user
+
+    def _is_admin(self, folder, user):
+        return FolderCollaboration.objects.filter(folder=folder, user=user, permission='admin', is_active=True).exists()
+
+    def _is_admin_or_owner(self, folder, user):
+        return self._is_owner_for_folder(folder, user) or self._is_admin(folder, user)
+
+
+    def _can_write(self, folder, user):
+        """检查用户是否可以编辑指定的共享文件夹"""
+        return self._is_admin(folder, user) or FolderCollaboration.objects.filter(
+            folder=folder,
+            user=user,
+            permission__in=['write', 'admin'],
+            is_active=True
+        ).exists()
+
+    def _can_write_with_ancestors(self, folder, user):
+        """
+        🔧 检查用户是否可以编辑文件夹（包括祖先文件夹的权限）
+        用于钻取场景：子文件夹继承父共享文件夹的权限
+        """
+        if not folder:
+            return False
+
+        # 如果是共享文件夹本身，直接检查
+        if folder.is_shared_folder:
+            has_write = self._can_write(folder, user)
+            if has_write:
+                return True
+
+        # 否则，向上追溯到根共享文件夹
+        current = folder
+        while current:
+            if current.is_shared_folder:
+                # 找到根共享文件夹，检查权限
+                has_write = self._can_write(current, user)
+                if has_write:
+                    return True
+            current = current.parent
+
+        # 没有找到共享文件夹祖先，检查是否是用户自己的文件夹
+        return folder.owner == user
+
+    def _can_access(self, folder, user):
+        """检查用户是否可以访问指定的共享文件夹"""
+        return folder.owner == user or FolderCollaboration.objects.filter(
+            folder=folder,
+            user=user,
+            is_active=True
+        ).exists()
+
+    def _can_access_with_ancestors(self, folder, user):
+        """
+        🔧 检查用户是否可以访问文件夹（包括祖先文件夹的权限）
+        用于钻取场景：子文件夹继承父共享文件夹的权限
+        """
+        if not folder:
+            return False
+
+        # 如果是共享文件夹本身，直接检查
+        if folder.is_shared_folder:
+            has_access = self._can_access(folder, user)
+            if has_access:
+                return True
+
+        # 否则，向上追溯到根共享文件夹
+        current = folder
+        while current:
+            if current.is_shared_folder:
+                # 找到根共享文件夹，检查权限
+                has_access = self._can_access(current, user)
+                if has_access:
+                    return True
+            current = current.parent
+
+        # 没有找到共享文件夹祖先，检查是否是用户自己的文件夹
+        return folder.owner == user
+
+
+    def _get_user_permission(self, folder, user):
+        """获取用户在共享文件夹中的权限"""
+        if not folder:
+            return None
+        if folder.owner == user:
+            return 'admin'
+        collab = FolderCollaboration.objects.filter(
+            folder=folder,
+            user=user,
+            is_active=True
+        ).first()
+        return collab.permission if collab else None
+
+    def _can_move_file(self, file_obj, user):
+        """检查是否可以移动文件"""
+
+        # 如果是自己的文件，可以移动
+        if file_obj.owner == user:
+            return True
+        # 如果文件在共享文件夹中，检查是否有写权限
+        # if file_obj.folder and file_obj.folder.is_shared_folder:
+        #     perm = self._get_user_permission(file_obj.folder, user)
+        #     return perm in ['write', 'admin']
+
+        return False
+
+    def _can_move_folder(self, folder_obj, user):
+        """检查是否可以移动文件夹"""
+        # 如果是自己的文件夹，可以移动
+        if folder_obj.owner == user:
+            return True
+        # 如果是共享文件夹，检查是否有管理员权限
+        # if folder_obj.is_shared_folder:
+        #     return self._is_admin(folder_obj, user)
+
+        return False
+
+    def _can_delete_file(self, file_obj, user):
+        """检查是否可以删除文件"""
+        # 如果是自己的文件，可以删除
+        if file_obj.owner == user:
+            return True
+        # 如果是共享文件，检查是否有管理员权限
+        # if file_obj.folder and file_obj.folder.is_shared_folder:
+        #     return self._is_admin_or_owner(file_obj.folder, user)
+
+        return False
+
+
+    def _can_delete_folder(self, folder_obj, user):
+        """检查是否可以删除文件夹"""
+        # 如果是自己的文件夹，可以删除
+        if folder_obj.owner == user:
+            return True
+        # 如果是共享文件夹，检查是否有管理员权限
+        # if folder_obj.is_shared_folder:
+        #     return self._is_admin_or_owner(folder_obj, user)
+
+        return False
+
 
 
 class IsCloudOwnerOrShared(permissions.BasePermission):
@@ -107,7 +259,7 @@ class IsFolderOwnerOrShared(permissions.BasePermission):
         return False
 
 
-class FolderViewSet(viewsets.ModelViewSet):
+class FolderViewSet(viewsets.ModelViewSet, UtilsTools):
     """
     🔧 文件夹视图集
     - 支持文件夹的增删改查
@@ -206,6 +358,9 @@ class FolderViewSet(viewsets.ModelViewSet):
         """
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
+        if not self._can_write_with_ancestors(instance, request.user):
+            return Response({'error': '无操作权限'}, status=403)
+
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
@@ -247,8 +402,15 @@ class FolderViewSet(viewsets.ModelViewSet):
                     node = {
                         'id': str(folder.id),
                         'name': folder.name,
+                        'is_shared_folder': folder.is_shared_folder,
                         'parent': str(folder.parent.id) if folder.parent else None,
-                        'children': build_tree(folders_list, folder.id)
+                        'children': build_tree(folders_list, folder.id),
+                        'owner': {
+                            'id': folder.owner.id,
+                            'real_name': folder.owner.real_name,
+                            'username': folder.owner.username,
+                            'avatar': folder.owner.avatar.url if folder.owner.avatar else None
+                        }
                     }
                     tree.append(node)
 
@@ -277,7 +439,9 @@ class FolderViewSet(viewsets.ModelViewSet):
         try:
             logger.info(f'{request.user} 开始移动文件夹 {pk}')
             try:
-                folder = Folder.objects.get(id=pk, owner=request.user)
+                folder = Folder.objects.get(id=pk)
+                if not self._can_move_folder(folder, request.user):
+                    return Response({'error': '无操作权限'}, status=403)
             except Folder.DoesNotExist:
                 return Response(
                     {'error': '文件夹不存在'},
@@ -346,7 +510,9 @@ class FolderViewSet(viewsets.ModelViewSet):
         """
         try:
             try:
-                folder = Folder.objects.get(id=pk, owner=request.user)
+                folder = Folder.objects.get(id=pk)
+                if not self._can_write_with_ancestors(folder, request.user):
+                    return Response({'error': '无操作权限'}, status=403)
             except Folder.DoesNotExist:
                 return Response(
                     {'error': '文件夹不存在'},
@@ -410,7 +576,14 @@ class FolderViewSet(viewsets.ModelViewSet):
         """
         try:
             try:
-                folder = Folder.objects.get(id=pk, owner=request.user)
+                folder = Folder.objects.get(id=pk)
+
+                if not self._can_delete_folder(folder, request.user):
+                    logger.warning(f'{request.user} 无权限删除文件夹 {folder}')
+                    return Response({'error': '无操作权限'}, status=403)
+                if folder.owner != request.user and not request.user.is_superuser:
+                    logger.warning(f'{request.user} 无权限删除文件夹 {folder}')
+                    return Response({'error': '无操作权限'}, status=403)
             except Folder.DoesNotExist:
                 return Response(
                     {'error': '文件夹不存在'},
@@ -1040,12 +1213,11 @@ class FolderViewSet(viewsets.ModelViewSet):
 
 
 # cloud/views.py
-class CloudFileViewSet(viewsets.ModelViewSet):
+class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
     """云文件视图集 - 支持分片上传/断点续传/秒传"""
 
     queryset = CloudFile.objects.filter(deleted_at__isnull=True)
     serializer_class = CloudFileSerializer
-    # permission_classes = [permissions.IsAuthenticated, IsCloudOwnerOrShared]
     permission_classes = [permissions.IsAuthenticated]
     # 🔧 关键修复：同时支持表单上传和 JSON 请求
     parser_classes = [MultiPartParser, FormParser, JSONParser]
@@ -1061,59 +1233,36 @@ class CloudFileViewSet(viewsets.ModelViewSet):
     SESSION_EXPIRE_HOURS = 24  # 会话过期时间: 24小时
     TEMP_UPLOAD_DIR = 'temp_uploads'  # 临时上传目录
 
-    def get_queryset_v1(self):
-        """
-           🔧 关键修复：支持文件夹钻取的查询逻辑
-           - 返回当前文件夹下的所有文件和子文件夹
-           - 支持星标、回收站等过滤
-        """
-        user = self.request.user
-        queryset = CloudFile.objects.select_related('owner', 'folder').filter(owner=user)
-
-        # 🔧 回收站过滤
-        is_trash = self.request.query_params.get('trash', 'false').lower() == 'true'
-        if is_trash:
-            # 🔧 返回已删除的文件（不包括文件夹，文件夹由 FolderViewSet 处理）
-            return queryset.filter(deleted_at__isnull=False).order_by('-deleted_at')
-        # 正常查询
-        queryset = queryset.filter(deleted_at__isnull=True)
-
-        # 🔧 2. 星标文件过滤 (starred=true)
-        # 星标过滤
-        is_starred = self.request.query_params.get('starred', 'false').lower() == 'true'
-        if is_starred:
-            queryset = queryset.filter(is_starred=True, deleted_at__isnull=True)
-
-        # 🔧 3. 文件夹路径过滤 (folder=uuid)
-        # 🔧 关键：文件夹钻取 - 按 parent 过滤
-        folder_id = self.request.query_params.get('folder', '')
-        if folder_id and folder_id.lower() != 'null':
-            queryset = queryset.filter(folder_id=folder_id)
-        else:
-            queryset = queryset.filter(folder__isnull=True)
-
-        # 搜索
-        search = self.request.query_params.get('search')
-        if search:
-            queryset = queryset.filter(Q(name__icontains=search) | Q(original_name__icontains=search))
-
-        return queryset.order_by('-updated_at')
 
     def get_queryset(self):
-        """基础查询集：仅当前用户可见的文件"""
+        """
+        🔧 关键修复：基础查询集
+        - 过滤已删除的文件（正常视图不显示回收站）
+        - 只显示当前用户的文件
+        - 根据 folder 参数过滤（钻取）
+        - 星标/搜索等过滤由 filter_backends 和 CloudFileFilter 处理
+        """
         user = self.request.user
-        # 注意：具体的 trash/folder/starred 过滤交由 CloudFileFilter 处理，
-        # 此处仅做基础权限隔离与默认排序，避免与 filter_backends 冲突
-        queryset = CloudFile.objects.select_related('owner', 'folder').filter(owner=user, deleted_at__isnull=True).order_by('-updated_at')
 
+        # 基础过滤：当前用户 + 未删除
+        queryset = CloudFile.objects.filter(
+            owner=user,
+            deleted_at__isnull=True
+        ).select_related('owner', 'folder')
 
+        # 如果是回收站视图，通过 CloudFileFilter 处理 trash 参数
+        # 这里只做基础过滤，不处理 trash/starred 等特殊逻辑
+
+        # 🔧 文件夹钻取过滤 (folder 参数)
         folder_id = self.request.query_params.get('folder', '')
-        if folder_id and folder_id.lower() != 'null':
+        if folder_id and folder_id.lower() != 'null' and folder_id != '':
             queryset = queryset.filter(folder_id=folder_id)
         else:
             queryset = queryset.filter(folder__isnull=True)
 
-        return queryset
+        # 🔧 搜索过滤由 SearchFilter 处理，不需要在这里单独处理
+
+        return queryset.order_by('-updated_at')
 
 
     @action(detail=False, methods=['get'])
@@ -1157,100 +1306,86 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    def list_v1(self, request, *args, **kwargs):
-        """
-        🔧 重写 list 方法：混合返回文件夹和文件
-        """
-        queryset = self.filter_queryset(self.get_queryset())
-        page = self.paginate_queryset(queryset)
-        folder_id = request.query_params.get('folder', '')
 
-        if page is not None:
-            # 🔧 关键：同时查询当前文件夹下的子文件夹
-            if folder_id and folder_id.lower() != 'null':
+    def list(self, request, *args, **kwargs):
+        """
+        🔧 关键修复：混合返回文件夹 + 文件，支持分页
+        - 应用所有 filter_backends 过滤
+        - 分页处理
+        - 混合文件夹和文件
+        """
+        try:
+            # 1. 获取基础 queryset
+            queryset = self.get_queryset()
+
+            # 2. 应用所有 filter_backends (CloudFileFilter + SearchFilter)
+            queryset = self.filter_queryset(queryset)
+
+            # 3. 分页处理
+            page = self.paginate_queryset(queryset)
+
+            # 4. 获取当前文件夹ID
+            folder_id = request.query_params.get('folder', '')
+            if folder_id and folder_id.lower() == 'null':
+                folder_id = ''
+
+            # 5. 获取当前层级的子文件夹（不受分页影响）
+            if folder_id and folder_id != '':
                 subfolders = Folder.objects.filter(
                     parent_id=folder_id,
                     owner=request.user,
                     deleted_at__isnull=True
-                )
+                ).order_by('name')
             else:
                 subfolders = Folder.objects.filter(
                     parent__isnull=True,
                     owner=request.user,
                     deleted_at__isnull=True
-                )
+                ).order_by('name')
 
-            folder_data = FolderListSerializer(subfolders, many=True, context={'request': request}).data
-            for item in folder_data: item['is_folder'] = True
+            # 6. 序列化文件夹和文件
+            # 注意：文件夹不参与分页，文件参与分页
+            folder_data = FolderListSerializer(
+                subfolders,
+                many=True,
+                context={'request': request}
+            ).data
+            for item in folder_data:
+                item['is_folder'] = True
 
-            file_data = self.get_serializer(page, many=True, context={'request': request}).data
-            for item in file_data: item['is_folder'] = False
+            if page is not None:
+                file_data = self.get_serializer(page, many=True, context={'request': request}).data
+                for item in file_data:
+                    item['is_folder'] = False
 
-            # 🔧 合并并排序：文件夹在前
-            combined = folder_data + file_data
-            combined.sort(key=lambda x: (not x['is_folder'], x['name'].lower()))
+                # 合并并排序：文件夹在前，按名称排序
+                combined = folder_data + file_data
+                combined.sort(key=lambda x: (not x['is_folder'], x.get('name', '').lower()))
 
-            return self.get_paginated_response(combined)
+                # 返回分页响应
+                return self.get_paginated_response(combined)
 
-        # 无分页时同样处理
-
-        is_trash = self.request.query_params.get('trash', 'false').lower() == 'true'
-        is_starred = self.request.query_params.get('starred', 'false').lower() == 'true'
-
-        subfolders = Folder.objects.filter(
-            parent_id=folder_id if folder_id and folder_id.lower() != 'null' else None,
-            owner=request.user,
-            deleted_at__isnull=True
-        ) if not is_trash and not is_starred else Folder.objects.none()
-
-        folder_data = FolderListSerializer(subfolders, many=True, context={'request': request}).data
-        for item in folder_data:
-            item['is_folder'] = True
-
-        file_data = self.get_serializer(queryset, many=True, context={'request': request}).data
-        for item in file_data:
-            item['is_folder'] = False
-
-        combined = folder_data + file_data
-        combined.sort(key=lambda x: (not x['is_folder'], x['name'].lower()))
-
-        return Response(combined)
-
-    def list(self, request, *args, **kwargs):
-        """🔧 重写 list：混合返回文件夹 + 文件（保持原有逻辑并接入过滤链）"""
-        # 1. 获取基础 queryset
-        queryset = self.get_queryset()
-        # 2. 应用所有 filter_backends (CloudFileFilter + SearchFilter)
-        queryset = self.filter_queryset(queryset)
-
-        # 3. 分页处理
-        page = self.paginate_queryset(queryset)
-        folder_id = request.query_params.get('folder', '')
-
-        if page is not None:
-            # 🔧 查询当前层级子文件夹（不受文件过滤器影响）
-            if folder_id and folder_id.lower() != 'null':
-                subfolders = Folder.objects.filter(
-                    parent_id=folder_id, owner=request.user, deleted_at__isnull=True
-                )
-            else:
-                subfolders = Folder.objects.filter(
-                    parent__isnull=True, owner=request.user, deleted_at__isnull=True
-                )
-
-            folder_data = FolderListSerializer(subfolders, many=True, context={'request': request}).data
-            for item in folder_data: item['is_folder'] = True
-
+            # 无分页时（降级处理）
             file_data = self.get_serializer(queryset, many=True, context={'request': request}).data
-            for item in file_data: item['is_folder'] = False
+            for item in file_data:
+                item['is_folder'] = False
 
             combined = folder_data + file_data
             combined.sort(key=lambda x: (not x['is_folder'], x.get('name', '').lower()))
 
-            return self.get_paginated_response(combined)
+            return Response({
+                'results': combined,
+                'count': queryset.count() + subfolders.count()
+            })
 
-        # 无分页时的降级处理（保持向后兼容）
-        return super().list(request, *args, **kwargs)
+        except Exception as e:
+            logger.error(f'文件列表查询失败: {e}', exc_info=True)
+            return Response(
+                {'error': f'查询失败: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
 
     def perform_create(self, serializer):
         """🔧 关键修复：确保 owner 被设置"""
@@ -2240,7 +2375,9 @@ class CloudFileViewSet(viewsets.ModelViewSet):
     def retrieve(self, request, pk=None):
         logger.info(f"{request.user} Retrieving file pk: {pk}")
         try:
-            file_obj = CloudFile.objects.get(id=pk, owner=request.user)
+            file_obj = CloudFile.objects.get(id=pk)
+            if not self._can_access_with_ancestors(file_obj.folder, request.user):
+                return Response({'error': '无操作权限'}, status=403)
             serializer = self.get_serializer(file_obj)
             return Response(serializer.data)
         except CloudFile.DoesNotExist:
@@ -2260,15 +2397,17 @@ class CloudFileViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def move(self, request, pk=None):
-        """📂 移动文件/文件夹"""
+        """📂 移动文件"""
         logger.info(f"{request.user} Moving file pk: {pk}")
         try:
             try:
-                file_obj = CloudFile.objects.get(id=pk, owner=request.user)
+                file_obj = CloudFile.objects.get(id=pk)
+                if not self._can_move_file(file_obj, request.user):
+                    return Response({'error': '无操作权限'}, status=403)
             except CloudFile.DoesNotExist:
                 return Response({'error': '文件不存在'}, status=404)
             target_folder_id = request.data.get('target_folder_id')
-            from_folder = CloudFile.folder
+            from_folder = file_obj.folder
             # 验证目标文件夹归属
             if target_folder_id:
                 try:
@@ -2319,7 +2458,9 @@ class CloudFileViewSet(viewsets.ModelViewSet):
         """重命名文件"""
         logger.info(f'{request.user} Rename pk: {pk}')
         try:
-            file_obj = CloudFile.objects.get(id=pk, owner=request.user)
+            file_obj = CloudFile.objects.get(id=pk)
+            if not self._can_write_with_ancestors(file_obj.folder, request.user):
+                return Response({'error': '无操作权限'}, status=403)
         except CloudFile.DoesNotExist:
             return Response({'error': '文件不存在'}, status=404)
         new_name = request.data.get('name', '').strip()
@@ -2360,7 +2501,13 @@ class CloudFileViewSet(viewsets.ModelViewSet):
         try:
             logger.info(f"{request.user} 软删除文件 pk {pk}")
             try:
-                file_obj = CloudFile.objects.get(id=pk, owner=request.user)
+                file_obj = CloudFile.objects.get(id=pk)
+                if not self._can_delete_file(file_obj, request.user):
+                    logger.warning(f"{request.user} 无权限删除文件 {file_obj.name}")
+                    return Response({'error': '无操作权限'}, status=403)
+                if file_obj.owner != request.user and not request.user.is_superuser:
+                    logger.warning(f"{request.user} 无权限删除文件 {file_obj.name}")
+                    return Response({'error': '无操作权限'}, status=403)
             except CloudFile.DoesNotExist:
                 return Response({'error': '文件不存在'}, status=404)
             file_obj.deleted_at = timezone.now()
@@ -2383,7 +2530,7 @@ class CloudFileViewSet(viewsets.ModelViewSet):
                     'logical_delete': True,
                 }
             )
-
+            logger.info(f"{request.user} 软删除文件 file_obj {file_obj}")
             return Response({'message': '文件已移动到回收站'})
         except Exception as e:
             logger.error(f'文件删除失败：{e}')
@@ -2856,6 +3003,7 @@ class CloudFileViewSet(viewsets.ModelViewSet):
         })
 
     # ====================== 工具函数 ======================
+
 
     # 🔧 新增：构建 Content-Disposition 头（支持中文文件名）
     def _build_content_disposition(self, filename):
@@ -3427,7 +3575,7 @@ class CloudFileViewSet(viewsets.ModelViewSet):
         )
 
 
-class FileShareViewSet(viewsets.ModelViewSet):
+class FileShareViewSet(viewsets.ModelViewSet, UtilsTools):
     """文件分享视图集"""
     queryset = FileShare.objects.all()
     serializer_class = FileShareSerializer
@@ -3515,11 +3663,15 @@ class FileShareViewSet(viewsets.ModelViewSet):
         if file_id:
             try:
                 file_obj = CloudFile.objects.get(id=file_id)
-                if file_obj.owner != request.user and not request.user.is_superuser:
-                    return Response(
-                        {'error': '无权分享此文件'},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
+                if self._can_write_with_ancestors(file_obj.folder, request.user):
+                    logger.info(f"{request.user} 从共享文件夹 -> 创建分享文件 file_id: {file_id}")
+                else:
+                    if file_obj.owner != request.user and not request.user.is_superuser:
+                        return Response(
+                            {'error': '无权分享此文件'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                    logger.info(f"{request.user} 创建分享文件 file_id: {file_id}")
             except CloudFile.DoesNotExist:
                 return Response(
                     {'error': '文件不存在'},
@@ -3529,11 +3681,15 @@ class FileShareViewSet(viewsets.ModelViewSet):
         if folder_id:
             try:
                 folder_obj = Folder.objects.get(id=folder_id)
-                if folder_obj.owner != request.user and not request.user.is_superuser:
-                    return Response(
-                        {'error': '无权分享此文件夹'},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
+                if self._can_write_with_ancestors(folder_obj, request.user):
+                    logger.info(f"{request.user} 从共享文件夹 -> 创建分享文件夹 folder_id: {folder_id}")
+                else:
+                    if folder_obj.owner != request.user and not request.user.is_superuser:
+                        return Response(
+                            {'error': '无权分享此文件夹'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                    logger.info(f"{request.user} 创建分享文件夹 folder_id: {folder_id}")
             except Folder.DoesNotExist:
                 return Response(
                     {'error': '文件夹不存在'},
@@ -4741,7 +4897,7 @@ class CloudFileDownloadView(APIView):
 
 # cloud/views.py - DocumentEditorViewSet 完整修复版
 
-class DocumentEditorViewSet(viewsets.ViewSet):
+class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
     """
     🔧 OnlyOffice 文档编辑器视图集（协同编辑完整版）
     支持：添加/修改/删除/启用/禁用协同用户
@@ -5043,6 +5199,7 @@ class DocumentEditorViewSet(viewsets.ViewSet):
             return True
         return False
 
+
     @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def edit(self, request, pk=None):
         """
@@ -5067,13 +5224,18 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                 return Response({'error': '文件不存在'}, status=status.HTTP_404_NOT_FOUND)
 
             # ==================== 2. 权限验证 ====================
+            # 判断是否是共享文件夹访问
+            is_shared_folder_access = self._can_access_with_ancestors(file_obj.folder, request.user)
             # 2.1 访问权限验证
             if not self._can_access_document(file_obj, request.user):
-                logger.warning(f'⚠️ 无权访问：user={request.user.username}, file={pk}')
-                return Response(
-                    {'error': '您没有权限访问该文件'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
+                if not is_shared_folder_access:
+                    logger.warning(f'⚠️ 无权访问：user={request.user.username}, file={pk}')
+                    return Response(
+                        {'error': '您没有权限访问该文件'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+                else:
+                    logger.info(f'👁️ 共享文件夹访问：user={request.user.username}, file={pk}')
 
             self.current_config = self.onlyoffice_configs.copy()
             # 🔧 关键修复：优先使用用户自定义权限配置
@@ -5082,11 +5244,16 @@ class DocumentEditorViewSet(viewsets.ViewSet):
             # 2.2 编辑权限验证（决定编辑器模式）
             can_edit = base_permissions.get('edit')
             if not can_edit:
-                logger.info(f'👁️ 只读模式：user={request.user.username}')
+                logger.info(f'👁️ 只读模式：user={request.user.username} , file={pk}')
 
             can_edit = self._can_edit_document(file_obj, request.user)
             if not can_edit:
                 logger.warning(f'⚠️ 无权限编辑：user={request.user.username}, file={pk}')
+
+            # 如果是共享文件夹访问，检查是否有写入权限
+            if is_shared_folder_access:
+                can_edit = self._can_write_with_ancestors(file_obj.folder, request.user)
+                logger.info(f'👁️ 共享文件夹编辑：user={request.user.username}, file={pk} can_edit: {can_edit}')
 
             # ==================== 3. 基础信息准备 ====================
             # 3.1 文件扩展名和文档类型
@@ -5816,13 +5983,29 @@ class DocumentEditorViewSet(viewsets.ViewSet):
         :return:
         """
         try:
-            file_obj = CloudFile.objects.get(id=pk, owner=request.user)
+            file_obj = CloudFile.objects.get(id=pk)
             # 验证管理权限
             if not self._can_manage_collaborators(file_obj, request.user):
                 return Response(
                     {'error': '无权管理协作者'},
                     status=status.HTTP_403_FORBIDDEN
                 )
+
+            if file_obj.folder:
+                if not self._is_admin_or_owner(file_obj.folder, request.user):
+                    return Response(
+                        {'error': '无管理权限'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            else:
+                if not self._is_owner_for_file(file_obj, request.user):
+                    return Response(
+                        {'error': '无管理权限，非法操作'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+
+
+
 
             collaborator_id = user_id  # 从 URL 获取
             if not collaborator_id:
@@ -5857,6 +6040,7 @@ class DocumentEditorViewSet(viewsets.ViewSet):
         except FileCollaboration.DoesNotExist:
             return Response({'error': '协作者关系不存在'}, status=404)
         except Exception as e:
+            logger.error(f'{e}')
             return Response(
                 {'error': f'获取文件失败：{str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -5874,7 +6058,8 @@ class DocumentEditorViewSet(viewsets.ViewSet):
         }
         """
         try:
-            file_obj = CloudFile.objects.get(id=pk, owner=request.user)
+            file_obj = CloudFile.objects.get(id=pk)
+
 
             # 验证管理权限
             if not self._can_manage_collaborators(file_obj, request.user):
@@ -5882,6 +6067,19 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                     {'error': '无权管理协作者'},
                     status=status.HTTP_403_FORBIDDEN
                 )
+
+            if file_obj.folder:
+                if not self._is_admin_or_owner(file_obj.folder, request.user):
+                    return Response(
+                        {'error': '无管理权限'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            else:
+                if not self._is_owner_for_file(file_obj, request.user):
+                    return Response(
+                        {'error': '无管理权限，非法操作'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
 
             user_id = request.data.get('user_id')
             permission = request.data.get('permission', 'read')
@@ -5965,7 +6163,7 @@ class DocumentEditorViewSet(viewsets.ViewSet):
         """
         try:
             logger.info(f'Update collaborator pk: {pk} user_id: {user_id}')
-            file_obj = CloudFile.objects.get(id=pk, owner=request.user)
+            file_obj = CloudFile.objects.get(id=pk)
 
             # 验证管理权限
             if not self._can_manage_collaborators(file_obj, request.user):
@@ -5973,6 +6171,19 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                     {'error': '无权管理协作者'},
                     status=status.HTTP_403_FORBIDDEN
                 )
+
+            if file_obj.folder:
+                if not self._is_admin_or_owner(file_obj.folder, request.user):
+                    return Response(
+                        {'error': '无管理权限'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            else:
+                if not self._is_owner_for_file(file_obj, request.user):
+                    return Response(
+                        {'error': '无管理权限，非法操作'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
 
             collaborator_id = user_id
             if not collaborator_id:
@@ -6042,7 +6253,7 @@ class DocumentEditorViewSet(viewsets.ViewSet):
         DELETE /api/cloud/documents/{id}/collaborators/{user_id}/
         """
         try:
-            file_obj = CloudFile.objects.get(id=pk, owner=request.user)
+            file_obj = CloudFile.objects.get(id=pk)
 
             # 验证管理权限
             if not self._can_manage_collaborators(file_obj, request.user):
@@ -6050,6 +6261,19 @@ class DocumentEditorViewSet(viewsets.ViewSet):
                     {'error': '无权管理协作者'},
                     status=status.HTTP_403_FORBIDDEN
                 )
+
+            if file_obj.folder:
+                if not self._is_admin_or_owner(file_obj.folder, request.user):
+                    return Response(
+                        {'error': '无管理权限'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            else:
+                if not self._is_owner_for_file(file_obj, request.user):
+                    return Response(
+                        {'error': '无管理权限，非法操作'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
 
             collaborator_id = user_id  # 从 URL 获取
             if not collaborator_id:
@@ -7976,5 +8200,358 @@ class CloudSystemSettingsViewSet(viewsets.GenericViewSet):
 
 
 
+
+
+class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
+    """共享文件夹视图集"""
+    serializer_class = FolderSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = CloudPagination  # 🔧 添加分页支持
+
+    def get_serializer_class(self):
+        """根据操作返回不同的序列化器"""
+        if self.action == 'list':
+            return FolderListSerializer
+        return FolderSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        # 获取用户有权限访问的共享文件夹：创建者 或 协作者
+        queryset = Folder.objects.filter(
+            is_shared_folder=True,
+            deleted_at__isnull=True
+        ).filter(
+            Q(owner=user) | Q(folder_collaborations__user=user, folder_collaborations__is_active=True)
+        ).distinct().select_related('owner').prefetch_related('folder_collaborations__user')
+
+        # 🔧 支持父文件夹过滤（用于文件夹钻取）
+        parent_id = self.request.query_params.get('parent', None)
+        if parent_id and parent_id.lower() != 'null':
+            queryset = queryset.filter(parent_id=parent_id)
+        else:
+            queryset = queryset.filter(parent__isnull=True)
+
+        # 🔧 支持搜索
+        search = self.request.query_params.get('search', '')
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+
+        return queryset.order_by('-created_at')
+
+
+    def perform_create(self, serializer):
+        # 创建时自动标记为共享文件夹
+        serializer.save(owner=self.request.user, is_shared_folder=True)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if not self._is_admin_or_owner(instance, request.user):
+            return Response({'error': '无删除该共享文件夹权限'}, status=status.HTTP_403_FORBIDDEN)
+        return super().destroy(request, *args, **kwargs)
+
+    # 🔧 新增：重写list方法，混合返回子文件夹和文件
+    def list(self, request, *args, **kwargs):
+        """
+        🔧 重写 list 方法：返回共享文件夹及其内容（支持钻取和搜索）
+        """
+        folder_id = request.query_params.get('folder', None)
+        search_keyword = request.query_params.get('search', '').strip()
+
+        logger.info(f'SharedFolderViewSet.list: folder_id={folder_id}, search={search_keyword}')
+
+
+        # 如果指定了folder参数，返回该共享文件夹下的内容
+        if folder_id:
+            try:
+                shared_folder = Folder.objects.select_related('owner').prefetch_related(
+                    'folder_collaborations__user'
+                ).get(id=folder_id, deleted_at__isnull=True)
+                logger.info(f'SharedFolderViewSet.list: shared_folder={shared_folder}')
+
+                # 检查用户权限 - 需要追溯到根共享文件夹的权限
+                if not self._can_access_with_ancestors(shared_folder, request.user):
+                    return Response({'error': '无权访问'}, status=status.HTTP_403_FORBIDDEN)
+
+                # 🔧 获取子文件夹 - 修复权限过滤逻辑
+                # 子文件夹继承父文件夹的权限，只要是共享文件夹的成员就能访问
+                subfolders = Folder.objects.filter(
+                    parent_id=folder_id,
+                    deleted_at__isnull=True
+                ).select_related('owner').prefetch_related('folder_collaborations__user')
+
+                # 🔧 关键修复：支持搜索子文件夹
+                if search_keyword:
+                    subfolders = subfolders.filter(name__icontains=search_keyword)
+
+                # 🔧 获取文件
+                files = CloudFile.objects.filter(
+                    folder_id=folder_id,
+                    deleted_at__isnull=True
+                ).select_related('owner')
+
+                # 🔧 关键修复：支持搜索文件
+                if search_keyword:
+                    files = files.filter(
+                        Q(name__icontains=search_keyword) |
+                        Q(original_name__icontains=search_keyword) |
+                        Q(description__icontains=search_keyword)
+                    )
+
+                logger.info(f'SharedFolderViewSet.list: found {subfolders.count()} subfolders, {files.count()} files')
+
+                # 🔧 分页处理（只对文件分页，文件夹不分页）
+                page = self.paginate_queryset(files)
+                if page is not None:
+                    folder_data = FolderListSerializer(subfolders, many=True, context={'request': request}).data
+                    for item in folder_data:
+                        item['is_folder'] = True
+
+                    file_data = CloudFileSerializer(page, many=True, context={'request': request}).data
+                    for item in file_data:
+                        item['is_folder'] = False
+
+                    combined = folder_data + file_data
+                    combined.sort(key=lambda x: (not x['is_folder'], x['name'].lower()))
+
+                    return self.get_paginated_response(combined)
+
+                # 无分页
+                folder_data = FolderListSerializer(subfolders, many=True, context={'request': request}).data
+                for item in folder_data:
+                    item['is_folder'] = True
+
+                file_data = CloudFileSerializer(files, many=True, context={'request': request}).data
+                for item in file_data:
+                    item['is_folder'] = False
+
+                combined = folder_data + file_data
+                combined.sort(key=lambda x: (not x['is_folder'], x['name'].lower()))
+
+                return Response(combined)
+
+            except Folder.DoesNotExist:
+                logger.error(f'共享文件夹不存在: {folder_id}')
+                return Response({'error': '共享文件夹不存在'}, status=status.HTTP_404_NOT_FOUND)
+            except Exception as e:
+                logger.error(f'加载共享文件夹内容失败: {e}', exc_info=True)
+                return Response(
+                    {'error': f'加载失败: {str(e)}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+            # 默认行为：返回共享文件夹列表
+        return super().list(request, *args, **kwargs)
+
+    @action(detail=True, methods=['post'])
+    def add_member(self, request, pk=None):
+        """添加或更新成员权限"""
+        folder = self.get_object()
+        if not self._is_admin_or_owner(folder, request.user):
+            return Response({'error': '无操作权限'}, status=status.HTTP_403_FORBIDDEN)
+
+        user_id = request.data.get('user_id')
+        permission = request.data.get('permission', 'read')
+
+        try:
+            target_user = CustomUser.objects.get(id=user_id)
+        except CustomUser.DoesNotExist:
+            return Response({'error': '用户不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+        collab, created = FolderCollaboration.objects.update_or_create(
+            folder=folder,
+            user=target_user,
+            defaults={'permission': permission, 'is_active': True}
+        )
+        return Response({'message': '添加成功', 'created': created})
+
+    @action(detail=True, methods=['post'])
+    def update_member(self, request, pk=None):
+        """更新成员权限"""
+        folder = self.get_object()
+        if not self._is_admin_or_owner(folder, request.user):
+            return Response({'error': '无操作权限'}, status=status.HTTP_403_FORBIDDEN)
+
+        user_id = request.data.get('user_id')
+        permission = request.data.get('permission', 'read')
+
+        try:
+            collab = FolderCollaboration.objects.get(folder=folder, user_id=user_id)
+            if collab.permission == permission:
+                return Response({'message': '权限未改变'})
+
+            if collab.user == request.user:
+                return Response({'error': '不能修改自己的权限'}, status=status.HTTP_400_BAD_REQUEST)
+
+            collab.permission = permission
+            collab.save(update_fields=['permission', 'updated_at'])
+            return Response({'message': '权限更新成功'})
+        except FolderCollaboration.DoesNotExist:
+            return Response({'error': '成员不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=True, methods=['post'])
+    def remove_member(self, request, pk=None):
+        """移除成员"""
+        folder = self.get_object()
+        if not self._is_admin_or_owner(folder, request.user):
+            return Response({'error': '无操作权限'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            user_id = request.data.get('user_id')
+            collab = FolderCollaboration.objects.get(folder=folder, user_id=user_id)
+            if collab.user == request.user:
+                return Response({'error': '不能移除自己'}, status=status.HTTP_400_BAD_REQUEST)
+            collab.delete()
+            return Response({'message': '移除成功'})
+        except FolderCollaboration.DoesNotExist:
+            return Response({'error': '成员不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=True, methods=['get'])
+    def members(self, request, pk=None):
+        """获取共享文件夹成员列表"""
+        folder = self.get_object()
+        if not self._can_access(folder, request.user):
+            return Response({'error': '无权访问'}, status=status.HTTP_403_FORBIDDEN)
+
+        collabs = FolderCollaboration.objects.filter(folder=folder, is_active=True).select_related('user')
+        data = [{
+            'id': c.user.id,
+            'username': c.user.username,
+            'real_name': c.user.real_name or c.user.username,
+            'permission': c.permission,
+            'is_owner': False
+        } for c in collabs]
+
+        # 将所有者放在首位
+        data.insert(0, {
+            'id': folder.owner.id,
+            'username': folder.owner.username,
+            'real_name': folder.owner.real_name or folder.owner.username,
+            'permission': 'admin',
+            'is_owner': True
+        })
+        return Response({'members': data})
+
+    # 🔧 新增：获取用户在共享文件夹中的权限
+    @action(detail=True, methods=['get'])
+    def my_permission(self, request, pk=None):
+        """获取当前用户在共享文件夹中的权限"""
+        folder = self.get_object()
+        user = request.user
+
+        if folder.owner == user:
+            return Response({'permission': 'admin', 'is_owner': True})
+
+        collab = FolderCollaboration.objects.filter(
+            folder=folder,
+            user=user,
+            is_active=True
+        ).first()
+
+        if collab:
+            return Response({'permission': collab.permission, 'is_owner': False})
+
+        return Response({'error': '无权访问'}, status=status.HTTP_403_FORBIDDEN)
+
+    # 🔧 新增：移动文件到/从共享文件夹
+    @action(detail=False, methods=['post'])
+    def move_items(self, request):
+        """
+        🔧 批量移动文件/文件夹到共享文件夹
+        {
+            "target_folder_id": "uuid",  // 目标共享文件夹ID
+            "file_ids": ["uuid1", "uuid2"],  // 要移动的文件ID列表
+            "folder_ids": ["uuid1", "uuid2"]  // 要移动的文件夹ID列表
+        }
+        """
+        try:
+            user = request.user
+            target_folder_id = request.data.get('target_folder_id')
+            file_ids = request.data.get('file_ids', [])
+            folder_ids = request.data.get('folder_ids', [])
+
+            if not target_folder_id:
+                return Response({'error': '目标文件夹不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 验证目标文件夹权限
+            try:
+                target_folder = Folder.objects.get(id=target_folder_id, is_shared_folder=True,
+                                                   deleted_at__isnull=True)
+            except Folder.DoesNotExist:
+                return Response({'error': '目标共享文件夹不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+            if not self._can_access(target_folder, user):
+                return Response({'error': '无权访问目标文件夹'}, status=status.HTTP_403_FORBIDDEN)
+
+            # 检查是否有编辑权限
+            my_perm = self._get_user_permission(target_folder, user)
+            if my_perm not in ['write', 'admin']:
+                return Response({'error': '需要编辑权限才能移动文件'}, status=status.HTTP_403_FORBIDDEN)
+
+            moved_count = 0
+            errors = []
+
+            # 移动文件
+            for file_id in file_ids:
+                try:
+                    file_obj = CloudFile.objects.get(id=file_id, deleted_at__isnull=True)
+                    # 检查源文件权限（必须是自己的文件或来自共享文件夹且有权限）
+                    if not self._can_move_file(file_obj, user):
+                        errors.append(f'文件 {file_obj.name}: 无权移动')
+                        continue
+
+                    file_obj.folder = target_folder
+                    file_obj.save(update_fields=['folder', 'updated_at'])
+                    moved_count += 1
+
+                    # 记录日志
+                    FileOperationLog.objects.create(
+                        file=file_obj,
+                        folder=target_folder,
+                        user=user,
+                        operation='move',
+                        description=f'移动到共享文件夹 {target_folder.name}',
+                        ip_address=get_request_ip(request)
+                    )
+                except CloudFile.DoesNotExist:
+                    errors.append(f'文件 {file_id}: 不存在')
+                except Exception as e:
+                    errors.append(f'文件 {file_id}: {str(e)}')
+
+            # 移动文件夹
+            for folder_id in folder_ids:
+                try:
+                    folder_obj = Folder.objects.get(id=folder_id, deleted_at__isnull=True)
+                    if not self._can_move_folder(folder_obj, user):
+                        errors.append(f'文件夹 {folder_obj.name}: 无权移动')
+                        continue
+
+                    folder_obj.parent = target_folder
+                    folder_obj.save(update_fields=['parent', 'updated_at'])
+                    moved_count += 1
+
+                    FileOperationLog.objects.create(
+                        folder=folder_obj,
+                        user=user,
+                        operation='move',
+                        description=f'移动到共享文件夹 {target_folder.name}',
+                        ip_address=get_request_ip(request)
+                    )
+                except Folder.DoesNotExist:
+                    errors.append(f'文件夹 {folder_id}: 不存在')
+                except Exception as e:
+                    errors.append(f'文件夹 {folder_id}: {str(e)}')
+
+            return Response({
+                'message': f'成功移动 {moved_count} 个项目',
+                'moved_count': moved_count,
+                'errors': errors[:10]
+            })
+
+        except Exception as e:
+            logger.error(f'移动失败: {e}', exc_info=True)
+            return Response(
+                {'error': f'移动失败: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 

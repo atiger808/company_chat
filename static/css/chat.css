@@ -555,6 +555,16 @@ body {
     object-fit: cover;
 }
 
+
+/* 确保消息内容不会被挤压 */
+.message-content {
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+    hyphens: auto;
+    max-width: 85%;
+    min-width: auto;
+}
+
 .message-left-wrapper .message-content {
     background-color: white;
     border-radius: 10px 10px 10px 5px;
@@ -635,7 +645,7 @@ body {
     background-color: #9eea6a;
     border-radius: 10px 10px 5px 10px;
     color: #000;
-    max-width: 100%;
+    max-width: 85%;
     min-width: 25%;
     padding: 10px 15px;
     position: relative;
@@ -657,12 +667,6 @@ body {
     border-left: 8px solid #9eea6a;
 }
 
-/* 确保消息内容不会被挤压 */
-.message-content {
-    overflow-wrap: break-word;
-    word-wrap: break-word;
-    hyphens: auto;
-}
 
 .last-message-content {
     max-width: 750px;
@@ -990,7 +994,10 @@ body {
         height: 36px;
     }
 
-    .message-left-wrapper .message-content,
+    .message-left-wrapper .message-content {
+        max-width: 100%;
+    }
+
     .message-right-wrapper .message-content {
         max-width: 85%;
     }
@@ -1001,7 +1008,7 @@ body {
     }
 
     .message-image, .message-video-container {
-        max-width: 100%;
+        /*max-width: 100%;*/
         /*max-height: 130px;*/
         max-height: auto;
     }
@@ -1019,7 +1026,10 @@ body {
         height: 32px;
     }
 
-    .message-left-wrapper .message-content,
+    .message-left-wrapper .message-content {
+        max-width: 100%;
+    }
+
     .message-right-wrapper .message-content {
         max-width: 90%;
         font-size: 14px;
@@ -1675,10 +1685,6 @@ input:checked + .slider:before {
 
     .chat-header {
         padding: 20px;
-    }
-
-    .message-content {
-        max-width: 80%;
     }
 
     .modal-content {
@@ -6213,6 +6219,30 @@ input:checked + .toggle-slider:before {
     font-size: 13px;
 }
 
+.quoted-file-link {
+    transition: all 0.2s;
+    /*white-space: nowrap;*/
+    cursor: pointer;
+    padding: 4px 8px;
+    background: rgba(64, 158, 255, 0.05);
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+}
+
+.quoted-file-link:hover {
+    background: rgba(64, 158, 255, 0.1) !important;
+}
+
+.quoted-file-link:hover span {
+    text-decoration: underline;
+}
+
+/*.quoted-file-link i {*/
+/*color: var(--primary-color);*/
+/*}*/
 
 /* ==================== 引用消息富媒体渲染样式 ==================== */
 .message-quote .quote-text {
@@ -6222,13 +6252,44 @@ input:checked + .toggle-slider:before {
     margin-top: 4px;
 }
 
-/* 文本/表情引用 */
+/* 文本/表情引用 最多显示3行，超出省略号*/
 .message-quote .quote-text-content {
     color: var(--text-primary);
     font-size: 0.9em;
-    line-height: 1.4;
-    white-space: pre-wrap;
-    word-break: break-word;
+    /*line-height: 1.4;*/
+    /*!*white-space: pre-wrap;*!*/
+    /*word-break: break-word;*/
+    /*white-space: nowrap;*/
+    /*overflow: hidden;*/
+    /*text-overflow: ellipsis;*/
+
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3; /* 限制文本为3行 */
+    overflow: hidden;
+
+    position: relative;
+    line-height: 1.4; /* 根据实际行高调整 */
+    max-height: calc(1.4em * 3); /* 3行的高度 */
+    overflow: hidden;
+}
+
+
+.text-clamp {
+  position: relative;
+  line-height: 1.2; /* 根据实际行高调整 */
+  max-height: calc(1.2em * 2); /* 2行的高度 */
+  overflow: hidden;
+}
+
+.text-clamp::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 2em; /* 根据需要调整省略号占据的宽度 */
+  height: 1.2em; /* 与行高相同 */
+  background: linear-gradient(to right, rgba(255, 255, 255, 0), rgba(255, 255, 255, 1) 50%);
 }
 
 /* 图片引用缩略图 */
@@ -6317,10 +6378,10 @@ input:checked + .toggle-slider:before {
 }
 
 .quote-text {
-    color: var(--text-primary);
-    font-size: 14px;
+    color: var(--text-secondary);
     line-height: 1.5;
     word-wrap: break-word;
+    font-size: 13px;
 }
 
 
@@ -8948,9 +9009,6 @@ body.pwa-mode .chat-input-area {
 }
 
 
-
-
-
 /* 🔧 强制修复 iOS Safari Textarea 粘贴/编辑能力 */
 #messageInput {
     user-select: text !important;
@@ -8970,18 +9028,18 @@ body.pwa-mode .chat-input-area {
 }
 
 
-
-
 /* ==================== @所有人 专用样式 ==================== */
 .at-all-item {
     background: linear-gradient(135deg, #e6f7ff 0%, #f0f5ff 100%);
     border-left: 3px solid var(--primary-color);
     margin-bottom: 4px;
 }
+
 .at-all-item:hover {
     background: #d6eaff;
     transform: translateX(2px);
 }
+
 .at-all-item .at-member-name {
     color: var(--primary-color);
     font-weight: 700;
@@ -9001,8 +9059,14 @@ body.pwa-mode .chat-input-area {
 }
 
 @keyframes draftPulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.7; transform: scale(0.98); }
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.7;
+        transform: scale(0.98);
+    }
 }
 
 /* 移动端适配 */
@@ -9014,52 +9078,58 @@ body.pwa-mode .chat-input-area {
 }
 
 
-
-
 /* 语音&视频通话功能样式开始 */
 
-.call-overlay { 
-    position: fixed; 
-    top: 0; 
-    left: 0; 
-    width: 100%; 
-    height: 100%; 
-    background: #000; 
-    z-index: 9999; 
-    display: flex; 
-    align-items: center; 
-    justify-content: center; 
-    transition: opacity 0.3s; 
+.call-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.3s;
 }
-.call-overlay.hidden { opacity: 0; pointer-events: none; }
+
+.call-overlay.hidden {
+    opacity: 0;
+    pointer-events: none;
+}
 
 /* 🔧 最小化状态 */
 .call-overlay.minimized {
     opacity: 1;
     pointer-events: auto;
 }
+
 .call-overlay.minimized .call-container {
     max-width: 360px;
     max-height: 180px;
 }
+
 .call-overlay.minimized .call-media {
     display: none;
 }
+
 .call-overlay.minimized .call-controls {
     padding: 10px;
 }
+
 .call-overlay.minimized .call-header {
     padding: 10px;
 }
 
-.call-container { 
-    width: 100%; 
-    max-width: 600px; 
-    height: 90vh; 
-    background: #1a1a1a; 
-    border-radius: 12px; 
-    display: flex; 
-    flex-direction: column; 
+.call-container {
+    width: 100%;
+    max-width: 600px;
+    height: 90vh;
+    background: #1a1a1a;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
     position: relative;
 }
@@ -9081,53 +9151,57 @@ body.pwa-mode .chat-input-area {
     justify-content: center;
     transition: all 0.2s;
 }
+
 .call-minimize-btn:hover {
     background: rgba(255, 255, 255, 0.3);
     transform: scale(1.1);
 }
 
-.call-header { 
-    padding: 15px; 
-    color: #fff; 
-    display: flex; 
-    justify-content: space-between; 
-    align-items: center; 
+.call-header {
+    padding: 15px;
+    color: #fff;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
 }
-.call-timer { 
-    font-family: monospace; 
-    font-size: 14px; 
-    color: #409eff; 
+
+.call-timer {
+    font-family: monospace;
+    font-size: 14px;
+    color: #409eff;
 }
-.call-media { 
-    flex: 1; 
-    position: relative; 
-    background: #000; 
+
+.call-media {
+    flex: 1;
+    position: relative;
+    background: #000;
 }
-.remote-video, .local-video { 
-    width: 100%; 
-    height: 100%; 
-    object-fit: cover; 
+
+.remote-video, .local-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 /* 🔧 优化本地视频位置 - 确保在移动端可见 */
-.local-video { 
-    position: absolute; 
-    bottom: 80px; 
-    right: 10px; 
-    width: 120px; 
-    height: 160px; 
-    border-radius: 8px; 
-    border: 2px solid #409eff; 
+.local-video {
+    position: absolute;
+    bottom: 80px;
+    right: 10px;
+    width: 120px;
+    height: 160px;
+    border-radius: 8px;
+    border: 2px solid #409eff;
     z-index: 10;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
-.call-controls { 
-    padding: 20px; 
-    display: flex; 
-    justify-content: center; 
+.call-controls {
+    padding: 20px;
+    display: flex;
+    justify-content: center;
     align-items: center;
-    gap: 20px; 
+    gap: 20px;
     flex-wrap: wrap;
     background: rgba(0, 0, 0, 0.3);
 }
@@ -9144,43 +9218,50 @@ body.pwa-mode .chat-input-area {
     border-radius: 20px;
     display: inline-block; /* 🔧 确保正确显示 */
 }
-.call-btn { 
-    width: 50px; 
-    height: 50px; 
-    border-radius: 50%; 
-    border: none; 
-    background: #333; 
-    color: #fff; 
-    font-size: 18px; 
-    cursor: pointer; 
+
+.call-btn {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    border: none;
+    background: #333;
+    color: #fff;
+    font-size: 18px;
+    cursor: pointer;
     transition: all 0.2s ease;
     display: flex;
     align-items: center;
     justify-content: center;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
-.call-btn:hover { 
-    background: #444; 
+
+.call-btn:hover {
+    background: #444;
     transform: scale(1.1);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
+
 .call-btn:active {
     transform: scale(0.95);
 }
-.call-btn.end-call { 
-    background: #ff4d4f; 
+
+.call-btn.end-call {
+    background: #ff4d4f;
     width: 60px;
     height: 60px;
     font-size: 22px;
 }
-.call-btn.end-call:hover { 
-    background: #d9363e; 
+
+.call-btn.end-call:hover {
+    background: #d9363e;
     transform: scale(1.15);
 }
-.call-btn.muted { 
-    background: #555; 
-    color: #ff4d4f; 
+
+.call-btn.muted {
+    background: #555;
+    color: #ff4d4f;
 }
+
 .call-btn.off {
     background: #555;
     color: #ff4d4f;
@@ -9194,7 +9275,7 @@ body.pwa-mode .chat-input-area {
         max-width: 100%;
         border-radius: 0;
     }
-    
+
     /* 🔧 通话头部优化 - 确保时长可见 */
     .call-header {
         padding: 15px 15px;
@@ -9204,19 +9285,19 @@ body.pwa-mode .chat-input-area {
         align-items: center;
         gap: 8px;
     }
-    
+
     #callStatusText {
         font-size: 18px;
         font-weight: bold;
         text-align: center;
     }
-    
+
     .call-timer {
         font-size: 20px;
         padding: 6px 16px;
         margin-top: 4px;
     }
-    
+
     /* 🔧 本地视频调整位置，避免被控制按钮遮挡 */
     .local-video {
         bottom: 40px;
@@ -9226,7 +9307,7 @@ body.pwa-mode .chat-input-area {
         border: 3px solid #409eff;
         box-shadow: 0 4px 16px rgba(64, 158, 255, 0.6);
     }
-    
+
     /* 🔧 控制按钮区域调整 - 确保在底部可见 */
     .call-controls {
         padding: 15px 15px;
@@ -9236,14 +9317,14 @@ body.pwa-mode .chat-input-area {
         position: relative;
         z-index: 20; /* 🔧 提高层级，确保在最上层 */
     }
-    
+
     .call-btn {
         width: 64px;
         height: 64px;
         font-size: 24px;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     }
-    
+
     /* 🔧 挂断按钮突出显示 */
     .call-btn.end-call {
         width: 76px;
@@ -9252,7 +9333,7 @@ body.pwa-mode .chat-input-area {
         order: 10; /* 确保在最后 */
         box-shadow: 0 6px 16px rgba(255, 77, 79, 0.5);
     }
-    
+
     /* 🔧 最小化按钮调整 */
     .call-minimize-btn {
         width: 36px;
@@ -9269,33 +9350,33 @@ body.pwa-mode .chat-input-area {
         max-width: 800px;
         border-radius: 16px;
     }
-    
+
     .call-media {
         min-height: 500px;
     }
-    
+
     .remote-video {
         max-height: 600px;
     }
-    
+
     .local-video {
         bottom: 100px;
         right: 20px;
         width: 160px;
         height: 213px;
     }
-    
+
     .call-controls {
         padding: 25px;
         gap: 25px;
     }
-    
+
     .call-btn {
         width: 56px;
         height: 56px;
         font-size: 20px;
     }
-    
+
     .call-btn.end-call {
         width: 64px;
         height: 64px;
@@ -9304,7 +9385,6 @@ body.pwa-mode .chat-input-area {
 }
 
 /* 语音&视频通话功能样式结束 */
-
 
 
 /* ==================== 来电弹窗样式优化 ==================== */
@@ -9356,7 +9436,7 @@ body.pwa-mode .chat-input-area {
     max-width: 400px;
     text-align: center;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3),
-                0 0 0 1px rgba(255, 255, 255, 0.1);
+    0 0 0 1px rgba(255, 255, 255, 0.1);
     animation: slideUp 0.4s ease;
     border: 1px solid rgba(255, 255, 255, 0.2);
 }
@@ -9688,9 +9768,15 @@ body.pwa-mode .chat-input-area {
 }
 
 @keyframes ringVibrate {
-    0%, 100% { transform: translateX(0); }
-    25% { transform: translateX(-4px); }
-    75% { transform: translateX(4px); }
+    0%, 100% {
+        transform: translateX(0);
+    }
+    25% {
+        transform: translateX(-4px);
+    }
+    75% {
+        transform: translateX(4px);
+    }
 }
 
 
@@ -9725,7 +9811,7 @@ body.pwa-mode .chat-input-area {
         height: 54px !important;
         font-size: 22px !important;
         flex-shrink: 0;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
     }
 
     .call-btn.end-call {
@@ -9741,7 +9827,7 @@ body.pwa-mode .chat-input-area {
         max-height: 200px; /* 增加高度容纳按钮 */
         overflow: visible !important; /* 关键：防止裁剪外部按钮 */
         /*position: fixed !important;*/
-        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
         border-radius: 12px;
     }
 
@@ -9773,6 +9859,23 @@ body.pwa-mode .chat-input-area {
     /* 最小化时仅保留 静音 & 挂断，避免拥挤 */
     .call-overlay.minimized .call-btn:not(.end-call):not(#muteBtn) {
         display: none;
+    }
+}
+
+
+/* 🔧 新增：消息高亮样式（用于滚动定位） */
+.message-highlighted {
+    animation: highlightPulse 2s ease-in-out;
+    box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.3);
+    border-radius: 8px;
+}
+
+@keyframes highlightPulse {
+    0%, 100% {
+        box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.3);
+    }
+    50% {
+        box-shadow: 0 0 0 6px rgba(64, 158, 255, 0.5);
     }
 }
 

@@ -467,14 +467,17 @@ class CloudApp {
         // 🔧 核心状态
         this.currentFolderId = null;          // 当前文件夹 ID（null 表示根目录）
         this.pathStack = [];                   // 面包屑路径栈 [{id, name}]
+        this.sharedFolderPathStack = [];       // 共享文件夹面包屑路径
         this.currentView = 'files';            // 当前视图：files/starred/shared/shared-with-me/trash
         this.viewMode = 'grid';                // 视图模式：list/grid
         this.contextTarget = null;             // 右键菜单目标元素
+        this.statusCode = null;
 
         this.pagination = {
             files: {page: 1, pageSize: 20, count: 0, next: null, previous: null},
             shares: {page: 1, pageSize: 10, count: 0, next: null, previous: null, search: ''},
-            collabs: {page: 1, pageSize: 20, count: 0, next: null, previous: null}
+            collabs: {page: 1, pageSize: 20, count: 0, next: null, previous: null},
+            sharedFolders: {page: 1, pageSize: 20, count: 0, next: null, previous: null}
         };
 
         // 🔧 配置（从前端配置管理器获取）
@@ -517,6 +520,8 @@ class CloudApp {
 
         this.currentShareFileId = null;
         this.currentUser = null;
+        this.cloud_home_url = '/cloud/';
+        this.cloud_login_url = '/cloud/login/';
         this.lastLoadedFiles = [];             // 缓存最后加载的文件列表
 
         this.trashViewMode = 'list';  // 🔧 回收站视图模式
@@ -577,7 +582,7 @@ class CloudApp {
             const token = localStorage.getItem('access_token');
             if (!token) {
                 localStorage.setItem('redirect_url', window.location.href);
-                window.location.href = '/cloud/login/';
+                window.location.href = this.cloud_login_url;
                 return;
             }
 
@@ -812,16 +817,26 @@ class CloudApp {
     }
 
     /**
-     * 根据文件夹 ID 获取名称（用于面包屑）
+     * 🔧 根据ID获取文件夹名称（增强版，支持从多个来源查找）
      */
     getFolderNameById(folderId) {
-        // 简单实现：从当前渲染的文件列表中查找
+        // 1. 从当前渲染的文件列表中查找
         const items = document.querySelectorAll('.file-item, .file-grid-item');
         for (const item of items) {
             if (item.dataset.fileId === folderId && item.dataset.isFolder === 'true') {
                 return item.querySelector('.file-name')?.textContent || '未知文件夹';
             }
         }
+
+        // 2. 从路径栈中查找
+        if (this.sharedFolderPathStack) {
+            const found = this.sharedFolderPathStack.find(item => item.id === folderId);
+            if (found) {
+                return found.name;
+            }
+        }
+
+        // 3. 默认返回
         return '文件夹';
     }
 
@@ -846,14 +861,21 @@ class CloudApp {
         // 更新状态
         this.currentView = view;
 
+        console.log('currentView: ', view)
         // 🔧 切换视图时重置分页
         if (view === 'files') this.pagination.files.page = 1;
         else if (view === 'shared') this.pagination.shares.page = 1;
         else if (view === 'collaborations') this.pagination.collabs.page = 1;
+        else if (view === 'shared-folders') this.pagination.sharedFolders.page = 1;
 
         // 🔧 关键：只在"全部文件"视图下支持文件夹钻取
         if (view !== 'files') {
             this.pathStack = [];
+        }
+
+        // 🔧 关键修复：只在"共享文件夹"视图下支持共享文件夹钻取
+        if (view !== 'shared-folders') {
+            this.sharedFolderPathStack = [];
             this.currentFolderId = null;
         } else {
             this.currentFolderId = folderId || null;
@@ -861,6 +883,7 @@ class CloudApp {
 
         // 更新面包屑
         this.updateBreadcrumb();
+        this.updateSharedFolderBreadcrumb()
 
         // 加载对应数据
         switch (view) {
@@ -891,6 +914,10 @@ class CloudApp {
                 this.collabResultsElementId = 'collabUserResultsNew'
                 this.collabselectedElementId = 'selectedCollabsNew'
                 await this.loadCollaborations();
+                break;
+            case 'shared-folders':
+                document.getElementById('sharedFoldersView').classList.add('active');
+                await this.loadSharedFolders();
                 break;
             case 'trash':
                 document.getElementById('trashView').classList.add('active');
@@ -941,10 +968,17 @@ class CloudApp {
 
         this.switchTrashViewMode(mode)
         this.switchCollabViewMode(mode)
+        this.switchSharedFolderViewMode(mode)
 
     }
 
 
+
+
+    /**
+     * 🔧 渲染分页控件
+     * @param {string} type - 分页类型: 'files', 'shares', 'collabs', 'sharedFolders'
+     */
     renderPagination(type) {
         const containerId = `paginationContainer${type.charAt(0).toUpperCase() + type.slice(1)}`;
         const container = document.getElementById(containerId);
@@ -957,46 +991,128 @@ class CloudApp {
         }
 
         const totalPages = Math.max(1, Math.ceil(pag.count / pag.pageSize));
+        const currentPage = pag.page;
+
         container.innerHTML = `
-        <div class="pagination-info">共 ${pag.count} 项，第 ${pag.page}/${totalPages} 页</div>
-        <div class="pagination-controls">
-            <button class="pagination-btn" ${!pag.previous ? 'disabled' : ''} onclick="cloudApp.changePage('${type}', ${pag.page - 1})">上一页</button>
-            ${this._renderPageNumbers(type, pag.page, totalPages)}
-            <button class="pagination-btn" ${!pag.next ? 'disabled' : ''} onclick="cloudApp.changePage('${type}', ${pag.page + 1})">下一页</button>
-        </div>
-    `;
+            <div class="pagination-wrapper">
+                <div class="pagination-info">共 ${pag.count} 项，第 ${currentPage}/${totalPages} 页</div>
+                <div class="pagination-controls">
+                    <button class="pagination-btn" 
+                            onclick="cloudApp.changePage('${type}', 1)" 
+                            ${currentPage <= 1 ? 'disabled' : ''}
+                            title="首页">
+                        <i class="fas fa-angle-double-left"></i>
+                    </button>
+                    <button class="pagination-btn" 
+                            onclick="cloudApp.changePage('${type}', ${currentPage - 1})" 
+                            ${!pag.previous ? 'disabled' : ''}
+                            title="上一页">
+                        <i class="fas fa-angle-left"></i>
+                    </button>
+                    ${this._renderPageNumbers(type, currentPage, totalPages)}
+                    <button class="pagination-btn" 
+                            onclick="cloudApp.changePage('${type}', ${currentPage + 1})" 
+                            ${!pag.next ? 'disabled' : ''}
+                            title="下一页">
+                        <i class="fas fa-angle-right"></i>
+                    </button>
+                    <button class="pagination-btn" 
+                            onclick="cloudApp.changePage('${type}', ${totalPages})" 
+                            ${currentPage >= totalPages ? 'disabled' : ''}
+                            title="末页">
+                        <i class="fas fa-angle-double-right"></i>
+                    </button>
+                </div>
+            </div>
+        `;
     }
 
+    /**
+     * 🔧 渲染页码
+     */
     _renderPageNumbers(type, currentPage, totalPages) {
         let html = '';
-        const showPages = 5; // 最多显示页码数
+        const showPages = 7; // 最多显示页码数
+
         let start = Math.max(1, currentPage - Math.floor(showPages / 2));
         let end = Math.min(totalPages, start + showPages - 1);
-        if (end - start + 1 < showPages) start = Math.max(1, end - showPages + 1);
 
+        // 调整起始位置，确保显示足够页码
+        if (end - start + 1 < showPages) {
+            start = Math.max(1, end - showPages + 1);
+        }
+
+        // 第一页和省略号
         if (start > 1) {
             html += `<button class="pagination-btn" onclick="cloudApp.changePage('${type}', 1)">1</button>`;
-            if (start > 2) html += `<span style="padding:0 4px;color:#909399;">...</span>`;
+            if (start > 2) {
+                html += `<span class="pagination-ellipsis">...</span>`;
+            }
         }
+
+        // 中间页码
         for (let i = start; i <= end; i++) {
-            html += `<button class="pagination-btn ${i === currentPage ? 'active' : ''}" onclick="cloudApp.changePage('${type}', ${i})">${i}</button>`;
+            html += `<button class="pagination-btn ${i === currentPage ? 'active' : ''}" 
+                              onclick="cloudApp.changePage('${type}', ${i})">${i}</button>`;
         }
+
+        // 最后一页和省略号
         if (end < totalPages) {
-            if (end < totalPages - 1) html += `<span style="padding:0 4px;color:#909399;">...</span>`;
+            if (end < totalPages - 1) {
+                html += `<span class="pagination-ellipsis">...</span>`;
+            }
             html += `<button class="pagination-btn" onclick="cloudApp.changePage('${type}', ${totalPages})">${totalPages}</button>`;
         }
+
         return html;
     }
 
+
+
+    /**
+     * 🔧 切换页码
+     * @param {string} type - 分页类型
+     * @param {number} page - 目标页码
+     */
     changePage(type, page) {
         if (page < 1) return;
-        this.pagination[type].page = page;
-        if (type === 'files') this.loadFiles(this.currentFolderId);
-        else if (type === 'shares') this.loadMyShares();
-        else if (type === 'collabs') this.loadCollaborations();
+
+        const pag = this.pagination[type];
+        const totalPages = Math.max(1, Math.ceil(pag.count / pag.pageSize));
+
+        if (page > totalPages) return;
+
+        pag.page = page;
+
+        console.log(`📄 切换页码: type=${type}, page=${page}`);
+
+        // 根据类型加载对应数据
+        switch (type) {
+            case 'files':
+                this.loadFiles(this.currentFolderId);
+                break;
+            case 'shares':
+                this.loadMyShares();
+                break;
+            case 'collabs':
+                this.loadCollaborations();
+                break;
+            case 'sharedFolders':
+                this.loadSharedFolders(this.currentFolderId);
+                break;
+        }
 
         // 滚动到列表顶部
-        document.querySelector(`#${type === 'files' ? 'fileListContainer' : type === 'shares' ? 'mySharesList' : 'collabListView'}`)?.scrollTo(0, 0);
+        const scrollContainer = document.querySelector(
+            type === 'files' ? '.file-list-container' :
+            type === 'shares' ? '#mySharesList' :
+            type === 'collabs' ? '#collabListView' :
+            '.file-list-container'
+        );
+
+        if (scrollContainer) {
+            scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
+        }
     }
 
 
@@ -1007,6 +1123,7 @@ class CloudApp {
             const response = await fetch('/api/cloud/dashboard/overview/', {
                 headers: TokenManager.getHeaders()
             });
+            this.statusCode = response.status;
             if (!response.ok) throw new Error('加载仪表盘失败');
 
             const data = await response.json();
@@ -1014,6 +1131,9 @@ class CloudApp {
 
         } catch (error) {
             console.error('加载仪表盘失败:', error);
+            if (this.statusCode === 401) {
+                this.handleAuthError()
+            }
         }
     }
 
@@ -1034,7 +1154,7 @@ class CloudApp {
             const response = await fetch(`/api/cloud/files/?${params.toString()}`, {
                 headers: TokenManager.getHeaders()
             });
-
+            this.statusCode = response.status;
             if (!response.ok) throw new Error('加载文件列表失败');
 
             const data = await response.json();
@@ -1054,41 +1174,90 @@ class CloudApp {
     }
 
 
+
+
+    /**
+     * 🔧 关键修复：加载文件列表，支持分页和搜索
+     * @param {string|null} folderId - 文件夹 ID
+     * @param {Object} filters - 额外过滤参数
+     */
     async loadFiles(folderId = null, filters = {}) {
         try {
             this.showLoading();
+
+            // 🔧 如果文件夹改变，重置到第一页
             if (folderId !== this.lastFolderId) {
                 this.pagination.files.page = 1;
+                this.lastFolderId = folderId;
             }
+
+            // 构建查询参数
             const params = new URLSearchParams();
-            if (folderId) params.append('folder', folderId);
-            if (filters.starred) params.append('starred', 'true');
+
+            // 文件夹参数
+            if (folderId) {
+                params.append('folder', folderId);
+            }
+
+            // 🔧 分页参数
             params.append('page', this.pagination.files.page);
             params.append('page_size', this.pagination.files.pageSize);
 
-            const res = await fetch(`/api/cloud/files/?${params.toString()}`, {headers: TokenManager.getHeaders()});
-            if (!res.ok) throw new Error('加载失败');
+            // 🔧 搜索参数
+            const searchValue = document.getElementById('fileSearch')?.value?.trim();
+            if (searchValue) {
+                params.append('search', searchValue);
+            }
 
-            const data = await res.json();
-            const fileList = Array.isArray(data.results) ? data.results : [];
-            this.pagination.files.count = data.count || 0;
-            this.pagination.files.next = data.next;
-            this.pagination.files.previous = data.previous;
+            // 星标过滤
+            if (filters.starred) {
+                params.append('starred', 'true');
+            }
+
+            console.log(`🔍 加载文件列表: page=${this.pagination.files.page}, folder=${folderId}, search=${searchValue}`);
+
+            const response = await fetch(`/api/cloud/files/?${params.toString()}`, {
+                headers: TokenManager.getHeaders()
+            });
+            this.statusCode = response.status;
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || error.detail || '加载文件列表失败');
+            }
+
+            const data = await response.json();
+
+            // 🔧 处理分页响应
+            const fileList = Array.isArray(data.results) ? data.results : (Array.isArray(data) ? data : []);
+
+            this.pagination.files.count = data.count || fileList.length || 0;
+            this.pagination.files.next = data.next || null;
+            this.pagination.files.previous = data.previous || null;
+
+            // 🔧 保存最后加载的数据
             this.lastLoadedFiles = fileList;
-            this.lastFolderId = folderId;
+
+            console.log(`✅ 文件列表加载完成: ${fileList.length} 项, 总计 ${this.pagination.files.count} 项`);
+
+            // 渲染文件列表
             this.renderFiles(fileList);
+
+            // 渲染分页
             this.renderPagination('files');
-        } catch (e) {
-            console.error(e);
-            this.showError('加载失败', e.message);
+
+        } catch (error) {
+            console.error('❌ 加载文件失败:', error);
+            this.showError('加载失败', error);
+            if (this.statusCode === 401) {
+                this.handleAuthError()
+            }
         } finally {
             this.hideLoading();
         }
     }
 
-
     /**
-     * 渲染文件列表（支持列表/网格视图）
+     * 渲染文件列表（支持列表/网格视图）（增强版 - 标识共享文件夹）
      */
     renderFiles(data) {
         const listBody = document.getElementById('fileListBody');
@@ -1140,6 +1309,12 @@ class CloudApp {
                 const isSelected = this.selectedFiles.has(file.id);
                 const isDownload = this.downloadEnabled || window.frontendCloudConfig?.get('system.download_enabled', false)
 
+                // 🔧 新增：检查是否为共享文件夹
+                const isSharedFolder = isFolder && file.is_shared_folder;
+                const folderColor = isSharedFolder ? '#E6A23C' : '#409EFF';
+
+                const avatar = file.owner?.avatar || '/static/images/default-avatar.png';
+                const ownerName = file.owner?.real_name || file.owner?.username || '未知';
 
                 html += `
                     <div class="file-item ${isFolder ? 'is-folder' : ''} ${isSelected ? 'selected' : ''}" 
@@ -1154,8 +1329,10 @@ class CloudApp {
                                    data-file-id="${file.id}"
                                    ${isSelected ? 'checked' : ''}
                                    onchange="cloudApp.toggleFileSelection('${file.id}', this.checked)">
-                            <i class="fas ${isFolder ? 'fa-folder' : file.icon_class || 'fa-file'}"></i>
+                            <i class="fas ${isFolder ? 'fa-folder' : file.icon_class || 'fa-file'}" style="color: ${folderColor}"></i>
                             <span class="file-name">${this.escapeHtml(file.name)}</span>
+        
+                            ${isSharedFolder ? `<div class="badge" title="共享文件夹 - ${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"></div>` : ''}
                         </div>
                         <div class="file-col size">${isFolder ? '-' : (file.size_formatted || '-')}</div>
                         <div class="file-col date">${this.formatDate(file.updated_at || file.created_at)}</div>
@@ -1239,6 +1416,11 @@ class CloudApp {
                 const tagType = isImage ? 'img' : isVideo ? 'video' : 'file';
                 const isDownload = this.downloadEnabled || window.frontendCloudConfig?.get('system.download_enabled', false)
 
+                // 🔧 新增：检查是否为共享文件夹
+                const isSharedFolder = isFolder && file.is_shared_folder;
+                const folderColor = isSharedFolder ? '#E6A23C' : '#409EFF';
+                const avatar = file.owner?.avatar || '/static/images/default-avatar.png';
+                const ownerName = file.owner?.real_name || file.owner?.username || '未知';
 
                 // 🔧 关键修复：图片和视频显示缩略图
                 const thumbnailHtml = (isImage || isVideo) && !isFolder ? `
@@ -1247,7 +1429,9 @@ class CloudApp {
                     </div>
                 ` : `
                     <div class="file-icon">
-                        <i class="fas ${isFolder ? 'fa-folder folder' : file.icon_class || 'fa-file'}"></i>
+                        <i class="fas ${isFolder ? 'fa-folder folder' : file.icon_class || 'fa-file'}" style="color: ${folderColor}"></i>
+                        
+                        ${isSharedFolder ? `<div class="badge badge-corner" title="共享文件夹 - ${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"></div>` : ''}
                     </div>
                 `;
 
@@ -1443,7 +1627,7 @@ class CloudApp {
                     file_ids: Array.from(this.selectedFiles)
                 })
             });
-
+            this.statusCode = response.status;
             if (!response.ok) {
                 const error = await response.json();
                 throw new Error(error.error || '批量删除失败');
@@ -1506,7 +1690,7 @@ class CloudApp {
             const response = await fetch('/api/cloud/folders/tree/', {
                 headers: TokenManager.getHeaders()
             });
-
+            this.statusCode = response.status;
             if (!response.ok) throw new Error('加载文件夹失败');
 
             const data = await response.json();
@@ -1519,7 +1703,8 @@ class CloudApp {
                 nodes.forEach(node => {
                     const indent = level * 20;
                     const hasChildren = node.children && node.children.length > 0;
-
+                    const isSharedFolder = node.is_shared_folder || false;
+                    console.log('isSharedFolder:', isSharedFolder);
                     html += `
                         <div class="folder-tree-item" 
                              data-folder-id="${node.id}" 
@@ -1527,6 +1712,7 @@ class CloudApp {
                              style="padding-left: ${indent + 15}px;">
                             <i class="fas fa-folder${hasChildren ? '-open' : ''}"></i>
                             <span class="folder-name">${this.escapeHtml(node.name)}</span>
+                            ${isSharedFolder ? '<span class="badge" title="共享文件夹"><i class="fas fa-folder-open"></i></span>' : ''}
                         </div>
                     `;
 
@@ -1634,7 +1820,7 @@ class CloudApp {
                     target_folder_id: this.batchMoveTargetFolder.id
                 })
             });
-
+            this.statusCode = response.status;
             if (!response.ok) {
                 const error = await response.json();
                 throw new Error(error.error || error.detail || '批量移动失败');
@@ -1742,7 +1928,7 @@ class CloudApp {
                         share_type: 'public'
                     })
                 });
-
+                this.statusCode = response.status;
                 if (response.ok) {
                     const share = await response.json();
                     results.push({
@@ -1838,8 +2024,15 @@ class CloudApp {
      */
     handleItemClick(fileId, isFolder) {
         if (isFolder) {
-            // 🔧 单击文件夹：在网格视图中也支持进入
-            this.navigateToFolder(fileId);
+
+            if (this.currentView === 'shared-folders') {
+                this.navigateToSharedFolder(fileId);
+            } else {
+                // 🔧 单击文件夹：在网格视图中也支持进入
+                this.navigateToFolder(fileId);
+            }
+
+
         } else {
             // 文件：切换选中状态
             const item = document.querySelector(`[data-file-id="${fileId}"]`);
@@ -1878,6 +2071,7 @@ class CloudApp {
             const response = await fetch(`/api/cloud/files/${fileId}/`, {
                 headers: TokenManager.getHeaders()
             });
+            this.statusCode = response.status;
             if (!response.ok) throw new Error('加载失败');
 
             const file = await response.json();
@@ -1901,6 +2095,7 @@ class CloudApp {
             const response = await fetch(`/api/cloud/files/${fileId}/download/`, {
                 headers: TokenManager.getHeaders()
             });
+            this.statusCode = response.status;
             if (!response.ok) {
                 const error = await response.json();
                 throw new Error(error.error || '下载失败');
@@ -2095,6 +2290,7 @@ class CloudApp {
             if (filters.folder) params.append('folder', filters.folder);
 
             const res = await fetch(`/api/cloud/documents/list_collabs/?${params.toString()}`, {headers: TokenManager.getHeaders()});
+            this.statusCode = res.status;
             if (!res.ok) throw new Error('加载协作文档失败');
 
             const data = await res.json();
@@ -2107,7 +2303,10 @@ class CloudApp {
             this.renderPagination('collabs');
         } catch (e) {
             console.error(e);
-            this.showError('加载失败', e.message);
+            this.showError('加载失败', e);
+            if (this.statusCode === 401) {
+                this.handleAuthError()
+            }
         } finally {
             this.hideLoading();
         }
@@ -3904,6 +4103,9 @@ class CloudApp {
 
     async createFolder() {
         const name = document.getElementById('newFolderName')?.value.trim();
+        const desc = document.getElementById('newFolderDesc')?.value.trim();
+        const isSharedFolder = document.getElementById('isSharedFolder').checked;
+
         if (!name) {
             this.showError('验证失败', '文件夹名称不能为空');
             return;
@@ -3916,7 +4118,12 @@ class CloudApp {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${TokenManager.getToken()}`
                 },
-                body: JSON.stringify({name, parent: this.currentFolderId})
+                body: JSON.stringify({
+                    name:name,
+                    description: desc,
+                    is_shared_folder: isSharedFolder,
+                    parent: this.currentFolderId
+                })
             });
 
             if (!response.ok) {
@@ -3927,6 +4134,9 @@ class CloudApp {
             this.showSuccess('创建成功', '文件夹创建成功');
             this.closeModal('newFolderModal');
             document.getElementById('newFolderName').value = '';
+            document.getElementById('newFolderDesc').value = '';
+            document.getElementById('isSharedFolder').checked = false;
+
             await this.loadFiles(this.currentFolderId);
         } catch (error) {
             console.error('创建失败:', error);
@@ -3942,6 +4152,7 @@ class CloudApp {
             const response = await fetch('/api/cloud/shares/?owner=me', {
                 headers: TokenManager.getHeaders()
             });
+            this.statusCode = response.status;
             if (!response.ok) throw new Error('加载分享失败');
 
             const data = await response.json();
@@ -3966,6 +4177,7 @@ class CloudApp {
             if (this.pagination.shares.search) params.append('search', this.pagination.shares.search);
 
             const res = await fetch(`/api/cloud/shares/?${params.toString()}`, {headers: TokenManager.getHeaders()});
+            this.statusCode = res.status;
             if (!res.ok) throw new Error('加载分享失败');
 
             const data = await res.json();
@@ -3977,7 +4189,10 @@ class CloudApp {
             this.renderPagination('shares');
         } catch (e) {
             console.error(e);
-            this.showError('加载失败', e.message);
+            this.showError('加载失败', e);
+            if (this.statusCode === 401) {
+                this.handleAuthError()
+            }
         } finally {
             this.hideLoading();
         }
@@ -4039,6 +4254,7 @@ class CloudApp {
             const response = await fetch('/api/cloud/shares/?shared_with_me=true', {
                 headers: TokenManager.getHeaders()
             });
+            this.statusCode = response.status;
             if (!response.ok) throw new Error('加载分享失败');
 
             const data = await response.json();
@@ -4046,7 +4262,10 @@ class CloudApp {
             this.renderSharedWithMe(shares);
         } catch (error) {
             console.error('加载分享给我失败:', error);
-            this.showError('加载失败', error.message);
+            this.showError('加载失败', error);
+            if (this.statusCode === 401) {
+                this.handleAuthError()
+            }
         } finally {
             this.hideLoading();
         }
@@ -4126,6 +4345,7 @@ class CloudApp {
             const response = await fetch('/api/cloud/files/trash_items/', {
                 headers: TokenManager.getHeaders()
             });
+            this.statusCode = response.status;
 
             if (!response.ok) throw new Error('加载回收站失败');
 
@@ -4136,7 +4356,10 @@ class CloudApp {
 
         } catch (error) {
             console.error('加载回收站失败:', error);
-            this.showError('加载失败', error.message);
+            this.showError('加载失败', error);
+            if (this.statusCode === 401) {
+                this.handleAuthError()
+            }
         } finally {
             this.hideLoading();
         }
@@ -4438,9 +4661,12 @@ class CloudApp {
                 await this.loadFiles(this.currentFolderId);
             } else if (this.currentView === 'trash') {
                 await this.loadTrash();
+            } else if (this.currentView === 'shared-folders') {
+                await this.loadSharedFolders(this.currentFolderId);
             } else {
                 await this.loadFiles(null);
             }
+
 
         } catch (error) {
             console.error('删除失败:', error);
@@ -4669,7 +4895,7 @@ class CloudApp {
                 method: 'POST',
                 headers: TokenManager.getHeaders()
             });
-
+            this.statusCode = response.status;
             const result = await response.json();
 
             if (!response.ok) {
@@ -4693,7 +4919,10 @@ class CloudApp {
         } catch (error) {
             this.hideLoading();
             console.error('清空失败:', error);
-            this.showError('清空失败', error.message);
+            this.showError('清空失败', error);
+            if (this.statusCode === 401) {
+                this.handleAuthError()
+            }
         }
     }
 
@@ -5033,7 +5262,7 @@ class CloudApp {
                 },
                 body: JSON.stringify({name: newName})
             });
-
+            this.statusCode = response.status;
             if (!response.ok) {
                 const error = await response.json();
                 throw new Error(error.error || error.detail || '重命名失败');
@@ -5046,7 +5275,15 @@ class CloudApp {
             this.closeModal('renameModal');
 
             // 刷新当前列表
-            await this.loadFiles(this.currentFolderId);
+            if (this.currentView === 'files') {
+                await this.loadFiles(this.currentFolderId);
+            } else if (this.currentView === 'trash') {
+                await this.loadTrash();
+            } else if (this.currentView === 'shared-folders') {
+                await this.loadSharedFolders(this.currentFolderId);
+            } else {
+                await this.loadFiles(null);
+            }
 
         } catch (error) {
             console.error('重命名失败:', error);
@@ -5084,7 +5321,7 @@ class CloudApp {
             const response = await fetch('/api/cloud/folders/tree/', {
                 headers: TokenManager.getHeaders()
             });
-
+            this.statusCode = response.status;
             if (!response.ok) throw new Error('加载文件夹失败');
 
             const data = await response.json();
@@ -5097,11 +5334,20 @@ class CloudApp {
                 nodes.forEach(node => {
                     const indent = level * 20;
                     const hasChildren = node.children && node.children.length > 0;
+                    const isSharedFolder = node.is_shared_folder;
+                    const isCurrentFolder = node.id === this.currentFolderId;
+                    const backgroundColor = isCurrentFolder ? '#f0f0f0' : '';
+                    const iconColor = isSharedFolder ? '#E6A23C' : '#409EFF';
+                    const avatar = node.owner?.avatar || '/static/images/default-avatar.png';
+                    const ownerName = node.owner?.real_name || node.owner?.username || '未知';
 
                     html += `
-                        <div class="folder-tree-item" data-folder-id="${node.id}" style="padding-left: ${indent + 15}px;">
-                            <i class="fas fa-folder${hasChildren ? '-open' : ''}"></i>
+                        <div class="folder-tree-item" title="${isSharedFolder ? '共享文件夹 - ' + node.name : '我的文件夹 - ' + node.name}" data-folder-id="${node.id}" style="padding-left: ${indent + 15}px; background-color: ${backgroundColor};">
+                            <i class="fas fa-folder${hasChildren ? '-open' : ''}" style="color: ${iconColor}"></i>
                             <span>${node.name}</span>
+                            
+                            ${isSharedFolder ? `<div class="badge" title="共享文件夹 - ${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"></div>` : ''}
+                            ${isCurrentFolder ? '<span class="badge badge-current" title="当前文件夹" style="color: lightseagreen; font-size:12px">当前文件夹</span>' : ''}
                         </div>
                     `;
 
@@ -5116,7 +5362,7 @@ class CloudApp {
 
             let html = `
                 <div class="folder-tree-item" data-folder-id="">
-                    <i class="fas fa-folder"></i>
+                    <i class="fas fa-folder" style="color: #409EFF"></i>
                     <span>根目录</span>
                 </div>
             `;
@@ -5139,7 +5385,10 @@ class CloudApp {
 
         } catch (error) {
             console.error('加载文件夹树失败:', error);
-            this.showError('加载失败', error.message);
+            this.showError('加载失败', error);
+            if (this.statusCode === 401) {
+                this.handleAuthError()
+            }
         }
     }
 
@@ -5160,7 +5409,7 @@ class CloudApp {
             if (this.currentMoveType === 'folder') {
                 // 文件夹移动
                 for (const folderId of this.currentMoveIds) {
-                    await fetch(`/api/cloud/folders/${folderId}/move/`, {
+                    let response = await fetch(`/api/cloud/folders/${folderId}/move/`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
@@ -5168,11 +5417,15 @@ class CloudApp {
                         },
                         body: JSON.stringify({new_parent: targetFolderId})
                     });
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.error || error.detail || error.message || '移动失败')
+                    }
                 }
             } else {
                 // 文件移动
                 for (const fileId of this.currentMoveIds) {
-                    await fetch(`/api/cloud/files/${fileId}/move/`, {
+                    let response = await fetch(`/api/cloud/files/${fileId}/move/`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
@@ -5180,6 +5433,10 @@ class CloudApp {
                         },
                         body: JSON.stringify({target_folder_id: targetFolderId})
                     });
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.error || error.detail || error.message || '移动失败')
+                    }
                 }
             }
 
@@ -5189,6 +5446,10 @@ class CloudApp {
             // 刷新当前列表
             if (this.currentView === 'files') {
                 await this.loadFiles(this.currentFolderId);
+            } else if (this.currentView === 'trash') {
+                await this.loadTrash();
+            } else if (this.currentView === 'shared-folders') {
+                await this.loadSharedFolders(this.currentFolderId);
             } else {
                 await this.loadFiles(null);
             }
@@ -5227,6 +5488,7 @@ class CloudApp {
             const response = await fetch('/api/cloud/dashboard/overview/', {
                 headers: TokenManager.getHeaders()
             });
+            this.statusCode = response.status;
             if (!response.ok) throw new Error('加载统计失败');
 
             const stats = await response.json();
@@ -5236,6 +5498,9 @@ class CloudApp {
             console.error('加载统计失败:', error);
             document.getElementById('dashboardStatsContent').innerHTML =
                 `<div class="empty-state"><p>加载失败：${error.message}</p></div>`;
+            if (this.statusCode === 401) {
+                this.handleAuthError()
+            }
         }
     }
 
@@ -5392,8 +5657,11 @@ class CloudApp {
             // 5. 自动刷新当前视图
             if (this.currentView === 'files') {
                 await this.loadFiles(this.currentFolderId);
+            } else if (this.currentView === 'trash') {
+                await this.loadTrash();
+            } else if (this.currentView === 'shared-folders') {
+                await this.loadSharedFolders(this.currentFolderId);
             } else {
-                // 若在其他视图，默认刷新根目录确保能看到同步结果
                 await this.loadFiles(null);
             }
 
@@ -5445,6 +5713,928 @@ class CloudApp {
             if (logo) logo.src = logoUrl;
         }
     }
+
+
+
+
+    /**
+     * 🔧 切换共享文件夹视图模式
+     */
+    switchSharedFolderViewMode(mode) {
+        const listView = document.getElementById('sharedFoldersListView');
+        const gridView = document.getElementById('sharedFoldersGridView');
+
+        if (listView && gridView) {
+            listView.classList.toggle('active', mode === 'list');
+            gridView.classList.toggle('active', mode === 'grid');
+
+            // 更新按钮状态
+            document.querySelectorAll('#sharedFoldersView .view-switcher .btn-icon').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.viewMode === mode);
+            });
+        }
+
+        this.sharedFolderViewMode = mode;
+    }
+
+    /**
+     * 🔧 更改共享文件夹分页
+     */
+    changeSharedFolderPage(page) {
+        if (page < 1) return;
+
+        if (!this.pagination.sharedFolders) {
+            this.pagination.sharedFolders = {page: 1, pageSize: 20, count: 0, next: null, previous: null};
+        }
+
+        this.pagination.sharedFolders.page = page;
+
+        // 判断当前是否在钻取模式
+        const currentFolderId = this.sharedFolderPathStack && this.sharedFolderPathStack.length > 0
+            ? this.sharedFolderPathStack[this.sharedFolderPathStack.length - 1].id
+            : null;
+
+        this.loadSharedFolders(currentFolderId);
+    }
+
+
+
+
+        /**
+     * 🔧 搜索共享文件夹中的文件和文件夹
+     */
+    async searchSharedFolders(keyword) {
+        // 清除搜索时重新加载
+        if (!keyword || !keyword.trim()) {
+            await this.loadSharedFolders(this.currentFolderId);
+            this.updateSharedFolderSearchUI(false);
+            return;
+        }
+
+        try {
+            // 显示搜索状态
+            this.updateSharedFolderSearchUI(true, keyword);
+
+            let url = '/api/cloud/shared-folders/';
+            const params = new URLSearchParams();
+
+            if (this.currentFolderId) {
+                params.append('folder', this.currentFolderId);
+            }
+            params.append('search', keyword.trim());
+            params.append('page', 1);
+            params.append('page_size', 20);
+
+            if (params.toString()) {
+                url += '?' + params.toString();
+            }
+
+            const res = await fetch(url, {headers: TokenManager.getHeaders()});
+
+            if (!res.ok) {
+                throw new Error('搜索失败');
+            }
+
+            const data = await res.json();
+            const results = Array.isArray(data.results) ? data.results : data;
+
+            // 渲染搜索结果
+            if (this.currentFolderId) {
+                this.renderSharedFolderContents(results, this.currentFolderId);
+            } else {
+                this.renderSharedFolders(results);
+            }
+
+            // 更新分页
+            if (!this.pagination.sharedFolders) {
+                this.pagination.sharedFolders = {page: 1, pageSize: 20, count: 0, next: null, previous: null};
+            }
+            this.pagination.sharedFolders.count = data.count || results.length;
+            this.pagination.sharedFolders.next = data.next;
+            this.pagination.sharedFolders.previous = data.previous;
+            this.renderPagination('sharedFolders');
+
+        } catch (error) {
+            console.error('搜索共享文件夹失败:', error);
+            this.showError('搜索失败', error.message);
+        }
+    }
+
+    /**
+     * 🔧 清除共享文件夹搜索
+     */
+    clearSharedFolderSearch() {
+        const searchInput = document.getElementById('sharedFolderSearchInput');
+        if (searchInput) {
+            searchInput.value = '';
+        }
+        this.updateSharedFolderSearchUI(false);
+        this.loadSharedFolders(this.currentFolderId);
+    }
+
+    /**
+     * 🔧 更新共享文件夹搜索UI状态
+     */
+    updateSharedFolderSearchUI(isSearching, keyword = '') {
+        const searchInput = document.getElementById('sharedFolderSearchInput');
+        const clearBtn = searchInput?.parentElement?.querySelector('.search-clear-btn');
+
+        if (clearBtn) {
+            clearBtn.style.display = (isSearching && keyword) ? 'block' : 'none';
+        }
+
+        // 可选：添加搜索中的视觉反馈
+        if (searchInput) {
+            if (isSearching) {
+                searchInput.classList.add('searching');
+            } else {
+                searchInput.classList.remove('searching');
+            }
+        }
+    }
+
+
+    /**
+     * 🔧 加载共享文件夹（支持分页和钻取）
+     */
+    async loadSharedFolders(folderId = null) {
+        try {
+            this.showLoading();
+
+            // 🔧 构建查询参数
+            let url = '/api/cloud/shared-folders/';
+            const params = new URLSearchParams();
+
+            if (folderId) {
+                // 钻取模式：获取共享文件夹下的内容
+                params.append('folder', folderId);
+                params.append('page', this.pagination.sharedFolders?.page || 1);
+                params.append('page_size', this.pagination.sharedFolders?.pageSize || 20);
+            } else {
+                // 列表模式：获取共享文件夹列表
+                params.append('page', this.pagination.sharedFolders?.page || 1);
+                params.append('page_size', this.pagination.sharedFolders?.pageSize || 20);
+            }
+
+            if (params.toString()) {
+                url += '?' + params.toString();
+            }
+
+            const res = await fetch(url, {headers: TokenManager.getHeaders()});
+
+            this.statusCode = res.status;
+
+
+            if (!res.ok) {
+                const errorText = await res.text();
+                console.error('❌ 请求失败:', {
+                    status: res.status,
+                    statusText: res.statusText,
+                    body: errorText
+                });
+
+                let errorMessage = '加载失败';
+                try {
+                    const errorData = JSON.parse(errorText);
+                    errorMessage = errorData.error || errorData.detail || errorMessage;
+                } catch (e) {
+                    errorMessage = `服务器错误 (${res.status})`;
+                }
+
+                throw new Error(errorMessage);
+            }
+
+            const data = await res.json();
+
+            // 🔧 处理分页信息
+            if (!this.pagination.sharedFolders) {
+                this.pagination.sharedFolders = {page: 1, pageSize: 20, count: 0, next: null, previous: null};
+            }
+            this.pagination.sharedFolders.count = data.count || 0;
+            this.pagination.sharedFolders.next = data.next;
+            this.pagination.sharedFolders.previous = data.previous;
+
+            const results = Array.isArray(data.results) ? data.results : data;
+
+            if (folderId) {
+                // 钻取模式：渲染文件夹内容
+                this.renderSharedFolderContents(results, folderId);
+            } else {
+                // 列表模式：渲染共享文件夹列表
+                this.renderSharedFolders(results);
+            }
+
+            // 🔧 渲染分页控件
+            this.renderPagination('sharedFolders');
+
+        } catch (e) {
+            console.error('❌ 加载共享文件夹失败:', e);
+            this.showError('加载失败', e || '未知错误');
+            if (this.statusCode === 401) {
+                this.handleAuthError()
+            }
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+    /**
+     * 🔧 渲染共享文件夹列表（卡片+列表双视图）
+     */
+    renderSharedFolders(folders) {
+        const listView = document.getElementById('sharedFoldersListView');
+        const gridView = document.getElementById('sharedFoldersGridView');
+
+        if (!folders || folders.length === 0) {
+            const emptyHtml = `
+                <div class="empty-state">
+                    <i class="fas fa-users"></i>
+                    <p>暂无共享文件夹</p>
+                    <button class="btn btn-primary" onclick="cloudApp.openModal('createSharedFolderModal')">新建共享文件夹</button>
+                </div>
+            `;
+
+            if (listView) {
+                listView.querySelector('.file-list-body').innerHTML = emptyHtml;
+            }
+            if (gridView) {
+                gridView.querySelector('.file-grid-body').innerHTML = emptyHtml;
+            }
+            return;
+        }
+
+        // 🔧 渲染列表视图
+        if (listView) {
+            let listHtml = '';
+            folders.forEach(f => {
+                const memberCount = f.member_count || (f.folder_collaborations ? f.folder_collaborations.length + 1 : 1);
+                const fileCount = f.file_count || (f.folder_contents ? f.folder_contents.length : 0);
+                const ownerName = f.owner?.real_name || f.owner?.username || '未知';
+                const avatar = f.owner?.avatar || '/static/images/default-avatar.png';
+                listHtml += `
+                    <div class="file-item is-folder" data-file-id="${f.id}" data-is-folder="true" ondblclick="cloudApp.navigateToSharedFolder('${f.id}')">
+                        <div class="file-col name">
+                            <i class="fas fa-folder" style="color: #E6A23C;"></i>
+                            <span class="file-name">${this.escapeHtml(f.name)}</span>
+                        </div>
+                        <div class="file-col size">${memberCount} 人 / ${fileCount} 个文件</div>
+                        
+                        <div class="file-col badge" title="${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"><span class="file-col size">${ownerName}</span></div>
+                        <div class="file-col date">${this.formatDate(f.created_at)}</div>
+                        <div class="file-col actions">
+                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.openManageMembersModal('${f.id}', '${this.escapeHtml(f.name)}')" title="管理成员">
+                                <i class="fas fa-user-cog"></i>
+                            </button>
+                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.navigateToSharedFolder('${f.id}')" title="打开">
+                                <i class="fas fa-folder-open"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            });
+            listView.querySelector('.file-list-body').innerHTML = listHtml;
+        }
+
+        // 🔧 渲染网格视图
+        if (gridView) {
+            let gridHtml = '';
+            folders.forEach(f => {
+                const memberCount = f.member_count || (f.folder_collaborations ? f.folder_collaborations.length + 1 : 1);
+                const fileCount = f.file_count || (f.folder_contents ? f.folder_contents.length : 0);
+                const ownerName = f.owner?.real_name || f.owner?.username || '未知';
+                const avatar = f.owner?.avatar || '/static/images/default-avatar.png';
+                gridHtml += `
+                    <div class="file-grid-item is-folder" data-file-id="${f.id}" data-is-folder="true" ondblclick="cloudApp.navigateToSharedFolder('${f.id}')">
+                        <div class="file-icon">
+                            <i class="fas fa-folder" style="font-size: 48px; color: #E6A23C;"></i>
+                            <div class="badge badge-corner" title="创建者 - ${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"></div>
+                        </div>
+                        <div class="file-name" title="${this.escapeHtml(f.name)}">${this.escapeHtml(f.name)}</div>
+                        <div class="file-meta" title="成员：${memberCount} 人 / ${fileCount} 个文件">${memberCount} 人 / ${fileCount} 个文件</div>
+                        <div class="file-meta" title="创建者 - ${ownerName}">${ownerName}</div>
+                        <div class="file-meta" title="创建时间：${this.formatDate(f.created_at)}">${this.formatDate(f.created_at)}</div>
+                        <div class="file-actions">
+                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.openManageMembersModal('${f.id}', '${this.escapeHtml(f.name)}')" title="管理成员">
+                                <i class="fas fa-user-cog"></i>
+                            </button>
+                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.navigateToSharedFolder('${f.id}')" title="打开">
+                                <i class="fas fa-folder-open"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            });
+            gridView.querySelector('.file-grid-body').innerHTML = gridHtml;
+        }
+    }
+
+
+
+
+    /**
+     * 🔧 渲染共享文件夹内容（钻取后的文件和子文件夹）- 参考全部文件的网格视图
+     */
+    renderSharedFolderContents(items, folderId) {
+        const listView = document.getElementById('sharedFoldersListView');
+        const gridView = document.getElementById('sharedFoldersGridView');
+
+        if (!items || items.length === 0) {
+            const emptyHtml = `
+                <div class="empty-state">
+                    <i class="fas fa-folder-open"></i>
+                    <p>此文件夹为空</p>
+                </div>
+            `;
+
+            if (listView) {
+                listView.querySelector('.file-list-body').innerHTML = emptyHtml;
+            }
+            if (gridView) {
+                gridView.querySelector('.file-grid-body').innerHTML = emptyHtml;
+            }
+            return;
+        }
+
+        // 🔧 列表视图渲染
+        if (listView) {
+            let listHtml = '';
+            items.forEach(item => {
+                console.log('item:::', item)
+                if (item.is_folder) {
+                    const memberCount = item.member_count || (item.folder_collaborations ? item.folder_collaborations.length + 1 : 1);
+                    const fileCount = item.file_count || (item.folder_contents ? item.folder_contents.length : 0);
+                    const ownerName = item.owner?.real_name || item.owner?.username || '未知';
+                    const avatar = item.owner?.avatar || '/static/images/default-avatar.png';
+                    // 文件夹
+                    listHtml += `
+                        <div class="file-item is-folder" data-file-id="${item.id}" data-is-folder="true" ondblclick="cloudApp.navigateToSharedFolder('${item.id}')">
+                            <div class="file-col name">
+                                <i class="fas fa-folder" style="color: #E6A23C;"></i>
+                                <span class="file-name">${this.escapeHtml(item.name)}</span>
+                            </div>
+                            <div class="file-col size">${memberCount} 人 / ${fileCount} 个文件</div>
+                        
+                            <div class="file-col badge" title="${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"><span class="file-col size">${ownerName}</span></div>
+
+                            <div class="file-col date" title="更新时间">${this.formatDate(item.updated_at)}</div>
+                            <div class="file-col actions">
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.navigateToSharedFolder('${item.id}')" title="打开">
+                                    <i class="fas fa-folder-open"></i>
+                                </button>
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${item.id}'], true)" title="移动">
+                                    <i class="fas fa-cut"></i>
+                                </button>
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${item.id}', true)" title="删除">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    // 文件
+                    const isImage = item.is_image || (item.mime_type && item.mime_type.startsWith('image/'));
+                    const isVideo = item.is_video || (item.mime_type && item.mime_type.startsWith('video/'));
+                    const isPdf = item.document_type === 'pdf' || (item.mime_type && item.mime_type === 'application/pdf');
+                    const isDocument = item.is_document;
+
+
+                    const ownerName = item.owner?.real_name || item.owner?.username || '未知';
+                    const avatar = item.owner?.avatar || '/static/images/default-avatar.png';
+
+                    listHtml += `
+                        <div class="file-item" data-file-id="${item.id}" data-is-folder="false">
+                            <div class="file-col name">
+                                <i class="fas ${item.icon_class || 'fa-file'}"></i>
+                                <span class="file-name">${this.escapeHtml(item.name)}</span>
+                            </div>
+                            <div class="file-col size">${item.size_formatted || '0 B'}</div>
+                            <div class="file-col badge" title="${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"><span class="file-col size">${ownerName}</span></div>
+                        
+                            <div class="file-col date" title="更新时间">${this.formatDate(item.updated_at)}</div>
+                            <div class="file-col actions">
+                                ${isImage || isVideo || isPdf ? `
+                                    <button class="btn-action" onclick="event.stopPropagation(); cloudApp.previewFile('${item.id}')" title="预览">
+                                        <i class="fas fa-eye"></i>
+                                    </button>
+                                ` : ''}
+                                
+                                ${isDocument ? `
+                                    <button class="btn-action" onclick="event.stopPropagation(); cloudApp.editDocument('${item.id}')" title="在线编辑">
+                                        <i class="fas fa-edit"></i>
+                                    </button>
+                                ` : ''}
+                                
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.shareFile('${item.id}', false)" title="分享">
+                                    <i class="fas fa-share-alt"></i>
+                                </button>
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.renameFile('${item.id}', '${this.escapeHtml(item.name)}')" title="重命名">
+                                    <i class="fas fa-edit"></i>
+                                </button>
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${item.id}'], false)" title="移动">
+                                    <i class="fas fa-cut"></i>
+                                </button>
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${item.id}', false)" title="删除">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                }
+            });
+            listView.querySelector('.file-list-body').innerHTML = listHtml;
+        }
+
+        // 🔧 网格视图渲染 - 参考全部文件的网格视图
+        if (gridView) {
+            let gridHtml = '';
+            items.forEach(item => {
+                console.log('item:::', item)
+                if (item.is_folder) {
+                    const memberCount = item.member_count || (item.folder_collaborations ? item.folder_collaborations.length + 1 : 1);
+                    const fileCount = item.file_count || (item.folder_contents ? item.folder_contents.length : 0);
+                    const ownerName = item.owner?.real_name || item.owner?.username || '未知';
+                    const avatar = item.owner?.avatar || '/static/images/default-avatar.png';
+                    // 文件夹网格项
+                    gridHtml += `
+                        <div class="file-grid-item is-folder" 
+                             data-file-id="${item.id}" 
+                             data-is-folder="true"
+                             ondblclick="cloudApp.navigateToSharedFolder('${item.id}')"
+                             oncontextmenu="cloudApp.handleContextMenu(event, '${item.id}', true)">
+                            <div class="file-checkbox-overlay">
+                                <input type="checkbox" 
+                                       class="file-checkbox" 
+                                       data-file-id="${item.id}"
+                                       onchange="cloudApp.toggleFileSelection('${item.id}', this.checked)">
+                            </div>
+                            
+                            
+                            <div class="file-icon">
+                                <i class="fas fa-folder" style="font-size: 48px; color: #E6A23C;"></i>
+                                <div class="badge badge-corner" title="创建者 - ${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"></div>
+                            </div>
+                            <div class="file-name" title="${this.escapeHtml(item.name)}">${this.escapeHtml(item.name)}</div>
+                            <div class="file-meta" title="成员：${memberCount} 人 / ${fileCount} 个文件">${memberCount} 人 / ${fileCount} 个文件</div>
+                            <div class="file-meta" title="创建者 - ${ownerName}">${ownerName}</div>
+                            
+                            
+                            <div class="file-date" title="更新时间">${this.formatDate(item.updated_at)}</div>
+                            <div class="file-actions">
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.navigateToSharedFolder('${item.id}')" title="打开">
+                                    <i class="fas fa-folder-open"></i>
+                                </button>
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${item.id}'], true)" title="移动">
+                                    <i class="fas fa-cut"></i>
+                                </button>
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${item.id}', true)" title="删除">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    // 文件网格项 - 支持缩略图预览
+                    const isImage = item.is_image || (item.mime_type && item.mime_type.startsWith('image/'));
+                    const isVideo = item.is_video || (item.mime_type && item.mime_type.startsWith('video/'));
+                    const isPdf = item.document_type === 'pdf' || (item.mime_type && item.mime_type === 'application/pdf');
+                    const isDocument = item.is_document;
+                    const tagType = isImage ? 'img' : isVideo ? 'video' : 'file';
+
+                    const ownerName = item.owner?.real_name || item.owner?.username || '未知';
+                    const avatar = item.owner?.avatar || '/static/images/default-avatar.png';
+
+                    // 🔧 图片、视频、PDF显示缩略图
+                    const thumbnailHtml = (isImage || isVideo) ? `
+                        <div class="file-thumbnail">
+                            <${tagType} src="${item.file_url}" alt="${item.name}" title="${item.name}" 
+                                  style="width:100%;height:80px;object-fit:cover;border-radius:4px;" 
+                                  onerror="this.parentElement.innerHTML='<div class=\\'file-icon\\'><i class=\\'fas ${item.icon_class || 'fa-file'}\\'></i></div>'" />
+                        </div>
+                        <div class="badge badge-corner" title="创建者 - ${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"></div>
+                    ` : `
+                        <div class="file-icon">
+                            <i class="fas ${item.icon_class || 'fa-file'}" style="font-size: 48px;"></i>
+                            <div class="badge badge-corner" title="创建者 - ${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"></div>
+                        </div>
+                    `;
+
+                    gridHtml += `
+
+                        
+                        <div class="file-grid-item" 
+                             data-file-id="${item.id}" 
+                             data-is-folder="false"
+                             ondblclick="cloudApp.handleItemDoubleClick('${item.id}', false, ${isDocument})"
+                             oncontextmenu="cloudApp.handleContextMenu(event, '${item.id}', false)">
+                            <div class="file-checkbox-overlay">
+                                <input type="checkbox" 
+                                       class="file-checkbox" 
+                                       data-file-id="${item.id}"
+                                       onchange="cloudApp.toggleFileSelection('${item.id}', this.checked)">
+                            </div>
+                            ${thumbnailHtml}
+                            <div class="file-name" title="${this.escapeHtml(item.name)}">${this.escapeHtml(item.name)}</div>
+                            <div class="file-meta">${item.size_formatted || '0 B'}</div>
+                            <div class="file-meta" title="创建者 - ${ownerName}">${ownerName}</div>
+                            <div class="file-date" title="更新时间">${this.formatDate(item.updated_at)}</div>
+                            <div class="file-actions">
+                                ${isImage || isVideo || isPdf ? `
+                                    <button class="btn-action" onclick="event.stopPropagation(); cloudApp.previewFile('${item.id}')" title="预览">
+                                        <i class="fas fa-eye"></i>
+                                    </button>
+                                ` : ''}
+                                
+                                ${isDocument ? `
+                                    <button class="btn-action" onclick="event.stopPropagation(); cloudApp.editDocument('${item.id}')" title="在线编辑">
+                                        <i class="fas fa-edit"></i>
+                                    </button>
+                                ` : ''}
+                                
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.shareFile('${item.id}', false)" title="分享">
+                                    <i class="fas fa-share-alt"></i>
+                                </button>
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.renameFile('${item.id}', '${this.escapeHtml(item.name)}')" title="重命名">
+                                    <i class="fas fa-edit"></i>
+                                </button>
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${item.id}'], false)" title="移动">
+                                    <i class="fas fa-cut"></i>
+                                </button>
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${item.id}', false)" title="删除">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                }
+            });
+            gridView.querySelector('.file-grid-body').innerHTML = gridHtml;
+        }
+    }
+
+
+
+
+    /**
+     * 🔧 导航到共享文件夹（支持钻取）- 参考全部文件的navigateToFolder逻辑
+     */
+    async navigateToSharedFolder(folderId, sliceIndex = null) {
+        try {
+            console.log('导航到共享文件夹:', folderId);
+
+            if (!this.sharedFolderPathStack) {
+                this.sharedFolderPathStack = [];
+            }
+
+            if (sliceIndex !== null && sliceIndex >= 0) {
+                // 🔧 点击面包屑中间项：截断路径
+                this.sharedFolderPathStack = this.sharedFolderPathStack.slice(0, sliceIndex + 1);
+            } else if (folderId === null) {
+                // 🔧 返回根目录
+                this.sharedFolderPathStack = [];
+            } else {
+                // 🔧 关键修复：检查是否已存在该文件夹，防止重复添加
+                const existingIndex = this.sharedFolderPathStack.findIndex(item => item.id === folderId);
+
+                if (existingIndex !== -1) {
+                    // 如果路径中已存在该文件夹，截断到该位置
+                    console.log('📁 路径中已存在该文件夹，截断到索引:', existingIndex);
+                    this.sharedFolderPathStack = this.sharedFolderPathStack.slice(0, existingIndex + 1);
+                } else {
+                    // 获取文件夹名称并压入栈
+                    const folderName = this.getFolderNameById(folderId);
+                    if (folderName) {
+                        this.sharedFolderPathStack.push({id: folderId, name: folderName});
+                        console.log('📁 添加新文件夹到路径栈:', folderName);
+                    } else {
+                        console.warn(`未能获取文件夹 ${folderId} 的名称`);
+                        this.sharedFolderPathStack.push({id: folderId, name: '未知文件夹'});
+                    }
+                }
+            }
+
+            this.currentFolderId = folderId;
+
+            // 更新面包屑和返回按钮显示
+            this.updateSharedFolderBreadcrumb();
+
+            // 重置分页
+            if (!this.pagination.sharedFolders) {
+                this.pagination.sharedFolders = {page: 1, pageSize: 20, count: 0, next: null, previous: null};
+            } else {
+                this.pagination.sharedFolders.page = 1;
+            }
+
+            // 加载文件夹内容
+            await this.loadSharedFolders(folderId);
+
+        } catch (error) {
+            console.error('导航失败:', error);
+            this.showError('导航错误', '无法进入该文件夹');
+        }
+    }
+
+    /**
+     * 🔧 更新共享文件夹面包屑 - 参考全部文件的updateBreadcrumb逻辑
+     */
+    updateSharedFolderBreadcrumb() {
+        const breadcrumb = document.getElementById('breadcrumbSharedFolder');
+        const backBtn = document.getElementById('btnBackSharedFolder');
+
+        if (!breadcrumb) return;
+
+        // 清空面包屑
+        breadcrumb.innerHTML = '';
+
+        // 🔧 根目录项
+        const rootItem = document.createElement('span');
+        rootItem.className = 'crumb-item' + (this.sharedFolderPathStack.length === 0 ? ' active' : '');
+        rootItem.textContent = '共享文件夹';
+        rootItem.dataset.folderId = '';
+        rootItem.onclick = () => this.backToSharedFolderRoot();
+        breadcrumb.appendChild(rootItem);
+
+        // 🔧 路径项
+        this.sharedFolderPathStack.forEach((item, index) => {
+            // 分隔符
+            const sep = document.createElement('span');
+            sep.className = 'crumb-separator';
+            sep.textContent = '/';
+            breadcrumb.appendChild(sep);
+
+            // 路径项
+            const crumb = document.createElement('span');
+            crumb.className = 'crumb-item' + (index === this.sharedFolderPathStack.length - 1 ? ' active' : '');
+            crumb.textContent = item.name;
+            crumb.dataset.folderId = item.id;
+
+            // 🔧 非当前项可点击
+            if (index < this.sharedFolderPathStack.length - 1) {
+                crumb.style.cursor = 'pointer';
+                crumb.onclick = () => this.navigateToSharedFolder(item.id, index);
+            }
+
+            breadcrumb.appendChild(crumb);
+        });
+
+        // 🔧 关键修复：更新返回按钮显示状态
+        if (backBtn) {
+            backBtn.style.display = this.sharedFolderPathStack.length > 0 ? 'block' : 'none';
+            backBtn.onclick = () => this.goBackInSharedFolder();
+            console.log('🔙 返回按钮显示状态:', this.sharedFolderPathStack.length > 0 ? '显示' : '隐藏');
+        } else {
+            console.warn('⚠️ btnBackSharedFolder 元素未找到');
+        }
+    }
+
+    /**
+     * 🔧 返回共享文件夹根目录
+     */
+    async backToSharedFolderRoot() {
+        this.sharedFolderPathStack = [];
+        this.currentFolderId = null;
+        this.updateSharedFolderBreadcrumb();
+        await this.loadSharedFolders(null);
+    }
+
+    /**
+     * 🔧 共享文件夹中返回上一级 - 参考全部文件的goBack逻辑
+     */
+    async goBackInSharedFolder() {
+        if (this.sharedFolderPathStack.length > 0) {
+            this.sharedFolderPathStack.pop();
+            const prevFolder = this.sharedFolderPathStack.length > 0
+                ? this.sharedFolderPathStack[this.sharedFolderPathStack.length - 1].id
+                : null;
+
+            this.currentFolderId = prevFolder;
+            this.updateSharedFolderBreadcrumb();
+            await this.loadSharedFolders(prevFolder);
+        }
+    }
+
+    /**
+     * 🔧 按索引导航到共享文件夹
+     */
+    async navigateToSharedFolderByIndex(index) {
+        this.sharedFolderPathStack = this.sharedFolderPathStack.slice(0, index + 1);
+        this.updateSharedFolderBreadcrumb();
+        const folderId = this.sharedFolderPathStack[index].id;
+        await this.loadSharedFolders(folderId);
+    }
+
+
+
+    /**
+     * 🔧 创建共享文件夹
+     */
+    async createSharedFolder() {
+        const name = document.getElementById('sharedFolderName').value.trim();
+        const desc = document.getElementById('sharedFolderDesc').value.trim();
+        if (!name) {
+            this.showError('验证失败', '文件夹名称不能为空');
+            return;
+        }
+        try {
+            this.showLoading();
+            const res = await fetch('/api/cloud/shared-folders/', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', ...TokenManager.getHeaders()},
+                // 🔧 关键修复：显式传递 parent 字段，支持在当前目录下创建
+                body: JSON.stringify({
+                    name: name,
+                    description: desc,
+                    parent: this.currentFolderId
+                })
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.error || err.detail || '创建失败');
+            }
+            this.showSuccess('创建成功', '共享文件夹创建成功');
+            this.closeModal('createSharedFolderModal');
+
+            // 清空表单
+            document.getElementById('sharedFolderName').value = '';
+            document.getElementById('sharedFolderDesc').value = '';
+
+            // 刷新当前视图
+            await this.loadSharedFolders(this.currentFolderId);
+
+        } catch (e) {
+            this.showError('创建失败', e.message);
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+    /**
+     * 🔧 打开管理成员模态框
+     */
+    async openManageMembersModal(folderId, folderName) {
+        this.currentManageSharedFolderId = folderId;
+        this.tempAddMemberId = null;
+        document.getElementById('manageSharedFolderName').textContent = folderName;
+        this.openModal('manageSharedFolderMembersModal');
+        await this.loadSharedFolderMembers(folderId);
+
+        // 绑定搜索事件 (防抖)
+        const searchInput = document.getElementById('memberSearchInput');
+        searchInput.oninput = Utils.debounce(async (e) => {
+            const keyword = e.target.value.trim();
+            if (keyword.length < 2) {
+                document.getElementById('memberSearchResults').style.display = 'none';
+                return;
+            }
+            try {
+                const res = await fetch(`/api/auth/search_users/?q=${encodeURIComponent(keyword)}`, {headers: TokenManager.getHeaders()});
+                const data = await res.json();
+                const users = data.results || [];
+                const resultsDiv = document.getElementById('memberSearchResults');
+                if (users.length === 0) {
+                    resultsDiv.innerHTML = '<div style="padding:10px; color:#999;">未找到用户</div>';
+                } else {
+                    resultsDiv.innerHTML = users.map(u => `
+                    <div class="user-result-item" onclick="cloudApp.selectMemberToAdd('${u.id}', '${this.escapeHtml(u.real_name || u.username)}')">
+                        <img src="${u.avatar_url || '/static/images/default-avatar.png'}" class="user-avatar">
+                        <div class="user-info">
+                            <div class="user-name">${this.escapeHtml(u.real_name || u.username)}</div>
+                        </div>
+                    </div>
+                `).join('');
+                }
+                resultsDiv.style.display = 'block';
+            } catch (err) {
+                console.error('搜索用户失败', err);
+            }
+        }, 300);
+    }
+
+    /**
+     * 🔧 选择待添加的成员
+     */
+    selectMemberToAdd(userId, userName) {
+        this.tempAddMemberId = userId;
+        document.getElementById('memberSearchResults').style.display = 'none';
+        document.getElementById('memberSearchInput').value = userName;
+    }
+
+    /**
+     * 🔧 添加共享文件夹成员
+     */
+    async addSharedFolderMember() {
+        if (!this.tempAddMemberId) {
+            this.showError('操作失败', '请先搜索并选择用户');
+            return;
+        }
+        const permission = document.getElementById('memberPermissionSelect').value;
+        try {
+            this.showLoading();
+            const res = await fetch(`/api/cloud/shared-folders/${this.currentManageSharedFolderId}/add_member/`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', ...TokenManager.getHeaders()},
+                body: JSON.stringify({user_id: this.tempAddMemberId, permission: permission})
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.error || err.detail || err.message || '添加失败')
+            };
+
+            this.showSuccess('添加成功', '成员添加成功');
+            document.getElementById('memberSearchInput').value = '';
+            this.tempAddMemberId = null;
+            await this.loadSharedFolderMembers(this.currentManageSharedFolderId);
+        } catch (e) {
+            this.showError('添加失败', e.message);
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+    /**
+     * 🔧 加载共享文件夹成员列表
+     */
+    async loadSharedFolderMembers(folderId) {
+        try {
+            const res = await fetch(`/api/cloud/shared-folders/${folderId}/members/`, {headers: TokenManager.getHeaders()});
+            if (!res.ok) throw new Error('加载成员失败');
+            const data = await res.json();
+            const members = data.members || [];
+            const listDiv = document.getElementById('sharedFolderMembersList');
+
+            let html = '';
+            members.forEach(m => {
+                const isOwner = m.is_owner;
+                html += `
+                <div class="collab-manage-item" style="margin-bottom: 8px;">
+                    <div class="collab-details" style="flex:1;">
+                        <div class="collab-name">
+                            ${this.escapeHtml(m.real_name)} 
+                            ${isOwner ? '<span class="badge badge-success" style="font-size:10px; margin-left:5px;">所有者</span>' : ''}
+                       </div>
+                    </div>
+                    <select class="collab-permission" ${isOwner ? 'disabled' : ''} onchange="cloudApp.updateSharedFolderPermission('${m.id}', this.value)">
+                        <option value="read" ${m.permission === 'read' ? 'selected' : ''}>只读</option>
+                        <option value="write" ${m.permission === 'write' ? 'selected' : ''}>可编辑</option>
+                        <option value="admin" ${m.permission === 'admin' ? 'selected' : ''}>管理员</option>
+                    </select>
+                    ${!isOwner ? `<button class="btn-action btn-danger" onclick="cloudApp.removeSharedFolderMember('${m.id}')" title="移除"><i class="fas fa-trash"></i></button>` : ''}
+                </div>
+            `;
+            });
+            listDiv.innerHTML = html || '<div class="empty-tip" style="padding:10px; color:#999;">暂无其他成员</div>';
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    /**
+     * 🔧 更新成员权限
+     */
+    async updateSharedFolderPermission(userId, permission) {
+        try {
+            const res = await fetch(`/api/cloud/shared-folders/${this.currentManageSharedFolderId}/update_member/`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', ...TokenManager.getHeaders()},
+                body: JSON.stringify({user_id: userId, permission: permission})
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.error || err.detail || err.message || '更新失败');
+            }
+            this.showSuccess('更新成功', '权限已更新');
+        } catch (e) {
+            this.showError('更新失败', e.message);
+            await this.loadSharedFolderMembers(this.currentManageSharedFolderId); // 失败时恢复原状
+        }
+    }
+
+    /**
+     * 🔧 移除成员
+     */
+    async removeSharedFolderMember(userId) {
+
+        const confirm = await this.showConfirmDialog('移除成员', '此操作将删除该成员，并取消该成员对当前文件夹的访问权限。', 'confirm');
+        if (!confirm) return;
+
+        try {
+            const res = await fetch(`/api/cloud/shared-folders/${this.currentManageSharedFolderId}/remove_member/`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', ...TokenManager.getHeaders()},
+                body: JSON.stringify({user_id: userId})
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.error || err.detail || err.message || '移除失败')
+            };
+            this.showSuccess('移除成功', '成员已移除');
+            await this.loadSharedFolderMembers(this.currentManageSharedFolderId);
+        } catch (e) {
+            this.showError('移除失败', e.message);
+        }
+    }
+
+
+
 
     // ==================== 事件监听 ====================
 
@@ -5535,14 +6725,37 @@ class CloudApp {
             });
         });
 
-        // 搜索
-        const fileSearch = document.getElementById('fileSearch');
-        if (fileSearch) {
-            fileSearch.addEventListener('input',
-                Utils.debounce((e) => {
-                    this.searchFiles(e.target.value);
-                }, 300)
-            );
+        // // 搜索
+        // const fileSearch = document.getElementById('fileSearch');
+        // if (fileSearch) {
+        //     fileSearch.addEventListener('input',
+        //         Utils.debounce((e) => {
+        //             this.searchFiles(e.target.value);
+        //         }, 300)
+        //     );
+        // }
+
+        // 🔧 文件搜索（防抖处理）
+        const fileSearchInput = document.getElementById('fileSearch');
+        if (fileSearchInput) {
+            let searchTimer = null;
+            fileSearchInput.addEventListener('input', (e) => {
+                clearTimeout(searchTimer);
+                searchTimer = setTimeout(() => {
+                    // 搜索时重置到第一页
+                    this.pagination.files.page = 1;
+                    this.loadFiles(this.currentFolderId);
+                }, 500); // 500ms 防抖
+            });
+
+            // 回车搜索
+            fileSearchInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    clearTimeout(searchTimer);
+                    this.pagination.files.page = 1;
+                    this.loadFiles(this.currentFolderId);
+                }
+            });
         }
 
 
@@ -5616,6 +6829,7 @@ class CloudApp {
                 // 普通点击：打开文件或文件夹
                 else {
                     this.handleItemClick(fileId, isFolder);
+
                 }
             }
         });
@@ -6073,7 +7287,7 @@ class CloudApp {
         localStorage.removeItem('user_id');
         localStorage.removeItem('user_type');
         localStorage.setItem('redirect_url', window.location.href);
-        window.location.href = '/cloud/login/';
+        window.location.href = this.cloud_login_url;
     }
 
     async logout() {
@@ -6087,7 +7301,7 @@ class CloudApp {
                 localStorage.removeItem('access_token');
                 localStorage.removeItem('user_id');
                 localStorage.removeItem('user_type');
-                window.location.href = '/cloud/login/';
+                window.location.href = this.cloud_login_url;
             }
         }
     }

@@ -3,15 +3,15 @@ from django.contrib import admin
 # Register your models here.
 
 from .models import Folder, CloudFile, UploadSession, FileShare, FileComment, FileOperationLog, FileVersion, \
-    FileCollaboration, DocumentVersion, DocumentEditLock, DocumentCollaboration, CloudSystemConfig, \
+    FileCollaboration, FolderCollaboration, DocumentVersion, DocumentEditLock, DocumentCollaboration, CloudSystemConfig, \
     UserOnlyOfficePermission
 
 
 @admin.register(Folder)
 class FolderAdmin(admin.ModelAdmin):
     """文件夹管理"""
-    list_display = ('id', 'name', 'parent', 'owner', 'is_public', 'is_shared', 'deleted_at', 'created_at', 'updated_at')
-    list_filter = ('owner', 'parent')
+    list_display = ('id', 'name', 'parent', 'owner', 'is_shared_folder', 'is_public', 'is_shared', 'deleted_at', 'created_at', 'updated_at')
+    list_filter = ('is_shared_folder', 'is_public', 'is_shared')
     search_fields = ('name', 'id')
     list_per_page = 20
 
@@ -21,7 +21,7 @@ class CloudFileAdmin(admin.ModelAdmin):
     """云文件管理"""
     list_display = ('id', 'name', 'md5', 'is_document', 'owner', 'reference_count', 'current_version', 'deleted_at',
                     'description', 'tags', 'is_starred', 'download_count', 'deleted_at', 'created_at', 'updated_at')
-    list_filter = ('owner', 'folder', 'tags')
+    list_filter = ('owner', 'is_document', 'tags')
     search_fields = ('name', 'original_name', 'id', 'md5')
     list_per_page = 20
 
@@ -72,9 +72,16 @@ class FileVersionAdmin(admin.ModelAdmin):
 
 @admin.register(FileCollaboration)
 class FileCollaborationAdmin(admin.ModelAdmin):
-    """文件版本管理"""
-    list_display = ('id', 'file', 'user', 'permission', 'is_active', 'created_at')
-    list_filter = ('file',)
+    """文件协作管理"""
+    list_display = ('id', 'file', 'user', 'permission', 'is_active', 'updated_at', 'created_at')
+    list_filter = ('is_active',)
+    list_per_page = 20
+
+@admin.register(FolderCollaboration)
+class FolderCollaborationAdmin(admin.ModelAdmin):
+    """共享文件夹协作管理"""
+    list_display = ('id', 'folder', 'user', 'permission', 'is_active', 'updated_at', 'created_at')
+    list_filter = ('is_active',)
     list_per_page = 20
 
 

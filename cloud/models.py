@@ -51,6 +51,8 @@ class Folder(models.Model):
 
     description = models.TextField(blank=True, null=True, verbose_name='描述')
 
+    is_shared_folder = models.BooleanField(default=False, verbose_name='是否为共享文件夹')
+
     # 🔧 关键修复：添加软删除字段
     deleted_at = models.DateTimeField(null=True, blank=True, verbose_name='删除时间')
 
@@ -688,6 +690,52 @@ class FileCollaboration(models.Model):
         return f'{self.user.username} - {self.file.name} ({self.permission})'
 
 
+class FolderCollaboration(models.Model):
+    """共享文件夹协作关系模型"""
+    PERMISSION_CHOICES = [
+        ('read', '只读'),
+        ('write', '可编辑'),
+        ('admin', '管理员'),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    folder = models.ForeignKey(
+        'Folder',
+        on_delete=models.CASCADE,
+        related_name='folder_collaborations',
+        verbose_name='共享文件夹'
+    )
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='folder_collaborations',
+        verbose_name='协作用户'
+    )
+
+    permission = models.CharField(
+        max_length=10,
+        choices=PERMISSION_CHOICES,
+        default='read',
+        verbose_name='权限'
+    )
+
+    is_active = models.BooleanField(default=True, verbose_name='是否有效')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '共享文件夹协作'
+        verbose_name_plural = verbose_name
+        unique_together = ['folder', 'user']
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['folder', 'is_active']),
+            models.Index(fields=['user', 'is_active']),
+        ]
+
+    def __str__(self):
+        return f'{self.user.username} - {self.folder.name} ({self.permission})'
 
 # 文档编辑相关模型
 class DocumentVersion(models.Model):

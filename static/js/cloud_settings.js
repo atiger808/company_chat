@@ -12,8 +12,8 @@ class CloudSettingsApp {
         this.onlyofficeConfigs = null;
 
         this.currentUser = null;
-        this.cloud_home_url = '/cloud/'
-        this.cloud_login_url = '/cloud/login/'
+        this.cloud_home_url = '/cloud/';
+        this.cloud_login_url = '/cloud/login/';
 
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', () => this.init());
@@ -54,7 +54,17 @@ class CloudSettingsApp {
         } catch (error) {
             console.error('❌ 初始化失败:', error);
             this.showError('加载配置失败', error.message);
+            this.handleAuthError()
         }
+    }
+
+
+    handleAuthError() {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('user_id');
+        localStorage.removeItem('user_type');
+        localStorage.setItem('redirect_url', window.location.href);
+        window.location.href = this.cloud_login_url;
     }
 
     // 加载配置分类

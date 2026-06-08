@@ -1481,6 +1481,10 @@ class CallConsumer(AsyncWebsocketConsumer):
                 call_type=media_type,
                 call_status=call_status
             )
+
+            message.chat_room.updated_at = timezone.now()
+            await database_sync_to_async(message.chat_room.save)()
+            await database_sync_to_async(message.save)()
             
             logger.info(f"✅ 通话记录消息已创建: message_id={message.id}, room={room_id}, status={call_status}, duration={message.call_duration}s")
             

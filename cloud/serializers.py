@@ -8,13 +8,22 @@
 
 from django.conf import settings
 from rest_framework import serializers
-from .models import Folder, CloudFile, UploadSession, FileShare, FileComment, FileOperationLog, FileVersion, CloudSystemConfig, UserOnlyOfficePermission
+from .models import Folder, FolderCollaboration, CloudFile, UploadSession, FileShare, FileComment, FileOperationLog, FileVersion, CloudSystemConfig, UserOnlyOfficePermission
 from accounts.models import CustomUser, Department
 from accounts.serializers import UserDetailSerializer
 from loguru import logger
 import json
 
 
+class FolderCollaborationSerializer(serializers.ModelSerializer):
+    """文件夹协作序列化器"""
+
+    class Meta:
+        model = FolderCollaboration
+        fields = [
+            'id', 'folder', 'user', 'permission', 'is_active', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
 
 class FolderListSerializer(serializers.ModelSerializer):
     """🔧 文件夹列表序列化器（简化版，用于列表展示）"""
@@ -24,12 +33,23 @@ class FolderListSerializer(serializers.ModelSerializer):
     # 🔧 添加路径字段（用于面包屑和缩进）
     path = serializers.SerializerMethodField()
 
+    # 🔧 新增：是否为共享文件夹
+    is_shared_folder = serializers.BooleanField(read_only=True)
+
+    # 🔧 新增：成员数量（仅共享文件夹）
+    member_count = serializers.SerializerMethodField()
+
+    # 🔧 新增：图标类（前端需要）
+    icon_class = serializers.SerializerMethodField()
+
+    owner = serializers.SerializerMethodField()
+
     class Meta:
         model = Folder
         fields = [
-            'id', 'name', 'parent', 'is_public', 'is_shared',
+            'id', 'name', 'parent', 'is_public', 'is_shared', 'owner',
             'file_count', 'created_at', 'updated_at', 'permanently_deleted',
-            'path',  # 🔧 新增字段
+            'path',  'is_shared_folder', 'member_count', 'icon_class',  # 🔧 新增字段
         ]
         read_only_fields = ['created_at', 'updated_at']
 
@@ -46,6 +66,30 @@ class FolderListSerializer(serializers.ModelSerializer):
             current = current.parent
         return '/'.join(path_parts) if path_parts else ''
 
+    def get_member_count(self, obj):
+        """🔧 获取共享文件夹成员数量"""
+        if obj.is_shared_folder:
+            return obj.folder_collaborations.filter(is_active=True).count() + 1  # +1 为所有者
+        return 0
+
+    def get_icon_class(self, obj):
+        """🔧 返回文件夹图标"""
+        return 'fa-folder'
+
+    def get_owner(self, obj):
+        """获取文件夹的拥有者"""
+        return {
+            'id': obj.owner.id,
+            'username': obj.owner.username,
+            'real_name': obj.owner.real_name,
+            'avatar': obj.owner.get_avatar_url() if hasattr(obj.owner, 'get_avatar_url') else '',
+            'department': obj.owner.department.name if obj.owner.department else None,
+            'is_active': obj.owner.is_active,
+            'is_staff': obj.owner.is_staff,
+            'is_superuser': obj.owner.is_superuser,
+            'last_login': obj.owner.last_login,
+        }
+
 
 class FolderSerializer(serializers.ModelSerializer):
     """🔧 文件夹详情序列化器"""
@@ -57,6 +101,7 @@ class FolderSerializer(serializers.ModelSerializer):
     children_count = serializers.SerializerMethodField()
     icon_class = serializers.SerializerMethodField()
     permanently_deleted = serializers.BooleanField(read_only=True)
+    folder_collaborations = FolderCollaborationSerializer(many=True, read_only=True, source='folder_collaboration_set')
 
     class Meta:
         model = Folder
@@ -65,8 +110,9 @@ class FolderSerializer(serializers.ModelSerializer):
             'department', 'department_name', 'is_public', 'is_shared',
             'file_count', 'total_size', 'path', 'children_count', 'icon_class',
             'created_at', 'updated_at', 'deleted_at', 'permanently_deleted',
+            'folder_collaborations', 'is_shared_folder'
         ]
-        read_only_fields = ['owner', 'created_at', 'updated_at']
+        read_only_fields = ['owner', 'folder_collaborations', 'created_at', 'updated_at']
 
     def get_file_count(self, obj):
         """获取文件夹内的文件总数（递归包含子文件夹）"""
@@ -86,6 +132,7 @@ class FolderSerializer(serializers.ModelSerializer):
 
     def get_icon_class(self, obj):
         return 'fa-folder'
+
 
 
     def validate_name(self, value):
@@ -128,6 +175,10 @@ class FolderSerializer(serializers.ModelSerializer):
 
         return attrs
 
+
+
+
+
 class CloudFileSerializer(serializers.ModelSerializer):
     """云文件序列化器"""
     owner_name = serializers.CharField(source='owner.username', read_only=True)
@@ -144,6 +195,7 @@ class CloudFileSerializer(serializers.ModelSerializer):
     permanently_deleted = serializers.BooleanField(read_only=True)
     size_formatted = serializers.SerializerMethodField()
     is_document = serializers.SerializerMethodField()
+    owner = serializers.SerializerMethodField()
 
     # 🔧 修改 description 和 tags 字段配置
     description = serializers.CharField(
@@ -214,6 +266,21 @@ class CloudFileSerializer(serializers.ModelSerializer):
     def get_is_document(self, obj):
         doc_types = self.all_doc_formats()
         return any(t in obj.get_extension().lower() for t in doc_types)
+
+
+    def get_owner(self, obj):
+        """获取文件所属用户的信息"""
+        return {
+            'id': obj.owner.id,
+            'username': obj.owner.username,
+            'real_name': obj.owner.real_name,
+            'avatar': obj.owner.get_avatar_url() if hasattr(obj.owner, 'get_avatar_url') else '',
+            'department': obj.owner.department.name if obj.owner.department else None,
+            'is_active': obj.owner.is_active,
+            'is_staff': obj.owner.is_staff,
+            'is_superuser': obj.owner.is_superuser,
+            'last_login': obj.owner.last_login,
+        }
 
 
     def _is_image_or_video(self, obj):

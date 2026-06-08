@@ -33,6 +33,7 @@ class DocumentEditorApp {
         this.isCollabSidebarOpen = true;
         this.selectedCollaborators = new Set();
         this.editingCollabId = null;
+        this.hasError = false;
 
         // 协同编辑 WebSocket 相关
         this.collabSocket = null;          // 协同编辑 WebSocket
@@ -88,17 +89,7 @@ class DocumentEditorApp {
 
         } catch (error) {
             console.error('初始化失败:', error);
-            const loadingEl = document.getElementById('loadingState');
-            if (loadingEl) {
-                loadingEl.innerHTML = `
-                    <i class="fas fa-exclamation-circle"></i>
-                    <p>${error.message}</p>
-                    <div style="margin-top:15px;">
-                        <button class="btn btn-primary" onclick="location.reload()">重试</button>
-                        <button class="btn btn-secondary" onclick="window.close()" style="margin-left:10px;">关闭</button>
-                    </div>
-                `;
-            }
+            this.showError(error.error || error.message || error.detail || `加载失败!`);
             this.handleAuthError();
         }
     }
@@ -138,35 +129,40 @@ class DocumentEditorApp {
         }
     }
 
+
     // 获取编辑配置
     async fetchEditConfig() {
-        const response = await fetch(`/api/cloud/documents/${this.fileId}/edit/`, {
-            headers: TokenManagerCustom.getHeaders()
-        });
+        console.log('🔧 获取编辑配置...');
+        try {
+            const response = await fetch(`/api/cloud/documents/${this.fileId}/edit/`, {
+                headers: TokenManagerCustom.getHeaders()
+            });
 
-        if (!response.ok) {
-            const error = await response.json().catch(() => ({}));
-
-            // 🔧 处理权限错误
-            if (response.status === 403) {
-                throw new Error('您没有权限编辑此文档');
+            if (!response.ok) {
+                const error = await response.json();
+                console.error('获取编辑配置失败 error:', error);
+                throw new Error(error.error || error.message || error.detail || '获取编辑配置失败');
             }
 
-            throw new Error(error.error || `加载失败：${response.status}`);
+            this.config = await response.json();
+
+            // 验证配置
+            if (!this.config.document?.fileType || !this.config.documentType) {
+                throw new Error('文档配置不完整');
+            }
+            if (!this.config.document?.url) {
+                throw new Error('文档访问链接缺失');
+            }
+
+            // 🔧 验证 document key 是否稳定
+            console.log('🔑 Document Key:', this.config.document.key);
+        } catch (error) {
+            this.hasError = true;
+            console.error('获取编辑配置失败:', error);
+            this.showLoadingError(error || `加载失败, 您没有访问该文件的权限！`);
+            this.showError(error || `加载失败, 您没有访问该文件的权限！`);
         }
 
-        this.config = await response.json();
-
-        // 验证配置
-        if (!this.config.document?.fileType || !this.config.documentType) {
-            throw new Error('文档配置不完整');
-        }
-        if (!this.config.document?.url) {
-            throw new Error('文档访问链接缺失');
-        }
-
-        // 🔧 验证 document key 是否稳定
-        console.log('🔑 Document Key:', this.config.document.key);
     }
 
 
@@ -200,6 +196,7 @@ class DocumentEditorApp {
 
     initEditor() {
         console.log('🔧 初始化编辑器', this.config);
+        if (!this.config) return;
 
         if (typeof DocsAPI === 'undefined' || typeof DocsAPI.DocEditor !== 'function') {
             console.error('❌ OnlyOffice API 未加载成功');
@@ -323,7 +320,7 @@ class DocumentEditorApp {
 
         } catch (error) {
             console.error('initEditor failed:', error);
-            this.showLoadingError('编辑器启动失败: ' + error.message);
+            this.showLoadingError('编辑器启动失败: ' + error.message || error.detail || error.error || '未知错误');
         }
     }
 
@@ -379,9 +376,14 @@ class DocumentEditorApp {
             this.collabSocket.onclose = (event) => {
                 console.log(`🔌 协同编辑 WebSocket 已断开 (code: ${event.code})，3 秒后重连...`);
                 // 非正常关闭时重连
-                if (event.code !== 1000) {
-                    setTimeout(() => this.initCollabWebSocket(), 3000);
+                if (!this.hasError) {
+                    if (event.code !== 1000) {
+                        setTimeout(() => this.initCollabWebSocket(), 3000);
+                    }
+                } else {
+                    console.log('❌ 协同编辑 WebSocket 连接已断开');
                 }
+
             };
 
             this.collabSocket.onerror = (error) => {
@@ -1058,7 +1060,8 @@ class DocumentEditorApp {
                     if (this.collabHeartbeatTimer) {
                         clearTimeout(this.collabHeartbeatTimer);
                         this.collabHeartbeatTimer = null;
-                    };
+                    }
+                    ;
                     this.handleAuthError()
                     return null;
                 }
@@ -1184,6 +1187,17 @@ class DocumentEditorApp {
             try {
                 await this.updateCollaborationStatus('editing');
                 await this.loadCollaborators();
+                if (this.hasError) {
+                    console.log('清除定时器 hasError', this.hasError);
+                    if (this.collabHeartbeatTimer) {
+                        clearTimeout(this.collabHeartbeatTimer);
+                        this.collabHeartbeatTimer = null;
+                    }
+                    if (this.collabSocket?.readyState === WebSocket.OPEN) {
+                        this.collabSocket.close(1000, 'Page unload');
+                    }
+                    return;
+                }
                 retryCount = 0;
             } catch (error) {
                 console.warn('心跳失败，重试中...', retryCount);
@@ -1199,6 +1213,7 @@ class DocumentEditorApp {
         heartbeat();
 
         window.addEventListener('beforeunload', () => {
+            console.log('loadCollaborators 401 or hasError 清除定时器 hasError', this.hasError);
             if (this.collabHeartbeatTimer) clearTimeout(this.collabHeartbeatTimer);
             this.updateCollaborationStatus('closed');
             if (this.collabSocket?.readyState === WebSocket.OPEN) {
@@ -1606,8 +1621,8 @@ class DocumentEditorApp {
                 if (response.ok) {
                     successCount++;
                 } else {
-                    const error = await response.json().catch(() => ({}));
-                    console.error(`添加 ${collaborator.name} 失败:`, error);
+                    const error = await response.json();
+                    throw new Error(error.error || error.detail || error.message || '添加失败');
                 }
             }
 
@@ -1620,7 +1635,8 @@ class DocumentEditorApp {
             await this.loadCollaborators();
 
         } catch (error) {
-            this.showError('添加协作者失败: ' + error.message);
+            console.error('添加协作者失败:', error);
+            this.showError('添加协作者失败: ' + error);
         }
     }
 
@@ -1632,7 +1648,10 @@ class DocumentEditorApp {
             const response = await fetch(`/api/cloud/documents/${this.fileId}/retrieve_collaborators/${collabId}/`, {
                 headers: TokenManagerCustom.getHeaders()
             });
-            if (!response.ok) throw new Error('获取协作者信息失败');
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || error.detail || error.message || '加载协作者信息失败');
+            };
 
             const collab = await response.json();
 
@@ -1651,7 +1670,7 @@ class DocumentEditorApp {
 
         } catch (error) {
             console.error('加载协作者信息失败:', error);
-            this.showError('加载失败: ' + error.message);
+            this.showError('加载失败: ' + error);
         }
     }
 
@@ -1686,7 +1705,7 @@ class DocumentEditorApp {
 
             if (!response.ok) {
                 const error = await response.json();
-                throw new Error(error.error || '更新失败');
+                throw new Error(error.error || error.detail || error.message || '更新协作者失败');
             }
 
             this.showSuccess('更新成功', '协作者权限已更新');
@@ -1697,7 +1716,7 @@ class DocumentEditorApp {
 
         } catch (error) {
             console.error('更新协作者失败:', error);
-            this.showError('更新失败: ' + error.message);
+            this.showError('更新失败: ' + error);
         }
     }
 
@@ -1714,7 +1733,7 @@ class DocumentEditorApp {
 
             if (!response.ok) {
                 const error = await response.json();
-                throw new Error(error.error || '移除失败');
+                throw new Error(error.error || error.detail || error.message || '移除失败');
             }
 
             this.showSuccess(`已移除协作者: ${userName}`);
@@ -1722,7 +1741,7 @@ class DocumentEditorApp {
 
         } catch (error) {
             console.error('移除协作者失败:', error);
-            this.showError('移除失败: ' + error.message);
+            this.showError('移除失败: ' + error);
         }
     }
 

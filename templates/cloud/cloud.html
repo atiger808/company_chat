@@ -5,12 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>企业网盘 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/cloud.css?v=20260529-945969b">
+    <link rel="stylesheet" href="/static/css/cloud.css?v=20260606-55ec1e7">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
     <!-- 🔧 添加二维码库 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>-->
-    <script src="/static/js/dist/qrcode.min.js?v=20260529-945969b"></script>
+    <script src="/static/js/dist/qrcode.min.js?v=20260606-55ec1e7"></script>
 </head>
 <body>
 <div class="cloud-layout">
@@ -50,8 +50,12 @@
 
             <!-- 🔧 新增：协作文档 -->
             <a href="#" class="nav-item" data-view="collaborations">
-                <i class="fas fa-file-alt"></i> 协作文档
+                <i class="fas fa-users"></i> 协作文档
                 <span class="badge-danger" id="collabCount" style="display: none;"></span>
+            </a>
+
+            <a href="#" class="nav-item" data-view="shared-folders">
+                <i class="fas fa-folder-open"></i> 共享文件夹
             </a>
 
             <a href="#" class="nav-item" data-view="trash">
@@ -77,7 +81,7 @@
             </a>
 
             <a href="/chat/" class="btn-back-chat">
-                <i class="fas fa-comments"></i> 返回聊天室
+                <i class="fas fa-comments"></i> 进入聊天室
             </a>
             <a class="btn-logout" onclick="cloudApp.logout()">
                 <i class="fas fa-sign-out-alt"></i> 退出登录
@@ -104,7 +108,7 @@
             </div>
             <div class="admin-header-right">
                 <span id="adminUsername"></span>
-                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260529-945969b" alt="头像">
+                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260606-55ec1e7" alt="头像">
             </div>
         </header>
 
@@ -128,7 +132,7 @@
                         </button>
 
                         <button class="btn btn-secondary" id="newFolderBtn">
-                            <i class="fas fa-folder-plus"></i> <span class="btn-text">新建</span>
+                            <i class="fas fa-folder-plus"></i> <span class="btn-text">新建文件夹</span>
                         </button>
 
                         <!-- 👇 新增：同步聊天室文档按钮 -->
@@ -253,10 +257,10 @@
             </div>
 
 
-            <!-- 协作文档视图 -->
+            <!-- 4. 协作文档视图 -->
             <div class="view-section" id="collaborationsView">
                 <div class="view-header">
-                    <h3><i class="fas fa-file-alt"></i> 协作文档</h3>
+                    <h3><i class="fas fa-users"></i> 协作文档</h3>
 
                     <div class="search-box">
                         <i class="fas fa-search"></i>
@@ -307,7 +311,86 @@
             </div>
 
 
-            <!-- 🔧 4. 回收站视图 -->
+            <!-- 5. 共享文件夹视图 -->
+            <div id="sharedFoldersView" class="view-section">
+                <div class="view-header">
+                    <h3><i class="fas fa-folder-open"></i> 共享文件夹</h3>
+                    <div class="toolbar-actions">
+                        <!-- 🔧 新增：搜索框 -->
+                        <div class="search-box-inline">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="sharedFolderSearchInput" placeholder="搜索文件或文件夹..."
+                                   onkeyup="if(event.key==='Enter') cloudApp.searchSharedFolders(this.value)">
+                            <button class="search-clear-btn" onclick="cloudApp.clearSharedFolderSearch()"
+                                    style="display:none;">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+
+                        <!-- 🔧 添加视图切换按钮 -->
+                        <div class="view-switcher">
+                            <button class="btn-icon active" data-view-mode="grid"
+                                    onclick="cloudApp.switchSharedFolderViewMode('grid')" title="卡片视图">
+                                <i class="fas fa-th-large"></i>
+                            </button>
+                            <button class="btn-icon" data-view-mode="list"
+                                    onclick="cloudApp.switchSharedFolderViewMode('list')" title="列表视图">
+                                <i class="fas fa-list"></i>
+                            </button>
+                        </div>
+
+                        <button class="btn btn-primary" onclick="cloudApp.openModal('createSharedFolderModal')">
+                            <i class="fas fa-plus"></i> 新建共享文件夹
+                        </button>
+                        <button class="btn btn-secondary"
+                                onclick="cloudApp.loadSharedFolders(cloudApp.currentFolderId)">
+                            <i class="fas fa-sync"></i> 刷新
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 🔧 添加面包屑导航 -->
+                <header class="top-bar">
+                    <div class="breadcrumb-container">
+                        <button class="btn-back" id="btnBackSharedFolder" style="display:none;"
+                                onclick="cloudApp.backToSharedFolderRoot()">
+                            <i class="fas fa-arrow-left"></i>
+                        </button>
+                        <div class="breadcrumb" id="breadcrumbSharedFolder">
+                            <span class="crumb-item active">共享文件夹</span>
+                        </div>
+                    </div>
+                </header>
+
+                <div class="file-list-container">
+                    <!-- 列表视图 -->
+                    <div class="file-list view-list" id="sharedFoldersListView">
+                        <div class="file-list-header">
+                            <div class="file-col name">名称</div>
+                            <div class="file-col size">成员数/文件数</div>
+                            <div class="file-col size">创建者</div>
+                            <div class="file-col date">创建时间</div>
+                            <div class="file-col actions">操作</div>
+                        </div>
+                        <div class="file-list-body" id="sharedFoldersListBody">
+                            <!-- 动态渲染 -->
+                        </div>
+                    </div>
+
+                    <!-- 🔧 网格视图 -->
+                    <div class="file-list view-grid active" id="sharedFoldersGridView">
+                        <div class="file-grid-body" id="sharedFoldersGridBody">
+                            <!-- 动态渲染 -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 🔧 添加分页容器 -->
+                <div id="paginationContainerSharedFolders" class="pagination-container"></div>
+            </div>
+
+
+            <!-- 🔧 6. 回收站视图 -->
             <div class="view-section" id="trashView">
                 <div class="view-header">
                     <h3><i class="fas fa-trash"></i> 回收站</h3>
@@ -354,7 +437,7 @@
 
             </div>
 
-            <!-- 🔧 5. 数据统计视图 -->
+            <!-- 🔧 7. 数据统计视图 -->
             <div class="view-section" id="dashboardView">
                 <div class="view-header">
                     <h3><i class="fas fa-chart-pie"></i> 网盘统计</h3>
@@ -401,15 +484,27 @@
 
 <!-- 新建文件夹模态框 -->
 <div class="modal" id="newFolderModal">
-    <div class="modal-content modal-sm">
+    <div class="modal-content">
         <div class="modal-header">
             <h3>新建文件夹</h3>
+            <span class="text-muted">默认在当前目录下创建</span>
             <button class="close-btn">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-group">
-                <label>文件夹名称</label>
+                <label>文件夹名称 <span class="text-danger">*</span></label>
                 <input type="text" id="newFolderName" placeholder="请输入文件夹名称">
+            </div>
+            <div class="form-group">
+                <label>描述</label>
+                <input type="text" id="newFolderDesc" placeholder="请输入描述（可选）">
+            </div>
+            <div class="config-section">
+                <label>是否是共享文件夹</label>
+                <label class="switch">
+                    <input type="checkbox" id="isSharedFolder">
+                    <span class="slider"></span>
+                </label>
             </div>
         </div>
         <div class="modal-footer">
@@ -690,6 +785,60 @@
 </div>
 
 
+<!-- 新建共享文件夹模态框 -->
+<div id="createSharedFolderModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>新建共享文件夹</h3>
+            <span class="text-muted">默认在当前目录下创建</span>
+            <button class="close-btn" onclick="cloudApp.closeModal('createSharedFolderModal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>文件夹名称 <span class="text-danger">*</span></label>
+                <input type="text" id="sharedFolderName" placeholder="请输入文件夹名称">
+            </div>
+            <div class="form-group">
+                <label>描述</label>
+                <input type="text" id="sharedFolderDesc" placeholder="请输入描述（可选）">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="cloudApp.closeModal('createSharedFolderModal')">取消</button>
+            <button class="btn btn-primary" onclick="cloudApp.createSharedFolder()">创建</button>
+        </div>
+    </div>
+</div>
+
+<!-- 管理成员模态框 -->
+<div id="manageSharedFolderMembersModal" class="modal">
+    <div class="modal-content" style="max-width: 600px;">
+        <div class="modal-header">
+            <h3>管理成员 - <span id="manageSharedFolderName"></span></h3>
+            <button class="close-btn" onclick="cloudApp.closeModal('manageSharedFolderMembersModal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group" style="display: flex; gap: 10px;">
+                <input type="text" id="memberSearchInput" placeholder="搜索用户姓名或账号..." style="flex: 1;">
+                <select id="memberPermissionSelect" style="width: 100px;">
+                    <option value="read">只读</option>
+                    <option value="write">可编辑</option>
+                    <option value="admin">管理员</option>
+                </select>
+                <button class="btn btn-primary" onclick="cloudApp.addSharedFolderMember()">添加</button>
+            </div>
+            <div id="memberSearchResults" class="search-results"
+                 style="max-height: 150px; overflow-y: auto; border: 1px solid #eee; margin-bottom: 10px; display: none; background: white;"></div>
+
+            <h4 style="margin-top: 20px; margin-bottom: 10px; font-size: 14px; color: #606266;">当前成员</h4>
+            <div id="sharedFolderMembersList" style="max-height: 300px; overflow-y: auto;">
+                <!-- 动态渲染 -->
+            </div>
+        </div>
+    </div>
+</div>
+
+
 <!-- 文件评论模态框 -->
 <div class="modal" id="commentModal">
     <div class="modal-content">
@@ -726,11 +875,11 @@
 
 <!-- 脚本引入 -->
 <!--<script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>-->
-<script src="/static/js/dist/spark-md5.min.js?v=20260529-945969b"></script>
-<script src="/static/js/utils.js?v=20260529-945969b"></script>
-<script src="/static/js/frontend_cloud_config.js?v=20260529-945969b"></script>
-<script src="/static/js/api.js?v=20260529-945969b"></script>
-<script src="/static/js/cloud.js?v=20260529-945969b"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260606-55ec1e7"></script>
+<script src="/static/js/utils.js?v=20260606-55ec1e7"></script>
+<script src="/static/js/frontend_cloud_config.js?v=20260606-55ec1e7"></script>
+<script src="/static/js/api.js?v=20260606-55ec1e7"></script>
+<script src="/static/js/cloud.js?v=20260606-55ec1e7"></script>
 
 <script>
     // 🔧 初始化侧边栏按钮显示状态

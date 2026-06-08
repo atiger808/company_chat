@@ -364,6 +364,17 @@ class Message(models.Model):
             }
         return None
 
+    # 🔧 新增：获取被引用消息的文件信息
+    def get_quote_file_info(self):
+        """获取被引用消息的文件信息"""
+        if self.quote_message and hasattr(self.quote_message, 'file') and self.quote_message.file:
+            try:
+                return self.quote_message.file.get_file_info()
+            except Exception as e:
+                logger.error(f"Error getting quote file info: {e}")
+                return None
+        return None
+
     def save(self, *args, **kwargs):
         # 🔧 关键修复：自动从关联的 FileUpload 获取时长
         if self.file and not self.voice_duration:

@@ -201,7 +201,6 @@ body {
 }
 
 
-
 .storage-status {
     padding: 20px;
     border-top: 1px solid #ebeef5;
@@ -689,9 +688,12 @@ body {
 }
 
 .file-grid-item .file-size,
+.file-grid-item .file-meta,
 .file-grid-item .file-date {
     font-size: 12px;
     color: #909399;
+    padding-bottom: 5px;
+
 }
 
 .file-grid-item .file-actions {
@@ -706,6 +708,55 @@ body {
 .file-grid-item:hover .file-actions {
     display: flex;
 }
+
+
+.owner-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    /*padding: 20px;*/
+    background: #f5f7fa;
+    border-radius: 8px;
+    /*box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);*/
+    border: 1px solid #fff;
+    border-bottom: 1px solid #ebeef5;
+    margin: 10px;
+    padding: 10px;
+}
+
+.owner-avatar {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.owner-info-text span {
+    font-size: 12px;
+    color: #303133;
+    margin-bottom: 5px;
+}
+
+.owner-info-text p {
+    font-size: 10px;
+    color: #909399;
+}
+
+.expire-info {
+    text-align: center;
+    padding: 15px;
+    color: #909399;
+    font-size: 13px;
+    margin-top: 10px;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.expire-info i {
+    margin-right: 5px;
+}
+
 
 /* 空状态 */
 .empty-state {
@@ -1641,8 +1692,6 @@ body {
 }
 
 
-
-
 /* 徽章 */
 .badge {
     display: inline-flex;
@@ -1955,7 +2004,7 @@ body {
 .file-list-header,
 .file-item {
     display: grid;
-    grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) 100px minmax(200px, 1fr) 120px;
+    grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) minmax(200px, 1fr) minmax(200px, 1fr) 120px;
     gap: 10px;
     padding: 12px 20px;
     align-items: center;
@@ -3007,9 +3056,6 @@ body {
 }
 
 
-
-
-
 /* cloud.css - 上传进度对话框样式 */
 .upload-progress-dialog {
     display: none;
@@ -3164,8 +3210,6 @@ body {
 }
 
 
-
-
 /* 🔧 分页控件样式 */
 .pagination-container {
     display: flex;
@@ -3175,18 +3219,28 @@ body {
     background: #fff;
     border-radius: 8px;
     margin-top: 15px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
+
+.pagination-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+
 .pagination-info {
     font-size: 13px;
     color: #606266;
     user-select: none;
 }
+
 .pagination-controls {
     display: flex;
     gap: 6px;
     align-items: center;
 }
+
 .pagination-btn {
     padding: 6px 12px;
     border: 1px solid #dcdfe6;
@@ -3198,6 +3252,7 @@ body {
     min-width: 36px;
     text-align: center;
 }
+
 .pagination-btn:hover:not(:disabled) {
     background: #409EFF;
     color: #fff;
@@ -3209,11 +3264,52 @@ body {
     cursor: not-allowed;
     background: #f5f7fa;
 }
+
 .pagination-btn.active {
     background: #409EFF;
     color: #fff;
     border-color: #409EFF;
     font-weight: 500;
+}
+
+
+.pagination-btn {
+    min-width: 32px;
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid #dcdfe6;
+    background: #fff;
+    color: #606266;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.pagination-btn:hover:not(:disabled):not(.active) {
+    color: #409eff;
+    border-color: #409eff;
+}
+
+.pagination-btn:disabled {
+    color: #c0c4cc;
+    cursor: not-allowed;
+    background: #f5f7fa;
+}
+
+.pagination-btn.active {
+    color: #fff;
+    background: #409eff;
+    border-color: #409eff;
+}
+
+.pagination-ellipsis {
+    padding: 0 4px;
+    color: #909399;
+    font-size: 13px;
 }
 
 /* 🔧 移动端适配 */
@@ -3223,8 +3319,124 @@ body {
         gap: 10px;
         padding: 10px 15px;
     }
+
     .pagination-controls {
         width: 100%;
         justify-content: center;
+    }
+}
+
+
+/* 🔧 共享文件夹标识样式 */
+.badge-shared {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 8px;
+    padding: 2px 6px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
+}
+
+.badge-shared i {
+    font-size: 10px;
+}
+
+.badge-corner {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    padding: 2px 4px;
+    font-size: 10px;
+}
+
+.file-icon {
+    position: relative;
+}
+
+/* 共享文件夹高亮边框 */
+.file-item.is-shared-folder,
+.file-grid-item.is-shared-folder {
+    border: 2px solid #667eea;
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
+}
+
+.file-item.is-shared-folder:hover,
+.file-grid-item.is-shared-folder:hover {
+    border-color: #764ba2;
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+}
+
+
+/* 🔧 新增：共享文件夹内联搜索框样式 */
+.search-box-inline {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0 10px;
+    min-width: 250px;
+    transition: all 0.3s ease;
+}
+
+.search-box-inline:focus-within {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.1);
+}
+
+.search-box-inline i.fa-search {
+    color: var(--text-light);
+    font-size: 14px;
+}
+
+.search-box-inline input {
+    border: none;
+    outline: none;
+    background: transparent;
+    padding: 8px 10px;
+    font-size: 14px;
+    color: var(--text-primary);
+    width: 100%;
+    min-width: 180px;
+}
+
+.search-box-inline input::placeholder {
+    color: var(--text-light);
+}
+
+.search-box-inline .search-clear-btn {
+    background: none;
+    border: none;
+    color: var(--text-light);
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s;
+}
+
+.search-box-inline .search-clear-btn:hover {
+    color: var(--text-primary);
+}
+
+.search-box-inline input.searching {
+    background: linear-gradient(to right, rgba(64, 158, 255, 0.05), transparent);
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+    .search-box-inline {
+        min-width: 180px;
+    }
+
+    .search-box-inline input {
+        min-width: 120px;
     }
 }

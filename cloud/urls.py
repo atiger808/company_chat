@@ -13,6 +13,7 @@ from .views import (
     CloudFileDownloadView,
     DocumentEditorViewSet,
     CloudSystemSettingsViewSet,
+    SharedFolderViewSet,
 )
 
 router = DefaultRouter()
@@ -23,6 +24,7 @@ router.register(r'comments', FileCommentViewSet, basename='cloud-comment')
 router.register(r'dashboard', CloudDashboardViewSet, basename='cloud-dashboard')
 router.register(r'documents', DocumentEditorViewSet, basename='document')
 router.register(r'settings', CloudSystemSettingsViewSet, basename='cloud-settings')  # 🔧 注册配置路由
+router.register(r'shared-folders', SharedFolderViewSet, basename='shared-folder')  # 🔧 注册配置路由
 
 
 urlpatterns = [

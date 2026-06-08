@@ -203,10 +203,12 @@ class MessageSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'chat_room', 'sender', 'content', 'message_type',
             'file_info', 'is_read', 'timestamp', 'is_deleted', 'deleted_at',
-            'file_id',  # ✅ 添加到 fields 列表中
-            # 🔧 引用字段
+            'file_id',
+            # 🔧 引用字段 - 扁平化字段（前端直接使用）
             'quote_message', 'quote_content', 'quote_sender', 'quote_sender_id',
-            'quote_timestamp', 'quote_message_type', 'quote_info', 'quote_file_info',
+            'quote_timestamp', 'quote_message_type',
+            # 🔧 嵌套字段（保留兼容性）
+            'quote_info', 'quote_file_info',
             # 🔧 添加语音时长字段
             'voice_duration', 'mentioned_users', 'mentioned_all',  # 🔧 加入列表
             'call_duration', 'call_type', 'call_status',
@@ -235,7 +237,7 @@ class MessageSerializer(serializers.ModelSerializer):
             return obj.extra_file_info
 
         # 3. 最终兜底：如果 message_type 是媒体类型，但无 file_info，返回最小结构
-        if obj.message_type in ['text', 'image', 'file', 'video', 'voice', 'emoji']:
+        if obj.message_type in ['text', 'image', 'file', 'video', 'voice', 'emoji', 'call_audio', 'call_video']:
             # 尝试从 content 中提取（不推荐，仅应急）
             # 或返回空结构，避免前端崩溃
             return {
@@ -255,23 +257,30 @@ class MessageSerializer(serializers.ModelSerializer):
         ).exists()
 
 
-    # 🔧 新增：序列化引用信息
+    # 🔧 优化：序列化引用信息（嵌套格式，保留兼容性）
     def get_quote_info(self, obj):
         if obj.quote_message_id:
             return {
                 'id': obj.quote_message_id,
                 'content': obj.quote_content,
+                'call_duration': obj.quote_message.call_duration,
                 'sender': obj.quote_sender,
                 'sender_id': obj.quote_sender_id,
                 'timestamp': obj.quote_timestamp.isoformat() if obj.quote_timestamp else None,
-                'message_type': obj.quote_message_type
+                'message_type': obj.quote_message_type,
+                'file_info': obj.get_quote_file_info() if hasattr(obj, 'get_quote_file_info') else None
             }
         return None
 
 
     def get_quote_file_info(self, obj):
+        """🔧 关键修复：获取被引用消息的文件信息"""
         if obj.quote_message_id:
-            return obj.quote_message.get_file_info()
+            try:
+                return obj.quote_message.get_file_info()
+            except Exception as e:
+                logger.error(f"Error getting quote file info: {e}")
+                return None
         return None
 
     def create(self, validated_data):
@@ -290,7 +299,24 @@ class MessageSerializer(serializers.ModelSerializer):
             try:
                 quote_message = Message.objects.get(id=quote_message_id)
                 message.quote_message = quote_message
+
+                # 🔧 关键修复：如果quote_content等字段为空，从原消息中提取
+                if not quote_content:
+                    message.quote_content = quote_message.content[:500] if quote_message.content else ''
+
+                if not quote_sender:
+                    message.quote_sender = quote_message.sender.real_name or quote_message.sender.username if quote_message.sender else '未知用户'
+
+                if not quote_sender_id:
+                    message.quote_sender_id = quote_message.sender.id if quote_message.sender else None
+
+                if not quote_timestamp:
+                    message.quote_timestamp = quote_message.timestamp
+
+                if not quote_message_type:
+                    message.quote_message_type = quote_message.message_type
             except Message.DoesNotExist:
+                logger.warning(f"Quote message {quote_message_id} does not exist")
                 pass
 
         if quote_content:
