@@ -2004,7 +2004,7 @@ body {
 .file-list-header,
 .file-item {
     display: grid;
-    grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) minmax(200px, 1fr) minmax(200px, 1fr) 120px;
+    grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) minmax(200px, 1fr) minmax(200px, 1fr) minmax(200px, 1fr);
     gap: 10px;
     padding: 12px 20px;
     align-items: center;
@@ -2039,7 +2039,7 @@ body {
 @media (max-width: 768px) {
     .file-list-header,
     .file-item {
-        grid-template-columns: minmax(150px, 1fr) minmax(200px, 1fr) minmax(150px, 1fr) 60px;
+        grid-template-columns: minmax(150px, 1fr) minmax(200px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr);
         padding: 10px 15px;
     }
 

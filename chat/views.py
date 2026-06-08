@@ -58,6 +58,18 @@ class VersionView(APIView):
         static_version = os.environ.get('STATIC_VERSION', getattr(settings, 'STATIC_VERSION', app_version))
         build_time = os.environ.get('BUILD_TIME', getattr(settings, 'BUILD_TIME'))
 
+        version_log_file = os.path.join(settings.BASE_DIR, 'version_log.log')
+        if static_version and os.path.exists(version_log_file):
+            with open(version_log_file, 'r', encoding='utf-8') as f:
+                log_lines = f.readlines()
+            for line in log_lines:
+                if static_version in line:
+                    try:
+                        build_time = re.search(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', line).group(0)
+                    except Exception as e:
+                        logger.error(f"无法解析时间戳：{line} error: {e}")
+                    break
+
         # 检查是否需要强制更新（可通过环境变量配置）
         force_update = os.environ.get('FORCE_UPDATE', 'false').lower() == 'true'
 

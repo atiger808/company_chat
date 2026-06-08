@@ -4634,6 +4634,7 @@ class ChatClient {
             // 引用头部
             const quoteHeader = document.createElement('div');
             quoteHeader.className = 'quote-header';
+            quoteHeader.title = '被引用的消息';
             quoteHeader.innerHTML = `<i class="fas fa-quote-left"></i> <span class="quote-sender">${this.escapeHtml(senderName)}：</span>`;
 
             // 引用内容容器

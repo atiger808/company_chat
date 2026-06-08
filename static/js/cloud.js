@@ -1321,7 +1321,7 @@ class CloudApp {
                          data-file-id="${file.id}" 
                          data-is-folder="${isFolder}"
                          ondblclick="cloudApp.handleItemDoubleClick('${file.id}', ${isFolder}, ${isDocument})"
-                         oncontextmenu="cloudApp.handleContextMenu(event, '${file.id}', ${isFolder})" title="${file.name}">
+                         oncontextmenu="cloudApp.handleContextMenu(event, '${file.id}', ${isFolder}, '${file.name}')" title="${file.name}">
                         <div class="file-col name">
                             <!-- 🔧 关键修复：添加复选框 -->
                             <input type="checkbox" 
@@ -1370,16 +1370,16 @@ class CloudApp {
                                     <i class="fas fa-users-cog"></i>
                                 </button>
                             ` : ''}
-                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.shareFile('${file.id}', ${isFolder})" title="分享">
+                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.shareFile('${file.id}', ${isFolder}, '${this.escapeHtml(file.name)}')" title="分享">
                                 <i class="fas fa-share-alt"></i>
                             </button>
-                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.renameFile('${file.id}', '${this.escapeHtml(file.name)}')" title="重命名">
+                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.renameFile('${file.id}', '${this.escapeHtml(file.name)}', ${isFolder})" title="重命名">
                                 <i class="fas fa-edit"></i>
                             </button>
-                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${file.id}'], ${isFolder})" title="移动">
+                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${file.id}'], ${isFolder}, '${this.escapeHtml(file.name)}')" title="移动">
                                 <i class="fas fa-cut"></i>
                             </button>
-                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${file.id}', ${isFolder})" title="删除">
+                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${file.id}', ${isFolder}, '${this.escapeHtml(file.name)}')" title="删除">
                                 <i class="fas fa-trash"></i>
                             </button>
                         </div>
@@ -1441,7 +1441,7 @@ class CloudApp {
                          data-file-id="${file.id}" 
                          data-is-folder="${isFolder}"
                          ondblclick="cloudApp.handleItemDoubleClick('${file.id}', ${isFolder}, ${isDocument})"
-                         oncontextmenu="cloudApp.handleContextMenu(event, '${file.id}', ${isFolder})" title="${file.name}">
+                         oncontextmenu="cloudApp.handleContextMenu(event, '${file.id}', ${isFolder}, '${file.name}')" title="${file.name}">
                          <!-- 🔧 网格视图的复选框（悬停显示） -->
                         <div class="file-checkbox-overlay">
                             <input type="checkbox" 
@@ -1490,13 +1490,13 @@ class CloudApp {
                                     <i class="fas fa-users-cog"></i>
                                 </button>
                             ` : ''}
-                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.shareFile('${file.id}', ${isFolder})" title="分享">
+                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.shareFile('${file.id}', ${isFolder}, '${this.escapeHtml(file.name)}')" title="分享">
                                 <i class="fas fa-share-alt"></i>
                             </button>
-                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${file.id}'], ${isFolder})" title="移动">
+                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${file.id}'], ${isFolder}, '${this.escapeHtml(file.name)}')" title="移动">
                                 <i class="fas fa-cut"></i>
                             </button>
-                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${file.id}', ${isFolder})" title="删除">
+                            <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${file.id}', ${isFolder}, '${this.escapeHtml(file.name)}')" title="删除">
                                 <i class="fas fa-trash"></i>
                             </button>
                         </div>
@@ -3548,12 +3548,12 @@ class CloudApp {
     }
 
 
-    handleContextMenu(e, fileId, isFolder) {
+    handleContextMenu(e, fileId, isFolder, sourceName) {
         e.preventDefault();
         e.stopPropagation();
 
         // 🔧 保存类型信息
-        this.contextTarget = {fileId, isFolder};
+        this.contextTarget = {fileId, isFolder, sourceName};
         const menu = document.getElementById('contextMenu');
 
         if (menu) {
@@ -3593,7 +3593,7 @@ class CloudApp {
      */
     renameSelectedItem() {
         if (this.contextTarget) {
-            const {fileId, isFolder} = this.contextTarget;
+            const {fileId, isFolder, sourceName} = this.contextTarget;
 
             // 获取文件名
             const item = document.querySelector(`[data-file-id="${fileId}"]`);
@@ -3612,8 +3612,8 @@ class CloudApp {
      */
     moveSelectedItem() {
         if (this.contextTarget) {
-            const {fileId, isFolder} = this.contextTarget;
-            this.moveItems([fileId], isFolder);
+            const {fileId, isFolder, sourceName} = this.contextTarget;
+            this.moveItems([fileId], isFolder, sourceName);
         }
         this.hideContextMenu();
     }
@@ -3623,8 +3623,8 @@ class CloudApp {
      */
     deleteSelectedItem() {
         if (this.contextTarget) {
-            const {fileId, isFolder} = this.contextTarget;
-            this.deleteItem(fileId, isFolder);
+            const {fileId, isFolder, sourceName} = this.contextTarget;
+            this.deleteItem(fileId, isFolder, sourceName);
         }
         this.hideContextMenu();
     }
@@ -4409,7 +4409,7 @@ class CloudApp {
                                 <i class="fas fa-undo"></i>
                             </button>
                             <button class="btn-action" 
-                                    onclick="event.stopPropagation(); cloudApp.permanentDeleteItem('${item.id}', ${isFolder})" 
+                                    onclick="event.stopPropagation(); cloudApp.permanentDeleteItem('${item.id}', ${isFolder}, '${this.escapeHtml(item.name)}')" 
                                     title="永久删除">
                                 <i class="fas fa-trash-alt"></i>
                             </button>
@@ -4440,7 +4440,7 @@ class CloudApp {
                             <button class="btn-action" onclick="cloudApp.restoreItem('${item.id}', ${isFolder})" title="恢复">
                                 <i class="fas fa-undo"></i>
                             </button>
-                            <button class="btn-action" onclick="cloudApp.permanentDeleteItem('${item.id}', ${isFolder})" title="永久删除">
+                            <button class="btn-action" onclick="cloudApp.permanentDeleteItem('${item.id}', ${isFolder}, '${this.escapeHtml(item.name)}')" title="永久删除">
                                 <i class="fas fa-trash-alt"></i>
                             </button>
                         </div>
@@ -4531,7 +4531,7 @@ class CloudApp {
      */
     restoreSelectedItem() {
         if (this.contextTarget) {
-            const {fileId, isFolder} = this.contextTarget;
+            const {fileId, isFolder, sourceName} = this.contextTarget;
             this.restoreItem(fileId, isFolder);
         }
         this.hideContextMenu();
@@ -4542,8 +4542,8 @@ class CloudApp {
      */
     permanentDeleteSelectedItem() {
         if (this.contextTarget) {
-            const {fileId, isFolder} = this.contextTarget;
-            this.permanentDeleteItem(fileId, isFolder);
+            const {fileId, isFolder, sourceName} = this.contextTarget;
+            this.permanentDeleteItem(fileId, isFolder, sourceName);
         }
         this.hideContextMenu();
     }
@@ -4629,10 +4629,10 @@ class CloudApp {
      * @param {string} itemId - 文件或文件夹 ID
      * @param {boolean} isFolder - 是否为文件夹
      */
-    async deleteItem(itemId, isFolder = false) {
+    async deleteItem(itemId, isFolder = false, sourceName = '') {
         const confirmed = await this.showConfirmDialog(
             '删除确认',
-            `确定要删除这个${isFolder ? '文件夹' : '文件'}吗？`,
+            `确定要删除 <strong>${sourceName}</strong> 这个${isFolder ? '文件夹' : '文件'}吗？`,
             'danger'
         );
 
@@ -4749,10 +4749,10 @@ class CloudApp {
     /**
      * 🔧 永久删除文件/文件夹
      */
-    async permanentDeleteItem(itemId, isFolder = false) {
+    async permanentDeleteItem(itemId, isFolder = false, sourceName = null) {
         const confirmed = await this.showConfirmDialog(
             '永久删除',
-            `确定要永久删除这个${isFolder ? '文件夹' : '文件'}吗？此操作不可恢复！`,
+            `确定要永久删除 <strong>${sourceName}</strong> 个${isFolder ? '文件夹' : '文件'}吗？此操作不可恢复！`,
             'danger'
         );
 
@@ -4980,7 +4980,7 @@ class CloudApp {
     /**
      * 🔧 分享文件/文件夹（支持文件夹）
      */
-    async shareFile(fileId, isFolder = false) {
+    async shareFile(fileId, isFolder = false, sourceName='') {
         this.currentShareFileId = fileId;
         this.currentShareType = isFolder ? 'folder' : 'file';
 
@@ -5027,7 +5027,7 @@ class CloudApp {
 
         // 更新模态框标题
         const modalTitle = document.querySelector('#shareModal .modal-header h3');
-        if (modalTitle) modalTitle.textContent = isFolder ? '分享文件夹' : '分享文件';
+        if (modalTitle) modalTitle.innerHTML = isFolder ? `分享文件夹：<strong>${sourceName}</strong> ` : `分享文件：<strong>${sourceName}</strong> `;
 
         this.openModal('shareModal');
     }
@@ -5297,18 +5297,18 @@ class CloudApp {
      * @param {Array} itemIds - 要移动的 ID 列表
      * @param {boolean} isFolder - 是否为文件夹
      */
-    async moveItems(itemIds, isFolder = false) {
+    async moveItems(itemIds, isFolder = false, sourceName =  '') {
         this.currentMoveIds = itemIds;
         this.currentMoveType = isFolder ? 'folder' : 'file';
         await this.loadFolderTree();
-        this.openModal('moveModal');
+        this.openModal('moveModal', sourceName);
     }
 
 
-    async moveFiles(fileIds) {
+    async moveFiles(fileIds, sourceName =  '') {
         this.currentMoveIds = fileIds;
         await this.loadFolderTree();
-        this.openModal('moveModal');
+        this.openModal('moveModal', sourceName);
     }
 
 
@@ -6081,10 +6081,10 @@ class CloudApp {
                                 <button class="btn-action" onclick="event.stopPropagation(); cloudApp.navigateToSharedFolder('${item.id}')" title="打开">
                                     <i class="fas fa-folder-open"></i>
                                 </button>
-                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${item.id}'], true)" title="移动">
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${item.id}'], true, '${this.escapeHtml(item.name)}')" title="移动">
                                     <i class="fas fa-cut"></i>
                                 </button>
-                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${item.id}', true)" title="删除">
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${item.id}', true, '${this.escapeHtml(item.name)}')" title="删除">
                                     <i class="fas fa-trash"></i>
                                 </button>
                             </div>
@@ -6124,16 +6124,16 @@ class CloudApp {
                                     </button>
                                 ` : ''}
                                 
-                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.shareFile('${item.id}', false)" title="分享">
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.shareFile('${item.id}', false, '${this.escapeHtml(item.name)}')" title="分享">
                                     <i class="fas fa-share-alt"></i>
                                 </button>
-                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.renameFile('${item.id}', '${this.escapeHtml(item.name)}')" title="重命名">
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.renameFile('${item.id}', '${this.escapeHtml(item.name)}', false)" title="重命名">
                                     <i class="fas fa-edit"></i>
                                 </button>
-                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${item.id}'], false)" title="移动">
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${item.id}'], false, '${this.escapeHtml(item.name)}')" title="移动">
                                     <i class="fas fa-cut"></i>
                                 </button>
-                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${item.id}', false)" title="删除">
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${item.id}', false, '${this.escapeHtml(item.name)}')" title="删除">
                                     <i class="fas fa-trash"></i>
                                 </button>
                             </div>
@@ -6160,7 +6160,7 @@ class CloudApp {
                              data-file-id="${item.id}" 
                              data-is-folder="true"
                              ondblclick="cloudApp.navigateToSharedFolder('${item.id}')"
-                             oncontextmenu="cloudApp.handleContextMenu(event, '${item.id}', true)">
+                             oncontextmenu="cloudApp.handleContextMenu(event, '${item.id}', true, '${this.escapeHtml(item.name)}')">
                             <div class="file-checkbox-overlay">
                                 <input type="checkbox" 
                                        class="file-checkbox" 
@@ -6183,10 +6183,10 @@ class CloudApp {
                                 <button class="btn-action" onclick="event.stopPropagation(); cloudApp.navigateToSharedFolder('${item.id}')" title="打开">
                                     <i class="fas fa-folder-open"></i>
                                 </button>
-                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${item.id}'], true)" title="移动">
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${item.id}'], true, '${this.escapeHtml(item.name)}')" title="移动">
                                     <i class="fas fa-cut"></i>
                                 </button>
-                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${item.id}', true)" title="删除">
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${item.id}', true, '${this.escapeHtml(item.name)}')" title="删除">
                                     <i class="fas fa-trash"></i>
                                 </button>
                             </div>
@@ -6225,7 +6225,7 @@ class CloudApp {
                              data-file-id="${item.id}" 
                              data-is-folder="false"
                              ondblclick="cloudApp.handleItemDoubleClick('${item.id}', false, ${isDocument})"
-                             oncontextmenu="cloudApp.handleContextMenu(event, '${item.id}', false)">
+                             oncontextmenu="cloudApp.handleContextMenu(event, '${item.id}', false, '${this.escapeHtml(item.name)}')">
                             <div class="file-checkbox-overlay">
                                 <input type="checkbox" 
                                        class="file-checkbox" 
@@ -6250,16 +6250,16 @@ class CloudApp {
                                     </button>
                                 ` : ''}
                                 
-                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.shareFile('${item.id}', false)" title="分享">
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.shareFile('${item.id}', false, '${this.escapeHtml(item.name)}')" title="分享">
                                     <i class="fas fa-share-alt"></i>
                                 </button>
-                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.renameFile('${item.id}', '${this.escapeHtml(item.name)}')" title="重命名">
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.renameFile('${item.id}', '${this.escapeHtml(item.name)}', false)" title="重命名">
                                     <i class="fas fa-edit"></i>
                                 </button>
-                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${item.id}'], false)" title="移动">
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.moveItems(['${item.id}'], false, '${this.escapeHtml(item.name)}')" title="移动">
                                     <i class="fas fa-cut"></i>
                                 </button>
-                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${item.id}', false)" title="删除">
+                                <button class="btn-action" onclick="event.stopPropagation(); cloudApp.deleteItem('${item.id}', false, '${this.escapeHtml(item.name)}')" title="删除">
                                     <i class="fas fa-trash"></i>
                                 </button>
                             </div>
@@ -7051,11 +7051,16 @@ class CloudApp {
         });
     }
 
-    openModal(modalId) {
+    openModal(modalId, sourceName=null) {
         const modal = document.getElementById(modalId);
         if (modal) {
             modal.classList.add('show');
             document.body.style.overflow = 'hidden';
+            // 更新标题
+            const titleEl = modal.querySelector('.modal-title');
+            if (titleEl && sourceName && modalId === 'moveModal') {
+                titleEl.innerHTML = `移动：<strong>${sourceName}</strong> 到`;
+            }
         }
     }
 

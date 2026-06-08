@@ -41,8 +41,8 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         if obj.room_type == 'private':
             other_members = obj.members.exclude(id=user.id)
             if other_members.exists():
-                return other_members.first().real_name or other_members.first().username
-            return '未知用户'
+                return ' - '.join([m.real_name or m.username for m in other_members])
+            return '未命名群聊'
 
         return obj.name or '未命名群聊'
 
