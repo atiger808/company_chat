@@ -9879,3 +9879,46 @@ body.pwa-mode .chat-input-area {
     }
 }
 
+
+/* 🔧 右键菜单 */
+.context-menu {
+    position: fixed;
+    background: white;
+    border: 1px solid #ebeef5;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    padding: 5px 0;
+    z-index: 3000;
+    display: none;
+    min-width: 160px;
+}
+
+.menu-item {
+    padding: 8px 15px;
+    cursor: pointer;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #606266;
+}
+
+.menu-item:hover {
+    background: #ecf5ff;
+    color: #409EFF;
+}
+
+.menu-item.danger {
+    color: #f56c6c;
+}
+
+.menu-item.danger:hover {
+    background: #fef0f0;
+}
+
+.menu-divider {
+    height: 1px;
+    background: #ebeef5;
+    margin: 5px 0;
+}
+

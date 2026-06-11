@@ -637,6 +637,59 @@ class MessageViewSet(viewsets.ModelViewSet):
 
         return queryset.select_related('sender', 'chat_room', 'file', 'quote_message')
 
+    def list(self, request, *args, **kwargs):
+        """🔧 重写 list 方法，对历史消息进行加密"""
+        queryset = self.filter_queryset(self.get_queryset())
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True, context={'request': request})
+
+            # 🔧 关键修复：对序列化后的数据进行加密
+            encrypted_data = self._encrypt_messages(serializer.data)
+
+            return self.get_paginated_response(encrypted_data)
+
+        serializer = self.get_serializer(queryset, many=True, context={'request': request})
+
+        # 🔧 关键修复：对序列化后的数据进行加密
+        encrypted_data = self._encrypt_messages(serializer.data)
+
+        return Response(encrypted_data)
+
+    def _encrypt_messages(self, messages_data):
+        """🔧 加密消息列表数据"""
+        try:
+            from utils.encrypt_aes import encrypt_data
+
+            json_str = json.dumps(messages_data, ensure_ascii=False)
+            encrypted_str = encrypt_data(json_str, mode='aes')
+
+            return {
+                'data': encrypted_str,
+                'encrypt': True  # 🔧 标记为加密数据，前端需要解密
+            }
+        except Exception as e:
+            logger.error(f"加密消息失败: {e}")
+
+    # chat/views.py - 确保分页响应也包含加密标记
+
+    # def get_paginated_response(self, data):
+    #     """
+    #     🔧 重写分页响应方法，确保分页数据也加密
+    #     """
+    #     # 如果数据已经是加密格式，直接返回
+    #     if isinstance(data, dict) and data.get('encrypt') and data.get('data'):
+    #         return Response({
+    #             'count': self.paginator.count if hasattr(self, 'paginator') else len(data),
+    #             'next': self.paginator.get_next_link() if hasattr(self, 'paginator') else None,
+    #             'previous': self.paginator.get_previous_link() if hasattr(self, 'paginator') else None,
+    #             'results': data  # 直接使用加密后的 results
+    #         })
+    #
+    #     # 否则调用父类方法
+    #     return super().get_paginated_response(data)
+
     def perform_create(self, serializer):
         # 获取当前用户作为 sender
         sender = self.request.user

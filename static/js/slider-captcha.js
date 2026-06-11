@@ -1,4 +1,4 @@
-// @File   :slider-captcha.js
+// @File   :static/js/slider-captcha.js
 // @Time   :2026/2/13 10:32
 // @Author :dayue
 // @Email  :ole211@qq.com

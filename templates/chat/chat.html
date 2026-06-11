@@ -15,7 +15,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="企业聊天室">
-    <link rel="apple-touch-icon" href="/static/icons/icon-128x128.png?v=20260606-55ec1e7">
+    <link rel="apple-touch-icon" href="/static/icons/icon-128x128.png?v=20260610-b5b5a5e">
     <!-- Service Worker 注册（降级方案） -->
     <script>
         // Service Worker 降级注册（确保在 DOMContentLoaded 前注册）
@@ -33,8 +33,8 @@
     <meta name="msapplication-TileColor" content="#409EFF">
     <meta name="msapplication-TileImage" content="/static/icons/icon-144x144.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20260606-55ec1e7">-->
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260606-55ec1e7">
+    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20260610-b5b5a5e">-->
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260610-b5b5a5e">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
 
     <!-- 🔧 iOS 专用样式修复 -->
@@ -185,7 +185,7 @@
         </div>
 
         <div class="user-profile">
-            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260606-55ec1e7"
+            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260610-b5b5a5e"
                  alt="头像" class="avatar">
             <div class="user-info">
                 <div class="username" id="currentUsername">加载中...</div>
@@ -230,7 +230,7 @@
             <!-- 聊天列表将通过JS动态生成 -->
             <div class="empty-state">
                 <i class="fas fa-inbox"></i>
-                <p>暂无聊天记录</p>
+                <p>正在加载中...</p>
             </div>
         </div>
 
@@ -252,7 +252,7 @@
                 </button>
                 <div class="chat-info" onclick="chatClient.showProfile(chatClient.currentRoomId)">
                     <div class="chat-avatar">
-                        <img src="/static/images/default-avatar.png?v=20260606-55ec1e7"
+                        <img src="/static/images/default-avatar.png?v=20260610-b5b5a5e"
                              alt="聊天对象" id="chatAvatar">
                     </div>
                     <div class="chat-details">
@@ -483,6 +483,16 @@
 </template>
 
 
+<!-- 右键菜单 -->
+<div id="contextMenu" class="context-menu">
+    <div class="menu-item" onclick="chatClient.quoteSelectedItem()"><i class="fas fa-quote-left"></i> 引用</div>
+    <div class="menu-divider"></div>
+    <div class="menu-item" onclick="chatClient.forwardSelectedItem()"><i class="fas fa-share"></i> 转发</div>
+    <!--    <div class="menu-divider"></div>-->
+    <!--    <div class="menu-item danger" onclick="chatClient.deleteSelectedItem()"><i class="fas fa-trash"></i> 删除</div>-->
+</div>
+
+
 <!-- 新建聊天模态框 -->
 <div class="modal" id="newChatModal">
     <div class="modal-content">
@@ -553,7 +563,7 @@
                 </div>
                 <div class="profile-avatar-section">
                     <div class="avatar-upload-container">
-                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20260606-55ec1e7"
+                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20260610-b5b5a5e"
                              alt="头像">
                         <label class="upload-btn" for="avatarUpload">
                             <i class="fas fa-camera"></i>
@@ -729,12 +739,13 @@
 <div id="callOverlay" class="call-overlay hidden">
     <div class="call-container">
 
-        
+
         <div class="call-header">
             <span id="callStatusText">正在呼叫...</span>
             <div id="callTimer" class="call-timer hidden">00:00</div>
             <!-- 🔧 新增：最小化按钮 -->
-            <button class="call-minimize-btn" id="minimizeCallBtn" onclick="chatClient.minimizeCallWindow()" title="最小化">
+            <button class="call-minimize-btn" id="minimizeCallBtn" onclick="chatClient.minimizeCallWindow()"
+                    title="最小化">
                 <i class="fas fa-minus"></i>
             </button>
         </div>
@@ -753,15 +764,18 @@
                 <i class="fas fa-microphone"></i>
             </button>
             <!-- 🔧 摄像头开关按钮（视频通话时显示） -->
-            <button class="call-btn" id="cameraBtn" onclick="chatClient.toggleCamera()" style="display:none;" title="开启/关闭摄像头">
+            <button class="call-btn" id="cameraBtn" onclick="chatClient.toggleCamera()" style="display:none;"
+                    title="开启/关闭摄像头">
                 <i class="fas fa-video"></i>
             </button>
             <!-- 🔧 切换前后摄像头按钮（视频通话时显示） -->
-            <button class="call-btn" id="btnSwitchCamera" onclick="chatClient.switchCamera()" style="display:none;" title="切换前后摄像头">
+            <button class="call-btn" id="btnSwitchCamera" onclick="chatClient.switchCamera()" style="display:none;"
+                    title="切换前后摄像头">
                 <i class="fas fa-sync-alt"></i>
             </button>
             <!-- 🔧 免提按钮 -->
-            <button class="call-btn" id="speakerBtn" onclick="chatClient.toggleSpeaker()" style="display:none;" title="免提/听筒">
+            <button class="call-btn" id="speakerBtn" onclick="chatClient.toggleSpeaker()" style="display:none;"
+                    title="免提/听筒">
                 <i class="fas fa-volume-up"></i>
             </button>
             <button class="call-btn end-call" id="btnEndCall" onclick="chatClient.endCall()" title="挂断">
@@ -772,22 +786,21 @@
 </div>
 
 
-
 <!-- 🔧 关键修复：脚本资源直接带版本参数 -->
-<script src="/static/js/dist/spark-md5.min.js?v=20260606-55ec1e7"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260606-55ec1e7"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260606-55ec1e7"></script>
-<script src="/static/js/encrypts.js?v=20260606-55ec1e7"></script>
-<script src="/static/js/api.js?v=20260606-55ec1e7"></script>
-<script src="/static/js/utils.js?v=20260606-55ec1e7"></script>
-<script src="/static/js/chat.js?v=20260606-55ec1e7"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260610-b5b5a5e"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260610-b5b5a5e"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260610-b5b5a5e"></script>
+<script src="/static/js/encrypts.js?v=20260610-b5b5a5e"></script>
+<script src="/static/js/api.js?v=20260610-b5b5a5e"></script>
+<script src="/static/js/utils.js?v=20260610-b5b5a5e"></script>
+<script src="/static/js/chat.js?v=20260610-b5b5a5e"></script>
 
 
 <!-- templates/chat/index.html - 替换原有的版本检测脚本 -->
 
 <script>
     // 🔧 修复1: 从构建时注入的版本号（与后端保持一致）
-    const CURRENT_VERSION = '20260606-55ec1e7';
+    const CURRENT_VERSION = '20260610-b5b5a5e';
 
     // 🔧 修复2: 首次访问时保存版本到 localStorage（不是 sessionStorage）
     const LAST_VERSION = localStorage.getItem('static_version');

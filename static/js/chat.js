@@ -415,6 +415,7 @@ class ChatClient {
         this.voiceMinDuration = 1;
         this.maxMessageLength = 2000;
 
+        this.contextTarget = null;
 
         this.inputDrafts = new Map(); // roomId -> {content, cursorPosition, quoteMessage}
         this.forwardMessage = null;   // 当前待转发的消息
@@ -780,6 +781,7 @@ class ChatClient {
             // 设置事件监听
             this.setupEventListeners();
             this.setupSidebar();
+            this.setupContextMenu();
 
             // 初始化用户下拉菜单
             this.initUserDropdown()
@@ -1274,7 +1276,10 @@ class ChatClient {
 
             this.ws.onmessage = (event) => {
                 try {
-                    const data = JSON.parse(event.data);
+                    let data = JSON.parse(event.data);
+
+                    data = this.decryptPacket(data);
+
                     this.handleWebSocketMessage(data);
                 } catch (error) {
                     console.error('Failed to parse WebSocket message:', error);
@@ -1689,16 +1694,33 @@ class ChatClient {
     // 🔧 新增：撤回后更新聊天室最后消息（优化方案）
     async updateChatRoomLastMessageAfterRevoke(roomId) {
         try {
+            // 构建查询参数
+            const params = new URLSearchParams({
+                chat_room_id: roomId,
+                page_size: '1'
+            });
             // 获取聊天室最新消息（排除已撤回的消息）
-            const response = await fetch(`/api/chat/messages/?chat_room=${roomId}&page_size=1`, {
+            const response = await fetch(`/api/chat/messages/?${params.toString()}`, {
                 headers: TokenManager.getHeaders()
             });
 
             if (response.ok) {
                 const data = await response.json();
-                let results = Array.isArray(data.results) ? data.results : window.EncryptUtils.decryptData(data.results);
 
-                const latestMessage = Array.isArray(results) ? results?.[0] : results;
+                // 🔧 关键修复：解密后端返回的加密数据
+                let results = this._decryptMessageResults(data.results);
+
+                // 如果解密后没有 results 字段，尝试直接使用 data
+                if (!results && data.results) {
+                    results = data.results;
+                } else if (!results && Array.isArray(data)) {
+                    results = data;
+                }
+
+                // 确保 results 是数组
+                let newMessages = Array.isArray(results) ? results : (results ? [results] : []);
+
+                const latestMessage = newMessages ? newMessages?.[0] : {};
 
                 const room = this.chatRooms.find(r => parseInt(r.id) === parseInt(roomId));
                 if (room && latestMessage) {
@@ -2510,7 +2532,7 @@ class ChatClient {
         }
     }
 
-    // 发送文本消息
+    // 发送文本消息统一加密
     async sendMessage(content = null, targetRoomId = null) {
         // 🔧 关键修复 1: 使用传入的 roomId 或当前的 currentRoomId
         const roomId = parseInt(targetRoomId || this.currentRoomId);
@@ -2588,53 +2610,13 @@ class ChatClient {
 
         // 🔧 关键修复 3: 通过 WebSocket 发送（传递临时 ID 和正确的 roomId）
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            const wsMessage = {
-                type: 'chat_message',
-                content: messageData.content,
-                message_type: messageData.message_type,
-                file_id: messageData.file_id,
-                file_info: messageData.file_info,
-                chat_room: parseInt(roomId),  // 🔧 确保携带正确的聊天室 ID
-                mentioned_users: Array.from(this.currentMentions),
-                mentioned_all: this.mentionedAll,
-                temp_id: tempMessageId,
-            };
-
-            // 传递引用信息给后端
-            if (this.currentQuoteMessage) {
-                wsMessage.quote_message_id = messageData.quote_message_id;
-                wsMessage.quote_content = messageData.quote_content;
-                wsMessage.quote_sender = messageData.quote_sender;
-                wsMessage.quote_sender_id = messageData.quote_sender_id;
-                wsMessage.quote_timestamp = messageData.quote_timestamp;
-                wsMessage.quote_message_type = messageData.quote_message_type;
-                wsMessage.quote_file_info = this.currentQuoteMessage.file_info || null;
-            }
-            console.log('通过 WebSocket 发送消息:', wsMessage);
-            this.ws.send(JSON.stringify(wsMessage));
+            this.ws.send(JSON.stringify(this.encryptPacket({
+                type:"chat_message",
+                ...messageData
+            })));
         } else {
             // WebSocket 不可用时加入队列（同样包含引用信息）
-            const queueMessage = {
-                chat_room: parseInt(roomId),  // 🔧 使用正确的 roomId
-                content: messageData.content,
-                message_type: messageData.message_type,
-                file_id: messageData.file_id,
-                file_info: messageData.file_info,
-                mentioned_users: Array.from(this.currentMentions),
-                mentioned_all: this.mentionedAll,
-                temp_id: tempMessageId
-            };
-
-            if (this.currentQuoteMessage) {
-                queueMessage.quote_message_id = messageData.quote_message_id;
-                queueMessage.quote_content = messageData.quote_content;
-                queueMessage.quote_sender = messageData.quote_sender;
-                queueMessage.quote_sender_id = messageData.quote_sender_id;
-                queueMessage.quote_timestamp = messageData.quote_timestamp;
-                queueMessage.quote_message_type = messageData.quote_message_type;
-                queueMessage.quote_file_info = this.currentQuoteMessage.file_info || null;
-
-            }
+            const queueMessage = messageData;
             this.messageQueue.push(queueMessage);
             this.showError('网络连接不稳定，消息将在连接恢复后发送');
         }
@@ -2881,8 +2863,21 @@ class ChatClient {
             }
 
             const data = await response.json();
-            let results = Array.isArray(data.results) ? data.results : window.EncryptUtils.decryptData(data.results);
-            let newMessages = Array.isArray(results) ? results : [results];
+
+            // 🔧 关键修复：解密后端返回的加密数据
+            let results = this._decryptMessageResults(data.results);
+
+
+            // 如果解密后没有 results 字段，尝试直接使用 data
+            if (!results && data.results) {
+                results = data.results;
+            } else if (!results && Array.isArray(data)) {
+                results = data;
+            }
+
+            // 确保 results 是数组
+            let newMessages = Array.isArray(results) ? results : (results ? [results] : []);
+
 
             // 🔧 关键修复1: 消息去重（基于ID，避免重复）
             if (append && newMessages.length > 0) {
@@ -2917,7 +2912,15 @@ class ChatClient {
                 // 注意：后端返回的是倒序（最新在前），需要反转
                 this.messages = [...newMessages].reverse();
                 this.isInitialLoad = false;
-                this.hasMoreMessages = data.next ? true : false; // 检查是否有下一页
+
+                // 🔧 关键修复：正确判断是否有更多消息
+                if (data && data.count !== undefined) {
+                    this.hasMoreMessages = this.messages.length < data.count;
+                } else if (newMessages.length >= page_size) {
+                    this.hasMoreMessages = true;
+                } else {
+                    this.hasMoreMessages = false;
+                }
 
                 // 🔧 关键修复5: 正确记录最早消息ID
                 this.oldestMessageId = newMessages[newMessages.length - 1].id;
@@ -2934,6 +2937,7 @@ class ChatClient {
             // console.log('加载聊天历史成功:', newMessages);
             console.log('append:', append);
             console.log('this.hasMoreMessages:', this.hasMoreMessages);
+
 
             // 渲染消息
             this.renderChatHistory(append);
@@ -3061,9 +3065,13 @@ class ChatClient {
         });
     }
 
+
+
     // 通过消息ID跳转到目标消息位置（支持平滑滚动和高亮闪烁）
     async jumpToMessage(messageId) {
         try {
+            // 显示加载状态
+            this.showLoading(true);
             const messagesList = document.getElementById('messagesList');
             if (!messagesList) return;
 
@@ -3096,22 +3104,40 @@ class ChatClient {
                 this.showError('消息可能已被删除或过于久远');
                 return;
             }
+            console.log('找到消息ID: ', messageId)
 
-            // 4. 执行平滑滚动
-            // 使用 scrollIntoView 比直接设置 scrollTop 更可靠，尤其是处理边界情况时
-            messageElement.scrollIntoView({
-                behavior: 'smooth',
-                block: 'center' // 将消息滚动到视图中间
-            });
 
-            // 5. 添加高亮闪烁效果，帮助用户定位
-            this.highlightMessage(messageElement);
+            // 等待 DOM 渲染完成后再次尝试跳转
+            const tryScroll = () => {
+                const el = document.querySelector(`.message-wrapper[data-message-id="${messageId}"]`);
+                if (el) {
+                    // 4. 执行平滑滚动
+                    // 使用 scrollIntoView 比直接设置 scrollTop 更可靠，尤其是处理边界情况时
+                    el.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'center', // 将消息滚动到视图中间
+                        inline: 'nearest'
+                    });
+                    // 5. 添加高亮闪烁效果，帮助用户定位
+                    this.highlightMessage(el);
+                } else {
+                    // 如果还没渲染完成，继续等待
+                    requestAnimationFrame(tryScroll);
+                }
+            };
+            requestAnimationFrame(tryScroll);
+
+
 
         } catch (error) {
             console.error('跳转消息失败:', error);
             this.showError('跳转消息失败');
+        } finally {
+            this.hideLoading();
         }
     }
+
+
 
     // 高亮闪烁消息元素
     highlightMessage(element) {
@@ -3406,6 +3432,8 @@ class ChatClient {
             return new Date(b.updated_at) - new Date(a.updated_at);
         });
 
+        // console.log('sortedRooms:', sortedRooms);
+
         let html = `
         <div class="group-item new-group-item" onclick="chatClient.openNewChatModal()">
             <div class="group-avatar">
@@ -3486,7 +3514,7 @@ class ChatClient {
                 } else {
                     lastMessageText = lastMessage.content || '暂无消息';
                 }
-                console.log('lastMessageText: ', lastMessageText);
+
             }
 
 
@@ -3496,6 +3524,7 @@ class ChatClient {
                 lastMessageTimestamp = draft.timestamp
             }
 
+            // console.log('lastMessageText: ', lastMessageText);
 
             // 🔧 关键修复：为私聊头像添加包装器和输入指示器
             const avatarHtml = room.room_type === 'private'
@@ -3676,13 +3705,26 @@ class ChatClient {
         wrapper.setAttribute('data-message-timestamp', message.timestamp);
 
         // 根据消息类型动态创建对应的 wrapper
-        let messageWrapper;
+        // 创建消息包装器
+        let messageWrapper = document.createElement('div');
+        messageWrapper.className = `${type === 'received' ? 'message-left-wrapper' : 'message-right-wrapper'}`;
+        messageWrapper.dataset.messageId = message.id || message.message_id;
+        messageWrapper.dataset.id = message.id || message.message_id;
+
+        // ✅ 正确绑定右键菜单
+        messageWrapper.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.handleContextMenu (e, message)
+        });
+
         const headerElementContainer = document.createElement('div');
 
         if (type === 'received') {
             // 接收的消息 - 使用左侧 wrapper
-            messageWrapper = document.createElement('div');
-            messageWrapper.className = 'message-left-wrapper';
+            // messageWrapper = document.createElement('div');
+            // messageWrapper.className = 'message-left-wrapper';
+
 
             // 创建头像元素（左侧）
             const avatarElement = document.createElement('div');
@@ -3753,8 +3795,8 @@ class ChatClient {
             // messageWrapper.appendChild(headerElement_2);
         } else {
             // 发送的消息 - 使用右侧 wrapper
-            messageWrapper = document.createElement('div');
-            messageWrapper.className = 'message-right-wrapper';
+            // messageWrapper = document.createElement('div');
+            // messageWrapper.className = 'message-right-wrapper';
 
             // 引用
             const quoteBtn = document.createElement('button');
@@ -5435,10 +5477,10 @@ class ChatClient {
 
         // 更新聊天头部
         const room = this.chatRooms.find(r => r.id === parseInt(roomId));
-        console.log('this.currentUser:', this.currentUser)
+        // console.log('this.currentUser:', this.currentUser)
         console.log('room:', room)
         console.log('roomId:', roomId, ' room_type: ', room?.room_type)
-        console.log('this.chatRooms:', this.chatRooms)
+        // console.log('this.chatRooms:', this.chatRooms)
 
 
         // 清除该聊天室的未读数
@@ -8957,6 +8999,103 @@ class ChatClient {
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#039;');
+    }
+
+
+
+    // ==================== 右键菜单 ====================
+    /**
+     * 🔧 右键菜单设置
+     */
+    setupContextMenu() {
+
+        // 在非回收站视图中，右键菜单显示下载和分享选项
+        const menu = document.getElementById('contextMenu');
+        if (menu) {
+            menu.innerHTML = `
+                <div class="menu-item" onclick="chatClient.quoteSelectedItem()"><i class="fas fa-quote-left"></i> 引用</div>
+                <div class="menu-divider"></div>
+                <div class="menu-item" onclick="chatClient.forwardSelectedItem()"><i class="fas fa-share"></i> 转发</div>
+                
+                
+<!--                <div class="menu-divider"></div>-->
+<!--                <div class="menu-item danger" onclick="chatClient.deleteSelectedItem()"><i class="fas fa-trash"></i> 删除</div>-->
+            `
+        }
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.context-menu') && !e.target.closest('.file-item, .file-grid-item')) {
+                this.hideContextMenu();
+            }
+        });
+    }
+
+
+    handleContextMenu(e, message) {
+        if (!message || message.is_deleted) {
+            return;
+        }
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        // 🔧 保存类型信息
+        this.contextTarget = message;
+        const menu = document.getElementById('contextMenu');
+
+        if (menu) {
+            // 菜单位置
+            let x = e.pageX;
+            let y = e.pageY;
+
+            // 防止菜单超出屏幕
+            const rect = menu.getBoundingClientRect();
+            if (x + rect.width > window.innerWidth) x = window.innerWidth - rect.width - 10;
+            if (y + rect.height > window.innerHeight) y = window.innerHeight - rect.height - 10;
+
+            menu.style.left = `${x}px`;
+            menu.style.top = `${y}px`;
+            menu.style.display = 'block';
+        }
+    }
+
+    hideContextMenu() {
+        const menu = document.getElementById('contextMenu');
+        if (menu) menu.style.display = 'none';
+        this.contextTarget = null;
+    }
+
+
+    forwardSelectedItem(){
+        if (this.contextTarget) {
+            const message = this.contextTarget;
+            this.showForwardModal(message);
+        }
+        this.hideContextMenu();
+    }
+
+    quoteSelectedItem(){
+        if (this.contextTarget) {
+            const message = this.contextTarget;
+            this.setQuoteMessage(message);
+        }
+        this.hideContextMenu();
+    }
+
+
+    /**
+     * 🔧 右键菜单删除
+     */
+    deleteSelectedItem() {
+        if (this.contextTarget) {
+            const message = this.contextTarget;
+            this.deleteMessage(message);
+        }
+        this.hideContextMenu();
+    }
+
+    deleteMessage(message) {
+        console.log("delete message: ", message)
     }
 
 
@@ -12915,6 +13054,52 @@ class ChatClient {
 
 
     // 语音&视频通话功能结束
+
+
+    // 🔧 ChatClient 全局加密封装
+    encryptPacket(data){
+        return EncryptUtils.encryptPacket(data);
+    }
+
+    // 在 ChatClient 类中添加 decryptPacket 方法
+    decryptPacket(packet){
+        return EncryptUtils.decryptPacket(packet)
+    }
+
+
+
+
+    // 🔧 新增：解密消息结果的方法
+    _decryptMessageResults(rawData) {
+        try {
+            // 🔑 关键修复：检查是否为加密数据
+            if (rawData && rawData.encrypt && rawData.data) {
+                // console.log('🔒 检测到加密的历史消息数据，正在解密...');
+
+                // 解密数据
+                const decryptedStr = window.EncryptUtils.decryptData(rawData.data, 'aes');
+                const decryptedData = JSON.parse(decryptedStr);
+
+                // console.log('🔓 解密后的历史消息数据:', decryptedData);
+
+                // 返回解密后的数据（可能是数组或包含 results 的对象）
+                if (Array.isArray(decryptedData)) {
+                    return decryptedData;
+                } else if (decryptedData && decryptedData.results) {
+                    return decryptedData.results;
+                } else {
+                    return decryptedData;
+                }
+            }
+
+            // 未加密的数据，直接返回
+            return rawData;
+        } catch (error) {
+            console.error('❌ 解密历史消息失败:', error);
+            return rawData; // 解密失败时返回原始数据
+        }
+    }
+
 
 
     // 监听输入框的@输入

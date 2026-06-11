@@ -1,5 +1,5 @@
 <!-- 在 HTML 头部引入依赖库 (使用 CDN) -->
-
+// static/js/encrypts.js
 
 (function () {
     // 兼容浏览器全局变量
@@ -64,6 +64,12 @@
     // 挂载到全局对象，方便其他 JS 文件调用
     window.EncryptUtils = {
         encryptData: (data) => (!data ? null : EncyptObject.encryptData(data)),
-        decryptData: (data) => (!data ? null : EncyptObject.decryptData(data))
+        decryptData: (data) => (!data ? null : EncyptObject.decryptData(data)),
+        encryptPacket: (data) => ({encrypt:true, data: EncyptObject.encryptData(data)}),
+        decryptPacket: (packet) => {
+            if(!packet || !packet.encrypt) return packet;
+            try { return JSON.parse(EncyptObject.decryptData(packet.data)); }
+            catch(e){ console.error(e); return packet; }
+        }
     };
 })();

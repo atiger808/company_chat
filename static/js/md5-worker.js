@@ -1,4 +1,4 @@
-// /static/js/md5-worker.js
+// static/js/md5-worker.js
 // 🔧 导入 SparkMD5（使用 importScripts 加载 CDN 或本地文件）
 // importScripts('https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js');
 importScripts('/static/js/dist/spark-md5.min.js');

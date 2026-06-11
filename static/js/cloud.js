@@ -2344,7 +2344,7 @@ class CloudApp {
                 const docType = doc.document_type || 'word';
                 const iconClass = doc.doc_icon || this.getDocIconClass(docType);
                 const collaboratorCount = doc.collaborator_count || 0;
-                const isOwner = doc.owner === this.currentUser?.id;
+                const isOwner = doc.owner?.id === this.currentUser?.id;
 
                 html += `
                 <div class="file-item is-collab"
@@ -2373,10 +2373,12 @@ class CloudApp {
                         <button class="btn-action" onclick="event.stopPropagation(); cloudApp.openCollabDoc('${doc.id}')" title="编辑">
                             <i class="fas fa-edit"></i>
                         </button>
-                        <button class="btn-action" onclick="event.stopPropagation(); cloudApp.shareFile('${doc.id}', false)" title="分享">
+                        ${isOwner ? `
+                        <button class="btn-action" onclick="event.stopPropagation(); cloudApp.shareFile('${doc.id}', false, '${this.escapeHtml(doc.name)}')" title="分享">
                             <i class="fas fa-share-alt"></i>
-                        </button>
-                        <button class="btn-action" onclick="event.stopPropagation(); cloudApp.removeCollabDoc('${doc.id}')" title="删除">
+                        </button> 
+                        ` : ''}
+                        <button class="btn-action" onclick="event.stopPropagation(); cloudApp.removeCollabDoc('${doc.id}', '${this.escapeHtml(doc.name)}')" title="删除">
                             <i class="fas fa-trash"></i>
                         </button>
                         
@@ -2394,7 +2396,7 @@ class CloudApp {
                 const docType = doc.document_type || 'word';
                 const iconClass = doc.doc_icon || this.getDocIconClass(docType);
                 const collaboratorCount = doc.collaborator_count || 0;
-                const isOwner = doc.owner === this.currentUser?.id;
+                const isOwner = doc.owner?.id === this.currentUser?.id;
 
                 html += `
                 <div class="file-grid-item is-collab"
@@ -2434,11 +2436,11 @@ class CloudApp {
                         </button>
                         ${isOwner ? `
                             
-                        <button class="btn-icon" onclick="event.stopPropagation(); cloudApp.shareFile('${doc.id}', false)" title="分享">
+                        <button class="btn-icon" onclick="event.stopPropagation(); cloudApp.shareFile('${doc.id}', false, '${this.escapeHtml(doc.name)}')" title="分享">
                             <i class="fas fa-share-alt"></i>
                         </button>
                         ` : ''}
-                        <button class="btn-icon" onclick="event.stopPropagation(); cloudApp.removeCollabDoc('${doc.id}')" title="删除">
+                        <button class="btn-icon" onclick="event.stopPropagation(); cloudApp.removeCollabDoc('${doc.id}', '${this.escapeHtml(doc.name)}')" title="删除">
                             <i class="fas fa-trash"></i>
                         </button>
                         
@@ -3125,7 +3127,7 @@ class CloudApp {
     }
 
 
-    async removeCollabDoc(fileId) {
+    async removeCollabDoc(fileId, sourceName='') {
 
         if (!fileId) {
             this.showError('操作失败', '未选择文档');
@@ -3134,7 +3136,7 @@ class CloudApp {
 
         const confirmed = await this.showConfirmDialog(
             '删除协作文档',
-            '确定要删除这个协作文档吗？<br><small style="color: var(--text-light);">删除后所有协作者将失去访问权限</small>',
+            `确定要删除 <strong>${sourceName}</strong> 这个协作文档吗？<br><small style="color: var(--text-light);">删除后所有协作者将失去访问权限</small>`,
             'danger'
         );
 

@@ -78,10 +78,15 @@ class UtilsTools(object):
         return file and file.owner == user
 
     def _is_admin(self, folder, user):
+        """是否是共享文件夹管理员"""
         return FolderCollaboration.objects.filter(folder=folder, user=user, permission='admin', is_active=True).exists()
 
     def _is_admin_or_owner(self, folder, user):
         return self._is_owner_for_folder(folder, user) or self._is_admin(folder, user)
+
+    def _is_admin_for_file(self, file, user):
+        """是否是文件协作管理员"""
+        return FileCollaboration.objects.filter(file=file, user=user, permission='admin', is_active=True).exists()
 
 
     def _can_write(self, folder, user):
@@ -5991,18 +5996,19 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-            if file_obj.folder:
-                if not self._is_admin_or_owner(file_obj.folder, request.user):
-                    return Response(
-                        {'error': '无管理权限'},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
-            else:
-                if not self._is_owner_for_file(file_obj, request.user):
-                    return Response(
-                        {'error': '无管理权限，非法操作'},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
+            if not self._is_admin_for_file(file_obj, request.user):
+                if file_obj.folder:
+                    if not self._is_admin_or_owner(file_obj.folder, request.user):
+                        return Response(
+                            {'error': '无管理权限'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                else:
+                    if not self._is_owner_for_file(file_obj, request.user):
+                        return Response(
+                            {'error': '无管理权限，非法操作'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
 
 
 
@@ -6068,18 +6074,20 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-            if file_obj.folder:
-                if not self._is_admin_or_owner(file_obj.folder, request.user):
-                    return Response(
-                        {'error': '无管理权限'},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
-            else:
-                if not self._is_owner_for_file(file_obj, request.user):
-                    return Response(
-                        {'error': '无管理权限，非法操作'},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
+            if not self._is_admin_for_file(file_obj, request.user):
+
+                if file_obj.folder:
+                    if not self._is_admin_or_owner(file_obj.folder, request.user):
+                        return Response(
+                            {'error': '无管理权限'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                else:
+                    if not self._is_owner_for_file(file_obj, request.user):
+                        return Response(
+                            {'error': '无管理权限，非法操作'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
 
             user_id = request.data.get('user_id')
             permission = request.data.get('permission', 'read')
@@ -6171,19 +6179,19 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                     {'error': '无权管理协作者'},
                     status=status.HTTP_403_FORBIDDEN
                 )
-
-            if file_obj.folder:
-                if not self._is_admin_or_owner(file_obj.folder, request.user):
-                    return Response(
-                        {'error': '无管理权限'},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
-            else:
-                if not self._is_owner_for_file(file_obj, request.user):
-                    return Response(
-                        {'error': '无管理权限，非法操作'},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
+            if not self._is_admin_for_file(file_obj, request.user):
+                if file_obj.folder:
+                    if not self._is_admin_or_owner(file_obj.folder, request.user):
+                        return Response(
+                            {'error': '无管理权限'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                else:
+                    if not self._is_owner_for_file(file_obj, request.user):
+                        return Response(
+                            {'error': '无管理权限，非法操作'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
 
             collaborator_id = user_id
             if not collaborator_id:
@@ -6194,7 +6202,10 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                     file=file_obj,
                     user_id=collaborator_id
                 )
+                if collab.user == request.user:
+                    return Response({'error': '不能修改自己的权限'}, status=400)
             except FileCollaboration.DoesNotExist:
+                logger.error(f'Collaborator {collaborator_id} not found')
                 return Response({'error': '协作者关系不存在'}, status=404)
 
             logger.info(f'{request.user.username} 修改文档 {file_obj.name} 协作者 {collab.user.username} 权限')
@@ -6261,19 +6272,19 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                     {'error': '无权管理协作者'},
                     status=status.HTTP_403_FORBIDDEN
                 )
-
-            if file_obj.folder:
-                if not self._is_admin_or_owner(file_obj.folder, request.user):
-                    return Response(
-                        {'error': '无管理权限'},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
-            else:
-                if not self._is_owner_for_file(file_obj, request.user):
-                    return Response(
-                        {'error': '无管理权限，非法操作'},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
+            if not self._is_admin_for_file(file_obj, request.user):
+                if file_obj.folder:
+                    if not self._is_admin_or_owner(file_obj.folder, request.user):
+                        return Response(
+                            {'error': '无管理权限'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                else:
+                    if not self._is_owner_for_file(file_obj, request.user):
+                        return Response(
+                            {'error': '无管理权限，非法操作'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
 
             collaborator_id = user_id  # 从 URL 获取
             if not collaborator_id:
@@ -6284,6 +6295,8 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                     file=file_obj,
                     user_id=collaborator_id
                 )
+                if collab.user == request.user:
+                    return Response({'error': '不能移除自己'}, status=400)
             except FileCollaboration.DoesNotExist:
                 return Response({'error': '协作者关系不存在'}, status=404)
 

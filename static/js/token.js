@@ -1,4 +1,4 @@
-// @File   :token.js
+// @File   :static/js/token.js
 // @Time   :2026/4/22 17:08
 // @Author :dayue
 // @Email  :ole211@qq.com
