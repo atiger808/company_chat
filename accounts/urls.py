@@ -14,6 +14,7 @@ from .views import (
     UserAdminViewSet,
     DepartmentListViewSet,
     reset_password_page,
+    ConsultationRequestView,
 )
 
 router = DefaultRouter()
@@ -77,4 +78,8 @@ urlpatterns = [
     # 获取好友列表
     path('friends/', UserViewSet.as_view({'get': 'get_friends'}), name='user-friends'),
     path('friends/', DepartmentListViewSet.as_view({'get': 'get_friends'}), name='user-friends'),
+
+    # 咨询提交接口
+    path('contact/submit/', ConsultationRequestView.as_view(), name='contact-submit'),
+
 ]

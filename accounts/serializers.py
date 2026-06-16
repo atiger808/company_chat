@@ -14,7 +14,7 @@ from django.conf import settings
 
 from .models import CustomUser
 from rest_framework_simplejwt.tokens import RefreshToken
-from .models import CustomUser, Department
+from .models import CustomUser, Department, ConsultationRequest
 from utils.encrypt_aes import encrypt_data, decrypt_data
 from utils.utils import SystemConfigManager
 
@@ -880,3 +880,26 @@ class UserSearchSerializer(serializers.Serializer):
     )
 
 
+
+class ConsultationRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ConsultationRequest
+        fields = ['company_name', 'contact_name', 'email', 'phone', 'demand_type', 'message']
+
+    def validate_phone(self, value):
+        """验证手机号格式 (11位数字)"""
+        if value and not re.match(r'^1[3-9]\d{9}$', value):
+            raise serializers.ValidationError("请输入有效的11位手机号码")
+        return value
+
+    def validate_email(self, value):
+        """验证企业邮箱格式"""
+        if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', value):
+            raise serializers.ValidationError("请输入有效的邮箱地址")
+        return value.lower().strip()
+
+    def validate_company_name(self, value):
+        return value.strip()
+
+    def validate_contact_name(self, value):
+        return value.strip()

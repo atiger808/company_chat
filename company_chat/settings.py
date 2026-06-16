@@ -461,6 +461,10 @@ EMAIL_TIMEOUT = config('EMAIL_TIMEOUT', default=300, cast=int)  # 超时(5分钟
 PASSWORD_RESET_TOKEN_EXPIRES_MINUTES = config('PASSWORD_RESET_TOKEN_EXPIRES_MINUTES', default=20, cast=int)
 PASSWORD_RESET_TOKEN_EXPIRES_HOURS = config('PASSWORD_RESET_TOKEN_EXPIRES_HOURS', default=1, cast=int)
 
+CONTACT_NOTIFICATION_EMAILS = config('CONTACT_NOTIFICATION_EMAILS', cast=lambda x: x.split(',')) or []
+
+SYSTEM_NAME = '企联云'
+
 # 前端地址（用于生成重置链接）
 FRONTEND_URL = config('FRONTEND_URL', default='https://chat.first-iq.com', cast=str)
 

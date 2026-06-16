@@ -32,7 +32,9 @@ urlpatterns = [
     path('api/chat/', include('chat.urls')),
 
     # 官网主页路由
-    path('', TemplateView.as_view(template_name='chat/index.html'), name='index'),
+    path('', TemplateView.as_view(template_name='index.html'), name='index'),
+    path('contact/', TemplateView.as_view(template_name='contact.html'), name='contact'),
+    path('docs/api/', TemplateView.as_view(template_name='docs/api_docs.html'), name='api_docs'),
 
     # 🔧 聊天页面路由
     path('chat/', TemplateView.as_view(template_name='chat/chat.html'), name='chat'),

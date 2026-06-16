@@ -925,11 +925,22 @@ body {
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    position: relative;
 }
 
 .image-preview-header {
     padding: 16px;
     text-align: right;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.image-nav-counter {
+    font-size: 14px;
+    color: #666;
+    font-weight: 500;
+    user-select: none;
 }
 
 .image-preview-header .close-btn {
@@ -982,6 +993,53 @@ body {
 
 .image-preview-actions .btn i {
     margin-right: 6px;
+}
+
+/* 图片预览导航按钮 */
+.image-nav-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.4);
+    border: none;
+    color: white;
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s ease;
+    z-index: 10;
+    user-select: none;
+}
+
+.image-nav-btn:hover {
+    background: rgba(0, 0, 0, 0.65);
+}
+
+.image-nav-prev {
+    left: 12px;
+}
+
+.image-nav-next {
+    right: 12px;
+}
+
+@media (max-width: 768px) {
+    .image-nav-btn {
+        width: 36px;
+        height: 36px;
+        font-size: 16px;
+    }
+    .image-nav-prev {
+        left: 6px;
+    }
+    .image-nav-next {
+        right: 6px;
+    }
 }
 
 
@@ -1889,11 +1947,22 @@ input:checked + .slider:before {
     display: flex;
     flex-direction: column;
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    position: relative;
 }
 
 .image-preview-header {
     padding: 16px;
     text-align: right;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.image-nav-counter {
+    font-size: 14px;
+    color: #666;
+    font-weight: 500;
+    user-select: none;
 }
 
 .image-preview-header .close-btn {
@@ -1946,6 +2015,53 @@ input:checked + .slider:before {
 
 .image-preview-actions .btn i {
     margin-right: 6px;
+}
+
+/* 图片预览导航按钮 */
+.image-nav-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.4);
+    border: none;
+    color: white;
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s ease;
+    z-index: 10;
+    user-select: none;
+}
+
+.image-nav-btn:hover {
+    background: rgba(0, 0, 0, 0.65);
+}
+
+.image-nav-prev {
+    left: 12px;
+}
+
+.image-nav-next {
+    right: 12px;
+}
+
+@media (max-width: 768px) {
+    .image-nav-btn {
+        width: 36px;
+        height: 36px;
+        font-size: 16px;
+    }
+    .image-nav-prev {
+        left: 6px;
+    }
+    .image-nav-next {
+        right: 6px;
+    }
 }
 
 /* ==================== 提示框 ==================== */

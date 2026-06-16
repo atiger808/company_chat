@@ -603,3 +603,42 @@ class OperationLog(CoreModel):
         ]
 
 
+
+class ConsultationRequest(models.Model):
+    DEMAND_TYPE_CHOICES = [
+        ('private', '私有化部署'),
+        ('saas', 'SaaS 云端订阅'),
+        ('custom', '深度定制开发'),
+        ('poc', '申请免费 POC 测试环境'),
+    ]
+
+    STATUS_CHOICES = [
+        ('pending', '待处理'),
+        ('contacted', '已联系'),
+        ('closed', '已关闭'),
+    ]
+
+    company_name = models.CharField(max_length=200, verbose_name="公司名称")
+    contact_name = models.CharField(max_length=100, verbose_name="联系人姓名")
+    email = models.EmailField(verbose_name="企业邮箱")
+    phone = models.CharField(max_length=20, verbose_name="联系电话")
+    demand_type = models.CharField(max_length=20, choices=DEMAND_TYPE_CHOICES, default='private',
+                                   verbose_name="期望部署方式")
+    message = models.TextField(blank=True, null=True, verbose_name="需求描述")
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name="处理状态")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="提交时间")
+    handled_at = models.DateTimeField(null=True, blank=True, verbose_name="处理时间")
+    admin_notes = models.TextField(blank=True, null=True, verbose_name="管理员备注")
+
+    class Meta:
+        verbose_name = "咨询请求"
+        verbose_name_plural = "咨询请求"
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.company_name} - {self.contact_name} ({self.get_demand_type_display()})"
+
+
+    def get_demand_type_display(self):
+        return dict(self.DEMAND_TYPE_CHOICES).get(self.demand_type, '未知')

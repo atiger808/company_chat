@@ -6821,33 +6821,102 @@ class ChatClient {
     }
 
 
+    // 收集当前房间所有图片消息的 URL 列表
+    _collectImageList() {
+        const images = [];
+        if (!this.messages || !Array.isArray(this.messages)) return images;
+        for (const msg of this.messages) {
+            if (msg.file_info?.url && msg.file_info?.mime_type?.startsWith('image/')) {
+                images.push({ url: msg.file_info.url, name: msg.file_info.name || '图片' });
+            }
+        }
+        return images;
+    }
+
     // 预览图片（大图查看）
     previewImage(imageUrl) {
         if (!imageUrl) return;
 
+        const imageList = this._collectImageList();
+        let currentIndex = imageList.findIndex(item => item.url === imageUrl);
+        if (currentIndex === -1) currentIndex = 0;
+
+        const showImage = (index) => {
+            const item = imageList[index];
+            const img = modal.querySelector('.preview-image');
+            img.src = item.url;
+            img.alt = item.name;
+            currentIndex = index;
+
+            // 更新计数显示
+            const counter = modal.querySelector('.image-nav-counter');
+            if (counter) {
+                counter.textContent = `${index + 1} / ${imageList.length}`;
+            }
+
+            // 控制左右按钮显示
+            const prevBtn = modal.querySelector('.image-nav-prev');
+            const nextBtn = modal.querySelector('.image-nav-next');
+            if (prevBtn) prevBtn.style.visibility = index <= 0 ? 'hidden' : 'visible';
+            if (nextBtn) nextBtn.style.visibility = index >= imageList.length - 1 ? 'hidden' : 'visible';
+
+            // 更新下载/新窗口打开按钮的链接
+            const downloadBtn = modal.querySelector('.image-preview-actions .btn-secondary');
+            const openBtn = modal.querySelector('.image-preview-actions .btn-primary');
+            if (downloadBtn) downloadBtn.onclick = () => this.downloadImage(item.url);
+            if (openBtn) openBtn.onclick = () => window.open(item.url, '_blank');
+        };
+
         // 创建图片预览模态框
         const modal = document.createElement('div');
         modal.className = 'image-preview-modal';
+        const showNav = imageList.length > 1;
         modal.innerHTML = `
             <div class="image-preview-content">
                 <div class="image-preview-header">
+                    ${showNav ? `<span class="image-nav-counter">${currentIndex + 1} / ${imageList.length}</span>` : ''}
                     <button class="close-btn" title="关闭">&times;</button>
                 </div>
                 <div class="image-preview-body">
-                    <img src="${imageUrl}" alt="图片预览" class="preview-image">
+                    <img src="${imageUrl}" alt="${imageList[currentIndex]?.name || '图片预览'}" class="preview-image">
                     <div class="image-preview-actions">
-                        <button class="btn btn-secondary" onclick="chatClient.downloadImage('${imageUrl}')">
+                        <button class="btn btn-secondary">
                             <i class="fas fa-download"></i> 下载
                         </button>
-                        <button class="btn btn-primary" onclick="window.open('${imageUrl}', '_blank')">
+                        <button class="btn btn-primary">
                             <i class="fas fa-external-link-alt"></i> 在新窗口打开
                         </button>
                     </div>
                 </div>
+                ${showNav ? `
+                <button class="image-nav-btn image-nav-prev" title="上一张">
+                    <i class="fas fa-chevron-left"></i>
+                </button>
+                <button class="image-nav-btn image-nav-next" title="下一张">
+                    <i class="fas fa-chevron-right"></i>
+                </button>` : ''}
             </div>
         `;
 
         document.body.appendChild(modal);
+
+        // 初始按钮状态
+        if (showNav) {
+            const prevBtn = modal.querySelector('.image-nav-prev');
+            const nextBtn = modal.querySelector('.image-nav-next');
+            if (prevBtn) prevBtn.style.visibility = currentIndex <= 0 ? 'hidden' : 'visible';
+            if (nextBtn) nextBtn.style.visibility = currentIndex >= imageList.length - 1 ? 'hidden' : 'visible';
+        }
+
+        // 绑定导航按钮事件
+        modal.querySelector('.image-nav-prev')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (currentIndex > 0) showImage(currentIndex - 1);
+        });
+        modal.querySelector('.image-nav-next')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (currentIndex < imageList.length - 1) showImage(currentIndex + 1);
+        });
 
         // 绑定关闭事件
         const closeBtn = modal.querySelector('.close-btn');
@@ -6858,10 +6927,29 @@ class ChatClient {
             if (e.target === modal) modal.remove();
         });
 
-        // 键盘 ESC 关闭
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') modal.remove();
-        }, {once: true});
+        // 键盘快捷键
+        const keyHandler = (e) => {
+            if (!modal.isConnected) {
+                document.removeEventListener('keydown', keyHandler);
+                return;
+            }
+            if (e.key === 'Escape') {
+                modal.remove();
+            } else if (e.key === 'ArrowLeft' && currentIndex > 0) {
+                e.preventDefault();
+                showImage(currentIndex - 1);
+            } else if (e.key === 'ArrowRight' && currentIndex < imageList.length - 1) {
+                e.preventDefault();
+                showImage(currentIndex + 1);
+            }
+        };
+        document.addEventListener('keydown', keyHandler);
+
+        // 初始下载/打开按钮绑定
+        const downloadBtn = modal.querySelector('.image-preview-actions .btn-secondary');
+        const openBtn = modal.querySelector('.image-preview-actions .btn-primary');
+        if (downloadBtn) downloadBtn.onclick = () => this.downloadImage(imageUrl);
+        if (openBtn) openBtn.onclick = () => window.open(imageUrl, '_blank');
     }
 
     // 下载图片
@@ -8696,7 +8784,7 @@ class ChatClient {
         }
     }
 
-// 更新连接状态
+    // 更新连接状态
     updateConnectionStatus(isConnected, elementId = 'userStatus') {
         const userStatus = document.getElementById(elementId);
         if (userStatus) {

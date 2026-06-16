@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>开发者文档 - 企联云开放 API</title>
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --primary: #3b82f6;
+            --primary-dark: #2563eb;
+            --bg-dark: #0f172a;
+            --bg-card: #1e293b;
+            --bg-sidebar: #0b1120;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: rgba(255, 255, 255, 0.1);
+            --code-bg: #0d1117;
+            --success: #10b981;
+            --warning: #f59e0b;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            line-height: 1.6;
+        }
+
+        /* 顶部导航 */
+        .top-nav {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            height: 64px;
+            background: rgba(15, 23, 42, 0.9);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            padding: 0 24px;
+            z-index: 100;
+        }
+        .nav-logo {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: white;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .nav-logo i { color: var(--primary); }
+        .nav-links { margin-left: auto; display: flex; gap: 24px; }
+        .nav-links a { color: var(--text-muted); text-decoration: none; font-size: 0.9rem; transition: 0.2s; }
+        .nav-links a:hover { color: white; }
+
+        /* 布局容器 */
+        .docs-container {
+            display: flex;
+            max-width: 1400px;
+            margin: 64px auto 0;
+            min-height: calc(100vh - 64px);
+        }
+
+        /* 左侧侧边栏 */
+        .sidebar {
+            width: 280px;
+            background: var(--bg-sidebar);
+            border-right: 1px solid var(--border);
+            padding: 32px 24px;
+            position: sticky;
+            top: 64px;
+            height: calc(100vh - 64px);
+            overflow-y: auto;
+        }
+        .sidebar-group { margin-bottom: 32px; }
+        .sidebar-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            font-weight: 600;
+        }
+        .sidebar-link {
+            display: block;
+            padding: 8px 12px;
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.9rem;
+            border-radius: 6px;
+            transition: 0.2s;
+            margin-bottom: 4px;
+        }
+        .sidebar-link:hover, .sidebar-link.active {
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--primary);
+        }
+
+        /* 右侧主内容 */
+        .main-content {
+            flex: 1;
+            padding: 48px 64px;
+            max-width: 900px;
+        }
+
+        h1 { font-size: 2.5rem; margin-bottom: 16px; font-weight: 700; }
+        h2 { font-size: 1.75rem; margin: 48px 0 16px; font-weight: 600; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+        h3 { font-size: 1.25rem; margin: 32px 0 12px; font-weight: 600; color: var(--text-main); }
+        p { color: var(--text-muted); margin-bottom: 16px; font-size: 1rem; }
+
+        /* 方法标签 */
+        .method {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            margin-right: 8px;
+        }
+        .method.get { background: rgba(16, 185, 129, 0.2); color: var(--success); }
+        .method.post { background: rgba(59, 130, 246, 0.2); color: var(--primary); }
+
+        /* 代码块 */
+        pre {
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            overflow-x: auto;
+            margin: 16px 0 24px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+        }
+        code { font-family: 'JetBrains Mono', monospace; color: #e2e8f0; }
+        .code-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(255,255,255,0.03);
+            padding: 8px 16px;
+            border-bottom: 1px solid var(--border);
+            border-radius: 8px 8px 0 0;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+        .copy-btn {
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: 4px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: 0.2s;
+        }
+        .copy-btn:hover { background: rgba(255,255,255,0.1); color: white; }
+
+        /* 提示框 */
+        .info-box {
+            background: rgba(59, 130, 246, 0.1);
+            border-left: 3px solid var(--primary);
+            padding: 16px;
+            border-radius: 0 8px 8px 0;
+            margin: 24px 0;
+        }
+        .info-box p { margin: 0; color: var(--text-main); font-size: 0.9rem; }
+
+        /* 响应式 */
+        @media (max-width: 1024px) {
+            .sidebar { display: none; } /* 移动端可改为汉堡菜单 */
+            .main-content { padding: 32px 24px; }
+        }
+    </style>
+</head>
+<body>
+
+    <nav class="top-nav">
+        <a href="/" class="nav-logo"><i class="fas fa-cloud"></i> 企联云</a>
+        <div class="nav-links">
+            <a href="/">返回官网</a>
+            <a href="/contact/">联系技术顾问</a>
+            <a href="/login/" class="btn" style="background:var(--primary); color:white; padding:8px 16px; border-radius:6px; text-decoration:none;">控制台登录</a>
+        </div>
+    </nav>
+
+    <div class="docs-container">
+        <!-- 左侧导航 -->
+        <aside class="sidebar">
+            <div class="sidebar-group">
+                <div class="sidebar-title">快速开始</div>
+                <a href="#intro" class="sidebar-link active">简介</a>
+                <a href="#auth" class="sidebar-link">身份认证</a>
+                <a href="#errors" class="sidebar-link">错误码说明</a>
+            </div>
+            <div class="sidebar-group">
+                <div class="sidebar-title">核心 API</div>
+                <a href="#chatrooms" class="sidebar-link">聊天室管理</a>
+                <a href="#messages" class="sidebar-link">消息收发</a>
+                <a href="#files" class="sidebar-link">文件与网盘</a>
+            </div>
+            <div class="sidebar-group">
+                <div class="sidebar-title">高级功能</div>
+                <a href="#webhooks" class="sidebar-link">Webhook 事件</a>
+                <a href="#websocket" class="sidebar-link">WebSocket 实时推送</a>
+            </div>
+        </aside>
+
+        <!-- 右侧内容 -->
+        <main class="main-content">
+            <section id="intro">
+                <h1>企联云开放 API</h1>
+                <p>欢迎使用企联云开发者文档。通过我们的 RESTful API 和 WebSocket 接口，您可以轻松将企业级即时通讯与网盘能力集成到您的内部 OA、ERP 或 CRM 系统中。</p>
+                <div class="info-box">
+                    <p><i class="fas fa-info-circle"></i> <strong>基础 URL:</strong> 所有 API 请求的基础路径为 <code>https://api.qilian.com/v1</code> (私有化部署请替换为您自己的域名)。</p>
+                </div>
+            </section>
+
+            <section id="auth">
+                <h2>身份认证</h2>
+                <p>企联云 API 使用 Bearer Token 进行身份验证。您需要在每个请求的 HTTP Header 中包含您的 Access Token。</p>
+                <div class="code-header"><span>HTTP Header 示例</span><button class="copy-btn" onclick="copyCode(this)">复制</button></div>
+                <pre><code>Authorization: Bearer YOUR_ACCESS_TOKEN
+Content-Type: application/json</code></pre>
+            </section>
+
+            <section id="chatrooms">
+                <h2>聊天室管理</h2>
+                <h3><span class="method post">POST</span> 创建群聊</h3>
+                <p>创建一个全新的群组聊天室，并邀请指定成员加入。</p>
+                <div class="code-header"><span>cURL 请求示例</span><button class="copy-btn" onclick="copyCode(this)">复制</button></div>
+                <pre><code>curl -X POST https://api.qilian.com/v1/chat/rooms/ \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "room_type": "group",
+    "name": "产品研发部",
+    "member_ids": [101, 102, 105]
+  }'</code></pre>
+
+                <h3><span class="method get">GET</span> 获取用户聊天列表</h3>
+                <p>获取当前认证用户参与的所有聊天室列表（包含未读消息数）。</p>
+                <div class="code-header"><span>响应示例 (200 OK)</span><button class="copy-btn" onclick="copyCode(this)">复制</button></div>
+                <pre><code>{
+  "count": 2,
+  "results": [
+    {
+      "id": 45,
+      "name": "产品研发部",
+      "room_type": "group",
+      "unread_count": 3,
+      "last_message": {
+        "content": "今天的代码评审定在下午3点",
+        "timestamp": "2026-06-16T14:30:00Z"
+      }
+    }
+  ]
+}</code></pre>
+            </section>
+
+            <section id="files">
+                <h2>文件与网盘</h2>
+                <h3><span class="method post">POST</span> 上传文件</h3>
+                <p>支持分片上传与 MD5 秒传去重。最大支持 500MB 单文件（可在系统设置中调整）。</p>
+                <div class="code-header"><span>JavaScript (Fetch) 示例</span><button class="copy-btn" onclick="copyCode(this)">复制</button></div>
+                <pre><code>const formData = new FormData();
+formData.append('file', document.querySelector('#fileInput').files[0]);
+formData.append('file_md5', 'd41d8cd98f00b204e9800998ecf8427e'); // 可选，用于秒传
+
+fetch('https://api.qilian.com/v1/chat/upload/', {
+  method: 'POST',
+  headers: { 'Authorization': 'Bearer YOUR_ACCESS_TOKEN' },
+  body: formData
+}).then(res => res.json()).then(data => console.log(data.file_url));</code></pre>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        // 简单的复制代码功能
+        function copyCode(btn) {
+            const code = btn.parentElement.nextElementSibling.innerText;
+            navigator.clipboard.writeText(code).then(() => {
+                const originalText = btn.innerText;
+                btn.innerText = '已复制!';
+                btn.style.color = 'var(--success)';
+                setTimeout(() => {
+                    btn.innerText = originalText;
+                    btn.style.color = '';
+                }, 2000);
+            });
+        }
+
+        // 侧边栏滚动高亮 (简单实现)
+        const links = document.querySelectorAll('.sidebar-link');
+        links.forEach(link => {
+            link.addEventListener('click', function() {
+                links.forEach(l => l.classList.remove('active'));
+                this.classList.add('active');
+            });
+        });
+    </script>
+</body>
+</html>

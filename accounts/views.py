@@ -3,10 +3,17 @@ import datetime
 
 from rest_framework.exceptions import ValidationError
 from django.core.exceptions import ObjectDoesNotExist
-from rest_framework import viewsets, status, permissions
+from rest_framework import viewsets, status, permissions, throttling
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework import serializers
+
+from email.utils import formataddr  # 👈 1. 引入标准库
+from email.header import Header  # 👈 1. 引入 Header
+from django.core.mail import send_mail
+from django.template.loader import render_to_string
+
 
 # 生成 JWT token
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -16,7 +23,7 @@ from django.utils import timezone
 from django.contrib.auth import logout
 from django.db.models import Q
 from django.conf import settings
-from .models import CustomUser, Department
+from .models import CustomUser, Department, ConsultationRequest
 from chat.models import ChatRoom
 from loguru import logger
 
@@ -39,6 +46,7 @@ from .serializers import (
     ChangePasswordSerializer,
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
+    ConsultationRequestSerializer,
 )
 from .permissions import IsSuperAdmin, IsAdminOrSuperAdmin, IsAdminUserManagement
 
@@ -1129,12 +1137,6 @@ class UserViewSet(viewsets.ModelViewSet):
             "email": "user@example.com"
         }
         """
-        from email.utils import formataddr  # 👈 1. 引入标准库
-        from email.header import Header  # 👈 1. 引入 Header
-        from django.core.mail import send_mail
-        from django.template.loader import render_to_string
-        from django.utils.http import urlsafe_base64_encode
-        from django.utils.encoding import force_bytes
 
         serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -1331,3 +1333,94 @@ def reset_password_page(request):
         return render(request, 'chat/reset-password-error.html', {
             'error_message': '页面加载失败，请刷新重试或重新申请重置链接'
         }, status=200)
+
+
+
+# 频率限制：同一 IP 每小时最多提交 3 次
+class ContactRequestThrottle(throttling.AnonRateThrottle):
+    rate = '3/hour'
+
+
+class ConsultationRequestView(APIView):
+    """
+    处理官网/联系页面的咨询提交
+    POST /api/contact/submit/
+    """
+    permission_classes = [permissions.AllowAny]  # 允许未登录用户提交
+    throttle_classes = [ContactRequestThrottle]  # 启用频率限制
+
+    def post(self, request):
+        serializer = ConsultationRequestSerializer(data=request.data)
+
+        # 1. 验证数据
+        if not serializer.is_valid():
+            # 提取第一个错误信息返回给前端
+            first_error = next(iter(serializer.errors.values()))[0]
+            return Response({
+                'error': first_error
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # 2. 保存到数据库
+            consultation = serializer.save()
+            logger.info(f"收到新的咨询请求: {consultation.company_name} - {consultation.contact_name}")
+
+            # 3. 发送通知邮件给管理员 (可选，但强烈推荐)
+            self._notify_admin(consultation)
+
+            return Response({
+                'success': True,
+                'message': '提交成功！我们的技术顾问将在 24 小时内与您联系。'
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            logger.error(f"处理咨询请求失败: {e}", exc_info=True)
+            return Response({
+                'error': '服务器内部错误，请稍后重试'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _notify_admin(self, consultation):
+        """发送内部通知邮件给管理员"""
+        try:
+            # 获取管理员邮箱列表 (可在 settings.py 中配置 ADMINS 或自定义)
+            admin_emails = getattr(settings, 'CONTACT_NOTIFICATION_EMAILS', [settings.DEFAULT_FROM_EMAIL])
+
+            # 获取系统名称
+            site_name = SystemConfigManager.get_config('system.name', '企联云')
+
+            # 👇 2. 核心修复：使用 Header 将中文转换为 MIME 编码
+            # 这会将 '企联云' 转换为类似 '=?utf-8?b?5Lyg6IuN5Lq6?=' 的纯 ASCII 字符串
+            encoded_name = str(Header(site_name, 'utf-8'))
+
+            # 👇 3. 拼接成标准的发件人格式
+            # 注意：这里的 settings.DEFAULT_FROM_EMAIL 必须是纯邮箱地址，如 noreply@qq.com
+            safe_from_email = f"{encoded_name} <{settings.DEFAULT_FROM_EMAIL}>"
+
+            subject = f"[新咨询] {consultation.company_name} - {consultation.get_demand_type_display()}"
+
+            message = f"""
+收到新的企业咨询请求：
+
+【公司名称】: {consultation.company_name}
+【联系人】: {consultation.contact_name}
+【联系电话】: {consultation.phone}
+【企业邮箱】: {consultation.email}
+【期望部署】: {consultation.get_demand_type_display()}
+【需求描述】: {consultation.message or '无'}
+【提交时间】: {consultation.created_at.strftime('%Y-%m-%d %H:%M:%S')}
+
+请登录管理后台及时处理。
+            """
+
+            send_mail(
+                subject=subject,
+                message=message,
+                from_email=safe_from_email,  # 👈 使用安全编码的发件人
+                recipient_list=admin_emails,
+                fail_silently=True,  # 邮件发送失败不应阻断用户提交成功的响应
+            )
+            logger.info(f"管理员通知邮件已发送至: {admin_emails}")
+
+        except Exception as e:
+            # 邮件发送失败仅记录日志，不影响主流程
+            logger.warning(f"发送咨询通知邮件失败: {e}")

@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>联系技术顾问 - 企联云</title>
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
+    <!-- 引入您项目现有的认证模块样式，保持完全一致 -->
+    <link rel="stylesheet" href="/static/css/chat_auth.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        /* 覆盖 body 背景，使其与官网主页一致 */
+        body {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 20px;
+        }
+
+        .contact-container {
+            display: flex;
+            max-width: 1000px;
+            width: 100%;
+            background: var(--bg-primary);
+            border-radius: var(--border-radius-lg);
+            box-shadow: var(--shadow-lg);
+            overflow: hidden;
+            animation: fadeInUp 0.5s ease;
+        }
+
+        .contact-left {
+            flex: 1;
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+            color: white;
+            padding: 48px 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .contact-left h2 {
+            font-size: 2rem;
+            margin-bottom: 16px;
+            font-weight: 700;
+        }
+
+        .contact-left p {
+            font-size: 1rem;
+            opacity: 0.9;
+            margin-bottom: 40px;
+            line-height: 1.6;
+        }
+
+        .contact-info-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .contact-info-item i {
+            font-size: 1.25rem;
+            margin-top: 4px;
+            width: 24px;
+            text-align: center;
+        }
+
+        .contact-info-item h4 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .contact-info-item span {
+            font-size: 0.9rem;
+            opacity: 0.85;
+        }
+
+        .contact-right {
+            flex: 1.2;
+            padding: 48px 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .contact-right h2 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: var(--text-primary);
+        }
+
+        .contact-right > p {
+            color: var(--text-secondary);
+            margin-bottom: 32px;
+            font-size: 0.95rem;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .form-group textarea.form-control {
+            padding-left: 12px; /* 文本域不需要左侧 icon 间距 */
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        .back-link {
+            display: inline-flex;
+            align-items: center;
+            color: var(--text-light);
+            font-size: 14px;
+            margin-bottom: 24px;
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+
+        .back-link:hover {
+            color: var(--primary-color);
+        }
+
+        .back-link i {
+            margin-right: 8px;
+            font-size: 12px;
+        }
+
+        /* ==================== 提示框 ==================== */
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            z-index: 9999;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            animation: slideIn 0.3s ease;
+        }
+
+        .toast-error {
+            background-color: #ff4d4f;
+        }
+
+        .toast-success {
+            background-color: #52c41a;
+        }
+
+
+        @media (max-width: 768px) {
+            .contact-container {
+                flex-direction: column;
+            }
+
+            .contact-left {
+                padding: 32px 24px;
+            }
+
+            .contact-right {
+                padding: 32px 24px;
+            }
+
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="contact-container">
+    <!-- 左侧：联系信息与信任背书 -->
+    <div class="contact-left">
+        <div>
+            <a href="/" style="text-decoration: none; color: inherit;">
+                <div class="logo" style="display:flex; align-items:center; gap:12px; margin-bottom:40px;">
+                    <i class="fas fa-cloud" style="font-size:28px;"></i>
+                    <span style="font-size:24px; font-weight:bold;">企联云</span>
+                </div>
+            </a>
+            <h2>开启企业数字化<br>协作新时代</h2>
+            <p>我们的技术顾问团队将为您提供 1 对 1 的专业咨询，包括架构评估、私有化部署方案及免费 POC 测试环境申请。</p>
+
+            <div class="contact-info-item">
+                <i class="fas fa-phone-alt"></i>
+                <div>
+                    <h4>销售与咨询热线</h4>
+                    <span>15925968073 (工作日 9:00 - 18:00)</span>
+                </div>
+            </div>
+            <div class="contact-info-item">
+                <i class="fas fa-envelope"></i>
+                <div>
+                    <h4>技术支持邮箱</h4>
+                    <span>928528666@qq.com</span>
+                </div>
+            </div>
+            <div class="contact-info-item">
+                <i class="fas fa-map-marker-alt"></i>
+                <div>
+                    <h4>总部地址</h4>
+                    <span>浙江省义乌市城西街道鸿运路315号国际陆港电商城 11A号楼</span>
+                </div>
+            </div>
+        </div>
+
+        <div style="font-size: 0.85rem; opacity: 0.7; margin-top: 40px;">
+            <i class="fas fa-check-circle"></i> 承诺 24 小时内响应您的咨询
+        </div>
+    </div>
+
+    <!-- 右侧：需求收集表单 -->
+    <div class="contact-right">
+        <a href="/" class="back-link"><i class="fas fa-arrow-left"></i> 返回官网主页</a>
+        <h2>联系技术顾问</h2>
+        <p>请填写以下信息，我们将尽快为您安排专属技术顾问对接。</p>
+
+        <form id="contactForm" class="auth-form" onsubmit="handleContactSubmit(event)">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="companyName">公司名称 <span style="color:var(--danger-color)">*</span></label>
+                    <div class="input-with-icon">
+                        <i class="fas fa-building"></i>
+                        <input type="text" id="companyName" name="company_name" class="form-control"
+                               placeholder="请输入企业全称" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="contactName">联系人姓名 <span style="color:var(--danger-color)">*</span></label>
+                    <div class="input-with-icon">
+                        <i class="fas fa-user"></i>
+                        <input type="text" id="contactName" name="contact_name" class="form-control"
+                               placeholder="您的姓名" required>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="contactEmail">企业邮箱 <span style="color:var(--danger-color)">*</span></label>
+                    <div class="input-with-icon">
+                        <i class="fas fa-envelope"></i>
+                        <input type="email" id="contactEmail" name="email" class="form-control"
+                               placeholder="name@company.com"
+                               required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="contactPhone">联系电话 <span style="color:var(--danger-color)">*</span></label>
+                    <div class="input-with-icon">
+                        <i class="fas fa-mobile-alt"></i>
+                        <input type="tel" id="contactPhone" name="phone" class="form-control" placeholder="11位手机号码"
+                               required>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="demandType">期望部署方式</label>
+                <div class="input-with-icon">
+                    <i class="fas fa-server"></i>
+                    <select id="demandType" name="demand_type" class="form-control"
+                            style="padding-left: 44px; cursor: pointer;">
+                        <option value="private">私有化部署 (数据完全本地化)</option>
+                        <option value="saas">SaaS 云端订阅 (开箱即用)</option>
+                        <option value="custom">深度定制开发</option>
+                        <option value="poc">申请免费 POC 测试环境</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="message">需求描述</label>
+                <textarea id="message" name="message" class="form-control"
+                          placeholder="请简要描述您的企业规模、核心痛点或具体需求（选填）"></textarea>
+            </div>
+
+            <button type="submit" id="submitBtn" class="btn btn-primary btn-block" style="margin-top: 8px;">
+                <span class="text">提交咨询</span>
+                <span class="loading"></span>
+            </button>
+
+            <div id="formSuccess" class="alert alert-success" style="margin-top: 16px; display: none;">
+                <i class="fas fa-check-circle"></i> 提交成功！我们的技术顾问将在 24 小时内通过企业邮箱或电话与您联系。
+            </div>
+        </form>
+    </div>
+</div>
+
+
+<script>
+
+    // 显示错误
+    function showError(message) {
+        console.error('显示错误:', message);
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'toast toast-error';
+        errorDiv.textContent = message;
+        document.body.appendChild(errorDiv);
+
+        setTimeout(() => {
+            if (errorDiv.parentNode) {
+                errorDiv.parentNode.removeChild(errorDiv);
+            }
+        }, 3000);
+    }
+
+    // 显示成功
+    function showSuccess(message) {
+        console.log('显示成功:', message);
+        const successDiv = document.createElement('div');
+        successDiv.className = 'toast toast-success';
+        successDiv.textContent = message;
+        document.body.appendChild(successDiv);
+
+        setTimeout(() => {
+            if (successDiv.parentNode) {
+                successDiv.parentNode.removeChild(successDiv);
+            }
+        }, 3000);
+    }
+
+    function showToast(message, type = 'success') {
+        if (type === 'error') {
+            this.showError(message)
+        } else {
+            this.showSuccess(message)
+        }
+    }
+
+    function handleContactSubmit(e) {
+        e.preventDefault();
+        const btn = document.getElementById('submitBtn');
+        const successMsg = document.getElementById('formSuccess');
+        const form = document.getElementById('contactForm');
+
+        // 获取 CSRF Token (Django 必需)
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                const cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+
+        // 显示加载状态
+        btn.classList.add('loading');
+        btn.disabled = true;
+
+        // 🔧 核心修复：手动构建请求数据，确保字段名与后端 Serializer 一致
+        // 原因：HTML 表单元素缺少 name 属性，导致 FormData 无法获取值
+        const data = {
+            company_name: document.getElementById('companyName').value.trim(),
+            contact_name: document.getElementById('contactName').value.trim(),
+            email: document.getElementById('contactEmail').value.trim(),
+            phone: document.getElementById('contactPhone').value.trim(),
+            demand_type: document.getElementById('demandType').value,
+            message: document.getElementById('message').value.trim()
+        };
+
+        console.log('🚀 提交的数据:', data);
+
+        // 注意：请确保此 URL 与您后端 urls.py 中配置的路由完全一致
+        fetch('/api/auth/contact/submit/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken') // Django CSRF 保护
+            },
+            body: JSON.stringify(data)
+        })
+            .then(response => response.json())
+            .then(result => {
+                btn.classList.remove('loading');
+                btn.disabled = false;
+
+                if (result.success) {
+                    successMsg.style.display = 'block';
+                    form.reset(); // 重置表单
+
+                    // 5秒后隐藏成功提示
+                    setTimeout(() => {
+                        successMsg.style.display = 'none';
+                    }, 5000);
+                } else {
+                    // 显示后端返回的验证错误（如：手机号格式不正确等）
+                    showError(result.error || result.detail || result.message || '提交失败，请检查填写内容');
+                }
+            })
+            .catch(error => {
+                console.error('提交失败:', error);
+                btn.classList.remove('loading');
+                btn.disabled = false;
+                showError('网络错误，请稍后重试');
+            });
+    }
+</script>
+
+</body>
+</html>

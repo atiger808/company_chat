@@ -40,11 +40,6 @@ fi
 
 # 2. 更新 HTML 中的静态资源链接（添加版本参数）
 
-# 3. 更新 JS 中的 CURRENT_VERSION（用于版本检测）
-if [ -f "templates/chat/index.html" ]; then
-    sed -i "s/const CURRENT_VERSION = '[^']*'/const CURRENT_VERSION = '${VERSION}'/" templates/chat/index.html
-    echo "✓ 更新 index.html: CURRENT_VERSION=${VERSION}"
-fi
 
 # 3. 更新 JS 中的 CURRENT_VERSION（用于版本检测）
 if [ -f "templates/chat/chat.html" ]; then
@@ -66,7 +61,6 @@ $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/login.html"
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/chat.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/reset-password.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/reset-password-error.html" ${VERSION}
-$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/index.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/chat/admin.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/cloud.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/cloud_editor.html" ${VERSION}

@@ -1,0 +1,1664 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>企联云 | 企业级安全通讯与协同办公平台</title>
+    <meta name="description"
+          content="企联云为企业提供安全、高效的即时通讯与企业网盘解决方案，支持多人实时协作办公，支持私有化部署，金融级数据加密，助力团队无缝协作。">
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
+
+    <!-- 引入现代字体 Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+          rel="stylesheet">
+
+    <!-- 引入 FontAwesome 图标库 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        /* ==================== 1. CSS 变量与全局重置 ==================== */
+        :root {
+            --primary: #3b82f6; /* 科技蓝 */
+            --primary-dark: #2563eb; /* 深蓝 */
+            --primary-glow: rgba(59, 130, 246, 0.5);
+            --bg-dark: #0f172a; /* 深邃背景 */
+            --bg-card: #1e293b; /* 卡片背景 */
+            --bg-card-hover: #334155;
+            --text-main: #f8fafc; /* 主要文字 */
+            --text-muted: #94a3b8; /* 次要文字 */
+            --border: rgba(255, 255, 255, 0.1);
+            --success: #10b981;
+            --radius: 12px;
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        a {
+            text-decoration: none;
+            color: inherit;
+            transition: var(--transition);
+        }
+
+        ul {
+            list-style: none;
+        }
+
+        img {
+            max-width: 100%;
+            display: block;
+        }
+
+        /* ==================== 2. 通用组件 ==================== */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 12px 28px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: var(--transition);
+            border: none;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+            box-shadow: 0 4px 14px 0 var(--primary-glow);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px 0 var(--primary-glow);
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-main);
+        }
+
+        .btn-outline:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: var(--primary);
+        }
+
+        .section-title {
+            text-align: center;
+            margin-bottom: 60px;
+        }
+
+        .section-title h2 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 16px;
+            background: linear-gradient(to right, #fff, #94a3b8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .section-title p {
+            color: var(--text-muted);
+            font-size: 1.125rem;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        /* 滚动动画类 */
+        .fade-in-up {
+            opacity: 0;
+            transform: translateY(30px);
+            transition: opacity 0.8s ease-out, transform 0.8s ease-out;
+        }
+
+        .fade-in-up.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        /* ==================== 3. 导航栏 (Header) ==================== */
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            z-index: 1000;
+            padding: 16px 0;
+            transition: var(--transition);
+            background: transparent;
+        }
+
+        .header.scrolled {
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 0;
+        }
+
+        .nav-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: white;
+        }
+
+        .logo i {
+            color: var(--primary);
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 32px;
+        }
+
+        .nav-links a {
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: 0.95rem;
+        }
+
+        .nav-links a:hover {
+            color: var(--text-main);
+        }
+
+        .nav-actions {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+        }
+
+        .mobile-menu-btn {
+            display: none;
+            background: none;
+            border: none;
+            color: white;
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+
+        /* ==================== 4. 首屏 (Hero Section) ==================== */
+        .hero {
+            padding: 160px 0 100px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* 背景光晕效果 */
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -20%;
+            right: -10%;
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, var(--primary-glow) 0%, transparent 70%);
+            opacity: 0.4;
+            z-index: -1;
+        }
+
+        .hero-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 60px;
+            align-items: center;
+        }
+
+        .hero-content h1 {
+            font-size: 3.5rem;
+            line-height: 1.1;
+            font-weight: 800;
+            margin-bottom: 24px;
+            letter-spacing: -0.02em;
+        }
+
+        .hero-content h1 span {
+            color: var(--primary);
+        }
+
+        .hero-content p {
+            font-size: 1.25rem;
+            color: var(--text-muted);
+            margin-bottom: 32px;
+            max-width: 500px;
+        }
+
+        .hero-buttons {
+            display: flex;
+            gap: 16px;
+        }
+
+        .hero-visual {
+            position: relative;
+        }
+
+        /* 模拟产品界面的玻璃拟态卡片 */
+        .mockup-card {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            animation: float 6s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0%, 100% {
+                transform: translateY(0);
+            }
+            50% {
+                transform: translateY(-15px);
+            }
+        }
+
+        .mockup-header {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .mockup-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .dot-red {
+            background: #ef4444;
+        }
+
+        .dot-yellow {
+            background: #f59e0b;
+        }
+
+        .dot-green {
+            background: #10b981;
+        }
+
+        .mockup-body {
+            display: grid;
+            grid-template-columns: 80px 1fr;
+            gap: 16px;
+            height: 300px;
+        }
+
+        .mockup-sidebar {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+
+        .mockup-main {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            padding: 16px;
+            gap: 12px;
+        }
+
+        .mockup-msg {
+            height: 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            width: 60%;
+        }
+
+        .mockup-msg.short {
+            width: 40%;
+        }
+
+        .mockup-msg.accent {
+            background: var(--primary);
+            width: 50%;
+            margin-left: auto;
+        }
+
+        /* ==================== 5. 核心特性 (Features) ==================== */
+        .features {
+            padding: 100px 0;
+            background: var(--bg-dark);
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 32px;
+        }
+
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 32px;
+            transition: var(--transition);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .feature-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 3px;
+            background: linear-gradient(90deg, var(--primary), transparent);
+            opacity: 0;
+            transition: var(--transition);
+        }
+
+        .feature-card:hover {
+            transform: translateY(-8px);
+            border-color: rgba(59, 130, 246, 0.3);
+            box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5);
+        }
+
+        .feature-card:hover::before {
+            opacity: 1;
+        }
+
+        .feature-icon {
+            width: 56px;
+            height: 56px;
+            background: rgba(59, 130, 246, 0.1);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            color: var(--primary);
+            margin-bottom: 24px;
+        }
+
+        .feature-card h3 {
+            font-size: 1.25rem;
+            margin-bottom: 12px;
+            font-weight: 600;
+        }
+
+        .feature-card p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            line-height: 1.6;
+        }
+
+        /* ==================== 6. 安全与信任 (Security) ==================== */
+        .security {
+            padding: 100px 0;
+            background: linear-gradient(180deg, var(--bg-dark) 0%, #0b1120 100%);
+            position: relative;
+        }
+
+        .security-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 80px;
+            align-items: center;
+        }
+
+        .security-content h2 {
+            font-size: 2.5rem;
+            margin-bottom: 24px;
+            font-weight: 700;
+        }
+
+        .security-content p {
+            color: var(--text-muted);
+            margin-bottom: 32px;
+            font-size: 1.1rem;
+        }
+
+        .security-list {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .security-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+        }
+
+        .security-item i {
+            color: var(--success);
+            font-size: 1.25rem;
+            margin-top: 4px;
+        }
+
+        .security-item h4 {
+            font-size: 1.1rem;
+            margin-bottom: 4px;
+        }
+
+        .security-item p {
+            font-size: 0.9rem;
+            margin-bottom: 0;
+        }
+
+        .security-visual {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            text-align: center;
+        }
+
+        .stat-card i {
+            font-size: 2rem;
+            color: var(--primary);
+            margin-bottom: 12px;
+        }
+
+        .stat-card h3 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .stat-card p {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+
+        /* ==================== 解决方案模块专属样式 ==================== */
+        .solutions {
+            padding: 100px 0;
+            background: linear-gradient(180deg, var(--bg-dark) 0%, #0b1120 100%);
+            position: relative;
+        }
+
+        /* 背景装饰光晕 */
+        .solutions::before {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 800px;
+            height: 400px;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.08) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .solutions-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 32px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .solution-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 40px;
+            transition: var(--transition);
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .solution-card:hover {
+            transform: translateY(-8px);
+            border-color: rgba(59, 130, 246, 0.4);
+            box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.6), 0 0 20px rgba(59, 130, 246, 0.1);
+        }
+
+        /* 卡片顶部装饰线 */
+        .solution-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 3px;
+            background: linear-gradient(90deg, var(--primary), transparent);
+            opacity: 0;
+            transition: var(--transition);
+        }
+
+        .solution-card:hover::before {
+            opacity: 1;
+        }
+
+        .solution-icon {
+            width: 64px;
+            height: 64px;
+            background: rgba(59, 130, 246, 0.1);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.75rem;
+            color: var(--primary);
+            margin-bottom: 24px;
+            transition: var(--transition);
+        }
+
+        .solution-card:hover .solution-icon {
+            background: var(--primary);
+            color: white;
+            transform: scale(1.05);
+        }
+
+        .solution-card h3 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 16px;
+            color: var(--text-main);
+        }
+
+        .solution-pain-point {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            margin-bottom: 24px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            line-height: 1.5;
+        }
+
+        .solution-pain-point i {
+            color: var(--warning-color);
+            margin-top: 4px;
+            flex-shrink: 0;
+        }
+
+        .solution-features {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            flex-grow: 1;
+        }
+
+        .solution-features li {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            line-height: 1.6;
+        }
+
+        .solution-features li i {
+            color: var(--success);
+            margin-top: 5px;
+            flex-shrink: 0;
+            font-size: 0.85rem;
+        }
+
+        .solution-features li strong {
+            color: var(--text-main);
+            font-weight: 600;
+        }
+
+        /* 响应式设计：移动端单列显示 */
+        @media (max-width: 968px) {
+            .solutions-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .solution-card {
+                padding: 32px 24px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .solutions {
+                padding: 60px 0;
+            }
+
+            .solution-card h3 {
+                font-size: 1.25rem;
+            }
+        }
+
+
+        /* ==================== 无缝集成与开放生态模块专属样式 ==================== */
+        .integrations {
+            padding: 100px 0;
+            background: var(--bg-dark);
+            position: relative;
+        }
+
+        /* 背景装饰网格线 (可选，增加科技感) */
+        .integrations::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: linear-gradient(rgba(59, 130, 246, 0.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(59, 130, 246, 0.03) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .integrations-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 24px;
+            position: relative;
+            z-index: 1;
+            margin-bottom: 48px;
+        }
+
+        .integration-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 32px 24px;
+            text-align: center;
+            transition: var(--transition);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .integration-card:hover {
+            transform: translateY(-6px);
+            border-color: rgba(59, 130, 246, 0.4);
+            box-shadow: 0 15px 30px -10px rgba(0, 0, 0, 0.5);
+        }
+
+        .integration-icon {
+            width: 64px;
+            height: 64px;
+            background: rgba(59, 130, 246, 0.1);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.75rem;
+            color: var(--primary);
+            margin: 0 auto 20px;
+            transition: var(--transition);
+        }
+
+        .integration-card:hover .integration-icon {
+            background: var(--primary);
+            color: white;
+            transform: scale(1.1) rotate(5deg);
+        }
+
+        .integration-card h3 {
+            font-size: 1.15rem;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: var(--text-main);
+        }
+
+        .integration-card p {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+
+        .integrations-cta {
+            text-align: center;
+            padding-top: 32px;
+            border-top: 1px solid var(--border);
+            position: relative;
+            z-index: 1;
+        }
+
+        .integrations-cta p {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            margin-bottom: 24px;
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 1024px) {
+            .integrations-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 640px) {
+            .integrations {
+                padding: 60px 0;
+            }
+
+            .integrations-grid {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+
+            .integration-card {
+                padding: 24px 20px;
+                text-align: left;
+                display: flex;
+                align-items: flex-start;
+                gap: 16px;
+            }
+
+            .integration-icon {
+                margin: 0;
+                width: 48px;
+                height: 48px;
+                font-size: 1.25rem;
+                flex-shrink: 0;
+            }
+
+            .integrations-cta {
+                display: flex;
+                flex-direction: column;
+                gap: 16px;
+            }
+
+            .integrations-cta .btn {
+                width: 100%;
+                margin-left: 0 !important;
+            }
+        }
+
+
+        /* ==================== 价格与部署方案模块专属样式 ==================== */
+        .pricing {
+            padding: 100px 0;
+            background: var(--bg-dark);
+            position: relative;
+            display: none;
+        }
+
+        .pricing-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 32px;
+            align-items: stretch; /* 确保卡片高度一致 */
+            margin-bottom: 48px;
+        }
+
+        .pricing-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 40px 32px;
+            display: flex;
+            flex-direction: column;
+            transition: var(--transition);
+            position: relative;
+        }
+
+        .pricing-card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5);
+            border-color: rgba(59, 130, 246, 0.3);
+        }
+
+        /* 重点推荐卡片高亮样式 */
+        .pricing-card.featured {
+            background: linear-gradient(180deg, rgba(59, 130, 246, 0.08) 0%, var(--bg-card) 100%);
+            border: 1px solid var(--primary);
+            box-shadow: 0 0 30px rgba(59, 130, 246, 0.15);
+            transform: scale(1.03);
+            z-index: 2;
+        }
+
+        .pricing-card.featured:hover {
+            transform: scale(1.03) translateY(-8px);
+            box-shadow: 0 25px 50px -15px rgba(59, 130, 246, 0.3);
+        }
+
+        .pricing-badge {
+            position: absolute;
+            top: -12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--primary);
+            color: white;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+        }
+
+        .pricing-header {
+            text-align: center;
+            margin-bottom: 24px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .pricing-header h3 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: var(--text-main);
+        }
+
+        .pricing-desc {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        .pricing-price {
+            text-align: center;
+            margin-bottom: 32px;
+            color: var(--text-main);
+        }
+
+        .price-currency {
+            font-size: 1.5rem;
+            font-weight: 600;
+            vertical-align: top;
+            line-height: 2;
+        }
+
+        .price-amount {
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: var(--primary);
+        }
+
+        .pricing-card.featured .price-amount {
+            color: var(--text-main); /* 高亮卡片中价格用白色，突出“联系销售” */
+        }
+
+        .price-period {
+            display: block;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            margin-top: 4px;
+        }
+
+        .pricing-features {
+            flex-grow: 1; /* 让按钮始终对齐在底部 */
+            margin-bottom: 32px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .pricing-features li {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+
+        .pricing-features li i {
+            color: var(--success);
+            margin-top: 4px;
+            flex-shrink: 0;
+        }
+
+        .pricing-card.featured .pricing-features li i {
+            color: var(--primary); /* 高亮卡片使用主题色勾选 */
+        }
+
+        .pricing-features li strong {
+            color: var(--text-main);
+            font-weight: 600;
+        }
+
+        .btn-block {
+            width: 100%;
+            text-align: center;
+        }
+
+        .pricing-footer {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            line-height: 1.8;
+            padding-top: 32px;
+            border-top: 1px solid var(--border);
+        }
+
+        .pricing-footer i {
+            color: var(--primary);
+            margin-right: 8px;
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 968px) {
+            .pricing-grid {
+                grid-template-columns: 1fr;
+                max-width: 500px;
+                margin: 0 auto 48px;
+            }
+
+            .pricing-card.featured {
+                transform: scale(1);
+                order: -1; /* 移动端将推荐版本置顶 */
+            }
+
+            .pricing-card.featured:hover {
+                transform: translateY(-8px);
+            }
+        }
+
+
+        /* ==================== 7. 底部行动号召 (CTA) ==================== */
+        .cta {
+            padding: 100px 0;
+            text-align: center;
+            background: radial-gradient(circle at center, rgba(59, 130, 246, 0.15) 0%, transparent 70%);
+        }
+
+        .cta h2 {
+            font-size: 2.5rem;
+            margin-bottom: 16px;
+            font-weight: 700;
+        }
+
+        .cta p {
+            color: var(--text-muted);
+            font-size: 1.125rem;
+            margin-bottom: 32px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        /* ==================== 8. 页脚 (Footer) ==================== */
+        .footer {
+            border-top: 1px solid var(--border);
+            padding: 60px 0 30px;
+            background: #0b1120;
+        }
+
+        .footer-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            gap: 40px;
+            margin-bottom: 40px;
+        }
+
+        .footer-brand p {
+            color: var(--text-muted);
+            margin-top: 16px;
+            font-size: 0.9rem;
+            max-width: 300px;
+        }
+
+        .footer-col h4 {
+            color: var(--text-main);
+            margin-bottom: 20px;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .footer-col ul li {
+            margin-bottom: 12px;
+        }
+
+        .footer-col ul li a {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .footer-col ul li a:hover {
+            color: var(--primary);
+        }
+
+        .footer-bottom {
+            border-top: 1px solid var(--border);
+            padding-top: 24px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        /* ==================== 9. 响应式设计 (Mobile) ==================== */
+        @media (max-width: 968px) {
+            .hero-grid, .security-grid {
+                grid-template-columns: 1fr;
+                text-align: center;
+            }
+
+            .hero-content h1 {
+                font-size: 2.5rem;
+            }
+
+            .hero-content p {
+                margin: 0 auto 32px;
+            }
+
+            .hero-buttons {
+                justify-content: center;
+            }
+
+            .security-list {
+                align-items: center;
+                text-align: left;
+            }
+
+            .footer-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .nav-links, .nav-actions .btn-outline {
+                display: none;
+            }
+
+            .mobile-menu-btn {
+                display: block;
+            }
+
+            .hero {
+                padding: 120px 0 60px;
+            }
+
+            .hero-content h1 {
+                font-size: 2rem;
+            }
+
+            .section-title h2 {
+                font-size: 2rem;
+            }
+
+            .footer-grid {
+                grid-template-columns: 1fr;
+                text-align: center;
+            }
+
+            .footer-brand p {
+                margin: 16px auto;
+            }
+
+            .footer-bottom {
+                flex-direction: column;
+                gap: 12px;
+            }
+
+            /* 移动端菜单展开样式 (通过 JS 控制) */
+            .nav-links.active {
+                display: flex;
+                flex-direction: column;
+                position: absolute;
+                top: 100%;
+                left: 0;
+                width: 100%;
+                background: var(--bg-card);
+                padding: 24px;
+                border-bottom: 1px solid var(--border);
+                gap: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<!-- 导航栏 -->
+<header class="header" id="header">
+    <div class="container nav-container">
+        <a href="/" class="logo">
+            <i class="fas fa-cloud"></i>
+            企联云
+        </a>
+
+        <nav class="nav-links" id="navLinks">
+            <a href="#features">核心功能</a>
+            <a href="#security">安全合规</a>
+            <a href="#solutions">解决方案</a>
+            <a href="#integrations">无缝集成与开放生态</a>
+            <a href="#pricing" style="display: none;">价格方案</a>
+
+        </nav>
+
+        <div class="nav-actions">
+            <a href="/login/" class="btn btn-outline">登录</a>
+            <a href="/register/" class="btn btn-primary">免费试用</a>
+            <button class="mobile-menu-btn" id="mobileMenuBtn">
+                <i class="fas fa-bars"></i>
+            </button>
+        </div each>
+    </div>
+</header>
+
+<!-- 首屏 Hero Section -->
+<section class="hero">
+    <div class="container hero-grid">
+        <div class="hero-content fade-in-up">
+            <h1>重塑企业协作<br><span>安全触手可及</span></h1>
+            <p>
+                集企业级即时通讯与智能网盘于一体。提供金融级数据加密、细粒度权限管控与私有化部署，让团队沟通更高效，资产更安全。</p>
+            <div class="hero-buttons">
+                <a href="/register/" class="btn btn-primary">
+                    <i class="fas fa-rocket"></i> 立即免费体验
+                </a>
+                <a href="#features" class="btn btn-outline">
+                    <i class="fas fa-play-circle"></i> 了解产品
+                </a>
+            </div>
+        </div>
+
+        <div class="hero-visual fade-in-up">
+            <div class="mockup-card">
+                <div class="mockup-header">
+                    <div class="mockup-dot dot-red"></div>
+                    <div class="mockup-dot dot-yellow"></div>
+                    <div class="mockup-dot dot-green"></div>
+                </div>
+                <div class="mockup-body">
+                    <div class="mockup-sidebar"></div>
+                    <div class="mockup-main">
+                        <div class="mockup-msg short"></div>
+                        <div class="mockup-msg"></div>
+                        <div class="mockup-msg accent"></div>
+                        <div class="mockup-msg"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- 核心特性 Features -->
+<section class="features" id="features">
+    <div class="container">
+        <div class="section-title fade-in-up">
+            <h2>为现代企业打造的全能协作平台</h2>
+            <p>打破信息孤岛，将高效沟通与安全存储完美结合，赋能团队生产力。</p>
+        </div>
+
+        <div class="features-grid">
+            <!-- 特性 1 -->
+            <div class="feature-card fade-in-up">
+                <div class="feature-icon">
+                    <i class="fas fa-comments"></i>
+                </div>
+                <h3>企业级即时通讯</h3>
+                <p>支持文字、语音、视频、文件等多种消息类型。已读回执、消息撤回、多端消息实时同步，让沟通零延迟。</p>
+            </div>
+
+            <!-- 特性 2 -->
+            <div class="feature-card fade-in-up">
+                <div class="feature-icon">
+                    <i class="fas fa-cloud-arrow-up"></i>
+                </div>
+                <h3>智能企业网盘</h3>
+                <p>海量云端存储，支持大文件秒传与断点续传。<strong>内置在线文档编辑，支持多人实时协作办公。</strong>完善的细粒度权限管控（查看、编辑、下载、分享），全方位保障企业数字资产安全。
+                </p>
+
+            </div>
+
+            <!-- 特性 3 -->
+            <div class="feature-card fade-in-up">
+                <div class="feature-icon">
+                    <i class="fas fa-users-gear"></i>
+                </div>
+                <h3>精细化组织架构</h3>
+                <p>完美对接企业现有组织架构，支持部门树形管理、角色权限分配，新员工入职一键同步通讯录。</p
+            </div>
+
+            <!-- 特性 4 -->
+            <div class="feature-card fade-in-up">
+                <div class="feature-icon">
+                    <i class="fas fa-laptop-code"></i>
+                </div>
+                <h3>全平台无缝协同</h3>
+                <p>全面适配 Web 端、Windows/Mac 桌面客户端以及 iOS/Android 移动端，随时随地开启高效办公。</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- 安全与信任 Security -->
+<section class="security" id="security">
+    <div class="container security-grid">
+        <div class="security-content fade-in-up">
+            <h2>金融级安全防护<br>守护企业核心数据</h2>
+            <p>我们深知企业数据的重要性。从传输到存储，从权限到审计，提供端到端的全链路安全保障。</p>
+
+            <div class="security-list">
+                <div class="security-item">
+                    <i class="fas fa-check-circle"></i>
+                    <div>
+                        <h4>端到端加密传输</h4>
+                        <p>全链路采用 TLS 1.3 加密协议，防止数据在传输过程中被窃听或篡改。</p>
+                    </div>
+                </div>
+                <div class="security-item">
+                    <i class="fas fa-check-circle"></i>
+                    <div>
+                        <h4>私有化部署支持</h4>
+                        <p>支持将系统完全部署在企业自有服务器上，数据 100% 掌握在自己手中。</p>
+                    </div>
+                </div>
+                <div class="security-item">
+                    <i class="fas fa-check-circle"></i>
+                    <div>
+                        <h4>全面操作审计日志</h4>
+                        <p>记录所有用户的登录、文件下载、分享及敏感操作，满足企业合规审查要求。</p>
+                    </div>
+                </div
+            </div>
+        </div>
+
+        <div class="security-visual fade-in-up">
+            <div class="stat-card">
+                <i class="fas fa-shield-virus"></i>
+                <h3>99.99%</h3>
+                <p>系统高可用性</p>
+            </div>
+            <div class="stat-card">
+                <i class="fas fa-lock"></i>
+                <h3>AES-256</h3>
+                <p>静态数据加密标准</p>
+            </div>
+            <div class="stat-card">
+                <i class="fas fa-server"></i>
+                <h3>100%</h3>
+                <p>支持私有化部署</p>
+            </div>
+            <div class="stat-card">
+                <i class="fas fa-user-shield"></i>
+                <h3>细粒度</h3>
+                <p>RBAC 权限管控模型</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ==================== 解决方案 (Solutions) ==================== -->
+<section class="solutions" id="solutions">
+    <div class="container">
+        <div class="section-title fade-in-up">
+            <h2>全场景企业级协作解决方案</h2>
+            <p>深入理解企业办公痛点，为不同规模与行业的团队提供量身定制的数字化协作方案。</p>
+        </div>
+
+        <div class="solutions-grid">
+            <!-- 方案 1: 跨部门高效协同 -->
+            <div class="solution-card fade-in-up">
+                <div class="solution-icon">
+                    <i class="fas fa-project-diagram"></i>
+                </div>
+                <h3>跨部门高效协同办公</h3>
+                <p class="solution-pain-point"><i class="fas fa-exclamation-circle"></i> 痛点：信息孤岛严重，跨团队项目推进缓慢，文件版本混乱。
+                </p>
+                <ul class="solution-features">
+                    <li><i class="fas fa-check"></i> <strong>IM + 网盘深度融合：</strong>聊天窗口直接预览、编辑网盘文件，告别反复传输。
+                    </li>
+                    <li><i class="fas fa-check"></i> <strong>在线文档多人协作：</strong>支持多人实时协同编辑文档、表格，修改痕迹实时同步，版本自动保存。
+                    </li>
+                    <li><i class="fas fa-check"></i> <strong>项目群组专属空间：</strong>为每个项目建立专属聊天室与共享文件夹，沉淀项目数字资产。
+                    </li>
+                </ul>
+            </div>
+
+            <!-- 方案 2: 核心数字资产管控 -->
+            <div class="solution-card fade-in-up">
+                <div class="solution-icon">
+                    <i class="fas fa-shield-alt"></i>
+                </div>
+                <h3>企业核心数字资产管控</h3>
+                <p class="solution-pain-point"><i class="fas fa-exclamation-circle"></i> 痛点：核心机密文件易泄露，员工离职带走资料，缺乏操作追溯。
+                </p>
+                <ul class="solution-features">
+                    <li><i class="fas fa-check"></i> <strong>细粒度权限管控：</strong>支持对文件夹/文件设置“仅预览、可编辑、可下载、禁止分享”等多级权限。
+                    </li>
+                    <li><i class="fas fa-check"></i> <strong>全面操作审计日志：</strong>详细记录所有用户的登录、文件下载、外链分享及敏感操作，满足合规审查。
+                    </li>
+                    <li><i class="fas fa-check"></i> <strong>离职一键交接：</strong>员工离职时，管理员可一键将其名下文件及聊天权限平滑转移给接替者。
+                    </li>
+                </ul>
+            </div>
+
+            <!-- 方案 3: 大型集团组织架构管理 -->
+            <div class="solution-card fade-in-up">
+                <div class="solution-icon">
+                    <i class="fas fa-sitemap"></i>
+                </div>
+                <h3>大型集团组织架构管理</h3>
+                <p class="solution-pain-point"><i class="fas fa-exclamation-circle"></i> 痛点：人员流动频繁，通讯录维护成本高，权限分配易出错。
+                </p>
+                <ul class="solution-features">
+                    <li><i class="fas fa-check"></i> <strong>无缝对接现有系统：</strong>支持与企业现有 AD/LDAP、钉钉、企业微信或
+                        HR 系统双向同步。
+                    </li>
+                    <li><i class="fas fa-check"></i> <strong>万级组织架构树：</strong>完美支持多层级部门树形展示，新员工入职一键开通全平台权限。
+                    </li>
+                    <li><i class="fas fa-check"></i> <strong>角色与数据隔离：</strong>基于 RBAC
+                        模型，实现跨部门数据隔离，确保各分支机构独立且安全运营。
+                    </li>
+                </ul>
+            </div>
+
+            <!-- 方案 4: 移动化与远程办公支持 -->
+            <div class="solution-card fade-in-up">
+                <div class="solution-icon">
+                    <i class="fas fa-mobile-alt"></i>
+                </div>
+                <h3>移动化与远程办公支持</h3>
+                <p class="solution-pain-point"><i class="fas fa-exclamation-circle"></i> 痛点：外勤人员无法及时获取信息，移动端体验差，锁屏易断连。
+                </p>
+                <ul class="solution-features">
+                    <li><i class="fas fa-check"></i> <strong>全平台无缝覆盖：</strong>提供 Web、Windows、Mac、iOS、Android
+                        原生客户端，体验高度一致。
+                    </li>
+                    <li><i class="fas fa-check"></i> <strong>移动端专属优化：</strong>支持语音消息快捷发送、离线消息推送、移动端锁屏
+                        WebSocket 保活机制。
+                    </li>
+                    <li><i class="fas fa-check"></i> <strong>安全远程接入：</strong>支持移动端设备绑定与远程数据擦除，确保外网访问企业内网数据的绝对安全。
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</section>
+
+
+<!-- ==================== 无缝集成与开放生态 (Integrations) ==================== -->
+<section class="integrations" id="integrations">
+    <div class="container">
+        <div class="section-title fade-in-up">
+            <h2>无缝集成与开放生态</h2>
+            <p>打破系统孤岛。企联云提供丰富的 API 与预置连接器，轻松融入您现有的企业 IT 架构，降低迁移与运维成本。</p>
+        </div>
+
+        <div class="integrations-grid">
+            <!-- 集成点 1: 身份与组织架构 -->
+            <div class="integration-card fade-in-up">
+                <div class="integration-icon">
+                    <i class="fas fa-users-cog"></i>
+                </div>
+                <h3>统一身份认证 (SSO)</h3>
+                <p>原生支持 SAML 2.0、OAuth 2.0 与 OIDC 协议。无缝对接企业现有
+                    AD/LDAP、钉钉、企业微信或飞书，实现单点登录与组织架构的自动双向同步。</p>
+            </div>
+
+            <!-- 集成点 2: 开放 API -->
+            <div class="integration-card fade-in-up">
+                <div class="integration-icon">
+                    <i class="fas fa-code"></i>
+                </div>
+                <h3>丰富的开放 API</h3>
+                <p>提供完善的 RESTful API 与 WebSocket 接口。支持自定义机器人、消息回调 (Webhook)，轻松与内部 OA、ERP、CRM
+                    等核心业务系统深度打通。</p>
+            </div>
+
+            <!-- 集成点 3: 多端同步引擎 -->
+            <div class="integration-card fade-in-up">
+                <div class="integration-icon">
+                    <i class="fas fa-sync-alt"></i>
+                </div>
+                <h3>多端实时同步引擎</h3>
+                <p>自研高效消息同步协议，确保 Web、Windows、macOS、iOS、Android
+                    多端消息、文件状态与未读数毫秒级一致，断网重连无感知。</p>
+            </div>
+
+            <!-- 集成点 4: 信创与国产化 -->
+            <div class="integration-card fade-in-up">
+                <div class="integration-icon">
+                    <i class="fas fa-microchip"></i>
+                </div>
+                <h3>全面信创适配</h3>
+                <p>全面兼容主流国产 CPU（鲲鹏、飞腾）、操作系统（统信
+                    UOS、银河麒麟）及数据库（达梦、人大金仓），满足政企及金融行业的信创合规要求。</p>
+            </div>
+        </div>
+
+        <!-- 底部开发者引导 -->
+        <div class="integrations-cta fade-in-up">
+            <p>需要与现有系统深度定制对接？</p>
+            <a href="/docs/api/" class="btn btn-outline">
+                <i class="fas fa-book"></i> 查看开发者文档
+            </a>
+            <a href="/contact/" class="btn btn-primary" style="margin-left: 16px;">
+                <i class="fas fa-headset"></i> 联系技术顾问
+            </a>
+        </div>
+    </div>
+</section>
+
+
+<!-- ==================== 价格与部署方案 (Pricing & Deployment) ==================== -->
+<section class="pricing" id="pricing">
+    <div class="container">
+        <div class="section-title fade-in-up">
+            <h2>灵活的企业级服务方案</h2>
+            <p>无论您是初创团队还是大型集团，我们都能提供匹配您业务规模与安全合规要求的部署方案。</p>
+        </div>
+
+        <div class="pricing-grid">
+            <!-- 方案 1: 标准 SaaS 版 -->
+            <div class="pricing-card fade-in-up">
+                <div class="pricing-header">
+                    <h3>标准 SaaS 版</h3>
+                    <p class="pricing-desc">适合中小型企业与初创团队，开箱即用，快速赋能。</p>
+                </div>
+                <div class="pricing-price">
+                    <span class="price-currency">¥</span>
+                    <span class="price-amount">按需订阅</span>
+                    <span class="price-period">/ 人 / 月</span>
+                </div>
+                <ul class="pricing-features">
+                    <li><i class="fas fa-check"></i> 基础 IM 通讯与群组管理</li>
+                    <li><i class="fas fa-check"></i> 100GB / 人 企业网盘空间</li>
+                    <li><i class="fas fa-check"></i> 基础在线文档协作</li>
+                    <li><i class="fas fa-check"></i> 7×12 小时工单支持</li>
+                    <li><i class="fas fa-check"></i> 数据传输 TLS 加密</li>
+                </ul>
+                <a href="/contact/" class="btn btn-outline btn-block">申请免费试用</a>
+            </div>
+
+            <!-- 方案 2: 专业私有化版 (重点推荐) -->
+            <div class="pricing-card featured fade-in-up">
+                <div class="pricing-badge">企业首选</div>
+                <div class="pricing-header">
+                    <h3>专业私有化版</h3>
+                    <p class="pricing-desc">适合中大型企业，数据完全本地化，深度满足安全合规要求。</p>
+                </div>
+                <div class="pricing-price">
+                    <span class="price-amount">联系销售</span>
+                    <span class="price-period">获取专属报价</span>
+                </div>
+                <ul class="pricing-features">
+                    <li><i class="fas fa-check-circle"></i> <strong>完全私有化部署</strong>，数据 100% 自主可控</li>
+                    <li><i class="fas fa-check-circle"></i> <strong>无限容量</strong> 企业网盘与在线文档协作</li>
+                    <li><i class="fas fa-check-circle"></i> 细粒度权限管控与全面操作审计日志</li>
+                    <li><i class="fas fa-check-circle"></i> 支持对接企业现有 AD/LDAP、钉钉、企微</li>
+                    <li><i class="fas fa-check-circle"></i> 7×24 小时专属客户经理与 SLA 保障</li>
+                </ul>
+                <a href="/contact/" class="btn btn-primary btn-block">联系专属顾问</a>
+            </div>
+
+            <!-- 方案 3: 集团定制版 -->
+            <div class="pricing-card fade-in-up">
+                <div class="pricing-header">
+                    <h3>集团定制版</h3>
+                    <p class="pricing-desc">适合大型集团、政企及金融机构，提供全链路定制化服务。</p>
+                </div>
+                <div class="pricing-price">
+                    <span class="price-amount">定制报价</span>
+                    <span class="price-period">一企一策</span>
+                </div>
+                <ul class="pricing-features">
+                    <li><i class="fas fa-check"></i> 包含“专业私有化版”所有功能</li>
+                    <li><i class="fas fa-check"></i> 多租户架构与跨地域容灾部署</li>
+                    <li><i class="fas fa-check"></i> 深度信创适配（国产 CPU/OS/数据库）</li>
+                    <li><i class="fas fa-check"></i> 专属 UI/UX 品牌定制与接口深度开发</li>
+                    <li><i class="fas fa-check"></i> 驻场实施培训与最高级别安全防护</li>
+                </ul>
+                <a href="/contact/" class="btn btn-outline btn-block">获取定制方案</a>
+            </div>
+        </div>
+
+        <!-- 底部补充说明 -->
+        <div class="pricing-footer fade-in-up">
+            <p><i class="fas fa-shield-alt"></i> 所有方案均默认包含：端到端加密传输、定期安全漏洞扫描、符合 GDPR
+                及国内数据安全法合规要求。</p>
+            <p>需要评估测试？ <a href="/contact/" style="color: var(--primary); font-weight: 600;">立即申请 30 天全功能免费
+                POC 测试环境</a></p>
+        </div each>
+    </div>
+</section>
+
+<!-- 底部行动号召 CTA -->
+<section class="cta fade-in-up">
+    <div class="container">
+        <h2>准备好提升团队协作效率了吗？</h2>
+        <p>立即加入数千家信赖我们的企业，开启安全、高效的数字化办公新时代。</p>
+        <a href="/register/" class="btn btn-primary" style="padding: 16px 40px; font-size: 1.1rem;">
+            免费创建企业空间 <i class="fas fa-arrow-right"></i>
+        </a>
+    </div>
+</section>
+
+<!-- 页脚 Footer -->
+<footer class="footer">
+    <div class="container">
+        <div class="footer-grid">
+            <div class="footer-brand">
+                <a href="/" class="logo">
+                    <i class="fas fa-shield-halved"></i>
+                    企联云
+                </a>
+                <p>专注于为企业提供安全、稳定、高效的即时通讯与云存储协同办公解决方案。</p>
+            </div>
+
+            <div class="footer-col">
+                <h4>产品</h4>
+                <ul>
+                    <li><a href="#">即时通讯</a></li>
+                    <li><a href="#">企业网盘</a></li>
+                    <li><a href="#">组织架构管理</a></li>
+                    <li><a href="#">开放 API</a></li>
+                </ul>
+            </div>
+
+            <div class="footer-col">
+                <h4>支持</h4>
+                <ul>
+                    <li><a href="#">帮助文档</a></li>
+                    <li><a href="#">系统状态</a></li>
+                    <li><a href="#">联系我们</a></li>
+                    <li><a href="#">意见反馈</a></li>
+                </ul>
+            </div>
+
+            <div class="footer-col">
+                <h4>法律</h4>
+                <ul>
+                    <li><a href="#">服务条款</a></li>
+                    <li><a href="#">隐私政策</a></li>
+                    <li><a href="#">安全合规</a></li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="footer-bottom">
+            <p>&copy; 2026 企联云 (Qilian Cloud). All rights reserved.</p>
+            <p>
+                <a href="https://beian.miit.gov.cn/" target="_blank" style="margin-right: 16px;">浙ICP备18046960号-1</a>
+            </p>
+        </div>
+    </div>
+</footer>
+
+<!-- JavaScript 交互逻辑 -->
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // 1. 导航栏滚动变色效果
+        const header = document.getElementById('header');
+        window.addEventListener('scroll', () => {
+            if (window.scrollY > 50) {
+                header.classList.add('scrolled');
+            } else {
+                header.classList.remove('scrolled');
+            }
+        });
+
+        // 2. 移动端菜单切换
+        const mobileMenuBtn = document.getElementById('mobileMenuBtn');
+        const navLinks = document.getElementById('navLinks');
+
+        mobileMenuBtn.addEventListener('click', () => {
+            navLinks.classList.toggle('active');
+            const icon = mobileMenuBtn.querySelector('i');
+            if (navLinks.classList.contains('active')) {
+                icon.classList.remove('fa-bars');
+                icon.classList.add('fa-xmark');
+            } else {
+                icon.classList.remove('fa-xmark');
+                icon.classList.add('fa-bars');
+            }
+        });
+
+        // 3. 滚动显现动画 (Intersection Observer)
+        const observerOptions = {
+            root: null,
+            rootMargin: '0px',
+            threshold: 0.1
+        };
+
+        const observer = new IntersectionObserver((entries, observer) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('visible');
+                    observer.unobserve(entry.target); // 动画只播放一次
+                }
+            });
+        }, observerOptions);
+
+        const fadeElements = document.querySelectorAll('.fade-in-up');
+        fadeElements.forEach(el => observer.observe(el));
+    });
+</script>
+</body>
+</html>

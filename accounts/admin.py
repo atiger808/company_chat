@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import CustomUser, Department, LoginLog, OperationLog
+from .models import CustomUser, Department, LoginLog, OperationLog, ConsultationRequest
 
 @admin.register(CustomUser)
 class CustomUserAdmin(admin.ModelAdmin):
@@ -10,6 +10,14 @@ class CustomUserAdmin(admin.ModelAdmin):
 @admin.register(Department)
 class DepartmentAdmin(admin.ModelAdmin):
     list_display = ('id', 'name', 'code', 'updated_at', 'created_at')
+    list_per_page = 20
+
+
+@admin.register(ConsultationRequest)
+class ConsultationRequestAdmin(admin.ModelAdmin):
+    list_display = ('id', 'company_name', 'contact_name', 'phone', 'email', 'demand_type', 'message', 'status', 'created_at')
+    list_filter = ('status', 'demand_type')
+    search_fields = ('company_name', 'contact_name', 'phone', 'email', 'message')
     list_per_page = 20
 
 
@@ -26,6 +34,9 @@ class CustomOperationLogAdmin(admin.ModelAdmin):
     list_filter = ['request_os', 'request_method', 'status', 'response_code', 'request_browser']
     search_fields = ('request_path', 'request_ip', 'request_modular')
     list_per_page = 20
+
+
+
 
 
 admin.site.register(LoginLog,  CustomLoginLogAdmin)
