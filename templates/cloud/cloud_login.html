@@ -4,34 +4,41 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>企业网盘 - 登录</title>
-    <link rel="stylesheet" href="/static/css/auth.css?v=20260423-2f85186">
-    <link rel="stylesheet" href="/static/css/cloud_auth.css?v=20260423-2f85186">
+    <link rel="stylesheet" href="/static/css/chat_auth.css?v=20260615-7d5db23">
+    <link rel="stylesheet" href="/static/css/cloud_auth.css?v=20260615-7d5db23">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
 
     <!-- 引入依赖库 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>-->
-    <script src="/static/js/dist/spark-md5.min.js?v=20260423-2f85186"></script>
+    <script src="/static/js/dist/spark-md5.min.js?v=20260615-7d5db23"></script>
     <!-- 引入业务逻辑 -->
 
     <!-- 2. 依赖库 -->
-    <script src="/static/js/dist/crypto-js.min.js?v=20260423-2f85186"></script>
-    <script src="/static/js/dist/sm4.min.js?v=20260423-2f85186"></script>
-    <script src="/static/js/encrypts.js?v=20260423-2f85186"></script>
+    <script src="/static/js/dist/crypto-js.min.js?v=20260615-7d5db23"></script>
+    <script src="/static/js/dist/sm4.min.js?v=20260615-7d5db23"></script>
+    <script src="/static/js/encrypts.js?v=20260615-7d5db23"></script>
 
-    <!--    <script src="/static/js/token.js?v=20260423-2f85186"></script>-->
-    <script src="/static/js/api.js?v=20260423-2f85186"></script>
-    <script src="/static/js/utils.js?v=20260423-2f85186"></script>
-    <script src="/static/js/cloud_auth.js?v=20260423-2f85186"></script>
+    <!--    <script src="/static/js/token.js?v=20260615-7d5db23"></script>-->
+    <script src="/static/js/api.js?v=20260615-7d5db23"></script>
+    <script src="/static/js/utils.js?v=20260615-7d5db23"></script>
+    <script src="/static/js/cloud_auth.js?v=20260615-7d5db23"></script>
 </head>
 <body>
 <div class="login-container">
     <!-- 左侧欢迎区域 -->
     <div class="login-left">
-        <div class="logo">
-            <i class="fas fa-cloud"></i>
-            <span>企业网盘</span>
-        </div>
+<!--        <div class="logo">-->
+<!--            <i class="fas fa-cloud"></i>-->
+<!--            <span>企业网盘</span>-->
+<!--        </div>-->
+
+        <a href="/" style="text-decoration: none; color: inherit;">
+            <div class="logo">
+                <i class="fas fa-cloud"></i>
+                <span>企业网盘</span>
+            </div>
+        </a>
 
         <div class="welcome-text">
             <h1>安全 · 高效 · 协同</h1>
@@ -64,6 +71,14 @@
 
     <!-- 右侧表单区域 -->
     <div class="login-right">
+        <!-- 👇 新增：返回官网链接 -->
+        <a href="/"
+           style="display: inline-flex; align-items: center; color: var(--text-light); font-size: 14px; margin-bottom: 24px; text-decoration: none; transition: all 0.2s;"
+           onmouseover="this.style.color='var(--primary-color)'"
+           onmouseout="this.style.color='var(--text-light)'">
+            <i class="fas fa-arrow-left" style="margin-right: 8px; font-size: 12px;"></i> 返回官网主页
+        </a>
+
         <!-- 登录表单 -->
         <div id="loginForm" class="auth-form">
             <h2><i class="fas fa-sign-in-alt"></i> 用户登录</h2>
@@ -84,7 +99,8 @@
                     <i class="fas fa-lock"></i>
                     <input type="password" id="loginPassword" class="form-control"
                            placeholder="请输入密码" autocomplete="current-password">
-                    <i class="fas fa-eye toggle-password" onclick="togglePassword('loginPassword', this)"></i>
+                    <i class="fas fa-eye toggle-password" onclick="togglePassword('loginPassword', this)"
+                       style="margin-left:320px"></i>
                 </div>
                 <div id="loginPasswordError" class="error-message"></div>
             </div>

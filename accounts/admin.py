@@ -4,7 +4,7 @@ from .models import CustomUser, Department, LoginLog, OperationLog
 
 @admin.register(CustomUser)
 class CustomUserAdmin(admin.ModelAdmin):
-    list_display = ('id', 'username', 'real_name', 'position', 'phone', 'email', 'is_online', 'last_seen', 'is_active')
+    list_display = ('id', 'username', 'real_name', 'position', 'phone', 'email', 'is_online', 'is_active', 'last_seen', 'date_joined')
     list_per_page = 20
 
 @admin.register(Department)

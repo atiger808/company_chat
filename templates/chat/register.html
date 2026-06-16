@@ -3,304 +3,189 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>注册 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/chat.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <title>企业聊天室 - 用户注册</title>
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
+
+    <!-- 引入项目现有的认证模块样式 -->
+    <link rel="stylesheet" href="/static/css/chat_auth.css">
+    <!-- 引入 FontAwesome 图标库 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
-<body class="auth-page">
-    <div class="auth-container">
-        <div class="auth-box">
-            <div class="auth-header">
-                <img src="/static/images/logo.png" alt="Logo" class="auth-logo">
-                <h1>企业聊天室</h1>
-                <p>创建您的企业账户</p>
+<body>
+
+<div class="login-container">
+    <!-- 左侧欢迎区域 -->
+    <div class="login-left">
+        <a href="/" style="text-decoration: none; color: inherit;">
+            <div class="logo">
+                <i class="fas fa-cloud"></i>
+                <span>企联云</span>
             </div>
-
-            <form id="registerForm" class="auth-form">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="username">
-                            <i class="fas fa-user"></i>
-                            <span>用户名</span>
-                        </label>
-                        <input type="text" id="username" name="username" required placeholder="请输入用户名">
-                        <small class="form-hint">3-20个字符，只能包含字母、数字和下划线</small>
-                    </div>
-                    <div class="form-group">
-                        <label for="realName">
-                            <i class="fas fa-id-card"></i>
-                            <span>真实姓名</span>
-                        </label>
-                        <input type="text" id="realName" name="realName" required placeholder="请输入真实姓名">
-                    </div>
-                </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="email">
-                            <i class="fas fa-envelope"></i>
-                            <span>邮箱</span>
-                        </label>
-                        <input type="email" id="email" name="email" required placeholder="请输入邮箱">
-                    </div>
-                    <div class="form-group">
-                        <label for="phone">
-                            <i class="fas fa-phone"></i>
-                            <span>手机号</span>
-                        </label>
-                        <input type="tel" id="phone" name="phone" placeholder="请输入手机号">
-                    </div>
-                </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="password">
-                            <i class="fas fa-lock"></i>
-                            <span>密码</span>
-                        </label>
-                        <div class="password-wrapper">
-                            <input type="password" id="password" name="password" required placeholder="请输入密码">
-                            <button type="button" class="toggle-password" onclick="togglePasswordVisibility('password')">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                        </div>
-                        <small class="form-hint">至少6个字符，建议包含大小写字母和数字</small>
-                    </div>
-                    <div class="form-group">
-                        <label for="confirmPassword">
-                            <i class="fas fa-lock"></i>
-                            <span>确认密码</span>
-                        </label>
-                        <div class="password-wrapper">
-                            <input type="password" id="confirmPassword" name="confirmPassword" required placeholder="请再次输入密码">
-                            <button type="button" class="toggle-password" onclick="togglePasswordVisibility('confirmPassword')">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label for="department">
-                        <i class="fas fa-building"></i>
-                        <span>部门</span>
-                    </label>
-                    <select id="department" name="department" required>
-                        <option value="">请选择部门</option>
-                        <!-- 部门选项将通过API动态加载 -->
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label for="position">
-                        <i class="fas fa-briefcase"></i>
-                        <span>职位</span>
-                    </label>
-                    <input type="text" id="position" name="position" placeholder="请输入职位">
-                </div>
-
-                <div class="form-group">
-                    <div id="registerCaptcha"></div>
-                </div>
-
-                <div class="form-terms">
-                    <label class="terms-checkbox">
-                        <input type="checkbox" id="agreeTerms" required>
-                        <span>我已阅读并同意 <a href="/terms/" target="_blank">服务条款</a> 和 <a href="/privacy/" target="_blank">隐私政策</a></span>
-                    </label>
-                </div>
-
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-primary btn-block" id="registerBtn">
-                        <i class="fas fa-user-plus"></i>
-                        <span>注册账户</span>
-                    </button>
-                </div>
-
-                <div class="auth-footer">
-                    <p>已有账户？<a href="/login/">立即登录</a></p>
-                </div>
-            </form>
+        </a>
+        <div class="welcome-text">
+            <h1>加入企业协作平台</h1>
+            <p>安全、高效、实时的企业内部沟通与文档协作解决方案。</p>
+        </div>
+        <div class="features">
+            <div class="feature-item">
+                <i class="fas fa-check-circle"></i>
+                <span>金融级数据加密，保障企业信息安全</span>
+            </div>
+            <div class="feature-item">
+                <i class="fas fa-check-circle"></i>
+                <span>智能网盘支持在线文档多人实时协作</span>
+            </div>
+            <div class="feature-item">
+                <i class="fas fa-check-circle"></i>
+                <span>无缝对接企业现有组织架构与通讯录</ each>
+            </div>
         </div>
     </div>
 
-    <script src="/static/js/utils.js"></script>
-    <script src="/static/js/api.js"></script>
-    <script src="/static/js/slider-captcha.js"></script>
-    <script>
-        let captchaVerified = false;
-        let registerCaptcha = null;
+    <!-- 右侧表单区域 -->
+    <div class="login-right">
 
-        document.addEventListener('DOMContentLoaded', function() {
-            // 初始化滑块验证码
-            registerCaptcha = new SliderCaptcha('registerCaptcha', {
-                onSuccess: function() {
-                    captchaVerified = true;
-                    setTimeout(() => {
-                        registerCaptcha.reset();
-                        captchaVerified = false;
-                    }, 3000);
-                },
-                onFail: function() {
-                    captchaVerified = false;
-                }
-            });
+        <!-- 👇 新增：返回官网链接 -->
+        <a href="/"
+           style="display: inline-flex; align-items: center; color: var(--text-light); font-size: 14px; margin-bottom: 24px; text-decoration: none; transition: all 0.2s;"
+           onmouseover="this.style.color='var(--primary-color)'"
+           onmouseout="this.style.color='var(--text-light)'">
+            <i class="fas fa-arrow-left" style="margin-right: 8px; font-size: 12px;"></i> 返回官网主页
+        </a>
 
-            // 密码强度检测
-            document.getElementById('password').addEventListener('input', function(e) {
-                checkPasswordStrength(e.target.value);
-            });
+        <!-- 注册表单 -->
+        <form id="registerForm" class="auth-form">
+            <h2><i class="fas fa-user-plus" style="color: var(--primary-color); margin-right: 8px;"></i>创建您的账户
+            </h2>
 
-            // 注册表单提交
-            document.getElementById('registerForm').addEventListener('submit', async function(e) {
-                e.preventDefault();
+            <!-- 用户名 -->
+            <div class="form-group">
+                <label for="registerUsername">用户名</label>
+                <div class="input-with-icon">
+                    <i class="fas fa-user"></i>
+                    <input type="text" id="registerUsername" class="form-control" placeholder="3-20位字母、数字或下划线"
+                           autocomplete="username">
+                </div>
+                <div id="registerUsernameError" class="error-message"></div>
+            </div>
 
-                if (!captchaVerified) {
-                    showError('请先完成滑块验证');
-                    return;
-                }
+            <!-- 邮箱 -->
+            <div class="form-group">
+                <label for="registerEmail">企业邮箱</label>
+                <div class="input-with-icon">
+                    <i class="fas fa-envelope"></i>
+                    <input type="email" id="registerEmail" class="form-control" placeholder="name@company.com"
+                           autocomplete="email">
+                </div>
+                <div id="registerEmailError" class="error-message"></div>
+            </div>
 
-                if (!document.getElementById('agreeTerms').checked) {
-                    showError('请阅读并同意服务条款和隐私政策');
-                    return;
-                }
+            <!-- 密码 -->
+            <div class="form-group">
+                <label for="registerPassword">密码</label>
+                <div class="input-with-icon">
+                    <i class="fas fa-lock"></i>
+                    <input type="password" id="registerPassword" class="form-control" placeholder="至少8位字符"
+                           autocomplete="new-password">
+                    <i class="fas fa-eye-slash" style="left: auto; right: 12px; cursor: pointer; pointer-events: auto;"
+                       onclick="togglePassword('registerPassword', this)"></i>
+                </div>
+                <div id="registerPasswordError" class="error-message"></div>
+            </div>
 
-                const username = document.getElementById('username').value.trim();
-                const realName = document.getElementById('realName').value.trim();
-                const email = document.getElementById('email').value.trim();
-                const phone = document.getElementById('phone').value.trim();
-                const password = document.getElementById('password').value;
-                const confirmPassword = document.getElementById('confirmPassword').value;
-                const department = document.getElementById('department').value;
-                const position = document.getElementById('position').value;
-                const registerBtn = document.getElementById('registerBtn');
+            <!-- 确认密码 -->
+            <div class="form-group">
+                <label for="registerPasswordConfirm">确认密码</label>
+                <div class="input-with-icon">
+                    <i class="fas fa-lock"></i>
+                    <input type="password" id="registerPasswordConfirm" class="form-control"
+                           placeholder="请再次输入密码" autocomplete="new-password">
+                    <i class="fas fa-eye-slash" style="left: auto; right: 12px; cursor: pointer; pointer-events: auto;"
+                       onclick="togglePassword('registerPasswordConfirm', this)"></i>
+                </div>
+                <div id="registerPasswordConfirmError" class="error-message"></div>
+            </div>
 
-                // 验证
-                if (username.length < 3 || username.length > 20) {
-                    showError('用户名长度必须在3-20个字符之间');
-                    return;
-                }
+            <!-- 手机号 (可选) -->
+            <div class="form-group">
+                <label for="registerPhone">手机号 <span
+                        style="color: var(--text-muted); font-weight: normal;">(可选)</span></label>
+                <div class="input-with-icon">
+                    <i class="fas fa-mobile-alt"></i>
+                    <input type="tel" id="registerPhone" class="form-control" placeholder="11位手机号码"
+                           autocomplete="tel">
+                </div>
+                <div id="registerPhoneError" class="error-message"></div>
+            </div>
 
-                if (password.length < 6) {
-                    showError('密码长度不能少于6个字符');
-                    return;
-                }
+            <!-- 提交按钮 -->
+            <button type="submit" id="registerSubmitBtn" class="btn btn-primary btn-block">
+                <span class="text">立即注册</span>
+                <span class="loading"></span>
+            </button>
 
-                if (password !== confirmPassword) {
-                    showError('两次输入的密码不一致');
-                    return;
-                }
+            <!-- 切换登录 -->
+            <div class="switch-form">
+                已有企业账户？ <a href="/login/">立即登录</a>
+            </div>
 
-                if (!validateEmail(email)) {
-                    showError('请输入有效的邮箱地址');
-                    return;
-                }
+            <!-- 全局错误提示 -->
+            <div id="registerGeneralError" class="alert alert-danger" style="margin-top: 16px;"></
+            each>
+        </form>
+    </div>
+</div>
 
-                if (phone && !validatePhone(phone)) {
-                    showError('请输入有效的手机号码');
-                    return;
-                }
+<!-- 滑块验证码模态框 (复用 chat_auth.js 逻辑) -->
+<div id="captchaModal" class="captcha-modal">
+    <div class="captcha-modal-content">
+        <div class="captcha-modal-header">
+            <h3><i class="fas fa-shield-alt"></i> 安全验证</h3>
+            <p>请完成滑块验证以继续注册操作</p>
+        </div>
+        <div class="captcha-container" id="captchaContainer">
+            <!-- SliderCaptcha 类将在此处动态生成 HTML -->
+        </div>
+        <div class="captcha-actions">
+            <button class="btn btn-secondary" id="captchaCancelBtn">取消</button>
+            <button class="btn btn-outline" id="captchaRefreshBtn" style="max-width: 120px;">
+                <i class="fas fa-sync-alt"></i> 换一张
+            </button>
+        </div>
+    </div>
+</div>
 
-                registerBtn.disabled = true;
-                registerBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>注册中...</span>';
+<!-- 引入项目现有的认证逻辑 JS -->
+<script src="/static/js/chat_auth.js"></script>
 
-                try {
-                    const data = await API.register({
-                        username,
-                        real_name: realName,
-                        email,
-                        phone: phone || null,
-                        password,
-                        department: department || null,
-                        position: position || null
-                    });
-
-                    showSuccess('注册成功，请登录');
-                    setTimeout(() => {
-                        window.location.href = '/login/';
-                    }, 2000);
-                } catch (error) {
-                    const errorMsg = error.message || '注册失败';
-                    // 解析错误信息
-                    if (errorMsg.includes('username')) {
-                        showError('用户名已存在或格式不正确');
-                    } else if (errorMsg.includes('email')) {
-                        showError('邮箱已存在或格式不正确');
-                    } else {
-                        showError(errorMsg);
-                    }
-                    registerCaptcha.reset();
-                    captchaVerified = false;
-                } finally {
-                    registerBtn.disabled = false;
-                    registerBtn.innerHTML = '<i class="fas fa-user-plus"></i> <span>注册账户</span>';
-                }
-            });
-        });
-
-        function checkPasswordStrength(password) {
-            const strengthMeter = document.getElementById('passwordStrength');
-            if (!strengthMeter) return;
-
-            let strength = 0;
-            if (password.length >= 6) strength++;
-            if (password.length >= 10) strength++;
-            if (/[a-z]/.test(password) && /[A-Z]/.test(password)) strength++;
-            if (/\d/.test(password)) strength++;
-            if (/[^a-zA-Z0-9]/.test(password)) strength++;
-
-            const strengthText = ['弱', '中', '强', '很强', '极强'];
-            const strengthColors = ['#ff4d4f', '#faad14', '#52c41a', '#52c41a', '#52c41a'];
-
-            strengthMeter.textContent = strengthText[strength - 1] || '弱';
-            strengthMeter.style.color = strengthColors[strength - 1] || '#ff4d4f';
-        }
-
-        function validateEmail(email) {
-            const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            return re.test(email);
-        }
-
-        function validatePhone(phone) {
-            const re = /^1[3-9]\d{9}$/;
-            return re.test(phone);
-        }
-
-        function togglePasswordVisibility(inputId) {
-            const input = document.getElementById(inputId);
-            const icon = input.nextElementSibling.querySelector('i');
+<!-- 页面初始化脚本：确保独立注册页显示正确 -->
+<script>
+    // 密码可见性切换函数 (供 HTML 内联调用)
+    function togglePassword(inputId, icon) {
+        const input = document.getElementById(inputId);
+        if (input) {
             if (input.type === 'password') {
                 input.type = 'text';
-                icon.className = 'fas fa-eye-slash';
+                icon.classList.remove('fa-eye-slash');
+                icon.classList.add('fa-eye');
             } else {
                 input.type = 'password';
-                icon.className = 'fas fa-eye';
+                icon.classList.remove('fa-eye');
+                icon.classList.add('fa-eye-slash');
             }
         }
+    }
 
-        function showError(message) {
-            const errorDiv = document.createElement('div');
-            errorDiv.className = 'toast toast-error';
-            errorDiv.textContent = message;
-            document.body.appendChild(errorDiv);
-            setTimeout(() => {
-                if (errorDiv.parentNode) {
-                    errorDiv.parentNode.removeChild(errorDiv);
-                }
-            }, 3000);
-        }
+    // 确保页面加载时只显示注册表单
+    document.addEventListener('DOMContentLoaded', () => {
+        const loginForm = document.getElementById('loginForm');
+        const registerForm = document.getElementById('registerForm');
+        if (loginForm) loginForm.style.display = 'none';
+        if (registerForm) registerForm.style.display = 'block';
 
-        function showSuccess(message) {
-            const successDiv = document.createElement('div');
-            successDiv.className = 'toast toast-success';
-            successDiv.textContent = message;
-            document.body.appendChild(successDiv);
-            setTimeout(() => {
-                if (successDiv.parentNode) {
-                    successDiv.parentNode.removeChild(successDiv);
-                }
-            }, 3000);
-        }
-    </script>
+        // 动态更新页面标题
+        document.title = '企业聊天室 - 用户注册';
+    });
+</script>
 </body>
 </html>

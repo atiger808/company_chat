@@ -31,6 +31,9 @@ urlpatterns = [
     # 🔧 聊天相关
     path('api/chat/', include('chat.urls')),
 
+    # 官网主页路由
+    path('', TemplateView.as_view(template_name='chat/index.html'), name='index'),
+
     # 🔧 聊天页面路由
     path('chat/', TemplateView.as_view(template_name='chat/chat.html'), name='chat'),
     path('login/', TemplateView.as_view(template_name='chat/login.html'), name='login'),

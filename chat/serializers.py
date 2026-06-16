@@ -51,6 +51,7 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         # 1. 优先读取视图层批量预取的数据
         if hasattr(obj, '_cached_last_message') and obj._cached_last_message:
             msg = obj._cached_last_message
+            # logger.info(f"Hit cache for {obj.id} last msg: {msg}")
             # 返回序列化后的数据
             return MessageSerializer(msg, context=self.context).data
 
@@ -60,9 +61,11 @@ class ChatRoomSerializer(serializers.ModelSerializer):
             if not request or not hasattr(request, 'user'):
                 return None
             user = request.user
+            date_joined = user.date_joined
 
             last_msg = Message.objects.select_related('sender', 'file').filter(
                 chat_room=obj, is_deleted=False,
+                timestamp__gte=date_joined
             ).exclude(
                 id__in=MessageDeleteStatus.objects.filter(is_deleted=True, user=user).values_list('message_id',
                                                                                                   flat=True)
@@ -84,10 +87,12 @@ class ChatRoomSerializer(serializers.ModelSerializer):
             if not request or not hasattr(request, 'user'):
                 return 0
             user = request.user
+            date_joined = user.date_joined
 
             # 优化：使用 exists/count 组合查询，减少内存占用
             unread = Message.objects.filter(
                 chat_room=obj, is_deleted=False,
+                timestamp__gte=date_joined
             ).exclude(
                 sender=user
             ).exclude(
@@ -110,8 +115,9 @@ class ChatRoomSerializer(serializers.ModelSerializer):
             if not request or not hasattr(request, 'user'):
                 logger.warning("Request or user not found in context.")
                 return False
-            
+
             user = request.user
+            date_joined = user.date_joined
 
             # 构建已删除消息的ID子查询
             deleted_message_ids = MessageDeleteStatus.objects.filter(
@@ -128,6 +134,7 @@ class ChatRoomSerializer(serializers.ModelSerializer):
             has_unread_mention = Message.objects.filter(
                 chat_room=obj,
                 is_deleted=False,
+                timestamp__gte=date_joined,
                 mentioned_users=user
             ).exclude(
                 id__in=deleted_message_ids
@@ -148,9 +155,11 @@ class ChatRoomSerializer(serializers.ModelSerializer):
                 logger.warning("Request or user not found in context.")
                 return False
             user = request.user
+            date_joined = user.date_joined
             return Message.objects.filter(
                 chat_room=obj,
                 is_deleted=False,
+                timestamp__gte=date_joined,
                 mentioned_all=True
             ).exclude(
                 sender=user

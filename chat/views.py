@@ -591,18 +591,25 @@ class MessageViewSet(viewsets.ModelViewSet):
         before_id = self.request.query_params.get('before_id')  # 加载更早的消息
         after_id = self.request.query_params.get('after_id')  # 加载更新的消息
 
+
+        date_joined = self.request.user.date_joined
+
+        logger.info(f'{self.request.user} 获取消息列表 chat_room_id: {chat_room_id} date_joined: {date_joined}')
+
         close_old_connections()
         # 构建基础查询集
         if chat_room_id:
             queryset = Message.objects.filter(
                 chat_room_id=chat_room_id,
                 chat_room__members=self.request.user,
-                is_deleted=False
+                is_deleted=False,
+                timestamp__gte=date_joined
             )
         else:
             queryset = Message.objects.filter(
                 chat_room__members=self.request.user,
-                is_deleted=False
+                is_deleted=False,
+                timestamp__gte=date_joined
             )
 
         # 🔧 优化：使用数据库查询过滤已删除的消息，避免Python循环
@@ -1090,7 +1097,8 @@ class FileUploadView(APIView):
 
         # 缓存文件内容
         file_content = file.read()
-        logger.info(f"File content length: {len(file_content)}")
+        file_ext = file.name.split('.')[-1].lower() if '.' in file.name else ''
+        logger.info(f"File content length: {len(file_content)} file_md5: {file_md5} file.name: {file.name} file_ext: {file_ext}")
         if not file_md5 or len(str(file_md5)) != 32:
             # 计算文件MD5
             md5_hash = hashlib.md5()
@@ -1156,11 +1164,11 @@ class FileUploadView(APIView):
             if self.is_ios_request(request) or self.is_android_request(request):
                 # iOS设备：同步转码（用户需要立即播放）
                 logger.info(f"iOS设备: 同步转码")
-                self.convert_to_mp3(file_upload, file_content)
+                self.convert_to_mp3(file_upload, file_content, file_ext=file_ext)
             else:
                 # 非iOS设备：异步转码（提高响应速度）
                 logger.info(f"非iOS设备: 异步转码")
-                transaction.on_commit(lambda: self.async_convert_to_mp3(file_upload, file_content))
+                transaction.on_commit(lambda: self.async_convert_to_mp3(file_upload, file_content, file_ext=file_ext))
 
         return Response({
             'file_url': file_url,
@@ -1262,7 +1270,7 @@ class FileUploadView(APIView):
     def is_ios_request(self, request):
         """检测请求是否来自iOS设备"""
         user_agent = request.META.get('HTTP_USER_AGENT', '').lower()
-        return 'iphone' in user_agent or 'ipad' in user_agent or 'ipod' in user_agent
+        return 'iphone' in user_agent or 'ipad' in user_agent or 'ipod' in user_agent or 'mac' in user_agent
 
     def is_android_request(self, request):
         """检测请求是否来自Android设备"""
@@ -1363,7 +1371,7 @@ class FileUploadView(APIView):
         if not file_upload.mp3_converted and file_upload.get_file_type() == 'voice':
             self.convert_to_mp3(file_upload)
 
-    def convert_to_mp3(self, file_upload, file_content=None):
+    def convert_to_mp3(self, file_upload, file_content=None, file_ext='webm'):
         """同步转码为MP3格式（iOS兼容）"""
         try:
             # 检查ffmpeg是否可用
@@ -1374,7 +1382,7 @@ class FileUploadView(APIView):
             # 获取原始文件路径
             if file_content:
                 # 从内存转码（避免二次读取磁盘）
-                temp_input = os.path.join('/tmp', f'temp_{file_upload.id}.webm')
+                temp_input = os.path.join('/tmp', f'temp_{file_upload.id}.{file_ext}')
                 with open(temp_input, 'wb') as f:
                     f.write(file_content)
                 input_path = temp_input
@@ -1455,10 +1463,10 @@ class FileUploadView(APIView):
             #     except:
             #         pass
 
-    def async_convert_to_mp3(self, file_upload, file_content=None):
+    def async_convert_to_mp3(self, file_upload, file_content=None, file_ext='webm'):
         """异步转码（在事务提交后执行）"""
         # 简单实现：直接调用（生产环境建议使用Celery）
-        self.convert_to_mp3(file_upload, file_content)
+        self.convert_to_mp3(file_upload, file_content, file_ext=file_ext)
 
 
 class AudioFormatView(APIView):
@@ -2479,7 +2487,7 @@ class SystemSettingsViewSet(viewsets.ViewSet):
         """📋 获取配置分类列表"""
         return Response({'categories': self.CONFIG_CATEGORIES})
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def list_configs(self, request):
         """📋 获取所有系统配置（支持分类过滤）"""
 

@@ -986,12 +986,22 @@ class AdminConsole {
 
         // 加载所有用户用于好友分配
         await this.loadAllUsersForFriends();
-        console.log('allUsersForFriends:', this.allUsersForFriends)
+        // console.log('allUsersForFriends:', this.allUsersForFriends)
 
         // 渲染好友选择界面（初始无好友）
         this.renderFriendSelection_create('friendGridCreate', [], 'friendSearchCreate');
 
         this.openModal('createUserModal');
+    }
+
+    isValidEmail(email) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        return emailRegex.test(email);
+    }
+
+    isValidPhone(phone) {
+        const phoneRegex = /^1[3456789]\d{9}$/;
+        return phoneRegex.test(phone);
     }
 
     // 修改 createUser 方法，添加好友分配
@@ -1015,6 +1025,29 @@ class AdminConsole {
             this.showError('验证失败', '两次输入的密码不一致');
             return;
         }
+
+        if (!email) {
+            this.showError('验证失败', '邮箱不能为空');
+            return;
+        }
+
+        // 验证是否是合法邮箱
+        if (!this.isValidEmail(email)) {
+            this.showError('验证失败', '邮箱格式不正确');
+            return;
+        }
+
+        if (phone && !this.isValidPhone(phone)) {
+            this.showError('验证失败', '手机号格式不正确');
+            return;
+        }
+
+        if (this.isSuperAdmin && !userType) {
+            this.showError('验证失败', '用户类型不能为空');
+            return;
+        }
+
+
 
         try {
             this.showLoading();
@@ -1225,9 +1258,9 @@ class AdminConsole {
             }
 
             const data = await response.json();
-            console.log('data:', data)
+            // console.log('data:', data)
             this.allUsersForFriends = Array.isArray(data) ? data : (data.results || []);
-            console.log('this.allUsersForFriends:', this.allUsersForFriends)
+            // console.log('this.allUsersForFriends:', this.allUsersForFriends)
             return this.allUsersForFriends;
         } catch (error) {
             console.error('加载用户列表失败:', error);
@@ -1344,11 +1377,6 @@ class AdminConsole {
         // 获取所有用户（排除当前用户 - 仅在编辑用户时需要）
         // let allUsers = this.allUsersForFriends;
         let allUsers = this.users;
-        if (document.getElementById('editUserId')) {
-            // 编辑用户时排除当前用户
-            const currentUserId = parseInt(document.getElementById('editUserId').value || '0');
-            allUsers = allUsers.filter(u => u.id !== currentUserId);
-        }
 
         // 将已选好友排到前面
         const sortedUsers = [...allUsers].sort((a, b) => {

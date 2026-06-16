@@ -278,9 +278,9 @@ class AdminChatRoomsClient {
             this.chatRoomsPage = data.page || 1;
             this.chatRoomsHasMore = data.next ? true : false;
 
-            console.log('加载聊天室列表成功 data:', data);
-            console.log('加载聊天室列表成功 rooms:', rooms);
-            console.log('加载聊天室列表成功 chatRooms:', this.chatRooms);
+            // console.log('加载聊天室列表成功 data:', data);
+            // console.log('加载聊天室列表成功 rooms:', rooms);
+            // console.log('加载聊天室列表成功 chatRooms:', this.chatRooms);
             console.log('加载聊天室列表成功 append:', append);
             console.log('加载聊天室列表成功 chatRoomsPage:', this.chatRoomsPage);
             console.log('加载聊天室列表成功 chatRoomsHasMore:', this.chatRoomsHasMore);

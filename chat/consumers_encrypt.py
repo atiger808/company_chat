@@ -189,8 +189,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             try:
                 # 🔧 关键修复6: 清理旧连接
                 await sync_to_async(close_old_connections)()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f'关闭数据库连接异常：{e}')
 
     async def send_encrypt(self, data):
         encrypt_str = encrypt_data(json.dumps(data, ensure_ascii=False), mode='aes')
@@ -251,7 +251,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         # 取消其他任务
         if hasattr(self, 'tasks'):
             for task in self.tasks:
-                if not task.done():
+                if not task.done() and hasattr(task, 'cancel'):
                     task.cancel()
                     try:
                         await task

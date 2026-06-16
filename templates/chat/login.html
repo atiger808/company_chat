@@ -28,10 +28,14 @@
 <div class="login-container">
     <!-- 左侧欢迎区域 -->
     <div class="login-left">
-        <div class="logo">
-            <i class="fas fa-comments"></i>
-            <span>企业聊天室</span>
-        </div>
+
+        <a href="/" style="text-decoration: none; color: inherit;">
+            <div class="logo">
+                <i class="fas fa-comments"></i>
+                <span>企业聊天室</span>
+            </div>
+        </a>
+
         <div class="welcome-text">
             <h1>欢迎使用企业内部通讯平台</h1>
             <p>安全、高效、实时的企业内部沟通解决方案</p>
@@ -58,6 +62,14 @@
 
     <!-- 右侧表单区域 -->
     <div class="login-right">
+        <!-- 👇 新增：返回官网链接 -->
+        <a href="/"
+           style="display: inline-flex; align-items: center; color: var(--text-light); font-size: 14px; margin-bottom: 24px; text-decoration: none; transition: all 0.2s;"
+           onmouseover="this.style.color='var(--primary-color)'"
+           onmouseout="this.style.color='var(--text-light)'">
+            <i class="fas fa-arrow-left" style="margin-right: 8px; font-size: 12px;"></i> 返回官网主页
+        </a>
+
         <!-- 登录表单 -->
         <div id="loginForm" class="auth-form">
             <h2>用户登录</h2>
@@ -108,9 +120,9 @@
                 <div class="success-message" id="loginSuccessMessage"></div>
             </form>
 
-<!--                            <div class="switch-form">-->
-<!--                                还没有账户？<a href="#" id="showRegisterLink">立即注册</a>-->
-<!--                            </div>-->
+            <!--                            <div class="switch-form">-->
+            <!--                                还没有账户？<a href="#" id="showRegisterLink">立即注册</a>-->
+            <!--                            </div>-->
         </div>
 
         <!-- 注册表单 -->

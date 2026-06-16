@@ -111,7 +111,7 @@ body {
 /* 📦 登录容器布局 */
 .login-container {
     display: flex;
-    max-width: 900px;
+    max-width: 960px;
     width: 100%;
     background: var(--bg-primary);
     border-radius: var(--border-radius-lg);
@@ -149,6 +149,12 @@ body {
     font-size: 28px;
     font-weight: bold;
     letter-spacing: 1px;
+}
+
+.login-left .logo i {
+    color: white;
+    font-size: 36px;
+    animation: float 3s ease-in-out infinite;
 }
 
 .welcome-text h1 {

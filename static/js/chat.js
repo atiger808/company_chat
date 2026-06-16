@@ -4601,6 +4601,7 @@ class ChatClient {
                     const video = document.createElement('video');
                     video.src = message.file_info.url;
                     video.controls = true;
+                    // video.muted = true;
                     video.className = 'message-video';
                     const playBtn = document.createElement('div');
                     playBtn.className = 'video-play-btn';
@@ -10721,7 +10722,7 @@ class ChatClient {
                 {urls: 'stun:stun1.l.google.com:19302'}
             );
 
-            console.log('🔧 ICE Servers 配置:', JSON.stringify(iceServers, null, 2));
+            // console.log('🔧 ICE Servers 配置:', JSON.stringify(iceServers, null, 2));
 
             return {
                 iceServers: iceServers,

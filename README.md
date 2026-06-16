@@ -10,6 +10,19 @@ python3.9
 pip install -r requirements.txt
 ```
 
+##### 文件传输
+
+```
+scp file.txt username@remote_server_ip:/home/username/
+
+```
+
+chrome浏览器删除强制ssl
+
+```
+chrome://net-internals/#hsts
+```
+
 
 
 ### 数据库配置

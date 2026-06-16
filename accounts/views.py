@@ -1129,6 +1129,8 @@ class UserViewSet(viewsets.ModelViewSet):
             "email": "user@example.com"
         }
         """
+        from email.utils import formataddr  # 👈 1. 引入标准库
+        from email.header import Header  # 👈 1. 引入 Header
         from django.core.mail import send_mail
         from django.template.loader import render_to_string
         from django.utils.http import urlsafe_base64_encode
@@ -1140,11 +1142,23 @@ class UserViewSet(viewsets.ModelViewSet):
         email = serializer.validated_data['email']
         user = CustomUser.objects.get(email=email)
 
+        # 获取系统名称
+        site_name = SystemConfigManager.get_config('system.name', '企联云')
+
+        # 👇 2. 核心修复：使用 Header 将中文转换为 MIME 编码
+        # 这会将 '企联云' 转换为类似 '=?utf-8?b?5Lyg6IuN5Lq6?=' 的纯 ASCII 字符串
+        encoded_name = str(Header(site_name, 'utf-8'))
+
+        # 👇 3. 拼接成标准的发件人格式
+        # 注意：这里的 settings.DEFAULT_FROM_EMAIL 必须是纯邮箱地址，如 noreply@qq.com
+        custom_from_email = f"{encoded_name} <{settings.DEFAULT_FROM_EMAIL}>"
+
         # 🔧 频率限制：同一邮箱1小时内只能请求1次
         if user.password_reset_token_expires and timezone.now() < user.password_reset_token_expires:
+            logger.warning(f"用户 {user.username} 请求密码重置，但已存在重置令牌，请检查邮箱（1小时内请勿重复请求）,请检查 password_reset_token_expires: {user.password_reset_token_expires}")
             return Response({
-                'message': '重置邮件已发送，请检查邮箱（1小时内请勿重复请求）'
-            }, status=status.HTTP_200_OK)
+                'message': '已存在重置令牌，请检查邮箱（1小时内请勿重复请求）'
+            }, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         # 生成重置令牌
         expires_minutes = settings.PASSWORD_RESET_TOKEN_EXPIRES_MINUTES
@@ -1180,7 +1194,7 @@ class UserViewSet(viewsets.ModelViewSet):
             send_mail(
                 subject=f"{context['site_name']} - 密码重置请求",
                 message=text_message,
-                from_email=settings.DEFAULT_FROM_EMAIL,
+                from_email=custom_from_email,   # 👈 4. 使用编码后的纯 ASCII 字符串
                 recipient_list=[email],
                 html_message=html_message,
                 fail_silently=False
@@ -1194,6 +1208,7 @@ class UserViewSet(viewsets.ModelViewSet):
 
         except Exception as e:
             logger.error(f"发送重置邮件失败：{email}, error: {e}")
+            user.clear_password_reset_token()
             return Response({
                 'error': '发送重置邮件失败，请稍后重试'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
