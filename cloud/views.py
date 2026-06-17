@@ -343,6 +343,7 @@ class FolderViewSet(viewsets.ModelViewSet, UtilsTools):
             operation='create',
             description=f'创建文件夹：{serializer.instance.name}',
             ip_address=get_request_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
             extra_data={  # ✅ 使用 extra_data 存储额外信息
                 'folder_name': serializer.instance.name,
                 'folder_id': str(serializer.instance.id),
@@ -377,6 +378,7 @@ class FolderViewSet(viewsets.ModelViewSet, UtilsTools):
             operation='update',
             description=f'更新文件夹：{instance.name}',
             ip_address=get_request_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
             extra_data={  # ✅ 使用 extra_data 存储额外信息
                 'folder_name': instance.name,
                 'folder_id': str(instance.id),
@@ -486,6 +488,7 @@ class FolderViewSet(viewsets.ModelViewSet, UtilsTools):
                 operation='move',
                 description=f'移动文件夹：{folder.name}',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={  # ✅ 存储移动详情
                     'from_parent': str(from_parent.name) if from_parent else '根目录',
                     'to_parent': str(new_parent.name) if new_parent else '根目录',
@@ -554,6 +557,7 @@ class FolderViewSet(viewsets.ModelViewSet, UtilsTools):
                 operation='rename',
                 description=f'重命名文件夹：{old_name} -> {new_name}',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={
                     'old_name': old_name,
                     'new_name': new_name
@@ -610,6 +614,7 @@ class FolderViewSet(viewsets.ModelViewSet, UtilsTools):
                 operation='delete',
                 description=f'删除文件夹：{folder.name}',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={
                     'folder_name': folder.name,
                     'folder_id': str(folder.id),
@@ -661,6 +666,7 @@ class FolderViewSet(viewsets.ModelViewSet, UtilsTools):
                 operation='restore',
                 description=f'恢复文件夹：{folder.name}',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={
                     'folder_name': folder.name,
                     'folder_id': str(folder.id),
@@ -746,6 +752,7 @@ class FolderViewSet(viewsets.ModelViewSet, UtilsTools):
                     operation='permanent_delete',
                     description=f'永久删除文件夹：{folder_name}',
                     ip_address=get_request_ip(request),
+                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
                     extra_data={
                         'folder_id': str(folder_id),
                         'folder_name': folder_name,
@@ -918,6 +925,7 @@ class FolderViewSet(viewsets.ModelViewSet, UtilsTools):
                 operation='download',
                 description=f'下载文件夹：{folder.name}（包含 {stats["files_count"]} 个文件, {stats["folders_count"]} 个子文件夹）',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={
                     'folder_id': str(folder.id),
                     'folder_name': folder.name,
@@ -1464,6 +1472,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                     operation='upload',
                     description=f'秒传文件：{new_file.name}',
                     ip_address=get_request_ip(request),
+                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
                     extra_data={
                         'original_file_id': str(existing_file.id),
                         'file_md5': file_md5,
@@ -1509,6 +1518,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                 operation='upload',
                 description=f'上传文件：{uploaded_file.name}',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={'quick_upload': False}
             )
 
@@ -1646,6 +1656,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                     operation='upload',
                     description=f'秒传文件：{new_file.name}',
                     ip_address=get_request_ip(request),
+                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
                     extra_data={
                         'original_file_id': str(existing_file.id),
                         'file_md5': file_md5,
@@ -2012,6 +2023,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                     operation='upload',
                     description=f'分片上传文件: {session.file_name}',
                     ip_address=get_request_ip(request),
+                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
                     extra_data={
                         'upload_method': 'chunked',
                         'total_chunks': session.total_chunks,
@@ -2204,9 +2216,10 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
         FileOperationLog.objects.create(
             file=file_obj,
             user=request.user,
-            operation='share',
+            operation='add_collaborator',
             description=f'添加协作者：{collaborator.username}',
             ip_address=get_request_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
             extra_data={
                 'collaborator_id': str(collaborator.id),
                 'collaborator_username': collaborator.username,
@@ -2325,6 +2338,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
             operation='download',
             description=f'下载文件：{file_obj.name}',
             ip_address=get_request_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
             extra_data={
                 'file_name': file_obj.name,
                 'file_size': file_obj.size,
@@ -2438,6 +2452,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                 operation='move',
                 description=f'移动文件：{file_obj.name}',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={
                     'file_name': file_obj.name,
                     'file_size': file_obj.size,
@@ -2489,6 +2504,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
             operation='rename',
             description=f'重命名文件：{new_name}',
             ip_address=get_request_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
             extra_data={
                 'old_name': old_name,
                 'new_name': new_name,
@@ -2526,6 +2542,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                 operation='delete',
                 description=f'删除文件：{file_obj.name}',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={
                     'file_id': str(file_obj.id),
                     'file_name': file_obj.name,
@@ -2578,6 +2595,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                 operation='restore',
                 description=f'恢复文件：{file_obj.name}',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={
                     'file_id': str(file_obj.id),
                     'file_name': file_obj.name,
@@ -2710,6 +2728,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                     operation='permanent_delete',
                     description=f'永久删除文件：{file_name}',
                     ip_address=get_request_ip(request),
+                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
                     extra_data={
                         'file_id': str(file_id),
                         'file_name': file_name,
@@ -2854,6 +2873,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                 description=f'清空回收站: 逻辑清空文件 {stats["files_logical"]} 个, 物理清空文件 {stats["files_physical"]} 个, '
                             f'逻辑清空文件夹 {stats["folders_logical"]} 个, 物理清空文件夹 {stats["folders_physical"]} 个',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={'stats': stats}
             )
 
@@ -2996,6 +3016,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                 operation='sync_to_cloud',
                 description=f'从聊天室同步文件: 成功 {sync_count}, 跳过 {skipped_count}, 错误 {error_count}',
                 ip_address=get_request_ip(request),  # 🔧 修复：使用传入的 request 而不是 self.request
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={'stats': stats}
             )
         except Exception as log_err:
@@ -3292,12 +3313,12 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                     deleted_count += 1
 
                     # 记录操作日志
-                    from .models import FileOperationLog
                     FileOperationLog.objects.create(
                         file=file_obj,
                         user=user,
                         operation='batch_delete',
                         description=f'批量删除文件：{file_obj.name}',
+                        user_agent=request.META.get('HTTP_USER_AGENT', ''),
                         ip_address=get_request_ip(request)
                     )
                 except Exception as e:
@@ -3320,12 +3341,13 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                     deleted_count += 1
 
                     # 记录操作日志
-                    from .models import FileOperationLog
+                    
                     FileOperationLog.objects.create(
                         folder=folder_obj,
                         user=user,
                         operation='batch_delete',
                         description=f'批量删除文件夹：{folder_obj.name}',
+                        user_agent=request.META.get('HTTP_USER_AGENT', ''),
                         ip_address=get_request_ip(request)
                     )
                 except Exception as e:
@@ -3402,7 +3424,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                     file_obj.save()
                     moved_count += 1
 
-                    from .models import FileOperationLog
+                    
                     # 记录操作日志
                     FileOperationLog.objects.create(
                         file=file_obj,
@@ -3410,6 +3432,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                         operation='batch_move',
                         description=f'批量移动文件：{file_obj.name}',
                         ip_address=get_request_ip(request),
+                        user_agent=request.META.get('HTTP_USER_AGENT', ''),
                         extra_data={
                             'target_folder': str(target_folder.name) if target_folder else '根目录'
                         }
@@ -3435,13 +3458,14 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                     moved_count += 1
 
                     # 记录操作日志
-                    from .models import FileOperationLog
+                    
                     FileOperationLog.objects.create(
                         folder=folder_obj,
                         user=user,
                         operation='batch_move',
                         description=f'批量移动文件夹：{folder_obj.name}',
                         ip_address=get_request_ip(request),
+                        user_agent=request.META.get('HTTP_USER_AGENT', ''),
                         extra_data={
                             'target_folder': str(target_folder.name) if target_folder else '根目录'
                         }
@@ -3889,6 +3913,7 @@ class FileShareViewSet(viewsets.ModelViewSet, UtilsTools):
             operation='save_from_share',
             description=f'从分享{share.share_code}保存文件夹',
             ip_address=get_request_ip(self.request),
+            user_agent=self.request.META.get('HTTP_USER_AGENT', ''),
             extra_data={'stats': stats}
         )
 
@@ -4029,7 +4054,7 @@ class FileShareViewSet(viewsets.ModelViewSet, UtilsTools):
                 operation='share_access',
                 description=f'访问分享链接：{share.share_code}',
                 ip_address=get_request_ip(request),
-                user_agent=request.META.get('HTTP_USER_AGENT', '')[:200],
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={'share_id': str(share.id)}
             )
 
@@ -4879,14 +4904,13 @@ class CloudFileDownloadView(APIView):
         🔧 记录下载日志
         """
         try:
-            from .models import FileOperationLog
-
             FileOperationLog.objects.create(
                 file=file_obj,
                 user=request.user if request.user.is_authenticated else None,
                 operation='download',
                 description=f'下载文件：{file_obj.name}',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={
                     'file_name': file_obj.name,
                     'file_size': file_obj.size,
@@ -5751,6 +5775,7 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                         operation='add_collaborator',
                         description=f'创建文档时添加协作者：{collab_user.username}',
                         ip_address=get_request_ip(request),
+                        user_agent=request.META.get('HTTP_USER_AGENT', ''),
                         extra_data={
                             'collaborator_id': str(collab_user.id),
                             'collaborator_username': collab_user.username,
@@ -5832,6 +5857,7 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                 operation='remove_all_collaborators',
                 description=f'清空文档协作者：{file_obj.name}（共移除 {collab_count} 人）',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={
                     'removed_count': collab_count,
                     'file_name': file_obj.name,
@@ -6125,6 +6151,7 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                 operation='add_collaborator',
                 description=f'添加协作者：{collaborator.username}（权限：{permission}）',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={
                     'collaborator_id': str(collaborator.id),
                     'collaborator_username': collaborator.username,
@@ -6231,6 +6258,7 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                 operation='update_collaborator',
                 description=f'修改协作者权限：{collab.user.username}',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={
                     'collaborator_id': str(collab.user.id),
                     'old_permission': collab.permission,
@@ -6310,6 +6338,7 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                 operation='remove_collaborator',
                 description=f'移除协作者：{collaborator_username}',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={
                     'collaborator_id': str(collaborator_id),
                     'collaborator_username': collaborator_username,
@@ -6454,9 +6483,10 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
             FileOperationLog.objects.create(
                 file=file_obj,
                 user=request.user,
-                operation='update_collaboration_status',
+                operation=status,
                 description=f'更新协作状态：{status}',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={
                     'status': status,
                     'cursor_position': cursor_position,
@@ -6663,9 +6693,10 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                             FileOperationLog.objects.create(
                                 file=file_obj,
                                 user=file_obj.owner,
-                                operation='edit',
+                                operation='edit_save',
                                 description=f'在线编辑保存：{file_obj.name} (v{version.version_number})',
                                 ip_address=get_request_ip(request),
+                                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                                 extra_data={
                                     'version_number': version.version_number,
                                     'file_size': len(content),
@@ -6887,7 +6918,8 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                 user=request.user,
                 operation='version_download',
                 description=f'下载历史版本：{original_name} v{version.version_number}',
-                ip_address=get_request_ip(request)
+                ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
             )
 
             return response
@@ -6981,6 +7013,7 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                 operation='restore_version',
                 description=f'恢复文档版本：{file_obj.name} v{version.version_number}',
                 ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 extra_data={
                     'version_id': str(version.id),
                     'version_number': version.version_number,
@@ -8523,6 +8556,7 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
                         user=user,
                         operation='move',
                         description=f'移动到共享文件夹 {target_folder.name}',
+                        user_agent=request.META.get('HTTP_USER_AGENT', ''),
                         ip_address=get_request_ip(request)
                     )
                 except CloudFile.DoesNotExist:
@@ -8547,7 +8581,8 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
                         user=user,
                         operation='move',
                         description=f'移动到共享文件夹 {target_folder.name}',
-                        ip_address=get_request_ip(request)
+                        ip_address=get_request_ip(request),
+                        user_agent=request.META.get('HTTP_USER_AGENT', '')
                     )
                 except Folder.DoesNotExist:
                     errors.append(f'文件夹 {folder_id}: 不存在')

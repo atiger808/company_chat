@@ -525,6 +525,8 @@ class FileOperationLog(models.Model):
         ('delete', '删除'),
         ('restore', '恢复'),
         ('permanent_delete', '永久删除'),
+        ('batch_delete', '批量删除'),
+        ('batch_move', '批量移动'),
         ('move', '移动'),
         ('rename', '重命名'),
         ('upload', '上传'),
@@ -534,6 +536,22 @@ class FileOperationLog(models.Model):
         ('unshare', '取消分享'),
         ('save_from_share', '从分享保存'),
         ('empty_trash', '清空回收站'),
+
+        ('sync_to_cloud', '同步到云'),
+        ('save_from_share', '从分享保存'),
+        ('share_access', '分享访问'),
+
+        ('edit_save', '编辑保存'),
+        ('editing', '编辑中'),
+        ('viewing', '查看中'),
+        ('closed', '已关闭'),
+        ('add_collaborator', '添加协作者'),
+        ('update_collaborator', '更新协作者'),
+        ('update_collaboration_status', '更新协作状态'),
+        ('remove_collaborator', '移除协作者'),
+        ('remove_all_collaborators', '移除所有协作者'),
+        ('version_download', '版本下载'),
+        ('restore_version', '恢复版本'),
     ]
 
     file = models.ForeignKey(
@@ -598,7 +616,9 @@ class FileOperationLog(models.Model):
         ]
 
     def __str__(self):
-        return f'{self.user.username} - {self.created_at}'
+        if self.user:
+            return f'{self.id} - {self.file} - {self.user.username} - {self.created_at}'
+        return f'{self.id} - {self.file} - {self.created_at}'
 
 
 class FileVersion(models.Model):

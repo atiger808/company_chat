@@ -514,7 +514,7 @@
 /* 图片预览导航计数器 */
 .image-nav-counter {
     position: relative;
-    top: 20px;
+    /*top: 20px;*/
     left: 0;
     color: #453d3d;
     font-size: 14px;
@@ -679,7 +679,7 @@
         right: 8px;
     }
     .image-nav-counter {
-        top: 20px;
+        /*top: 20px;*/
         font-size: 12px;
     }
 }
