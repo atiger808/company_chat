@@ -483,6 +483,9 @@
     position: relative;
     max-width: 90vw;
     max-height: 90vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .preview-image-content {
@@ -490,6 +493,7 @@
     max-height: 90vh;
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    transition: opacity 0.15s ease;
 }
 
 .close-preview {
@@ -500,10 +504,55 @@
     font-size: 32px;
     cursor: pointer;
     transition: transform 0.2s;
+    z-index: 11;
 }
 
 .close-preview:hover {
     transform: scale(1.1);
+}
+
+/* 图片预览导航计数器 */
+.image-nav-counter {
+    position: relative;
+    top: 20px;
+    left: 0;
+    color: #453d3d;
+    font-size: 14px;
+    font-weight: 500;
+    user-select: none;
+}
+
+/* 图片预览导航按钮 */
+.image-nav-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.4);
+    border: none;
+    color: white;
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s ease;
+    z-index: 10;
+    user-select: none;
+}
+
+.image-nav-btn:hover {
+    background: rgba(0, 0, 0, 0.65);
+}
+
+.image-nav-prev {
+    left: 0px;
+}
+
+.image-nav-next {
+    right: 0px;
 }
 
 /* 文件消息样式 */
@@ -616,6 +665,22 @@
 
     .image-preview-content {
         max-width: 95vw;
+    }
+
+    .image-nav-btn {
+        width: 36px;
+        height: 36px;
+        font-size: 16px;
+    }
+    .image-nav-prev {
+        left: 8px;
+    }
+    .image-nav-next {
+        right: 8px;
+    }
+    .image-nav-counter {
+        top: 20px;
+        font-size: 12px;
     }
 }
 

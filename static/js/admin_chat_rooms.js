@@ -1443,42 +1443,127 @@ class AdminChatRoomsClient {
     }
 
     // 🔧 新增：显示图片预览模态框
+    // 收集当前房间所有图片消息的 URL 列表
+    _collectImageList() {
+        const images = [];
+        if (!this.roomMessages || !Array.isArray(this.roomMessages)) return images;
+        for (const msg of this.roomMessages) {
+            if (!msg.is_deleted && msg.file_info?.url && (msg.message_type === 'image' || msg.file_info?.mime_type?.startsWith('image/'))) {
+                images.push({ url: msg.file_info.url, name: msg.file_info.name || '图片' });
+            }
+        }
+        return images;
+    }
+
     previewImage(imageUrl) {
         if (!imageUrl) return;
+
+        const imageList = this._collectImageList();
+        let currentIndex = imageList.findIndex(item => item.url === imageUrl);
+        if (currentIndex === -1) currentIndex = 0;
+
+        console.log('当前图片索引:', currentIndex);
+        console.log('图片列表:', imageList);
 
         // 检查是否已有预览模态框
         const existingModal = document.querySelector('.image-preview-modal');
         if (existingModal) existingModal.remove();
 
+        const showNav = imageList.length > 1;
+
+        const showImage = (index) => {
+            const item = imageList[index];
+            const img = modal.querySelector('.preview-image-content');
+            // 淡出切换
+            img.style.opacity = '0';
+            setTimeout(() => {
+                img.src = item.url;
+                img.alt = item.name;
+                img.style.opacity = '1';
+            }, 100);
+            currentIndex = index;
+
+            // 更新计数显示
+            const counter = modal.querySelector('.image-nav-counter');
+            if (counter) {
+                counter.textContent = `${index + 1} / ${imageList.length}`;
+            }
+
+            // 控制左右按钮显示
+            const prevBtn = modal.querySelector('.image-nav-prev');
+            const nextBtn = modal.querySelector('.image-nav-next');
+            if (prevBtn) prevBtn.style.visibility = index <= 0 ? 'hidden' : 'visible';
+            if (nextBtn) nextBtn.style.visibility = index >= imageList.length - 1 ? 'hidden' : 'visible';
+        };
+
         const modal = document.createElement('div');
         modal.className = 'image-preview-modal';
         modal.innerHTML = `
-        <div class="image-preview-content">
-            <span class="close-preview">&times;</span>
-            <img class="preview-image-content" src="${imageUrl}">
-        </div>
-    `;
+            <div class="image-preview-content">
+                <span class="close-preview">&times;</span>
+                ${showNav ? `<span class="image-nav-counter">${currentIndex + 1} / ${imageList.length}</span>` : ''}
+                <img class="preview-image-content" src="${imageUrl}" alt="${imageList[currentIndex]?.name || '图片预览'}">
+                ${showNav ? `
+                <button class="image-nav-btn image-nav-prev" title="上一张">
+                    <i class="fas fa-chevron-left"></i>
+                </button>
+                <button class="image-nav-btn image-nav-next" title="下一张">
+                    <i class="fas fa-chevron-right"></i>
+                </button>` : ''}
+            </div>
+        `;
         document.body.appendChild(modal);
 
-        // 绑定关闭事件
-        const closeBtn = modal.querySelector('.close-preview');
         const closeModal = () => {
             modal.style.opacity = '0';
             setTimeout(() => modal.remove(), 300);
         };
 
+        // 绑定关闭事件
+        const closeBtn = modal.querySelector('.close-preview');
         closeBtn.onclick = closeModal;
         modal.onclick = (e) => {
             if (e.target === modal) closeModal();
         };
 
+        // 初始按钮状态
+        if (showNav) {
+            const prevBtn = modal.querySelector('.image-nav-prev');
+            const nextBtn = modal.querySelector('.image-nav-next');
+            if (prevBtn) prevBtn.style.visibility = currentIndex <= 0 ? 'hidden' : 'visible';
+            if (nextBtn) nextBtn.style.visibility = currentIndex >= imageList.length - 1 ? 'hidden' : 'visible';
+        }
+
+        // 绑定导航按钮事件
+        modal.querySelector('.image-nav-prev')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (currentIndex > 0) showImage(currentIndex - 1);
+        });
+        modal.querySelector('.image-nav-next')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (currentIndex < imageList.length - 1) showImage(currentIndex + 1);
+        });
+
         // 显示动画
         setTimeout(() => modal.style.opacity = '1', 10);
 
-        // ESC 键关闭
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closeModal();
-        }, {once: true});
+        // 键盘快捷键
+        const keyHandler = (e) => {
+            if (!modal.isConnected) {
+                document.removeEventListener('keydown', keyHandler);
+                return;
+            }
+            if (e.key === 'Escape') {
+                closeModal();
+            } else if (e.key === 'ArrowLeft' && currentIndex > 0) {
+                e.preventDefault();
+                showImage(currentIndex - 1);
+            } else if (e.key === 'ArrowRight' && currentIndex < imageList.length - 1) {
+                e.preventDefault();
+                showImage(currentIndex + 1);
+            }
+        };
+        document.addEventListener('keydown', keyHandler);
     }
 
 

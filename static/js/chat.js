@@ -6826,7 +6826,7 @@ class ChatClient {
         const images = [];
         if (!this.messages || !Array.isArray(this.messages)) return images;
         for (const msg of this.messages) {
-            if (msg.file_info?.url && msg.file_info?.mime_type?.startsWith('image/')) {
+            if (!msg.is_deleted && msg.file_info?.url && (msg.message_type === 'image' || msg.file_info?.mime_type?.startsWith('image/'))) {
                 images.push({ url: msg.file_info.url, name: msg.file_info.name || '图片' });
             }
         }
