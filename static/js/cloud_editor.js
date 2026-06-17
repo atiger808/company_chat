@@ -93,6 +93,7 @@ class DocumentEditorApp {
             const cachedUser = localStorage.getItem('current_user');
             if (cachedUser) {
                 this.currentUser = JSON.parse(cachedUser);
+                this.renderCurrentUser(); // 🔧 新增：渲染用户信息
                 return;
             }
 
@@ -103,6 +104,7 @@ class DocumentEditorApp {
             if (response.ok) {
                 this.currentUser = await response.json();
                 localStorage.setItem('current_user', JSON.stringify(this.currentUser));
+                this.renderCurrentUser(); // 🔧 新增：渲染用户信息
             } else {
                 throw new Error('获取用户信息失败');
             }
@@ -115,6 +117,29 @@ class DocumentEditorApp {
                 email: '',
                 avatar: '/static/images/default-avatar.png'
             };
+        }
+    }
+
+    // 🔧 渲染顶部栏当前用户信息
+    renderCurrentUser() {
+        if (!this.currentUser) return;
+
+        const avatarEl = document.getElementById('currentUserAvatar');
+        const nameEl = document.getElementById('currentUserName');
+
+        if (avatarEl) {
+            // 兼容不同接口返回的头像字段名，并设置加载失败的兜底图
+            const avatarUrl = this.currentUser.avatar_url || this.currentUser.avatar || '/static/images/default-avatar.png';
+            avatarEl.src = avatarUrl;
+            // 兜底：如果头像URL无效或加载失败，回退到默认头像
+            avatarEl.onerror = () => { avatarEl.src = '/static/images/default-avatar.png'; };
+        }
+
+        if (nameEl) {
+            // 优先显示真实姓名，其次用户名
+            const displayName = this.currentUser.real_name || this.currentUser.username || '匿名用户';
+            nameEl.textContent = displayName;
+            nameEl.title = displayName; // 鼠标悬停时显示完整名称（防止被截断）
         }
     }
 
@@ -783,9 +808,15 @@ class DocumentEditorApp {
             // 检查是否是所有者（统一类型比较）
             const currentUserIdStr = String(this.currentUser?.id);
             const isOwner = this.collaborators.some(c => String(c.id) === currentUserIdStr && c.is_owner);
-            if (isOwner) {
+            console.log('isOwner:', isOwner);
+            // 如果不是所有者，则检查是否有管理员权限
+            const hasAdminPermission = isOwner || this.collaborators.some(c => String(c.id) === currentUserIdStr && c.permission === 'admin');
+            console.log('hasAdminPermission:', hasAdminPermission);
+            if (hasAdminPermission) {
                 document.getElementById('manageCollabSection').style.display = 'block';
                 this.renderManageCollabList();
+            } else {
+                document.getElementById('manageCollabSection').style.display = 'none';
             }
         } catch (error) { console.error('加载协作者失败:', error); }
     }
@@ -805,7 +836,7 @@ class DocumentEditorApp {
                     <span class="online-indicator ${collab.status === 'editing' ? 'online' : 'offline'}"></span>
                 </div>
                 <div class="collab-info">
-                    <div class="collab-name">${this.escapeHtml(collab.real_name || collab.username)}</div>
+                    <div class="collab-name">${this.currentUser?.id === collab.id ? '我' : this.escapeHtml(collab.real_name || collab.username)}</div>
                     <div class="collab-meta">${collab.status === 'editing' ? '✏️ 编辑中' : '👁️ 查看中'}</div>
                 </div>
             </div>
@@ -826,7 +857,7 @@ class DocumentEditorApp {
                     <span class="online-indicator ${collab.status === 'editing' ? 'online' : 'offline'}"></span>
                 </div>
                 <div class="collab-info">
-                    <div class="collab-name">${this.escapeHtml(collab.real_name || collab.username)}</div>
+                    <div class="collab-name">${this.currentUser?.id === collab.id ? '我' : this.escapeHtml(collab.real_name || collab.username)}</div>
                     <div class="collab-meta">
                         <span class="collab-permission ${collab.permission}">${this.getPermissionText(collab.permission)}</span>
                         ${collab.is_active ? '' : '<span class="badge badge-warning" style="margin-left:5px;">已禁用</span>'}
@@ -865,11 +896,15 @@ class DocumentEditorApp {
         } catch (error) { console.error('更新协同状态失败:', error); }
     }
 
-    toggleCollabSidebar() {
+    toggleCollabSidebar(btn) {
         const sidebar = document.getElementById('collaborationSidebar');
         if (sidebar) {
             sidebar.classList.toggle('collapsed');
             this.isCollabSidebarOpen = !this.isCollabSidebarOpen;
+        }
+
+        if (btn) {
+            this.isCollabSidebarOpen ? btn.className = 'btn btn-primary' : btn.className = 'btn btn-secondary';
         }
     }
 

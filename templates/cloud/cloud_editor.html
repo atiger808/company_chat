@@ -25,7 +25,7 @@
 
     <script src="/static/js/utils.js?v=20260617-802b0cb"></script>
     <script src="/static/js/api.js?v=20260617-802b0cb"></script>
-    <script src="/static/js/cloud_editor.js?v=20260617-802b0cb"></script>
+    <script src="/static/js/cloud_editor.js?v=20260617-802b0ce"></script>
 
 
     <!-- 协同编辑专用样式 -->
@@ -777,6 +777,61 @@
             }
         }
 
+
+        /* ==================== 当前用户信息样式 ==================== */
+        .current-user-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 12px 4px 4px;
+            background: #f5f7fa;
+            border-radius: 20px;
+            cursor: default;
+            transition: background 0.2s;
+            margin-right: 10px; /* 与右侧操作区保持间距 */
+        }
+
+        .current-user-info:hover {
+            background: #e8f4fd;
+        }
+
+        .current-user-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid #fff;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .current-user-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: #333;
+            max-width: 100px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* 🔧 移动端适配：空间有限时隐藏昵称，仅显示头像 */
+        @media (max-width: 768px) {
+            .current-user-name {
+                display: none;
+            }
+
+            .current-user-info {
+                padding: 2px;
+                background: transparent;
+                margin-right: 5px;
+            }
+
+            .current-user-avatar {
+                width: 24px;
+                height: 24px;
+            }
+        }
+
     </style>
 </head>
 <body>
@@ -788,6 +843,12 @@
             <h1 id="docTitle">加载中...</h1>
         </div>
         <div class="editor-actions">
+            <!-- 🔧 新增：当前用户信息标签 -->
+            <div class="current-user-info" id="currentUserInfo" title="当前登录用户">
+                <img id="currentUserAvatar" src="/static/images/default-avatar.png" alt="avatar"
+                     class="current-user-avatar">
+                <span id="currentUserName" class="current-user-name">加载中...</span>
+            </div>
             <!-- 协同编辑者 -->
             <div class="collaborators" id="collaboratorsList"></div>
             <!-- 保存状态 -->
@@ -799,12 +860,13 @@
             <button class="btn btn-secondary" onclick="editorApp.showVersions()">
                 <i class="fas fa-history"></i> 版本历史
             </button>
-            <button class="btn btn-secondary" onclick="editorApp.toggleCollabSidebar()">
+            <button class="btn btn-primary" id="collaborationBtn" onclick="editorApp.toggleCollabSidebar(this)">
                 <i class="fas fa-users"></i> 协作者
             </button>
-            <button class="btn btn-primary" onclick="editorApp.closeEditor()">
+            <button class="btn btn-danger" onclick="editorApp.closeEditor()">
                 <i class="fas fa-times"></i> 关闭
             </button>
+
         </div>
     </header>
 
@@ -869,6 +931,10 @@
         <div class="collab-section" id="manageCollabSection" style="display: none;">
             <div class="section-title">
                 <span>协作者管理</span>
+                <!-- 刷新 -->
+                <button class="btn btn-sm btn-secondary" onclick="editorApp.loadCollaborators()">
+                    <i class="fas fa-sync"></i> 刷新
+                </button>
                 <button class="btn btn-sm btn-primary" id="addCollabBtn" onclick="editorApp.showAddCollaboratorModal()">
                     <i class="fas fa-plus"></i> 添加
                 </button>
