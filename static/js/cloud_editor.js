@@ -902,7 +902,7 @@ class DocumentEditorApp {
             sidebar.classList.toggle('collapsed');
             this.isCollabSidebarOpen = !this.isCollabSidebarOpen;
         }
-
+        btn = btn || document.getElementById('collaborationBtn');
         if (btn) {
             this.isCollabSidebarOpen ? btn.className = 'btn btn-primary' : btn.className = 'btn btn-secondary';
         }

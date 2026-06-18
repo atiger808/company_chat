@@ -184,6 +184,9 @@ class MessageSerializer(serializers.ModelSerializer):
     file_info = serializers.SerializerMethodField() # 自动从 FileUpload 获取
     is_read = serializers.SerializerMethodField()
 
+    # 🔧 新增：云盘文件 ID（如果该消息文件已存在于当前用户的云盘中，且为文档类型）
+    cloud_file_id = serializers.SerializerMethodField()
+
     file_id = serializers.IntegerField(write_only=True, required=False)  # ✅ 明确接收 file_id
 
     # 🔧 新增：引用消息字段
@@ -221,6 +224,7 @@ class MessageSerializer(serializers.ModelSerializer):
             # 🔧 添加语音时长字段
             'voice_duration', 'mentioned_users', 'mentioned_all',  # 🔧 加入列表
             'call_duration', 'call_type', 'call_status',
+            'cloud_file_id',  # 🔧 新增字段
         ]
         read_only_fields = ['id', 'timestamp', 'is_read', 'is_deleted', 'deleted_at', 'sender', 'sender_id', 'sender_name', 'voice_duration', 'mentioned_users', 'mentioned_all']
 
@@ -290,6 +294,50 @@ class MessageSerializer(serializers.ModelSerializer):
             except Exception as e:
                 logger.error(f"Error getting quote file info: {e}")
                 return None
+        return None
+
+    def get_cloud_file_id(self, obj):
+        """
+        🔧 检查当前消息的文件是否已存在于当前用户的云盘中。
+        如果存在且为可在线编辑的文档类型，返回云盘文件 ID，否则返回 None。
+        """
+        # 1. 必须有物理文件且计算过 MD5
+        if not obj.file or not obj.file.md5:
+            return None
+
+        user = self.context.get('request').user
+        if not user or not user.is_authenticated:
+            return None
+
+        file_md5 = obj.file.md5
+
+        # 2. 优先从 context 中获取批量预取的字典（解决 N+1 查询问题，性能极佳）
+        cloud_file_map = self.context.get('cloud_file_map', {})
+        if cloud_file_map:
+            cloud_file_id = cloud_file_map.get(file_md5)
+        else:
+            # 3. 降级方案：单条查询（仅在未传入 cloud_file_map 时触发）
+            from cloud.models import CloudFile
+            cloud_file = CloudFile.objects.filter(
+                owner=user,
+                md5=file_md5,
+                deleted_at__isnull=True
+            ).first()
+            cloud_file_id = cloud_file.id if cloud_file else None
+
+        if not cloud_file_id:
+            return None
+
+        # 4. 判断是否为 OnlyOffice 支持的文档类型（只有文档才需要“在线编辑”按钮）
+        file_name = obj.file.filename or ''
+        ext = file_name.split('.')[-1].lower() if '.' in file_name else ''
+
+        # OnlyOffice 支持在线编辑的格式
+        doc_extensions = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'pdf', 'txt', 'csv']
+
+        if ext in doc_extensions:
+            return str(cloud_file_id)
+
         return None
 
     def create(self, validated_data):

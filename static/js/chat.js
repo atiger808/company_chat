@@ -778,6 +778,8 @@ class ChatClient {
             // 加载部门列表
             await this.loadDepartments();
 
+            this.initTheme();
+
             // 设置事件监听
             this.setupEventListeners();
             this.setupSidebar();
@@ -2611,7 +2613,7 @@ class ChatClient {
         // 🔧 关键修复 3: 通过 WebSocket 发送（传递临时 ID 和正确的 roomId）
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify(this.encryptPacket({
-                type:"chat_message",
+                type: "chat_message",
                 ...messageData
             })));
         } else {
@@ -3066,7 +3068,6 @@ class ChatClient {
     }
 
 
-
     // 通过消息ID跳转到目标消息位置（支持平滑滚动和高亮闪烁）
     async jumpToMessage(messageId) {
         try {
@@ -3128,7 +3129,6 @@ class ChatClient {
             requestAnimationFrame(tryScroll);
 
 
-
         } catch (error) {
             console.error('跳转消息失败:', error);
             this.showError('跳转消息失败');
@@ -3136,7 +3136,6 @@ class ChatClient {
             this.hideLoading();
         }
     }
-
 
 
     // 高亮闪烁消息元素
@@ -3715,7 +3714,7 @@ class ChatClient {
         messageWrapper.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             e.stopPropagation();
-            this.handleContextMenu (e, message)
+            this.handleContextMenu(e, message)
         });
 
         const headerElementContainer = document.createElement('div');
@@ -4571,6 +4570,21 @@ class ChatClient {
                     img.className = 'message-image';
                     img.onclick = () => this.previewImage(message.file_info.url);
                     container.appendChild(img);
+
+                    // 🔧 新增：添加文件操作按钮
+                    const actionsDiv = document.createElement('div');
+                    actionsDiv.className = 'message-file-actions';
+                    actionsDiv.innerHTML = `
+                        <button class="msg-action-btn" onclick="chatClient.saveToCloud('${message.id}')" title="保存到云盘">
+                            <i class="fas fa-cloud-upload-alt"></i> 
+                        </button>
+                        ${message.cloud_file_id && this.isDocumentType(message.file_info?.mime_type) ? `
+                            <button class="msg-action-btn" onclick="chatClient.editCloudDoc('${message.cloud_file_id}')" title="在线编辑">
+                                <i class="fas fa-edit"></i> 
+                            </button>
+                        ` : ''}
+                    `;
+                    container.appendChild(actionsDiv);
                 } else {
                     container.textContent = '[图片加载失败]';
                 }
@@ -4580,6 +4594,7 @@ class ChatClient {
                 if (message.file_info?.url) {
                     const fileLink = document.createElement('div');
                     fileLink.className = 'message-file';
+                    fileLink.title = message.file_info?.name || '文件'
                     const iconClass = Utils.getFileIconClass(message.file_info.mime_type, message.file_info.name);
                     fileLink.innerHTML = `
                     <i class="${iconClass}"></i>
@@ -4589,6 +4604,21 @@ class ChatClient {
                 `;
                     fileLink.onclick = () => window.open(message.file_info.url, '_blank');
                     container.appendChild(fileLink);
+
+                    // 🔧 新增：添加文件操作按钮
+                    const actionsDiv = document.createElement('div');
+                    actionsDiv.className = 'message-file-actions';
+                    actionsDiv.innerHTML = `
+                        <button class="msg-action-btn" onclick="chatClient.saveToCloud('${message.id}')" title="保存到云盘">
+                            <i class="fas fa-cloud-upload-alt"></i>
+                        </button>
+                        ${message.cloud_file_id && this.isDocumentType(message.file_info?.mime_type) ? `
+                            <button class="msg-action-btn" onclick="chatClient.editCloudDoc('${message.cloud_file_id}')" title="在线编辑">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                        ` : ''}
+                    `;
+                    container.appendChild(actionsDiv);
                 } else {
                     container.textContent = '[文件信息缺失]';
                 }
@@ -4613,6 +4643,21 @@ class ChatClient {
                     videoContainer.appendChild(video);
                     videoContainer.appendChild(playBtn);
                     container.appendChild(videoContainer);
+
+                    // 🔧 新增：添加文件操作按钮
+                    const actionsDiv = document.createElement('div');
+                    actionsDiv.className = 'message-file-actions';
+                    actionsDiv.innerHTML = `
+                        <button class="msg-action-btn" onclick="chatClient.saveToCloud('${message.id}')" title="保存到云盘">
+                            <i class="fas fa-cloud-upload-alt"></i>
+                        </button>
+                        ${message.cloud_file_id && this.isDocumentType(message.file_info?.mime_type) ? `
+                            <button class="msg-action-btn" onclick="chatClient.editCloudDoc('${message.cloud_file_id}')" title="在线编辑">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                        ` : ''}
+                    `;
+                    container.appendChild(actionsDiv);
                 } else {
                     container.textContent = '[视频加载失败]';
                 }
@@ -4629,6 +4674,21 @@ class ChatClient {
                     audio.controls = true;
                     audio.className = 'message-audio';
                     container.appendChild(audio);
+
+                    // 🔧 新增：添加文件操作按钮
+                    const actionsDiv = document.createElement('div');
+                    actionsDiv.className = 'message-file-actions';
+                    actionsDiv.innerHTML = `
+                        <button class="msg-action-btn" onclick="chatClient.saveToCloud('${message.id}')" title="保存到云盘">
+                            <i class="fas fa-cloud-upload-alt"></i>
+                        </button>
+                        ${message.cloud_file_id && this.isDocumentType(message.file_info?.mime_type) ? `
+                            <button class="msg-action-btn" onclick="chatClient.editCloudDoc('${message.cloud_file_id}')" title="在线编辑">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                        ` : ''}
+                    `;
+                    container.appendChild(actionsDiv);
                 } else {
                     container.textContent = '[语音加载失败]';
                 }
@@ -4670,9 +4730,9 @@ class ChatClient {
 
             // 🔧 获取发送者名称（兼容多种字段）
             const senderName = message.quote_sender ||
-                              message.quote_info?.sender ||
-                              message.quote_sender_name ||
-                              '引用';
+                message.quote_info?.sender ||
+                message.quote_sender_name ||
+                '引用';
 
             // 引用头部
             const quoteHeader = document.createElement('div');
@@ -4688,7 +4748,7 @@ class ChatClient {
             quoteContent.innerHTML = this.renderQuotedContent(
                 message.quote_message_type || 'text',
                 message.quote_message_type === 'file' ? message.quote_file_info?.name || message.quote_content || '' : message.quote_content || message.quote_info?.content || '',
-                 message.quote_file_info || message.quote_info || null,
+                message.quote_file_info || message.quote_info || null,
                 message.quote_message_id || message.quote_info?.id || null
             );
 
@@ -5268,7 +5328,6 @@ class ChatClient {
             overlay.classList.toggle('show');
         }
     }
-
 
 
     // 显示侧边栏
@@ -5945,9 +6004,8 @@ class ChatClient {
     }
 
 
-
     // ==================== 侧边栏管理 ====================
-    setupSidebar(){
+    setupSidebar() {
 
         // 修复：添加返回按钮事件监听
         const backBtn = document.getElementById('backBtn');
@@ -6827,7 +6885,7 @@ class ChatClient {
         if (!this.messages || !Array.isArray(this.messages)) return images;
         for (const msg of this.messages) {
             if (!msg.is_deleted && msg.file_info?.url && (msg.message_type === 'image' || msg.file_info?.mime_type?.startsWith('image/'))) {
-                images.push({ url: msg.file_info.url, name: msg.file_info.name || '图片' });
+                images.push({url: msg.file_info.url, name: msg.file_info.name || '图片'});
             }
         }
         return images;
@@ -9091,25 +9149,44 @@ class ChatClient {
     }
 
 
-
     // ==================== 右键菜单 ====================
     /**
      * 🔧 右键菜单设置
      */
     setupContextMenu() {
 
+        console.log('contextTarget: ', this.contextTarget)
+
         // 在非回收站视图中，右键菜单显示下载和分享选项
         const menu = document.getElementById('contextMenu');
         if (menu) {
-            menu.innerHTML = `
+            // 基础菜单项
+            let menuHtml = `
                 <div class="menu-item" onclick="chatClient.quoteSelectedItem()"><i class="fas fa-quote-left"></i> 引用</div>
                 <div class="menu-divider"></div>
                 <div class="menu-item" onclick="chatClient.forwardSelectedItem()"><i class="fas fa-share"></i> 转发</div>
-                
-                
-<!--                <div class="menu-divider"></div>-->
-<!--                <div class="menu-item danger" onclick="chatClient.deleteSelectedItem()"><i class="fas fa-trash"></i> 删除</div>-->
-            `
+               
+            `;
+            // 🔧 新增：如果是文件/图片/视频/音频，添加保存到云盘
+            if (this.contextTarget && this.contextTarget.file_info && this.contextTarget.file_info.id) {
+                menuHtml += `
+                    <div class="menu-divider"></div>
+                    <div class="menu-item" onclick="chatClient.saveToCloud('${this.contextTarget.id}')">
+                        <i class="fas fa-cloud-upload-alt"></i> 保存到云盘
+                    </div>
+                `;
+                // 如果已在云盘且是文档，添加在线编辑
+                if (this.contextTarget.cloud_file_id && this.isDocumentType(this.contextTarget.file_info.mime_type)) {
+                    menuHtml += `
+                        <div class="menu-item" onclick="chatClient.editCloudDoc('${this.contextTarget.cloud_file_id}')">
+                            <i class="fas fa-edit"></i> 在线编辑
+                        </div>
+                    `;
+                }
+            }
+
+            menu.innerHTML = menuHtml;
+
         }
 
         document.addEventListener('click', (e) => {
@@ -9133,6 +9210,32 @@ class ChatClient {
         const menu = document.getElementById('contextMenu');
 
         if (menu) {
+            let menuHtml = `
+            <div class="menu-item" onclick="chatClient.quoteSelectedItem()"><i class="fas fa-quote-left"></i> 引用</div>
+            <div class="menu-item" onclick="chatClient.forwardSelectedItem()"><i class="fas fa-share"></i> 转发</div>
+        `;
+
+            // 🔧 新增：如果消息是文件且在云盘中，添加“在线编辑”和“保存到云盘”
+            if (message.file_info && (message.message_type === 'file' || message.message_type === 'image' || message.message_type === 'video' || message.message_type === 'audio')) {
+                if (message.cloud_file_id) {
+                    menuHtml += `
+                    <div class="menu-divider"></div>
+                    <div class="menu-item" onclick="chatClient.editCloudDoc('${message.cloud_file_id}')">
+                        <i class="fas fa-edit"></i> 在线编辑
+                    </div>
+                `;
+                } else {
+                    menuHtml += `
+                    <div class="menu-divider"></div>
+                    <div class="menu-item" onclick="chatClient.saveToCloud('${message.id}')">
+                        <i class="fas fa-cloud-upload-alt"></i> 保存到云盘
+                    </div>
+                `;
+                }
+            }
+
+            menu.innerHTML = menuHtml;
+
             // 菜单位置
             let x = e.pageX;
             let y = e.pageY;
@@ -9155,7 +9258,7 @@ class ChatClient {
     }
 
 
-    forwardSelectedItem(){
+    forwardSelectedItem() {
         if (this.contextTarget) {
             const message = this.contextTarget;
             this.showForwardModal(message);
@@ -9163,7 +9266,7 @@ class ChatClient {
         this.hideContextMenu();
     }
 
-    quoteSelectedItem(){
+    quoteSelectedItem() {
         if (this.contextTarget) {
             const message = this.contextTarget;
             this.setQuoteMessage(message);
@@ -13145,17 +13248,109 @@ class ChatClient {
     // 语音&视频通话功能结束
 
 
+    // 🔧 判断是否为文档类型
+    isDocumentType(mimeType) {
+        if (!mimeType) return false;
+        const docTypes = [
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-powerpoint',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'application/pdf'
+        ];
+        return docTypes.includes(mimeType);
+    }
+
+    // 🔧 保存消息文件到云盘
+    async saveToCloud(messageId) {
+        const message = this.messages.find(m => m.id == messageId || m.message_id == messageId);
+        if (!message || !message.file_info?.id) {
+            this.showError('无法保存，文件信息缺失');
+            return;
+        }
+
+        try {
+            const response = await fetch('/api/cloud/files/save_from_chat/', {
+                method: 'POST',
+                headers: {...TokenManager.getHeaders(), 'Content-Type': 'application/json'},
+                body: JSON.stringify({file_upload_id: message.file_info.id})
+            });
+            const data = await response.json();
+            if (response.ok) {
+                message.cloud_file_id = data.cloud_file_id; // 缓存云盘文件ID
+                this.showSuccess(data.message || '保存成功');
+                // 重新渲染该消息以显示“在线编辑”按钮
+                this.rerenderMessage(message);
+            } else {
+                this.showError('保存失败', data.error || data.message || data.detail);
+            }
+        } catch (error) {
+            this.showError('保存失败', error.message || data.error | data.detail);
+        }
+        this.hideContextMenu();
+    }
+
+    // 🔧 重新渲染单条消息
+    rerenderMessage(message) {
+        const msgEl = document.querySelector(`.message-wrapper[data-message-id="${message.id}"]`);
+        if (msgEl) {
+            const type = message.sender_id === this.currentUser?.id ? 'sent' : 'received';
+            // 清空原内容并重新渲染
+            const contentContainer = msgEl.querySelector('.message-text') || msgEl.querySelector('.message-content');
+            if (contentContainer) {
+                contentContainer.innerHTML = '';
+                this.renderMessageContent(message, contentContainer);
+            }
+        }
+    }
+
+    // 🔧 打开云盘文档在线编辑
+    editCloudDoc(cloudFileId) {
+        if (!cloudFileId) {
+            this.showError('未找到云盘文件ID');
+            return;
+        }
+        window.open(`/cloud/editor/?id=${cloudFileId}`, '_blank');
+        this.hideContextMenu();
+    }
+
+    // ==================== 主题切换功能 ====================
+    initTheme() {
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        this.updateThemeIcon(savedTheme);
+    }
+
+    toggleTheme() {
+        const current = document.documentElement.getAttribute('data-theme');
+        const newTheme = current === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', newTheme);
+        localStorage.setItem('theme', newTheme);
+        this.updateThemeIcon(newTheme);
+    }
+
+    updateThemeIcon(theme) {
+        const btn = document.getElementById('themeToggleBtn');
+        if (btn) {
+            const icon = btn.querySelector('i');
+            if (icon) {
+                icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+            }
+        }
+        console.log(`🌗 主题已切换为: ${theme}`);
+    }
+
     // 🔧 ChatClient 全局加密封装
-    encryptPacket(data){
+    encryptPacket(data) {
         return EncryptUtils.encryptPacket(data);
     }
 
     // 在 ChatClient 类中添加 decryptPacket 方法
-    decryptPacket(packet){
+    decryptPacket(packet) {
         return EncryptUtils.decryptPacket(packet)
     }
-
-
 
 
     // 🔧 新增：解密消息结果的方法
@@ -13188,7 +13383,6 @@ class ChatClient {
             return rawData; // 解密失败时返回原始数据
         }
     }
-
 
 
     // 监听输入框的@输入

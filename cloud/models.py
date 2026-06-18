@@ -539,6 +539,7 @@ class FileOperationLog(models.Model):
 
         ('sync_to_cloud', '同步到云'),
         ('save_from_share', '从分享保存'),
+        ('save_from_chat', '从聊天保存'),
         ('share_access', '分享访问'),
 
         ('edit_save', '编辑保存'),

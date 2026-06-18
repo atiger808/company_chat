@@ -3440,3 +3440,506 @@ body {
         min-width: 120px;
     }
 }
+
+
+
+/* ==================== 企业网盘暗黑模式完整适配 ==================== */
+
+/* 1. 定义暗色主题变量 */
+[data-theme="dark"] {
+    --cloud-bg-primary: #121212;
+    --cloud-bg-secondary: #1e1e1e;
+    --cloud-bg-tertiary: #2a2a2a;
+    --cloud-bg-hover: #333333;
+    --cloud-bg-active: #2d3748;
+
+    --cloud-text-primary: #e0e0e0;
+    --cloud-text-secondary: #a0a0a0;
+    --cloud-text-light: #777777;
+
+    --cloud-border-color: #333333;
+    --cloud-border-light: #444444;
+
+    --cloud-shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.4);
+    --cloud-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+
+    /* 🔧 修正选中态与高亮背景，避免刺眼 */
+    --cloud-selected-bg: #1c2d41;
+    --cloud-selected-border: #3a7bd5;
+}
+
+/* 2. 全局背景与文字覆盖 */
+[data-theme="dark"] body {
+    background-color: var(--cloud-bg-primary) !important;
+    color: var(--cloud-text-primary) !important;
+}
+
+/* 3. 核心布局组件暗色化 */
+[data-theme="dark"] .cloud-layout,
+[data-theme="dark"] .main-content,
+[data-theme="dark"] .content-area {
+    background-color: var(--cloud-bg-primary) !important;
+}
+
+[data-theme="dark"] .sidebar,
+[data-theme="dark"] .nav-container {
+    background-color: var(--cloud-bg-secondary) !important;
+    border-right-color: var(--cloud-border-color) !important;
+}
+
+[data-theme="dark"] .top-bar,
+[data-theme="dark"] .toolbar,
+[data-theme="dark"] .file-list-header,
+[data-theme="dark"] .breadcrumb-container {
+    background-color: var(--cloud-bg-secondary) !important;
+    border-bottom-color: var(--cloud-border-color) !important;
+    color: var(--cloud-text-primary) !important;
+}
+
+/* 4. 🔧 重点修复：标签、徽章、提示框背景偏亮问题 */
+[data-theme="dark"] .tag,
+[data-theme="dark"] .badge,
+[data-theme="dark"] .share-type-badge,
+[data-theme="dark"] .status-badge,
+[data-theme="dark"] .file-info,
+[data-theme="dark"] .upload-info,
+[data-theme="dark"] .move-target-info {
+    background-color: var(--cloud-bg-tertiary) !important;
+    border-color: var(--cloud-border-light) !important;
+    color: var(--cloud-text-secondary) !important;
+}
+
+[data-theme="dark"] .badge-primary,
+[data-theme="dark"] .tag-primary {
+    background-color: rgba(64, 158, 255, 0.2) !important;
+    color: #66b1ff !important;
+    border-color: rgba(64, 158, 255, 0.4) !important;
+}
+
+/* 5. 文件列表与网格项 */
+[data-theme="dark"] .file-item,
+[data-theme="dark"] .file-grid-item {
+    background-color: transparent !important;
+    border-bottom-color: var(--cloud-border-color) !important;
+    color: var(--cloud-text-primary) !important;
+}
+[data-theme="dark"] .file-item:hover,
+[data-theme="dark"] .file-grid-item:hover {
+    background-color: var(--cloud-bg-hover) !important;
+}
+
+/* 🔧 修复原有 !important 选中态刺眼问题 */
+[data-theme="dark"] .file-item.selected,
+[data-theme="dark"] .file-grid-item.selected {
+    background: var(--cloud-selected-bg) !important;
+    border-color: var(--cloud-selected-border) !important;
+    color: #e6f0ff !important;
+}
+
+/* 6. 按钮与交互控件 */
+[data-theme="dark"] .btn-secondary,
+[data-theme="dark"] .btn-icon {
+    background-color: var(--cloud-bg-tertiary) !important;
+    border-color: var(--cloud-border-light) !important;
+    color: var(--cloud-text-primary) !important;
+}
+[data-theme="dark"] .btn-secondary:hover,
+[data-theme="dark"] .btn-icon:hover {
+    background-color: var(--cloud-bg-hover) !important;
+    color: #fff !important;
+}
+
+/* 7. 模态框与下拉菜单 */
+[data-theme="dark"] .modal-content,
+[data-theme="dark"] .dropdown-menu,
+[data-theme="dark"] .context-menu {
+    background-color: var(--cloud-bg-secondary) !important;
+    border-color: var(--cloud-border-color) !important;
+    box-shadow: var(--cloud-shadow-md) !important;
+}
+[data-theme="dark"] .modal-header,
+[data-theme="dark"] .modal-footer {
+    background-color: var(--cloud-bg-tertiary) !important;
+    border-color: var(--cloud-border-color) !important;
+}
+[data-theme="dark"] .menu-item:hover {
+    background-color: var(--cloud-bg-hover) !important;
+}
+
+/* 8. 表单与输入框 */
+[data-theme="dark"] input,
+[data-theme="dark"] textarea,
+[data-theme="dark"] select,
+[data-theme="dark"] .form-input,
+[data-theme="dark"] .form-select {
+    background-color: var(--cloud-bg-tertiary) !important;
+    border-color: var(--cloud-border-light) !important;
+    color: var(--cloud-text-primary) !important;
+}
+[data-theme="dark"] ::placeholder { color: var(--cloud-text-light) !important; }
+
+/* 9. 导航项与侧边栏 */
+[data-theme="dark"] .nav-item,
+[data-theme="dark"] .sidebar-link {
+    color: var(--cloud-text-secondary) !important;
+}
+[data-theme="dark"] .nav-item:hover,
+[data-theme="dark"] .nav-item.active {
+    background-color: var(--cloud-bg-hover) !important;
+    color: #409EFF !important;
+}
+
+/* 10. 滚动条暗色化 */
+[data-theme="dark"] ::-webkit-scrollbar { width: 8px; height: 8px; }
+[data-theme="dark"] ::-webkit-scrollbar-track { background: var(--cloud-bg-primary); }
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+    background: #444;
+    border-radius: 4px;
+}
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: #555; }
+
+
+
+
+
+/* cloud.css - 找到原有的 ==================== 暗黑模式 (Dark Mode) ==================== 部分，替换为以下完整版本 */
+
+/* ==================== 暗黑模式 (Dark Mode) ==================== */
+[data-theme="dark"] {
+    --bg-primary: #1e1e1e;
+    --bg-secondary: #2d2d2d;
+    --bg-color: #121212; /* 🔧 关键修复：补充 body 背景色变量 */
+    --text-primary: #e0e0e0;
+    --text-secondary: #a0a0a0;
+    --text-light: #888888;
+    --border-color: #333333;
+    --border-secondary-color: #444444;
+    --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* 全局背景与文字 */
+[data-theme="dark"] body {
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+}
+
+[data-theme="dark"] .cloud-layout,
+[data-theme="dark"] .admin-container {
+    background-color: var(--bg-primary);
+}
+
+/* 侧边栏与顶部栏 */
+[data-theme="dark"] .sidebar,
+[data-theme="dark"] .admin-sidebar {
+    background-color: #1e1e1e;
+    border-right-color: #333;
+}
+
+[data-theme="dark"] .sidebar-header,
+[data-theme="dark"] .top-bar,
+[data-theme="dark"] .admin-header {
+    background-color: #1e1e1e;
+    border-bottom-color: #333;
+    color: var(--text-primary);
+}
+
+/* 导航菜单 */
+[data-theme="dark"] .nav-item {
+    color: var(--text-secondary);
+}
+[data-theme="dark"] .nav-item:hover,
+[data-theme="dark"] .nav-item.active {
+    background-color: #2d2d2d;
+    color: var(--primary-color);
+}
+
+/* 存储状态与进度条 */
+[data-theme="dark"] .storage-status {
+    border-top-color: #333;
+}
+[data-theme="dark"] .progress-bar {
+    background-color: #333;
+}
+
+/* 侧边栏底部按钮 */
+[data-theme="dark"] .btn-back-chat {
+    background-color: #2d2d2d;
+    color: var(--text-secondary);
+}
+[data-theme="dark"] .btn-back-chat:hover {
+    background-color: #333;
+    color: var(--primary-color);
+}
+[data-theme="dark"] .btn-logout {
+    background-color: rgba(245, 108, 108, 0.1);
+    color: #f56c6c;
+}
+
+/* 文件列表与卡片容器 */
+[data-theme="dark"] .file-list-container,
+[data-theme="dark"] .share-list-container,
+[data-theme="dark"] .view-header,
+[data-theme="dark"] .stat-card,
+[data-theme="dark"] .recent-files-section,
+[data-theme="dark"] .pagination-container {
+    background-color: #1e1e1e;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="dark"] .file-list-header {
+    background-color: #252525;
+    border-bottom-color: #333;
+    color: var(--text-secondary);
+}
+
+[data-theme="dark"] .file-item,
+[data-theme="dark"] .share-item,
+[data-theme="dark"] .simple-file-item {
+    border-bottom-color: #333;
+    color: var(--text-primary);
+}
+
+[data-theme="dark"] .file-item:hover,
+[data-theme="dark"] .share-item:hover {
+    background-color: #2d2d2d;
+}
+
+[data-theme="dark"] .file-item.is-folder {
+    background-color: rgba(230, 162, 60, 0.05);
+}
+
+/* 网格视图 */
+[data-theme="dark"] .file-grid-item {
+    background-color: #1e1e1e;
+    border-color: #333;
+    color: var(--text-primary);
+}
+[data-theme="dark"] .file-grid-item:hover {
+    border-color: var(--primary-color);
+    background-color: #252525;
+}
+[data-theme="dark"] .file-grid-item.is-folder {
+    background-color: rgba(230, 162, 60, 0.1);
+    border-color: rgba(230, 162, 60, 0.3);
+}
+
+/* 模态框 */
+[data-theme="dark"] .modal-content {
+    background-color: #1e1e1e;
+    color: var(--text-primary);
+}
+[data-theme="dark"] .modal-header,
+[data-theme="dark"] .modal-footer {
+    background-color: #252525;
+    border-color: #333;
+}
+[data-theme="dark"] .modal-header h3 {
+    color: var(--text-primary);
+}
+
+/* 表单元素 */
+[data-theme="dark"] .form-group label {
+    color: var(--text-secondary);
+}
+[data-theme="dark"] .form-group input,
+[data-theme="dark"] .form-group select,
+[data-theme="dark"] .search-box input {
+    background-color: #2d2d2d;
+    border-color: #444;
+    color: var(--text-primary);
+}
+[data-theme="dark"] .form-group input:focus,
+[data-theme="dark"] .form-group select:focus,
+[data-theme="dark"] .search-box input:focus {
+    border-color: var(--primary-color);
+}
+
+/* 按钮 */
+[data-theme="dark"] .btn-secondary {
+    background-color: #2d2d2d;
+    border-color: #444;
+    color: var(--text-secondary);
+}
+[data-theme="dark"] .btn-secondary:hover {
+    background-color: #333;
+    color: var(--text-primary);
+}
+
+/* 分享链接区域 */
+[data-theme="dark"] .share-link {
+    background-color: #2d2d2d;
+}
+[data-theme="dark"] .share-link-input input {
+    background-color: #1e1e1e;
+    border-color: #444;
+    color: var(--text-primary);
+}
+
+/* 文件夹树 */
+[data-theme="dark"] .folder-tree-item {
+    color: var(--text-primary);
+}
+[data-theme="dark"] .folder-tree-item:hover {
+    background-color: #2d2d2d;
+}
+[data-theme="dark"] .folder-tree-item.selected {
+    background-color: rgba(64, 158, 255, 0.1);
+    border-color: var(--primary-color);
+}
+
+/* 上传区域 */
+[data-theme="dark"] .upload-area {
+    border-color: #444;
+    background-color: #252525;
+}
+[data-theme="dark"] .upload-area:hover,
+[data-theme="dark"] .upload-area.dragover {
+    border-color: var(--primary-color);
+    background-color: rgba(64, 158, 255, 0.05);
+}
+
+/* 批量操作栏 */
+[data-theme="dark"] .batch-operation-bar {
+    background-color: rgba(64, 158, 255, 0.1);
+    border-color: rgba(64, 158, 255, 0.2);
+}
+
+/* 右键菜单 */
+[data-theme="dark"] .context-menu {
+    background-color: #252525;
+    border-color: #444;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+[data-theme="dark"] .menu-item {
+    color: var(--text-primary);
+}
+[data-theme="dark"] .menu-item:hover {
+    background-color: #333;
+    color: var(--primary-color);
+}
+[data-theme="dark"] .menu-divider {
+    background-color: #444;
+}
+
+/* Toast 提示 */
+[data-theme="dark"] .toast {
+    background-color: #2d2d2d;
+    color: var(--text-primary);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+/* 确认对话框 */
+[data-theme="dark"] .confirm-dialog-content {
+    background-color: #1e1e1e;
+}
+[data-theme="dark"] .confirm-dialog-header,
+[data-theme="dark"] .confirm-dialog-footer {
+    background-color: #252525;
+    border-color: #333;
+}
+[data-theme="dark"] .confirm-dialog-header h3,
+[data-theme="dark"] .confirm-dialog-body p {
+    color: var(--text-primary);
+}
+[data-theme="dark"] .confirm-dialog-btn.cancel {
+    background-color: #333;
+    color: var(--text-secondary);
+}
+
+/* 加载动画 */
+[data-theme="dark"] .loading-overlay {
+    background-color: rgba(0, 0, 0, 0.7);
+}
+[data-theme="dark"] .loading-spinner {
+    border-color: #444;
+    border-top-color: var(--primary-color);
+}
+
+/* 分页控件 */
+[data-theme="dark"] .pagination-btn {
+    background-color: #2d2d2d;
+    border-color: #444;
+    color: var(--text-secondary);
+}
+[data-theme="dark"] .pagination-btn:hover:not(:disabled) {
+    background-color: var(--primary-color);
+    color: #fff;
+}
+
+/* 协作文档 */
+[data-theme="dark"] .file-item.is-collab {
+    background: linear-gradient(to right, rgba(64, 158, 255, 0.05), transparent);
+    border-left-color: var(--primary-color);
+}
+[data-theme="dark"] .file-item.is-collab:hover {
+    background: rgba(64, 158, 255, 0.1);
+}
+[data-theme="dark"] .collab-card-footer {
+    border-top-color: #333;
+    color: var(--text-secondary);
+}
+
+/* 文件选择模态框 */
+[data-theme="dark"] .file-select-breadcrumb {
+    background-color: #252525;
+    border-bottom-color: #333;
+}
+[data-theme="dark"] .file-select-item {
+    background-color: #252525;
+    border-color: #444;
+    color: var(--text-primary);
+}
+[data-theme="dark"] .file-select-item:hover {
+    background-color: #333;
+    border-color: var(--primary-color);
+}
+[data-theme="dark"] .file-select-item.selected {
+    background-color: rgba(64, 158, 255, 0.1);
+    border-color: var(--primary-color);
+}
+
+/* 协作者标签 */
+[data-theme="dark"] .collab-tag {
+    background-color: rgba(64, 158, 255, 0.1);
+    border-color: rgba(64, 158, 255, 0.3);
+    color: var(--primary-color);
+}
+[data-theme="dark"] .collab-permission {
+    background-color: #2d2d2d;
+    border-color: #444;
+    color: var(--text-primary);
+}
+
+/* 上传进度对话框 */
+[data-theme="dark"] .upload-progress-content {
+    background-color: #1e1e1e;
+}
+[data-theme="dark"] .upload-progress-header {
+    border-bottom-color: #333;
+}
+[data-theme="dark"] .upload-progress-header h4 {
+    color: var(--text-primary);
+}
+[data-theme="dark"] .file-info {
+    background-color: #252525;
+}
+[data-theme="dark"] .progress-status {
+    background-color: rgba(103, 194, 58, 0.1);
+    color: #67C23A;
+}
+
+/* 回收站 */
+[data-theme="dark"] .trash-view .file-item {
+    background-color: #1a1a1a;
+}
+[data-theme="dark"] .trash-view .file-item:hover {
+    background-color: #252525;
+}
+
+/* 共享文件夹标识 */
+[data-theme="dark"] .file-item.is-shared-folder,
+[data-theme="dark"] .file-grid-item.is-shared-folder {
+    border-color: rgba(102, 126, 234, 0.5);
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
+}

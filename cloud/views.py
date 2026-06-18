@@ -3028,6 +3028,112 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
             'total_processed': total_processed
         })
 
+
+
+    @action(detail=False, methods=['post'])
+    def save_from_chat(self, request):
+        """从聊天消息保存文件到云盘"""
+        file_upload_id = request.data.get('file_upload_id')
+        if not file_upload_id:
+            return Response({'error': '缺少 file_upload_id'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from chat.models import FileUpload
+            file_upload = FileUpload.objects.get(id=file_upload_id)
+        except FileUpload.DoesNotExist:
+            return Response({'error': '聊天文件不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+        user = request.user
+
+        # 检查是否已存在于当前用户的云盘中（通过 MD5 判断）
+        existing_file = CloudFile.objects.filter(
+            owner=request.user,
+            md5=file_upload.md5,
+            deleted_at__isnull=True
+        ).first()
+
+        if existing_file:
+            return Response({
+                'message': '文件已在您的云盘中',
+                'cloud_file_id': str(existing_file.id),
+                'exists': True
+            }, status=status.HTTP_200_OK)
+
+        # 🔧 优化1：使用 get_or_create 返回的元组解包，确保获取的是对象实例而不是 (obj, created) 元组
+        safe_folder_name = '文档（来自聊天室）'
+        root_folder, _ = Folder.objects.get_or_create(
+            owner=user,
+            name=safe_folder_name,
+            defaults={
+                'parent': None,
+                'description': '从聊天室同步',
+                'is_public': False
+            }
+        )
+
+        lookup_kwargs = {
+            'owner': user,
+            'folder': root_folder,
+            'md5': file_upload.md5 if file_upload.md5 else None,  # 如果 md5 为空，可能需要其他策略
+        }
+
+        # 如果 md5 为空，回退到文件名匹配（需谨慎，同名不同内容会被覆盖或跳过）
+        if not file_upload.md5:
+            lookup_kwargs['name'] = file_upload.filename[:255]
+
+        # 尝试获取现有文件，如果存在则跳过或更新（视业务逻辑而定，这里假设如果存在则跳过物理复制但标记同步）
+        cloud_file, created = CloudFile.objects.get_or_create(
+            **lookup_kwargs,
+            defaults={
+                'original_name': (file_upload.filename or 'unnamed')[:255],
+                'name': file_upload.filename[:255],
+                'mime_type': file_upload.mime_type,
+                'created_at': file_upload.created_at,
+                'description': '来自聊天室',
+                'size': file_upload.file.size if hasattr(file_upload.file, 'size') else 0,
+            }
+        )
+
+
+        # 重新构建物理文件，确保文件存在
+        if created or not cloud_file.file or not os.path.exists(cloud_file.file.path):
+            with open(file_upload.file.path, 'rb') as f:
+                content = f.read()
+
+            content_file = ContentFile(content)
+            # 使用 save 方法保存文件到存储后端
+            # 注意：save 方法会触发 save() 调用，除非指定 save=False
+            cloud_file.file.save(
+                file_upload.filename[:255],
+                content_file,
+                save=True
+            )
+
+            # 更新大小信息（如果之前未知）
+            if not cloud_file.size:
+                cloud_file.size = len(content)
+                cloud_file.save(update_fields=['size'])
+
+        # 记录操作日志
+        try:
+            FileOperationLog.objects.create(
+                folder=None,
+                user=request.user,
+                operation='save_from_chat',
+                description=f'从聊天室保存文件: {file_upload.filename}',
+                ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                extra_data={'file_upload_id': file_upload_id}
+            )
+        except Exception as log_err:
+            logger.error(f"记录保存日志失败: {log_err}")
+
+        return Response({
+            'message': '保存成功',
+            'cloud_file_id': str(cloud_file.id),
+            'exists': False
+        }, status=status.HTTP_201_CREATED)
+
     # ====================== 工具函数 ======================
 
 

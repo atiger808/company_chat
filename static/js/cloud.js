@@ -602,6 +602,9 @@ class CloudApp {
             // 5. 加载文件列表（根目录）
             await this.loadFiles(null);
 
+            // 🔧 关键修复：初始化主题（必须在设置事件监听前或同时调用，确保页面加载时应用正确主题）
+            this.initTheme();
+
             // 6. 设置事件监听
             this.setupEventListeners();
             this.setupSidebar();
@@ -973,8 +976,6 @@ class CloudApp {
     }
 
 
-
-
     /**
      * 🔧 渲染分页控件
      * @param {string} type - 分页类型: 'files', 'shares', 'collabs', 'sharedFolders'
@@ -1068,7 +1069,6 @@ class CloudApp {
     }
 
 
-
     /**
      * 🔧 切换页码
      * @param {string} type - 分页类型
@@ -1105,13 +1105,13 @@ class CloudApp {
         // 滚动到列表顶部
         const scrollContainer = document.querySelector(
             type === 'files' ? '.file-list-container' :
-            type === 'shares' ? '#mySharesList' :
-            type === 'collabs' ? '#collabListView' :
-            '.file-list-container'
+                type === 'shares' ? '#mySharesList' :
+                    type === 'collabs' ? '#collabListView' :
+                        '.file-list-container'
         );
 
         if (scrollContainer) {
-            scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
+            scrollContainer.scrollTo({top: 0, behavior: 'smooth'});
         }
     }
 
@@ -1172,8 +1172,6 @@ class CloudApp {
             this.hideLoading();
         }
     }
-
-
 
 
     /**
@@ -3127,7 +3125,7 @@ class CloudApp {
     }
 
 
-    async removeCollabDoc(fileId, sourceName='') {
+    async removeCollabDoc(fileId, sourceName = '') {
 
         if (!fileId) {
             this.showError('操作失败', '未选择文档');
@@ -4121,7 +4119,7 @@ class CloudApp {
                     'Authorization': `Bearer ${TokenManager.getToken()}`
                 },
                 body: JSON.stringify({
-                    name:name,
+                    name: name,
                     description: desc,
                     is_shared_folder: isSharedFolder,
                     parent: this.currentFolderId
@@ -4982,7 +4980,7 @@ class CloudApp {
     /**
      * 🔧 分享文件/文件夹（支持文件夹）
      */
-    async shareFile(fileId, isFolder = false, sourceName='') {
+    async shareFile(fileId, isFolder = false, sourceName = '') {
         this.currentShareFileId = fileId;
         this.currentShareType = isFolder ? 'folder' : 'file';
 
@@ -5299,7 +5297,7 @@ class CloudApp {
      * @param {Array} itemIds - 要移动的 ID 列表
      * @param {boolean} isFolder - 是否为文件夹
      */
-    async moveItems(itemIds, isFolder = false, sourceName =  '') {
+    async moveItems(itemIds, isFolder = false, sourceName = '') {
         this.currentMoveIds = itemIds;
         this.currentMoveType = isFolder ? 'folder' : 'file';
         await this.loadFolderTree();
@@ -5307,7 +5305,7 @@ class CloudApp {
     }
 
 
-    async moveFiles(fileIds, sourceName =  '') {
+    async moveFiles(fileIds, sourceName = '') {
         this.currentMoveIds = fileIds;
         await this.loadFolderTree();
         this.openModal('moveModal', sourceName);
@@ -5717,8 +5715,6 @@ class CloudApp {
     }
 
 
-
-
     /**
      * 🔧 切换共享文件夹视图模式
      */
@@ -5760,9 +5756,7 @@ class CloudApp {
     }
 
 
-
-
-        /**
+    /**
      * 🔧 搜索共享文件夹中的文件和文件夹
      */
     async searchSharedFolders(keyword) {
@@ -6031,8 +6025,6 @@ class CloudApp {
     }
 
 
-
-
     /**
      * 🔧 渲染共享文件夹内容（钻取后的文件和子文件夹）- 参考全部文件的网格视图
      */
@@ -6274,8 +6266,6 @@ class CloudApp {
     }
 
 
-
-
     /**
      * 🔧 导航到共享文件夹（支持钻取）- 参考全部文件的navigateToFolder逻辑
      */
@@ -6425,7 +6415,6 @@ class CloudApp {
     }
 
 
-
     /**
      * 🔧 创建共享文件夹
      */
@@ -6539,7 +6528,8 @@ class CloudApp {
             if (!res.ok) {
                 const err = await res.json();
                 throw new Error(err.error || err.detail || err.message || '添加失败')
-            };
+            }
+            ;
 
             this.showSuccess('添加成功', '成员添加成功');
             document.getElementById('memberSearchInput').value = '';
@@ -6627,7 +6617,8 @@ class CloudApp {
             if (!res.ok) {
                 const err = await res.json();
                 throw new Error(err.error || err.detail || err.message || '移除失败')
-            };
+            }
+            ;
             this.showSuccess('移除成功', '成员已移除');
             await this.loadSharedFolderMembers(this.currentManageSharedFolderId);
         } catch (e) {
@@ -6635,7 +6626,30 @@ class CloudApp {
         }
     }
 
+    // ==================== 主题切换功能 ====================
+    initTheme() {
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        this.updateThemeIcon(savedTheme);
+    }
 
+    toggleTheme() {
+        const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', newTheme);
+
+        localStorage.setItem('theme', newTheme);
+        this.updateThemeIcon(newTheme);
+    }
+
+    updateThemeIcon(theme) {
+        // 更新图标
+        const themeIcon = document.querySelector('#themeToggleBtn i');
+        if (themeIcon) {
+            themeIcon.className = theme === 'light' ? 'fas fa-moon' : 'fas fa-sun';
+        }
+        console.log(`🌗 主题已切换为: ${theme}`);
+    }
 
 
     // ==================== 事件监听 ====================
@@ -7053,7 +7067,7 @@ class CloudApp {
         });
     }
 
-    openModal(modalId, sourceName=null) {
+    openModal(modalId, sourceName = null) {
         const modal = document.getElementById(modalId);
         if (modal) {
             modal.classList.add('show');
@@ -7312,6 +7326,8 @@ class CloudApp {
             }
         }
     }
+
+
 }
 
 // 全局初始化

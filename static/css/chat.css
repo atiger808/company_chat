@@ -426,7 +426,7 @@ body {
 .header-right {
     display: flex;
     align-items: center;
-    gap: 20px;
+    gap:10px;
 }
 
 .btn-icon {
@@ -571,7 +571,7 @@ body {
     color: var(--text-primary);
     max-width: 100%;
     min-width: 25%;
-    padding: 10px 15px;
+    padding: 2px 15px;
     position: relative;
     word-break: break-word;
     line-height: 0.5;
@@ -647,7 +647,7 @@ body {
     color: #000;
     max-width: 85%;
     min-width: 25%;
-    padding: 10px 15px;
+    padding: 2px 15px;
     position: relative;
     word-break: break-word;
     line-height: 0.5;
@@ -10038,3 +10038,201 @@ body.pwa-mode .chat-input-area {
     margin: 5px 0;
 }
 
+
+
+/* ==================== 暗黑模式 (Dark Mode) ==================== */
+[data-theme="dark"] {
+    --bg-primary: #1e1e1e;
+    --bg-secondary: #2d2d2d;
+    --bg-tertiary: #3a3a3a;
+    --bg-hover: #2d2d2d;
+    --text-primary: #e0e0e0;
+    --text-secondary: #a0a0a0;
+    --text-light: #888888;
+    --border-color: #444444;
+    --border-secondary-color: #555555;
+    --border-light-color: #666666;
+    --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* 全局背景与文字 */
+[data-theme="dark"] body {
+    background-color: #121212;
+    color: var(--text-primary);
+}
+
+[data-theme="dark"] .messages-container {
+    background-color: #121212;
+    color: var(--text-primary);
+}
+
+
+/* 6. 按钮与交互控件 */
+[data-theme="dark"] .btn-secondary,
+[data-theme="dark"] .btn-icon {
+    background-color: var(--bg-tertiary) !important;
+    border-color: var(--border-light-color) !important;
+    color: var(--text-primary) !important;
+}
+[data-theme="dark"] .btn-secondary:hover,
+[data-theme="dark"] .btn-icon:hover {
+    background-color: var(--bg-hover) !important;
+    color: #fff !important;
+}
+
+/* 7. 模态框与下拉菜单 */
+[data-theme="dark"] .modal-content,
+[data-theme="dark"] .dropdown-menu,
+[data-theme="dark"] .context-menu {
+    background-color: var(--bg-secondary) !important;
+    border-color: var(--border-color) !important;
+    box-shadow: var(--shadow-md) !important;
+}
+[data-theme="dark"] .modal-header,
+[data-theme="dark"] .modal-footer {
+    background-color: var(--bg-tertiary) !important;
+    border-color: var(--border-color) !important;
+}
+[data-theme="dark"] .menu-item:hover {
+    background-color: var(--bg-hover) !important;
+}
+
+/* 8. 表单与输入框 */
+[data-theme="dark"] input,
+[data-theme="dark"] textarea,
+[data-theme="dark"] select,
+[data-theme="dark"] .search-box,
+[data-theme="dark"] .form-input,
+[data-theme="dark"] .form-select {
+    background-color: var(--bg-tertiary) !important;
+    border-color: var(--border-light-color) !important;
+    color: var(--text-primary) !important;
+}
+[data-theme="dark"] ::placeholder { color: var(--text-light) !important; }
+
+
+
+[data-theme="dark"] .chat-container,
+[data-theme="dark"] .cloud-layout,
+[data-theme="dark"] .admin-container {
+    background-color: var(--bg-primary);
+}
+
+/* 侧边栏与顶部栏 */
+[data-theme="dark"] .sidebar,
+[data-theme="dark"] .admin-sidebar {
+    background-color: #252525;
+    border-right-color: #333;
+}
+
+[data-theme="dark"] .chat-header,
+[data-theme="dark"] .sidebar-header,
+[data-theme="dark"] .top-bar,
+[data-theme="dark"] .admin-header {
+    background-color: #2d2d2d;
+    border-bottom-color: #333;
+    color: var(--text-primary);
+}
+
+/* 聊天消息气泡 */
+[data-theme="dark"] .message-left-wrapper .message-content {
+    background-color: #333333;
+    color: #e0e0e0;
+}
+[data-theme="dark"] .message-left-wrapper .message-content::before {
+    border-right-color: #333333;
+}
+
+[data-theme="dark"] .message-right-wrapper .message-content {
+    background-color: #0a5a2a; /* 微信暗黑模式绿色 */
+    color: #e0e0e0;
+}
+[data-theme="dark"] .message-right-wrapper .message-content::before {
+    border-left-color: #0a5a2a;
+}
+
+/* 列表项悬停与选中 */
+[data-theme="dark"] .chat-item:hover,
+[data-theme="dark"] .group-item:hover,
+[data-theme="dark"] .nav-item:hover,
+[data-theme="dark"] .file-item:hover,
+[data-theme="dark"] .file-grid-item:hover {
+    background-color: #333333;
+}
+
+[data-theme="dark"] .chat-item.active {
+    background-color: #3a3a3a;
+}
+
+/* 模态框 */
+[data-theme="dark"] .modal-content {
+    background-color: #2d2d2d;
+    color: #e0e0e0;
+}
+[data-theme="dark"] .modal-header,
+[data-theme="dark"] .modal-footer {
+    background-color: #252525;
+    border-color: #444;
+}
+
+
+
+/* 按钮 */
+[data-theme="dark"] .btn-secondary {
+    background-color: #444;
+    color: #e0e0e0;
+    border-color: #555;
+}
+
+/* ==================== 消息文件操作按钮样式 ==================== */
+.message-file-actions {
+    display: flex;
+    gap: 8px;
+    /*margin-top: 8px;*/
+    /*flex-wrap: wrap;*/
+}
+
+.msg-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 8px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: #409EFF;
+    background: rgba(64, 158, 255, 0.1);
+    border: 1px solid rgba(64, 158, 255, 0.3);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.msg-action-btn:hover {
+    background: rgba(64, 158, 255, 0.2);
+    border-color: #409EFF;
+    transform: translateY(-1px);
+}
+
+.msg-action-btn i {
+    font-size: 12px;
+}
+
+/* 暗黑模式适配 */
+[data-theme="dark"] .msg-action-btn {
+    background: rgba(64, 158, 255, 0.15);
+    border-color: rgba(64, 158, 255, 0.4);
+    color: #66b1ff;
+}
+
+/* 暗黑模式下的操作按钮 */
+/*[data-theme="dark"] .msg-action-btn {*/
+/*    background: rgba(255, 255, 255, 0.1);*/
+/*    border-color: rgba(255, 255, 255, 0.2);*/
+/*    color: #ccc;*/
+/*}*/
+
+[data-theme="dark"] .msg-action-btn:hover {
+    background: var(--primary-color);
+    color: white;
+}
