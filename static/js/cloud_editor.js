@@ -1334,6 +1334,7 @@ class DocumentEditorApp {
         localStorage.removeItem('access_token');
         localStorage.removeItem('user_id');
         localStorage.removeItem('user_type');
+        localStorage.removeItem('current_user');
         localStorage.setItem('redirect_url', window.location.href);
         window.location.href = '/cloud/login/';
     }

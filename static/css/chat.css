@@ -65,7 +65,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    background-color: #409EFF;
+    background-color: var(--primary-color);
     /*background: linear-gradient(135deg, #ff6b6b 0%, #2489d1 100%);*/
     /*background: linear-gradient(135deg, #ff6b6b 0%, #24ee34 100%);*/
     color: white;
@@ -1146,7 +1146,7 @@ body {
 .input-wrapper textarea {
     width: 100%;
     border: 1px solid var(--border-secondary-color);
-    border-radius: 20px;
+    border-radius: 12px;
     padding: 10px 16px;
     font-size: 15px;
     resize: none;
@@ -6843,7 +6843,7 @@ body.pwa-mode .chat-input-area {
         left: 0;
         right: 0;
         z-index: 100;
-        background: var(--bg-primary);
+        background: var(--primary-color);
     }
 
     /* 确保聊天区域不被遮挡 */
@@ -8389,7 +8389,7 @@ body.pwa-mode .chat-input-area {
         padding: 12px 16px;
         padding-right: 60px; /* 为发送按钮留空间 */
         border: 1px solid var(--border-secondary-color);
-        border-radius: 24px;
+        border-radius: 12px;
         font-size: 16px; /* 防止 iOS 自动放大 */
         line-height: 1.5;
         resize: none;
@@ -9009,25 +9009,60 @@ body.pwa-mode .chat-input-area {
     gap: 8px;
 }
 
+/*.user-menu-trigger {*/
+/*    width: 36px;*/
+/*    height: 36px;*/
+/*    border-radius: 50%;*/
+/*    background: rgba(255, 255, 255, 0.2);*/
+/*    border: none;*/
+/*    color: white;*/
+/*    cursor: pointer;*/
+/*    display: flex;*/
+/*    align-items: center;*/
+/*    justify-content: center;*/
+/*    transition: var(--transition);*/
+/*    font-size: 16px;*/
+/*}*/
+
+/*.user-menu-trigger:hover {*/
+/*    background: rgba(255, 255, 255, 0.3);*/
+/*    transform: scale(1.05);*/
+/*}*/
+
 .user-menu-trigger {
     width: 36px;
     height: 36px;
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.2);
-    border: none;
+    background: linear-gradient(135deg, #409EFF 0%, #337ecc 100%);
+    font-size: 16px;
     color: white;
+    border: none;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: var(--transition);
-    font-size: 16px;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 8px rgba(64, 158, 255, 0.3);
+    margin-left: 8px;
+    position: relative;
+    overflow: hidden;
 }
 
 .user-menu-trigger:hover {
-    background: rgba(255, 255, 255, 0.3);
-    transform: scale(1.05);
+    /*transform: scale(1.1) rotate(15deg);*/
+    transform: scale(1.1);
+    box-shadow: 0 4px 15px rgba(64, 158, 255, 0.5);
 }
+
+.user-menu-trigger:active {
+    transform: scale(0.95) rotate(0);
+}
+
+.user-menu-trigger i {
+    transition: transform 0.5s ease;
+}
+
+
 
 .user-dropdown-menu {
     position: absolute;
@@ -10068,6 +10103,13 @@ body.pwa-mode .chat-input-area {
 }
 
 
+
+[data-theme="dark"] .logo {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+
 /* 6. 按钮与交互控件 */
 [data-theme="dark"] .btn-secondary,
 [data-theme="dark"] .btn-icon {
@@ -10130,7 +10172,7 @@ body.pwa-mode .chat-input-area {
 [data-theme="dark"] .sidebar-header,
 [data-theme="dark"] .top-bar,
 [data-theme="dark"] .admin-header {
-    background-color: #2d2d2d;
+    background-color: var(--bg-secondary);
     border-bottom-color: #333;
     color: var(--text-primary);
 }
@@ -10167,7 +10209,7 @@ body.pwa-mode .chat-input-area {
 
 /* 模态框 */
 [data-theme="dark"] .modal-content {
-    background-color: #2d2d2d;
+    background-color: var(--bg-secondary);
     color: #e0e0e0;
 }
 [data-theme="dark"] .modal-header,

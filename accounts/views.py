@@ -1091,6 +1091,17 @@ class UserViewSet(viewsets.ModelViewSet):
             from django.core.mail import send_mail
             from django.template.loader import render_to_string
 
+            # 获取系统名称
+            site_name = SystemConfigManager.get_config('system.name', '企联云')
+
+            # 👇 2. 核心修复：使用 Header 将中文转换为 MIME 编码
+            # 这会将 '企联云' 转换为类似 '=?utf-8?b?5Lyg6IuN5Lq6?=' 的纯 ASCII 字符串
+            encoded_name = str(Header(site_name, 'utf-8'))
+
+            # 👇 3. 拼接成标准的发件人格式
+            # 注意：这里的 settings.DEFAULT_FROM_EMAIL 必须是纯邮箱地址，如 noreply@qq.com
+            custom_from_email = f"{encoded_name} <{settings.DEFAULT_FROM_EMAIL}>"
+
             # 准备邮件上下文
             context = {
                 'username': request.user.real_name or request.user.username,
@@ -1112,7 +1123,7 @@ class UserViewSet(viewsets.ModelViewSet):
             send_mail(
                 subject=f"{context['site_name']} - 密码修改通知",
                 message=text_content,
-                from_email=settings.DEFAULT_FROM_EMAIL,
+                from_email=custom_from_email,
                 recipient_list=[request.user.email],
                 html_message=html_content,
                 fail_silently=False  # 生产环境建议设为 True + 日志记录
