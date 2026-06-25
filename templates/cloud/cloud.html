@@ -5,12 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>企业网盘 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/cloud.css?v=20260618-bb15a54">
+    <link rel="stylesheet" href="/static/css/cloud.css?v=20260623-28bf256">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
     <!-- 🔧 添加二维码库 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>-->
-    <script src="/static/js/dist/qrcode.min.js?v=20260618-bb15a54"></script>
+    <script src="/static/js/dist/qrcode.min.js?v=20260623-28bf256"></script>
 </head>
 <body>
 <div class="cloud-layout">
@@ -21,10 +21,12 @@
     <!-- 左侧垂直导航 -->
     <aside class="sidebar" id="cloudSidebar">
         <div class="sidebar-header">
-            <div class="logo">
-                <i class="fas fa-cloud"></i>
-                <span>企业网盘</span>
-            </div>
+            <a href="/" style="text-decoration: none; color: inherit;">
+                <div class="logo">
+                    <i class="fas fa-cloud"></i>
+                    <span>企业网盘</span>
+                </div>
+            </a>
             <button class="sidebar-close-btn" id="sidebarCloseBtn">
                 <i class="fas fa-times"></i>
             </button>
@@ -111,7 +113,7 @@
             </div>
             <div class="admin-header-right">
                 <span id="adminUsername"></span>
-                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260618-bb15a54" alt="头像">
+                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260623-28bf256" alt="头像">
             </div>
         </header>
 
@@ -372,7 +374,7 @@
                             <div class="file-col name">名称</div>
                             <div class="file-col size">成员数/文件数</div>
                             <div class="file-col size">创建者</div>
-                            <div class="file-col date">创建时间</div>
+                            <div class="file-col date">修改时间</div>
                             <div class="file-col actions">操作</div>
                         </div>
                         <div class="file-list-body" id="sharedFoldersListBody">
@@ -705,6 +707,22 @@
                     <small class="text-muted">暂无选中的协作者</small>
                 </div>
             </div>
+
+            <!-- 通知设置 -->
+            <div class="form-group">
+                <div class="notification-item">
+                    <label>
+                        <i class="fas fa-bell"></i>
+                        发送协作通知
+                    </label>
+                    <label class="switch">
+                        <input type="checkbox" id="collabNotify" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <small class="form-hint">将以私聊消息形式通知协作者</small>
+            </div>
+
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="cloudApp.closeCreateCollabDocModal()">取消</button>
@@ -878,11 +896,11 @@
 
 <!-- 脚本引入 -->
 <!--<script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>-->
-<script src="/static/js/dist/spark-md5.min.js?v=20260618-bb15a54"></script>
-<script src="/static/js/utils.js?v=20260618-bb15a54"></script>
-<script src="/static/js/frontend_cloud_config.js?v=20260618-bb15a54"></script>
-<script src="/static/js/api.js?v=20260618-bb15a54"></script>
-<script src="/static/js/cloud.js?v=20260618-bb15a54"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260623-28bf256"></script>
+<script src="/static/js/utils.js?v=20260623-28bf256"></script>
+<script src="/static/js/frontend_cloud_config.js?v=20260623-28bf256"></script>
+<script src="/static/js/api.js?v=20260623-28bf256"></script>
+<script src="/static/js/cloud.js?v=20260623-28bf257"></script>
 
 <script>
     // 🔧 初始化侧边栏按钮显示状态

@@ -58,7 +58,8 @@ class FileCommentAdmin(admin.ModelAdmin):
 class FileOperationLogAdmin(admin.ModelAdmin):
     """文件操作日志管理"""
     list_display = ('id', 'file', 'user', 'operation', 'description', 'ip_address', 'created_at')
-    list_filter = ('operation', 'user_agent')
+    list_filter = ('operation', 'user_agent', 'user')
+    search_fields = ('id', 'description')
     list_per_page = 20
 
 

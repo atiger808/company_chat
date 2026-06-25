@@ -813,7 +813,7 @@ class AdminChatRoomsClient {
 
         switch (fileType) {
             case 'text':
-                contentHtml = `<div class="message-text">${this.escapeHtml(message.content)}</div>`;
+                contentHtml = `<div class="message-text">${message.content || ''}</div>`;
                 break;
 
             case 'emoji':

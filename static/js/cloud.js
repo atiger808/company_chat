@@ -2880,6 +2880,21 @@ class CloudApp {
                         <small class="text-muted">暂无选中的协作者</small>
                     </div>
                 </div>
+
+                <!-- 通知设置 -->
+                <div class="form-group">
+                    <div class="notification-item">
+                        <label>
+                            <i class="fas fa-bell"></i>
+                            发送协作通知
+                        </label>
+                        <label class="switch">
+                            <input type="checkbox" id="collabNotify" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <small class="form-hint">将以私聊消息形式通知协作者</small>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="cloudApp.closeCreateCollabDocModal()">取消</button>
@@ -3070,6 +3085,8 @@ class CloudApp {
             permission: info.permission
         }));
 
+        const notify = document.getElementById('collabNotify').checked;
+
         try {
             this.showLoading();
 
@@ -3081,7 +3098,8 @@ class CloudApp {
                 },
                 body: JSON.stringify({
                     file_id: this.currentCreateFileId,
-                    initial_collaborators: initialCollaborators
+                    initial_collaborators: initialCollaborators,
+                    notify: notify
                 })
             });
 
@@ -3279,6 +3297,21 @@ class CloudApp {
                         <small class="text-muted">暂无选中的协作者</small>
                     </div>
                 </div>
+                
+                <!-- 通知设置 -->
+                <div class="form-group">
+                    <div class="notification-item">
+                        <label>
+                            <i class="fas fa-bell"></i>
+                            发送协作通知
+                        </label>
+                        <label class="switch">
+                            <input type="checkbox" id="selectCollabNotify" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <small class="form-hint">将以私聊消息形式通知协作者</small>
+                </div>
 
               
                 
@@ -3425,6 +3458,8 @@ class CloudApp {
             permission: info.permission
         }));
 
+        const notify = document.getElementById('selectCollabNotify').checked;
+
 
         try {
             this.showLoading();
@@ -3438,7 +3473,8 @@ class CloudApp {
                 },
                 body: JSON.stringify({
                     file_id: this.selectedFileId,
-                    initial_collaborators: initialCollaborators
+                    initial_collaborators: initialCollaborators,
+                    notify: notify
                 })
             });
 
@@ -5975,8 +6011,8 @@ class CloudApp {
                         </div>
                         <div class="file-col size">${memberCount} 人 / ${fileCount} 个文件</div>
                         
-                        <div class="file-col badge" title="${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"><span class="file-col size">${ownerName}</span></div>
-                        <div class="file-col date">${this.formatDate(f.created_at)}</div>
+                        <div class="file-col badge" title="创建者 - ${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"><span class="file-col size">${ownerName}</span></div>
+                        <div class="file-col date" title="创建时间">${this.formatDate(f.created_at)}</div>
                         <div class="file-col actions">
                             <button class="btn-action" onclick="event.stopPropagation(); cloudApp.openManageMembersModal('${f.id}', '${this.escapeHtml(f.name)}')" title="管理成员">
                                 <i class="fas fa-user-cog"></i>
@@ -6070,7 +6106,7 @@ class CloudApp {
                         
                             <div class="file-col badge" title="${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"><span class="file-col size">${ownerName}</span></div>
 
-                            <div class="file-col date" title="更新时间">${this.formatDate(item.updated_at)}</div>
+                            <div class="file-col date" title="修改时间">${this.formatDate(item.updated_at)}</div>
                             <div class="file-col actions">
                                 <button class="btn-action" onclick="event.stopPropagation(); cloudApp.navigateToSharedFolder('${item.id}')" title="打开">
                                     <i class="fas fa-folder-open"></i>
@@ -6104,7 +6140,7 @@ class CloudApp {
                             <div class="file-col size">${item.size_formatted || '0 B'}</div>
                             <div class="file-col badge" title="${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"><span class="file-col size">${ownerName}</span></div>
                         
-                            <div class="file-col date" title="更新时间">${this.formatDate(item.updated_at)}</div>
+                            <div class="file-col date" title="修改时间">${this.formatDate(item.updated_at)}</div>
                             <div class="file-col actions">
                                 ${isImage || isVideo || isPdf ? `
                                     <button class="btn-action" onclick="event.stopPropagation(); cloudApp.previewFile('${item.id}')" title="预览">
@@ -6172,7 +6208,7 @@ class CloudApp {
                             <div class="file-meta" title="创建者 - ${ownerName}">${ownerName}</div>
                             
                             
-                            <div class="file-date" title="更新时间">${this.formatDate(item.updated_at)}</div>
+                            <div class="file-date" title="修改时间">${this.formatDate(item.updated_at)}</div>
                             <div class="file-actions">
                                 <button class="btn-action" onclick="event.stopPropagation(); cloudApp.navigateToSharedFolder('${item.id}')" title="打开">
                                     <i class="fas fa-folder-open"></i>
@@ -6230,7 +6266,7 @@ class CloudApp {
                             <div class="file-name" title="${this.escapeHtml(item.name)}">${this.escapeHtml(item.name)}</div>
                             <div class="file-meta">${item.size_formatted || '0 B'}</div>
                             <div class="file-meta" title="创建者 - ${ownerName}">${ownerName}</div>
-                            <div class="file-date" title="更新时间">${this.formatDate(item.updated_at)}</div>
+                            <div class="file-date" title="修改时间">${this.formatDate(item.updated_at)}</div>
                             <div class="file-actions">
                                 ${isImage || isVideo || isPdf ? `
                                     <button class="btn-action" onclick="event.stopPropagation(); cloudApp.previewFile('${item.id}')" title="预览">

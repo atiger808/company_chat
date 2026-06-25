@@ -1321,12 +1321,11 @@ def reset_password_page(request):
             }, status=200)
 
         # 🔧 可选：提前验证令牌（如果验证失败可重定向到错误页）
-        # from accounts.models import CustomUser
-        # user = CustomUser.objects.filter(email=email).first()
-        # if not user or not user.verify_password_reset_token(token):
-        #     return render(request, 'chat/reset-password-error.html', {
-        #         'error_message': '重置链接已过期或无效，请重新申请'
-        #     })
+        user = CustomUser.objects.filter(email=email).first()
+        if not user or not user.verify_password_reset_token(token):
+            return render(request, 'chat/reset-password-error.html', {
+                'error_message': '重置链接已过期或无效，请重新申请'
+            })
 
 
         # 渲染重置密码页面

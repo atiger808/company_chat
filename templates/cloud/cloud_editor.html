@@ -23,9 +23,9 @@
 
     <!-- 项目静态文件 -->
 
-    <script src="/static/js/utils.js?v=20260618-bb15a54"></script>
-    <script src="/static/js/api.js?v=20260618-bb15a54"></script>
-    <script src="/static/js/cloud_editor.js?v=20260618-bb15a54"></script>
+    <script src="/static/js/utils.js?v=20260623-28bf256"></script>
+    <script src="/static/js/api.js?v=20260623-28bf256"></script>
+    <script src="/static/js/cloud_editor.js?v=20260623-28bf256"></script>
 
 
     <!-- 协同编辑专用样式 -->
@@ -845,7 +845,7 @@
         <div class="editor-actions">
             <!-- 🔧 新增：当前用户信息标签 -->
             <div class="current-user-info" id="currentUserInfo" title="当前登录用户">
-                <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260618-bb15a54" alt="avatar"
+                <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260623-28bf256" alt="avatar"
                      class="current-user-avatar">
                 <span id="currentUserName" class="current-user-name">加载中...</span>
             </div>
@@ -992,13 +992,22 @@
                     <option value="admin">管理员（可管理协作者）</option>
                 </select>
             </div>
-            <!-- 通知选项 -->
+
+            <!-- 通知设置 -->
             <div class="form-group">
-                <label>
-                    发送通知给协作者
-                </label>
-                <input type="checkbox" id="collabNotify" checked>
+                <div class="notification-item">
+                    <label>
+                        <i class="fas fa-bell"></i>
+                        发送协作通知
+                    </label>
+                    <label class="switch">
+                        <input type="checkbox" id="collabNotify" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <small class="form-hint">将以私聊消息形式通知协作者</small>
             </div>
+
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="editorApp.closeAddCollaboratorModal()">取消</button>
@@ -1037,13 +1046,21 @@
             </div>
 
             <!-- 状态开关 -->
+
             <div class="form-group">
-                <label>
-                    <input type="checkbox" id="editCollabActive" checked>
-                    启用此协作者
-                </label>
+                <div class="notification-item">
+                    <label>
+                        <i class="fas fa-bell"></i>
+                        启用此协作者
+                    </label>
+                    <label class="switch">
+                        <input type="checkbox" id="editCollabActive" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
                 <small class="form-hint">禁用后协作者将无法访问此文档</small>
             </div>
+
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="editorApp.closeEditCollabModal()">取消</button>

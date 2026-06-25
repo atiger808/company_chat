@@ -57,7 +57,7 @@ class UserOnlineStatusAdmin(admin.ModelAdmin):
 @admin.register(SystemConfig)
 class SystemConfigAdmin(admin.ModelAdmin):
     list_display = ('id', 'key', 'name', 'value', 'value_type', 'category', 'description', 'is_public', 'created_at', 'updated_at', 'updated_by')
-    list_filter = ('is_public',)
+    list_filter = ('is_public', 'category', 'value_type')
     search_fields = ('key', 'name', 'id')
     list_per_page = 20
 

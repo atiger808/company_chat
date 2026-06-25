@@ -5822,19 +5822,21 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
     def create_collab_doc(self, request):
         """
         🔧 从现有云文件创建协作文档，并指定协作者
-        POST /api/cloud/documents/custom-create/
+        POST /api/cloud/documents/create-collab/
         {
             "file_id": "uuid-xxx",  //  目标云文件id
             "initial_collaborators": [  // 初始协作者
                 {"user_id": 123, "permission": "write"},
                 {"user_id": 456, "permission": "read"}
-            ]
+            ],
+            "notify": true,  // 是否发送通知
         }
         """
         try:
             user = request.user
             initial_collaborators = request.data.get('initial_collaborators', [])
             file_id = request.data.get('file_id')
+            notify = request.data.get('notify', True)
 
             if not file_id:
                 return Response({'error': '请指定源文件'}, status=status.HTTP_400_BAD_REQUEST)
@@ -5890,6 +5892,12 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                     )
 
                     collaborator_count += 1
+                    # 🔧 可选：发送通知
+                    if notify:
+                        self._send_collaboration_notification(
+                            file_obj, collab_user, user, permission
+                        )
+
 
                 except CustomUser.DoesNotExist:
                     logger.warning(f'协作用户不存在：{collab_info.get("user_id")}')
@@ -6711,10 +6719,175 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
         ).count()
 
     def _send_collaboration_notification(self, file_obj, collaborator, inviter, permission):
-        """发送协作邀请通知"""
+        """发送协作邀请通知（实时 WebSocket + 私信 + 日志）"""
         try:
-            # 这里可以集成通知系统
-            logger.info(f'发送协作通知：{collaborator.username} 被邀请编辑 {file_obj.name}')
+            if not settings.CHANNELS_ENABLED:
+                logger.info(f'[通知] 协作邀请（通道未启用）：{collaborator.username} 被邀请编辑 {file_obj.name}')
+                return
+
+            channel_layer = get_channel_layer()
+            timestamp = timezone.now().isoformat()
+            editor_url = f'{settings.BASE_URL.rstrip("/")}/cloud/editor/?id={file_obj.id}'
+            inviter_name = getattr(inviter, 'real_name', inviter.username)
+            permission_display = {'read': '只读', 'write': '可编辑', 'admin': '管理员'}.get(permission, permission)
+
+            # 1. 发送到被邀请用户的个人通知组（全局通知）
+            notification_data = {
+                'type': 'collaboration_invite',
+                'file_id': str(file_obj.id),
+                'file_name': file_obj.name,
+                'mime_type': file_obj.mime_type or '',
+                'icon_class': file_obj.get_icon_class() if hasattr(file_obj, 'get_icon_class') else 'fa-file',
+                'inviter_id': inviter.id,
+                'inviter_username': inviter.username,
+                'inviter_real_name': getattr(inviter, 'real_name', inviter.username),
+                'inviter_avatar': inviter.get_avatar_url() if hasattr(inviter, 'get_avatar_url') else '',
+                'permission': permission,
+                'permission_display': permission_display,
+                'editor_url': editor_url,
+                'timestamp': timestamp,
+            }
+            async_to_sync(channel_layer.group_send)(
+                f'user_{collaborator.id}_notifications',
+                notification_data
+            )
+            logger.info(f'[通知] 协作邀请已发送（WebSocket 通知）：{inviter.username} → {collaborator.username}（{file_obj.name}，权限：{permission}）')
+
+            # 2. 以私聊形式发送协作邀请消息
+            try:
+                from chat.models import ChatRoom, Message as ChatMessage
+                # 查找或创建两者的私聊聊天室
+                existing_room = ChatRoom.objects.filter(
+                    room_type='private',
+                    members=inviter
+                ).filter(
+                    members=collaborator
+                ).first()
+
+                if existing_room:
+                    chat_room = existing_room
+                    # 如果已删除则恢复
+                    for user in [inviter, collaborator]:
+                        ChatRoomDeleteStatus_obj = existing_room.delete_statuses.filter(user=user).first()
+                        if ChatRoomDeleteStatus_obj and ChatRoomDeleteStatus_obj.is_deleted:
+                            ChatRoomDeleteStatus_obj.is_deleted = False
+                            ChatRoomDeleteStatus_obj.deleted_at = None
+                            ChatRoomDeleteStatus_obj.save()
+                else:
+                    chat_room = ChatRoom.objects.create(
+                        room_type='private',
+                        creator=inviter,
+                    )
+                    chat_room.members.add(inviter, collaborator)
+
+                # 构建邀请消息内容
+                invite_content = (
+                    f'📄 协作邀请\n'
+                    f'<b>{inviter_name}</b> 邀请你协作编辑文件 "<b>{file_obj.name}</b>"\n'
+                    f'权限：{permission_display}\n\n'
+                    f'👉 <a href="{editor_url}" target="_blank" style="color:#3c8dbc;text-decoration:none;">点击此处打开协作编辑  <i class="fa fa-external-link" title="点击打开"></i></a>\n\n'
+                    # f'或复制链接到浏览器打开：\n{editor_url}'
+                )
+
+                invite_message = ChatMessage.objects.create(
+                    chat_room=chat_room,
+                    sender=inviter,
+                    content=invite_content,
+                    message_type='text',
+                )
+                chat_room.updated_at = timezone.now()
+                chat_room.save(update_fields=['updated_at'])
+
+                # 广播消息到聊天室
+                sender_data = {
+                    'id': inviter.id,
+                    'username': inviter.username,
+                    'email': inviter.email,
+                    'real_name': inviter_name,
+                    'avatar': inviter.get_avatar_url() if hasattr(inviter, 'get_avatar_url') else None,
+                    'is_active': inviter.is_active,
+                    'is_online': inviter.is_online,
+                }
+                async_to_sync(channel_layer.group_send)(
+                    f'chat_{chat_room.id}',
+                    {
+                        'type': 'chat_message',
+                        'chat_room': chat_room.id,
+                        'message_id': str(invite_message.id),
+                        'is_read': False,
+                        'sender': sender_data,
+                        'sender_id': inviter.id,
+                        'sender_name': inviter.username,
+                        'content': invite_content,
+                        'message_type': 'text',
+                        'file_info': None,
+                        'timestamp': invite_message.timestamp.isoformat(),
+                        'mentioned_users': [],
+                        'mentioned_all': False,
+                        'temp_id': None,
+                        'quote_message_id': None,
+                        'quote_content': None,
+                        'quote_sender': None,
+                        'quote_sender_id': None,
+                        'quote_timestamp': None,
+                        'quote_message_type': None,
+                        'quote_file_info': None,
+                        'voice_duration': None,
+                    }
+                )
+
+                # 给协作者发送全局通知（新消息提醒）
+                async_to_sync(channel_layer.group_send)(
+                    f'user_{collaborator.id}_notifications',
+                    {
+                        'type': 'new_message',
+                        'chat_room': chat_room.id,
+                        'content': invite_content,
+                        'sender': sender_data,
+                        'sender_name': inviter.username,
+                        'sender_id': inviter.id,
+                        'message_type': 'text',
+                        'file_info': None,
+                        'mentioned_users': [],
+                        'mentioned_all': False,
+                        'timestamp': invite_message.timestamp.isoformat(),
+                        'temp_id': None,
+                        'quote_message_id': None,
+                        'quote_content': None,
+                        'quote_sender': None,
+                        'quote_sender_id': None,
+                        'quote_timestamp': None,
+                        'quote_message_type': None,
+                        'quote_file_info': None,
+                        'voice_duration': None,
+                    }
+                )
+
+                logger.info(f'[通知] 协作邀请私信已发送：room_id={chat_room.id}, message_id={invite_message.id}')
+
+            except Exception as msg_err:
+                logger.warning(f'[通知] 发送协作邀请私信失败：{msg_err}')
+
+            # 3. 广播到文档协同组，通知现有协作者
+            try:
+                from cloud.websocket_utils import CollabMessageBroadcaster
+                CollabMessageBroadcaster.broadcast_collab_message(
+                    file_id=str(file_obj.id),
+                    message_type='collab_status_update',
+                    data={
+                        'userId': str(collaborator.id),
+                        'userName': getattr(collaborator, 'real_name', collaborator.username),
+                        'status': 'invited',
+                        'permission': permission,
+                        'last_activity': timestamp,
+                    },
+                    sender_id=str(inviter.id),
+                    sender_username=inviter.username,
+                    sender_real_name=inviter_name,
+                )
+            except Exception as broadcast_err:
+                logger.warning(f'[通知] 广播到协同组失败：{broadcast_err}')
+
         except Exception as e:
             logger.warning(f'发送协作通知失败：{e}')
 

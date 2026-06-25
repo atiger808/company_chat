@@ -862,6 +862,24 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             'media_type': event.get('media_type', 'audio'),
         }))
 
+    async def collaboration_invite(self, event):
+        """处理协作邀请通知（来自云盘文档）"""
+        await self.send(text_data=json.dumps({
+            'type': 'collaboration_invite',
+            'file_id': event['file_id'],
+            'file_name': event['file_name'],
+            'mime_type': event.get('mime_type', ''),
+            'icon_class': event.get('icon_class', 'fa-file'),
+            'inviter_id': event['inviter_id'],
+            'inviter_username': event['inviter_username'],
+            'inviter_real_name': event.get('inviter_real_name', event['inviter_username']),
+            'inviter_avatar': event.get('inviter_avatar', ''),
+            'permission': event['permission'],
+            'permission_display': event.get('permission_display', event['permission']),
+            'editor_url': event.get('editor_url', ''),
+            'timestamp': event['timestamp'],
+        }))
+
     async def call_answer(self, event):
         """处理接听信令（转发给前端）"""
         try:

@@ -414,6 +414,7 @@ class ChatClient {
         this.voiceMaxDuration = 60;
         this.voiceMinDuration = 1;
         this.maxMessageLength = 2000;
+        this.messageCanrevokeMinutes = 10;
 
         this.contextTarget = null;
 
@@ -918,11 +919,15 @@ class ChatClient {
         // 消息长度限制
         this.maxMessageLength = frontendConfig.get('chat.max_message_length', 2000);
 
+        // 消息可撤回时间限制
+        this.messageCanrevokeMinutes = frontendConfig.get('chat.message_canrevoke_minutes', 10);
+
         console.log('📋 系统配置已应用:', {
             fileMaxSizeMB: this.fileMaxSizeMB,
             voiceMinDuration: this.voiceMinDuration,
             voiceMaxDuration: this.voiceMaxDuration,
-            maxMessageLength: this.maxMessageLength
+            maxMessageLength: this.maxMessageLength,
+            messageCanrevokeMinutes: this.messageCanrevokeMinutes
         });
     }
 
@@ -1041,6 +1046,10 @@ class ChatClient {
                 if (localStorage.getItem('debugMode') === 'true') {
                     console.log(`[Heartbeat] ${this.heartbeatCount} - ${this.lastHeartbeatTime.toLocaleTimeString()}`);
                 }
+                break;
+            // 🔧 新增：处理云盘协作邀请通知
+            case 'collaboration_invite':
+                this.handleCollaborationInvite(data);
                 break;
             default:
                 console.log('Unknown global message type:', data.type, data);
@@ -2406,6 +2415,29 @@ class ChatClient {
 
         // 3. 更新通讯录中的在线状态
         this.updateContactsUserStatus(user_id, is_online);
+    }
+
+    // 🔧 新增：处理云盘协作邀请通知
+    handleCollaborationInvite(data) {
+        const {file_name, inviter_real_name, inviter_username, permission_display, editor_url} = data;
+        const inviter = inviter_real_name || inviter_username;
+        const msg = `${this.escapeHtml(inviter)} 邀请你协作编辑 <b>${this.escapeHtml(file_name)}</b>（权限：${permission_display}）`;
+        this.showToast(msg, 'success');
+        // 桌面通知（点击跳转编辑器）
+        if ('Notification' in window && Notification.permission === 'granted' && !document.hasFocus()) {
+            const notif = new Notification('📄 协作邀请', {
+                body: `${inviter} 邀请你编辑 ${file_name}（权限：${permission_display}）`,
+                icon: '/static/images/default-avatar.png',
+                tag: `collab-invite-${data.file_id}`,
+                requireInteraction: true,
+                data: {url: editor_url},
+            });
+            notif.onclick = () => {
+                window.focus();
+                if (editor_url) window.open(editor_url, '_blank');
+                notif.close();
+            };
+        }
     }
 
     // 更新聊天列表中的用户状态
@@ -3865,7 +3897,7 @@ class ChatClient {
             const messageTime = new Date(message.timestamp).getTime();
             const currentTime = new Date().getTime();
             const timeDiff = currentTime - messageTime;
-            const canRevoke = isOwnMessage && timeDiff < 10 * 60 * 1000; // 10分钟内
+            const canRevoke = isOwnMessage && timeDiff < this.messageCanrevokeMinutes * 60 * 1000; // 10分钟内
 
             if (canRevoke) {
                 const actionBtn = document.createElement('div');
@@ -6036,9 +6068,9 @@ class ChatClient {
         const messagesContainer = document.getElementById('messagesContainer');
         if (messagesContainer) {
             messagesContainer.addEventListener('click', (e) => {
-                e.preventDefault();
-                // 仅在移动端且侧边栏显示时隐藏
+                // 仅在移动端且侧边栏显示时隐藏，不影响链接点击
                 if (window.innerWidth <= 768 && this.isShowingSidebar) {
+                    e.preventDefault();
                     this.closeSidebar();
                 }
             });

@@ -933,8 +933,9 @@ class MessageViewSet(viewsets.ModelViewSet):
 
             # 检查是否在10分钟内
             time_diff = timezone.now() - message.timestamp
-            if time_diff.total_seconds() > 600:  # 10分钟
-                return Response({'error': '消息已超过可撤销时间（10分钟）'}, status=status.HTTP_400_BAD_REQUEST)
+            message_canrevoke_minutes = SystemConfigManager.get_config('chat.message_canrevoke_minutes', 10)
+            if time_diff.total_seconds() > message_canrevoke_minutes * 60:  # 10分钟
+                return Response({'error': f'消息已超过可撤销时间（{message_canrevoke_minutes}分钟）'}, status=status.HTTP_400_BAD_REQUEST)
 
             # 撤销消息（软删除）
             message.is_deleted = True

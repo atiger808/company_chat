@@ -625,6 +625,14 @@ PREDEFINED_CONFIGS = {
         'category': 'chat',
         'validation': {'min': 0, 'max': 3650}
     },
+    'chat.message_canrevoke_minutes': {
+        'name': '消息撤回时间',
+        'value_type': 'integer',
+        'default': '10',
+        'description': '消息可撤回时间（分钟）',
+        'category': 'chat',
+        'validation': {'min': 1, 'max': 60}
+    },
     'chat.read_receipt_enabled': {
         'name': '已读回执',
         'value_type': 'boolean',
