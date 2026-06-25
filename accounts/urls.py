@@ -15,6 +15,8 @@ from .views import (
     DepartmentListViewSet,
     reset_password_page,
     ConsultationRequestView,
+    TokenRefreshView,
+    TokenVerifyView,
 )
 
 router = DefaultRouter()
@@ -82,4 +84,7 @@ urlpatterns = [
     # 咨询提交接口
     path('contact/submit/', ConsultationRequestView.as_view(), name='contact-submit'),
 
+    # Token 管理
+    path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
+    path('token/verify/', TokenVerifyView.as_view(), name='token-verify'),
 ]

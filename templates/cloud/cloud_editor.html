@@ -25,7 +25,7 @@
 
     <script src="/static/js/utils.js?v=20260623-28bf256"></script>
     <script src="/static/js/api.js?v=20260623-28bf256"></script>
-    <script src="/static/js/cloud_editor.js?v=20260623-28bf256"></script>
+    <script src="/static/js/cloud_editor.js?v=20260623-28bf254"></script>
 
 
     <!-- 协同编辑专用样式 -->
@@ -105,7 +105,8 @@
             top: 60px;
             right: 0;
             width: 280px;
-            height: calc(100vh - 60px);
+            /*height: calc(100vh - 60px);*/
+            bottom: 40px;
             background: #fff;
             border-left: 1px solid #e0e0e0;
             display: flex;
@@ -189,7 +190,7 @@
         .collab-item {
             display: flex;
             align-items: center;
-            padding: 8px;
+            padding: 6px;
             border-radius: 6px;
             background: #f8f9fa;
             transition: background 0.2s;
@@ -243,14 +244,6 @@
             min-width: 0;
         }
 
-        .collab-name {
-            font-size: 13px;
-            font-weight: 500;
-            color: #333;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
 
         .collab-meta {
             font-size: 11px;
@@ -814,6 +807,7 @@
             text-overflow: ellipsis;
         }
 
+
         /* 🔧 移动端适配：空间有限时隐藏昵称，仅显示头像 */
         @media (max-width: 768px) {
             .current-user-name {
@@ -950,7 +944,7 @@
 <div class="modal" id="versionModal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>版本历史</h3>
+            <h3><i class="fas fa-history"></i> 版本历史</h3>
             <button class="close-btn" onclick="editorApp.closeVersionModal()">&times;</button>
         </div>
         <div class="modal-body">
@@ -983,14 +977,13 @@
                     <!-- 搜索结果 -->
                 </div>
             </div>
-            <!-- 权限设置 -->
+
+            <!-- 已选协作者列表（含权限和移除） -->
             <div class="form-group">
-                <label>权限设置</label>
-                <select id="collabPermission" class="form-select">
-                    <option value="read">只读（仅查看）</option>
-                    <option value="write" selected>可编辑（可修改内容）</option>
-                    <option value="admin">管理员（可管理协作者）</option>
-                </select>
+                <label>已选协作者</label>
+                <div class="selected-collabs" id="selectedCollabsList">
+                    <small class="text-muted">暂未选择协作者</small>
+                </div>
             </div>
 
             <!-- 通知设置 -->
@@ -1022,7 +1015,7 @@
 <div class="modal" id="editCollabModal">
     <div class="modal-content modal-sm">
         <div class="modal-header">
-            <h3><i class="fas fa-user-cog"></i> 修改协作者权限</h3>
+            <h3><i class="fas fa-user-edit"></i> 修改协作者权限</h3>
             <button class="close-btn" onclick="editorApp.closeEditCollabModal()">&times;</button>
         </div>
         <div class="modal-body">

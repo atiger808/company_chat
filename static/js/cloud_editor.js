@@ -8,15 +8,111 @@
 // 从 URL 获取文件 ID
 const fileId = new URLSearchParams(window.location.search).get('id');
 
-// Token 管理器
+// Token 管理器 增强 TokenManagerCustom
 const TokenManagerCustom = {
     getToken: () => localStorage.getItem('access_token'),
+    getRefreshToken: () => localStorage.getItem('refresh_token'),
+
     getHeaders: () => {
         const token = localStorage.getItem('access_token');
         return {
             'Content-Type': 'application/json',
             'Authorization': token ? `Bearer ${token}` : ''
         };
+    },
+
+    // 获取带自动刷新的 headers
+    async getHeadersWithRefresh() {
+        let token = localStorage.getItem('access_token');
+        const refreshToken = localStorage.getItem('refresh_token');
+
+        if (!token) {
+            console.warn('❌ 无 access_token');
+            return null;
+        }
+
+        // 检查 token 是否过期或即将过期
+        const tokenData = this.parseToken(token);
+        if (tokenData && tokenData.exp) {
+            const expiryTime = tokenData.exp * 1000;
+            const now = Date.now();
+            const timeUntilExpiry = expiryTime - now;
+
+            // 如果 token 将在 5 分钟内过期，提前刷新
+            if (timeUntilExpiry < 5 * 60 * 1000) {
+                const newToken = await this.refreshToken();
+                if (newToken) {
+                    token = newToken;
+                }
+            }
+        }
+
+        return {
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : ''
+        };
+    },
+
+    // 刷新 Token
+    async refreshToken() {
+        const refreshToken = localStorage.getItem('refresh_token');
+        if (!refreshToken) {
+            console.warn('❌ 无 refresh_token');
+            return null;
+        }
+
+        try {
+            const response = await fetch('/api/auth/token/refresh/', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({refresh: refreshToken})
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                localStorage.setItem('access_token', data.access);
+                if (data.refresh) {
+                    localStorage.setItem('refresh_token', data.refresh);
+                }
+                console.log('✅ Token 刷新成功');
+                return data.access;
+            } else {
+                console.error('❌ Token 刷新失败');
+                // 清除过期 token
+                this.clearTokens();
+                return null;
+            }
+        } catch (error) {
+            console.error('❌ Token 刷新请求失败:', error);
+            return null;
+        }
+    },
+
+    // 解析 Token
+    parseToken(token) {
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            return payload;
+        } catch (e) {
+            return null;
+        }
+    },
+
+    // 清除 Token
+    clearTokens() {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+    },
+
+    // 检查 Token 是否有效
+    isTokenValid() {
+        const token = this.getToken();
+        if (!token) return false;
+
+        const payload = this.parseToken(token);
+        if (!payload || !payload.exp) return false;
+
+        return payload.exp * 1000 > Date.now();
     }
 };
 
@@ -29,7 +125,7 @@ class DocumentEditorApp {
         this.currentUser = null;
         this.collaborators = [];
         this.isCollabSidebarOpen = true;
-        this.selectedCollaborators = new Set();
+        this.selectedCollaborators = new Map(); // key: userId, value: {id, name, real_name, permission, avatar}
         this.editingCollabId = null;
         this.hasError = false;
 
@@ -47,6 +143,21 @@ class DocumentEditorApp {
     // 初始化
     async init() {
         try {
+            // 0. 检查并刷新 token
+            const token = localStorage.getItem('access_token');
+            if (!token) {
+                this.handleAuthError();
+                return;
+            }
+
+            // 尝试刷新 token（如果即将过期）
+            const tokenExpiry = this.getTokenExpiry(token);
+            if (tokenExpiry && tokenExpiry < Date.now()) {
+                console.log('Token 已过期，尝试刷新...');
+                const newToken = await this.refreshToken();
+                if (!newToken) return; // 刷新失败，已跳转登录页
+            }
+
             // 1. 获取当前用户信息
             await this.loadCurrentUser();
             if (!this.fileId) throw new Error('文件 ID 缺失');
@@ -79,6 +190,19 @@ class DocumentEditorApp {
 
             // 10. 设置搜索事件监听
             this.setupSearchListener();
+
+
+            // 11. 启用自动保存
+            this.startAutoSave();
+
+            // 12. 启动 Token 心跳检查（每 5 分钟检查一次）
+            this.startTokenHeartbeat();
+
+            // 13. 尝试恢复本地缓存
+            const cachedContent = this.restoreFromLocalCache();
+            if (cachedContent) {
+                this.showToast('发现未保存的本地缓存', 'info', 5000);
+            }
 
         } catch (error) {
             console.error('初始化失败:', error);
@@ -132,7 +256,9 @@ class DocumentEditorApp {
             const avatarUrl = this.currentUser.avatar_url || this.currentUser.avatar || '/static/images/default-avatar.png';
             avatarEl.src = avatarUrl;
             // 兜底：如果头像URL无效或加载失败，回退到默认头像
-            avatarEl.onerror = () => { avatarEl.src = '/static/images/default-avatar.png'; };
+            avatarEl.onerror = () => {
+                avatarEl.src = '/static/images/default-avatar.png';
+            };
         }
 
         if (nameEl) {
@@ -233,6 +359,7 @@ class DocumentEditorApp {
                         // 🔧 优化：移除这里的 loadCollaborators()，因为在 init() 中已经加载过了，避免重复请求
                     },
                     onDocumentStateChange: (event) => {
+                        this._hasUnsavedChanges = !!event.data;
                         this.updateSaveStatus({data: event.data});
                     },
                     onRequestClose: async () => {
@@ -317,15 +444,46 @@ class DocumentEditorApp {
     // ==================== 协同编辑 WebSocket ====================
 
     initCollabWebSocket() {
+        // 避免重复连接
+        if (this.collabSocket && this.collabSocket.readyState === WebSocket.OPEN) {
+            console.log('⚠️ WebSocket 已连接，跳过');
+            return;
+        }
+
+        // 关闭旧连接
+        if (this.collabSocket) {
+            this.collabSocket.close(1000, 'Reconnecting');
+            this.collabSocket = null;
+        }
+
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const token = localStorage.getItem('access_token');
+
+        if (!token) {
+            console.warn('❌ 未找到 access_token，跳转登录页');
+            this.handleAuthError();
+            return;
+        }
+
         const wsUrl = `${protocol}//${window.location.host}/ws/cloud/collab/${this.fileId}/?token=${encodeURIComponent(token)}`;
+
+        // 连接超时控制
+        const connectionTimeout = setTimeout(() => {
+            if (this.collabSocket && this.collabSocket.readyState === WebSocket.CONNECTING) {
+                console.warn('⚠️ WebSocket 连接超时');
+                this.collabSocket.close();
+            }
+        }, 10000); // 10秒超时
+
 
         try {
             this.collabSocket = new WebSocket(wsUrl);
 
             this.collabSocket.onopen = () => {
+                clearTimeout(connectionTimeout);
+                this.reconnectAttempt = 0; // 重置重连次数
                 console.log('✅ 协同编辑 WebSocket 已连接');
+
                 this.sendCollabMessage('user_joined', {
                     user: {
                         id: this.config?.editorConfig?.user?.id,
@@ -346,16 +504,79 @@ class DocumentEditorApp {
             };
 
             this.collabSocket.onclose = (event) => {
-                console.log(`🔌 协同编辑 WebSocket 已断开 (code: ${event.code})`);
-                if (!this.hasError && event.code !== 1000) {
-                    setTimeout(() => this.initCollabWebSocket(), 3000);
+                clearTimeout(connectionTimeout);
+                console.log(`🔌 协同编辑 WebSocket 已断开 (code: ${event.code}, reason: ${event.reason})`);
+
+                // 认证失败 (code 4001) - 不再重连，跳转登录页
+                if (event.code === 4001) {
+                    console.warn('❌ 认证失败，token 无效或已过期');
+                    this.showToast('认证失败，请重新登录', 'error', 5000);
+                    setTimeout(() => this.handleAuthError(), 2000);
+                    return;
+                }
+
+                // 权限不足 (code 4003) - 不再重连
+                if (event.code === 4003) {
+                    console.warn('❌ 权限不足，无法访问此文档');
+                    this.showToast('您没有权限访问此文档', 'error', 5000);
+                    return;
+                }
+
+                // 正常关闭 (code 1000) 或页面卸载时不重连
+                if (event.code === 1000 || event.code === 1001) {
+                    console.log('WebSocket 正常关闭');
+                    return;
+                }
+
+                // 其他错误 - 尝试刷新 Token 后有限次重连
+                if (!this.hasError) {
+                    const maxRetries = 5;
+                    const currentAttempt = this.reconnectAttempt || 0;
+
+                    if (currentAttempt < maxRetries) {
+                        const reconnectDelay = Math.min(3000 * (currentAttempt + 1), 15000);
+                        this.reconnectAttempt = currentAttempt + 1;
+
+                        console.log(`🔄 尝试重连 (${currentAttempt + 1}/${maxRetries})，延迟 ${reconnectDelay}ms`);
+                        this.showToast(`连接断开，尝试重连 (${currentAttempt + 1}/${maxRetries})...`, 'warning');
+
+                        // 重连前先尝试刷新 token（可能连接断开是因为 token 过期）
+                        if (this.reconnectAttempt === 1) {
+                            const token = TokenManagerCustom.getToken();
+                            const tokenData = token ? TokenManagerCustom.parseToken(token) : null;
+                            if (tokenData && tokenData.exp) {
+                                const timeUntilExpiry = (tokenData.exp * 1000) - Date.now();
+                                if (timeUntilExpiry < 300000) { // 5分钟内过期
+                                    console.log('⏰ Token 可能已过期，重连前尝试刷新...');
+                                    TokenManagerCustom.refreshToken().then(newToken => {
+                                        if (newToken) {
+                                            setTimeout(() => this.initCollabWebSocket(), 1000);
+                                        } else {
+                                            setTimeout(() => this.initCollabWebSocket(), reconnectDelay);
+                                        }
+                                    }).catch(() => {
+                                        setTimeout(() => this.initCollabWebSocket(), reconnectDelay);
+                                    });
+                                    return; // 由 refreshToken 回调触发重连
+                                }
+                            }
+                        }
+
+                        setTimeout(() => this.initCollabWebSocket(), reconnectDelay);
+                    } else {
+                        console.error('❌ 重连次数已达上限');
+                        this.showToast('连接失败，请刷新页面重试', 'error', 5000);
+                    }
                 }
             };
 
             this.collabSocket.onerror = (error) => {
+                clearTimeout(connectionTimeout);
                 console.error('协同编辑 WebSocket 错误:', error);
             };
+
         } catch (error) {
+            clearTimeout(connectionTimeout);
             console.error('创建协同编辑 WebSocket 失败:', error);
         }
     }
@@ -482,7 +703,6 @@ class DocumentEditorApp {
     }
 
     handleUserLeft(payload) {
-        console.log('user_left payload: ', payload)
         const {userId, userName, timestamp, reason} = payload;
         if (!userId) return;
 
@@ -573,7 +793,9 @@ class DocumentEditorApp {
                         color: data.color || this.getUserColor(userId),
                         position: data.position
                     });
-                } catch (e) { console.warn('渲染远程光标失败:', e); }
+                } catch (e) {
+                    console.warn('渲染远程光标失败:', e);
+                }
             }
         }
     }
@@ -585,7 +807,12 @@ class DocumentEditorApp {
 
         if (!this.remoteSelections) this.remoteSelections = new Map();
         const userStrId = String(userId);
-        this.remoteSelections.set(userStrId, { selection, color: color || this.getUserColor(userStrId), userName, timestamp: Date.now() });
+        this.remoteSelections.set(userStrId, {
+            selection,
+            color: color || this.getUserColor(userStrId),
+            userName,
+            timestamp: Date.now()
+        });
         this.renderRemoteSelections();
     }
 
@@ -607,10 +834,12 @@ class DocumentEditorApp {
                     this.editor.coAuthoringApi.addSelection?.({
                         userId, userName: data.userName, color: data.color,
                         ranges: data.selection.ranges,
-                        style: { backgroundColor: `${data.color}20`, borderColor: data.color, borderWidth: 2 }
+                        style: {backgroundColor: `${data.color}20`, borderColor: data.color, borderWidth: 2}
                     });
                 }
-            } catch (e) { console.warn('渲染远程选区失败:', e); }
+            } catch (e) {
+                console.warn('渲染远程选区失败:', e);
+            }
         }
     }
 
@@ -652,7 +881,7 @@ class DocumentEditorApp {
     // ==================== 聊天消息处理 ====================
 
     handleChatMessage(payload) {
-        const { messageId, userId, userName, avatar, content, timestamp, mentionUsers, isSystem } = payload;
+        const {messageId, userId, userName, avatar, content, timestamp, mentionUsers, isSystem} = payload;
         const currentUserIdStr = String(this.config?.editorConfig?.user?.id);
 
         if (String(userId) === currentUserIdStr) return;
@@ -770,13 +999,15 @@ class DocumentEditorApp {
         try {
             await fetch(`/api/cloud/documents/${this.fileId}/chat_message/`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...TokenManagerCustom.getHeaders() },
+                headers: {'Content-Type': 'application/json', ...TokenManagerCustom.getHeaders()},
                 body: JSON.stringify({
                     content: message.text, timestamp: message.time,
                     user_id: message.user?.id, user_name: message.user?.name, avatar: message.user?.avatar
                 })
             });
-        } catch (error) { console.warn('聊天消息同步失败:', error); }
+        } catch (error) {
+            console.warn('聊天消息同步失败:', error);
+        }
     }
 
     // ==================== 协同编辑功能 ====================
@@ -787,7 +1018,10 @@ class DocumentEditorApp {
                 headers: TokenManagerCustom.getHeaders()
             });
             if (!response.ok) {
-                if (response.status === 401) { this.handleAuthError(); return null; }
+                if (response.status === 401) {
+                    this.handleAuthError();
+                    return null;
+                }
                 throw new Error('加载协作者失败');
             }
             const data = await response.json();
@@ -808,17 +1042,19 @@ class DocumentEditorApp {
             // 检查是否是所有者（统一类型比较）
             const currentUserIdStr = String(this.currentUser?.id);
             const isOwner = this.collaborators.some(c => String(c.id) === currentUserIdStr && c.is_owner);
-            console.log('isOwner:', isOwner);
+
             // 如果不是所有者，则检查是否有管理员权限
             const hasAdminPermission = isOwner || this.collaborators.some(c => String(c.id) === currentUserIdStr && c.permission === 'admin');
-            console.log('hasAdminPermission:', hasAdminPermission);
+
             if (hasAdminPermission) {
                 document.getElementById('manageCollabSection').style.display = 'block';
                 this.renderManageCollabList();
             } else {
                 document.getElementById('manageCollabSection').style.display = 'none';
             }
-        } catch (error) { console.error('加载协作者失败:', error); }
+        } catch (error) {
+            console.error('加载协作者失败:', error);
+        }
     }
 
     renderCollabList() {
@@ -881,7 +1117,7 @@ class DocumentEditorApp {
     }
 
     getPermissionText(permission) {
-        const map = { 'read': '只读', 'write': '可编辑', 'admin': '管理员' };
+        const map = {'read': '只读', 'write': '可编辑', 'admin': '管理员'};
         return map[permission] || permission;
     }
 
@@ -889,11 +1125,13 @@ class DocumentEditorApp {
         try {
             await fetch(`/api/cloud/documents/${this.fileId}/collaboration/status/`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...TokenManagerCustom.getHeaders() },
-                body: JSON.stringify({ status: status }),
+                headers: {'Content-Type': 'application/json', ...TokenManagerCustom.getHeaders()},
+                body: JSON.stringify({status: status}),
                 keepalive: true // 🔧 关键：保证页面卸载时请求能发出去
             });
-        } catch (error) { console.error('更新协同状态失败:', error); }
+        } catch (error) {
+            console.error('更新协同状态失败:', error);
+        }
     }
 
     toggleCollabSidebar(btn) {
@@ -927,7 +1165,10 @@ class DocumentEditorApp {
             const activityList = document.getElementById('editActivityList');
             const toggleBtn = document.querySelector('.section-title .btn-secondary i');
             if (activityList) activityList.style.display = 'none';
-            if (toggleBtn) { toggleBtn.className = 'fas fa-eye-slash'; toggleBtn.title = '显示编辑动态'; }
+            if (toggleBtn) {
+                toggleBtn.className = 'fas fa-eye-slash';
+                toggleBtn.title = '显示编辑动态';
+            }
         }
     }
 
@@ -953,12 +1194,14 @@ class DocumentEditorApp {
 
     async showVersions() {
         try {
-            const response = await fetch(`/api/cloud/documents/${this.fileId}/versions/`, { headers: TokenManagerCustom.getHeaders() });
+            const response = await fetch(`/api/cloud/documents/${this.fileId}/versions/`, {headers: TokenManagerCustom.getHeaders()});
             if (!response.ok) throw new Error('加载版本失败');
             const data = await response.json();
             this.renderVersionList(data.versions);
             document.getElementById('versionModal').classList.add('show');
-        } catch (error) { this.showError('加载版本历史失败：' + error.message); }
+        } catch (error) {
+            this.showError('加载版本历史失败：' + error.message);
+        }
     }
 
     renderVersionList(versions) {
@@ -995,30 +1238,45 @@ class DocumentEditorApp {
         if (!confirmed) return;
         try {
             const response = await fetch(`/api/cloud/documents/${this.fileId}/restore_version/`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json', ...TokenManagerCustom.getHeaders() },
-                body: JSON.stringify({ version_id: versionId, create_backup: false })
+                method: 'POST', headers: {'Content-Type': 'application/json', ...TokenManagerCustom.getHeaders()},
+                body: JSON.stringify({version_id: versionId, create_backup: false})
             });
-            if (!response.ok) { const error = await response.json(); throw new Error(error.error || '恢复失败'); }
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || '恢复失败');
+            }
             this.showSuccess('版本恢复成功！');
             this.closeVersionModal();
             location.reload();
-        } catch (error) { this.showError('恢复版本失败：' + error.message); }
+        } catch (error) {
+            this.showError('恢复版本失败：' + error.message);
+        }
     }
 
     async downloadVersion(versionId, createdBy, versionNumber) {
         try {
-            const response = await fetch(`/api/cloud/documents/versions/${versionId}/download/`, { headers: TokenManagerCustom.getHeaders() });
-            if (!response.ok) { const error = await response.json(); throw new Error(error.error || '下载失败'); }
+            const response = await fetch(`/api/cloud/documents/versions/${versionId}/download/`, {headers: TokenManagerCustom.getHeaders()});
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || '下载失败');
+            }
             const blob = await response.blob();
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
-            link.href = url; link.download = `文档_v${versionNumber}_${createdBy}.docx`;
-            document.body.appendChild(link); link.click(); document.body.removeChild(link);
+            link.href = url;
+            link.download = `文档_v${versionNumber}_${createdBy}.docx`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
             setTimeout(() => URL.revokeObjectURL(url), 100);
-        } catch (error) { this.showError('下载版本失败: ' + error.message); }
+        } catch (error) {
+            this.showError('下载版本失败: ' + error.message);
+        }
     }
 
-    closeVersionModal() { document.getElementById('versionModal').classList.remove('show'); }
+    closeVersionModal() {
+        document.getElementById('versionModal').classList.remove('show');
+    }
 
     // ==================== 协作者管理功能 ====================
 
@@ -1027,11 +1285,62 @@ class DocumentEditorApp {
         document.getElementById('collabSearchInput').value = '';
         document.getElementById('collabSearchResults').innerHTML = '';
         this.selectedCollaborators.clear();
+        this._renderSelectedCollabs();
     }
 
     closeAddCollaboratorModal() {
         document.getElementById('addCollaboratorModal').classList.remove('show');
         this.selectedCollaborators.clear();
+    }
+
+    // 🔧 渲染已选协作者列表（含权限选择和移除功能）
+    _renderSelectedCollabs() {
+        const container = document.getElementById('selectedCollabsList');
+        if (!container) return;
+
+        if (this.selectedCollaborators.size === 0) {
+            container.innerHTML = '<small class="text-muted">暂无选中的协作者</small>';
+            return;
+        }
+
+        let html = '<div class="collabs-grid">';
+        this.selectedCollaborators.forEach((collab) => {
+            const name = this.escapeHtml(collab.real_name || collab.name);
+            html += `
+            <div class="collab-tag" data-user-id="${collab.id}">
+                <span class="collab-name">${name}</span>
+                <select class="collab-permission" onchange="editorApp._updateCollabPermission('${collab.id}', this.value)">
+                    <option value="read" ${collab.permission === 'read' ? 'selected' : ''}>只读</option>
+                    <option value="write" ${collab.permission === 'write' ? 'selected' : ''}>可编辑</option>
+                    <option value="admin" ${collab.permission === 'admin' ? 'selected' : ''}>管理员</option>
+                </select>
+                <i class="fas fa-times remove-collab" onclick="editorApp._removeSelectedCollab('${collab.id}')"></i>
+            </div>`;
+        });
+        html += '</div>';
+        container.innerHTML = html;
+    }
+
+    // 🔧 更新已选协作者的权限
+    _updateCollabPermission(userId, permission) {
+        const collab = this.selectedCollaborators.get(userId);
+        if (collab) {
+            collab.permission = permission;
+        }
+    }
+
+    // 🔧 移除已选协作者
+    _removeSelectedCollab(userId) {
+        this.selectedCollaborators.delete(userId);
+        const collabSearchResults = document.getElementById('collabSearchResults');
+        let iconElement = collabSearchResults.querySelector(`[data-user-id="${userId}"]`);
+        if (iconElement) {
+            iconElement.className = 'fas fa-plus-circle';
+            iconElement.style.color = '#409EFF'
+        } else {
+            console.log(`iconElement not found userId=${userId}`);
+        }
+        this._renderSelectedCollabs();
     }
 
     setupSearchListener() {
@@ -1046,20 +1355,30 @@ class DocumentEditorApp {
             const iframe = document.querySelector('iframe[name="frameEditor"]');
             if (iframe && iframe.contentDocument && iframe.contentDocument.readyState === 'complete') {
                 const elem = iframe.contentDocument.getElementById(elementId);
-                if (elem) { elem.style.display = 'none'; clearInterval(interval); }
+                if (elem) {
+                    elem.style.display = 'none';
+                    clearInterval(interval);
+                }
             }
             if (++attempts >= maxAttempts) clearInterval(interval);
         }, 200);
     }
 
     async searchCollaborators(keyword) {
-        if (!keyword.trim()) { document.getElementById('collabSearchResults').innerHTML = ''; return; }
+        if (!keyword.trim()) {
+            document.getElementById('collabSearchResults').innerHTML = '';
+            return;
+        }
         try {
-            const response = await fetch(`/api/auth/search_users/?q=${encodeURIComponent(keyword)}`, { headers: TokenManagerCustom.getHeaders() });
+            const response = await fetch(`/api/auth/search_users/?q=${encodeURIComponent(keyword)}`, {headers: TokenManagerCustom.getHeaders()});
             if (!response.ok) throw new Error('搜索失败');
             const data = await response.json();
             const users = data.results || [];
-            const existingIds = new Set([...this.collaborators.map(c => c.id), this.currentUser?.id]);
+            const existingIds = new Set([
+                ...this.collaborators.map(c => c.id),
+                this.currentUser?.id,
+                ...Array.from(this.selectedCollaborators.keys()),
+            ]);
             const filtered = users.filter(u => !existingIds.has(u.id.toString()));
             this.renderSearchResults(filtered);
         } catch (error) {
@@ -1069,49 +1388,81 @@ class DocumentEditorApp {
 
     renderSearchResults(users) {
         const container = document.getElementById('collabSearchResults');
-        if (users.length === 0) { container.innerHTML = '<div style="padding:10px;color:#999;text-align:center;">未找到用户</div>'; return; }
-        container.innerHTML = users.map(user => `
-            <div class="search-result-item" style="padding:10px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:10px;cursor:pointer;"
-                 onclick="editorApp.selectCollaborator('${user.id}', '${this.escapeHtml(user.real_name || user.username)}')">
-                <img src="${user.avatar_url || '/static/images/default-avatar.png'}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;">
+        if (users.length === 0) {
+            container.innerHTML = '<div style="padding:10px;color:#999;text-align:center;">未找到用户</div>';
+            return;
+        }
+        container.innerHTML = users.map(user => {
+            const name = this.escapeHtml(user.real_name || user.username);
+            const avatar = user.avatar_url || '/static/images/default-avatar.png';
+            const realName = user.real_name || user.username;
+            const userId = user.id;
+            return `
+            <div class="user-result-item" style="padding:10px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:10px;cursor:pointer;"
+                 onclick="editorApp.selectCollaborator('${userId}', '${name}', '${avatar}', '${this.escapeHtml(realName)}', this)">
+                <img src="${avatar}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;">
                 <div style="flex:1;">
-                    <div style="font-weight:500;">${this.escapeHtml(user.real_name || user.username)}</div>
+                    <div style="font-weight:500;">${name}</div>
                     <div style="font-size:12px;color:#999;">${user.department_info?.name || ''} ${user.position || ''}</div>
                 </div>
-                <button class="btn btn-sm btn-primary" onclick="event.stopPropagation();editorApp.selectCollaborator('${user.id}', '${this.escapeHtml(user.real_name || user.username)}')">添加</button>
-            </div>`).join('');
+                <i class="fas fa-plus-circle add-icon" data-user-id="${userId}" title="添加协作者"></i>
+              
+            </div>`;
+        }).join('');
     }
 
-    selectCollaborator(userId, userName) {
-        this.selectedCollaborators.add({id: userId, name: userName});
+    selectCollaborator(userId, userName, avatar, realName, element) {
+        this.selectedCollaborators.set(userId, {
+            id: userId,
+            name: userName,
+            real_name: realName || userName,
+            avatar: avatar || '/static/images/default-avatar.png',
+            permission: 'write', // 默认可编辑
+        });
+        let iconElement = element.querySelector('i') || element;
+        if (iconElement) {
+            iconElement.className = 'fas fa-check-circle';
+            iconElement.style.color = '#28a745';
+        }
+        this._renderSelectedCollabs();
         this.showSuccess(`已选择：${userName}`);
     }
 
     async confirmAddCollaborator() {
-        if (this.selectedCollaborators.size === 0) { this.showWarning('请选择要添加的协作者'); return; }
-        const permission = document.getElementById('collabPermission').value;
+        if (this.selectedCollaborators.size === 0) {
+            this.showWarning('请选择要添加的协作者');
+            return;
+        }
         const notify = document.getElementById('collabNotify').checked;
         try {
             let successCount = 0;
-            for (const collaborator of this.selectedCollaborators) {
+            for (const [userId, collab] of this.selectedCollaborators) {
                 const response = await fetch(`/api/cloud/documents/${this.fileId}/add_collaborator/`, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json', ...TokenManagerCustom.getHeaders() },
-                    body: JSON.stringify({ user_id: collaborator.id, permission: permission, notify: notify })
+                    method: 'POST', headers: {'Content-Type': 'application/json', ...TokenManagerCustom.getHeaders()},
+                    body: JSON.stringify({user_id: userId, permission: collab.permission, notify: notify})
                 });
                 if (response.ok) successCount++;
-                else { const error = await response.json(); throw new Error(error.error || '添加失败'); }
+                else {
+                    const error = await response.json();
+                    throw new Error(error.error || '添加失败');
+                }
             }
             if (successCount > 0) this.showSuccess(`成功添加 ${successCount} 位协作者`);
             this.selectedCollaborators.clear();
             this.closeAddCollaboratorModal();
-            await this.loadCollaborators(); // 🔧 这里保留，因为是主动管理操作，需要拉取最新权限列表
-        } catch (error) { this.showError('添加协作者失败: ' + error); }
+            await this.loadCollaborators();
+        } catch (error) {
+            this.showError('添加协作者失败: ' + error);
+        }
     }
 
     async openEditCollabModal(collabId, currentPermission, isActive) {
         try {
-            const response = await fetch(`/api/cloud/documents/${this.fileId}/retrieve_collaborators/${collabId}/`, { headers: TokenManagerCustom.getHeaders() });
-            if (!response.ok) { const error = await response.json(); throw new Error(error.error || '加载失败'); }
+            const response = await fetch(`/api/cloud/documents/${this.fileId}/retrieve_collaborators/${collabId}/`, {headers: TokenManagerCustom.getHeaders()});
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || '加载失败');
+            }
             const collab = await response.json();
             document.getElementById('editCollabAvatar').src = collab.avatar || '/static/images/default-avatar.png';
             document.getElementById('editCollabName').textContent = collab.real_name || collab.username;
@@ -1120,7 +1471,9 @@ class DocumentEditorApp {
             document.getElementById('editCollabActive').checked = collab.is_active !== undefined ? collab.is_active : isActive;
             this.editingCollabId = collabId;
             document.getElementById('editCollabModal').classList.add('show');
-        } catch (error) { this.showError('加载失败: ' + error); }
+        } catch (error) {
+            this.showError('加载失败: ' + error);
+        }
     }
 
     closeEditCollabModal() {
@@ -1129,19 +1482,27 @@ class DocumentEditorApp {
     }
 
     async saveEditCollab() {
-        if (!this.editingCollabId || !this.fileId) { this.showError('参数错误'); return; }
+        if (!this.editingCollabId || !this.fileId) {
+            this.showError('参数错误');
+            return;
+        }
         const permission = document.getElementById('editCollabPermission').value;
         const isActive = document.getElementById('editCollabActive').checked;
         try {
             const response = await fetch(`/api/cloud/documents/${this.fileId}/update_collaborator/${this.editingCollabId}/`, {
-                method: 'PUT', headers: { 'Content-Type': 'application/json', ...TokenManagerCustom.getHeaders() },
-                body: JSON.stringify({ permission: permission, is_active: isActive })
+                method: 'PUT', headers: {'Content-Type': 'application/json', ...TokenManagerCustom.getHeaders()},
+                body: JSON.stringify({permission: permission, is_active: isActive})
             });
-            if (!response.ok) { const error = await response.json(); throw new Error(error.error || '更新失败'); }
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || '更新失败');
+            }
             this.showSuccess('更新成功', '协作者权限已更新');
             this.closeEditCollabModal();
             await this.loadCollaborators(); // 🔧 这里保留，主动管理操作后刷新
-        } catch (error) { this.showError('更新失败: ' + error); }
+        } catch (error) {
+            this.showError('更新失败: ' + error);
+        }
     }
 
     async removeCollaborator(userId, userName) {
@@ -1151,10 +1512,15 @@ class DocumentEditorApp {
             const response = await fetch(`/api/cloud/documents/${this.fileId}/collaborators/${userId}/`, {
                 method: 'DELETE', headers: TokenManagerCustom.getHeaders()
             });
-            if (!response.ok) { const error = await response.json(); throw new Error(error.error || '移除失败'); }
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || '移除失败');
+            }
             this.showSuccess(`已移除协作者: ${userName}`);
             await this.loadCollaborators(); // 🔧 这里保留，主动管理操作后刷新
-        } catch (error) { this.showError('移除失败: ' + error); }
+        } catch (error) {
+            this.showError('移除失败: ' + error);
+        }
     }
 
     // ==================== 文档链接分享 ====================
@@ -1168,9 +1534,15 @@ class DocumentEditorApp {
         const link = this.getDocShareLink();
         const input = document.getElementById('docShareLink');
         if (input) {
-            input.value = link; input.select();
-            try { await navigator.clipboard.writeText(link); this.showSuccess('链接已复制'); }
-            catch (err) { document.execCommand('copy'); this.showSuccess('链接已复制'); }
+            input.value = link;
+            input.select();
+            try {
+                await navigator.clipboard.writeText(link);
+                this.showSuccess('链接已复制');
+            } catch (err) {
+                document.execCommand('copy');
+                this.showSuccess('链接已复制');
+            }
         }
     }
 
@@ -1179,7 +1551,8 @@ class DocumentEditorApp {
     updateSaveStatus(data) {
         const statusEl = document.getElementById('saveStatus');
         if (!statusEl) return;
-        const icon = statusEl.querySelector('i'); const text = statusEl.querySelector('span');
+        const icon = statusEl.querySelector('i');
+        const text = statusEl.querySelector('span');
         if (data?.data) {
             statusEl.classList.add('saving');
             if (icon) icon.className = 'fas fa-spinner fa-spin';
@@ -1206,14 +1579,29 @@ class DocumentEditorApp {
 
     formatTime(timestamp) {
         if (!timestamp) return '';
-        const date = new Date(timestamp); const now = new Date();
-        if (date.toDateString() === now.toDateString()) return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+        const date = new Date(timestamp);
+        const now = new Date();
+        if (date.toDateString() === now.toDateString()) return date.toLocaleTimeString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
         const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));
         if (diffDays < 7) {
             const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
-            return `周${weekdays[date.getDay()]} ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+            return `周${weekdays[date.getDay()]} ${date.toLocaleTimeString('zh-CN', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+            })}`;
         }
-        return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+        return date.toLocaleDateString('zh-CN', {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
     }
 
     truncateMessage(text, maxLength = 100) {
@@ -1224,54 +1612,84 @@ class DocumentEditorApp {
 
     formatFileSize(bytes) {
         if (bytes === 0) return '0 B';
-        const k = 1024; const sizes = ['B', 'KB', 'MB', 'GB'];
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
         return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
     }
 
     escapeHtml(text) {
         if (!text) return '';
-        const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+        const map = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'};
         return text.replace(/[&<>"']/g, m => map[m]);
     }
 
     // ==================== 提示消息 ====================
 
-    showError(message) { this.showToast(`${message}`, 'error'); }
-    showWarning(message) { this.showToast(`${message}`, 'warning', 5000); }
-    showSuccess(message) { this.showToast(`${message}`, 'success'); }
+    showError(message) {
+        this.showToast(`${message}`, 'error');
+    }
+
+    showWarning(message) {
+        this.showToast(`${message}`, 'warning', 5000);
+    }
+
+    showSuccess(message) {
+        this.showToast(`${message}`, 'success');
+    }
 
     showToast(message, type = 'info', timeout = 3000) {
         const toast = document.createElement('div');
         toast.className = `toast toast-${type}`;
         toast.innerHTML = `<strong>${type === 'error' ? '错误' : type === 'success' ? '成功' : '提示'}</strong><br>${message}`;
         document.body.appendChild(toast);
-        setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, timeout);
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => toast.remove(), 300);
+        }, timeout);
     }
 
     showAlert(title, message) {
         return new Promise((resolve) => {
-            const dialog = document.createElement('div'); dialog.className = 'confirm-dialog';
+            const dialog = document.createElement('div');
+            dialog.className = 'confirm-dialog';
             dialog.innerHTML = `<div class="confirm-dialog-content"><div class="confirm-dialog-header"><i class="fas fa-info-circle"></i><h3>${title}</h3><button class="close-btn" style="margin-left: auto;"><i class="fas fa-times"></i></button></div><div class="confirm-dialog-body"><p>${message}</p></div><div class="confirm-dialog-footer"><button class="confirm-dialog-btn confirm">确定</button></div></div>`;
             document.body.appendChild(dialog);
-            const closeDialog = () => { dialog.classList.remove('show'); setTimeout(() => { if (dialog.parentNode) document.body.removeChild(dialog); }, 300); resolve(); };
+            const closeDialog = () => {
+                dialog.classList.remove('show');
+                setTimeout(() => {
+                    if (dialog.parentNode) document.body.removeChild(dialog);
+                }, 300);
+                resolve();
+            };
             dialog.querySelector('.confirm').addEventListener('click', closeDialog);
             dialog.querySelector('.close-btn').addEventListener('click', closeDialog);
-            dialog.addEventListener('click', (e) => { if (e.target === dialog) closeDialog(); });
+            dialog.addEventListener('click', (e) => {
+                if (e.target === dialog) closeDialog();
+            });
             setTimeout(() => dialog.classList.add('show'), 10);
         });
     }
 
     showConfirmDialog(title, message, type = 'confirm') {
         return new Promise((resolve) => {
-            const dialog = document.createElement('div'); dialog.className = 'confirm-dialog';
+            const dialog = document.createElement('div');
+            dialog.className = 'confirm-dialog';
             dialog.innerHTML = `<div class="confirm-dialog-content"><div class="confirm-dialog-header"><i class="fas fa-${type === 'danger' ? 'exclamation-triangle' : 'check-circle'}"></i><h3>${title}</h3><button class="close-btn" style="margin-left: auto;"><i class="fas fa-times"></i></button></div><div class="confirm-dialog-body"><p>${message}</p></div><div class="confirm-dialog-footer"><button class="confirm-dialog-btn cancel">取消</button><button class="confirm-dialog-btn ${type}">确定</button></div></div>`;
             document.body.appendChild(dialog);
-            const closeDialog = (result) => { dialog.classList.remove('show'); setTimeout(() => { if (dialog.parentNode) document.body.removeChild(dialog); }, 300); resolve(result); };
+            const closeDialog = (result) => {
+                dialog.classList.remove('show');
+                setTimeout(() => {
+                    if (dialog.parentNode) document.body.removeChild(dialog);
+                }, 300);
+                resolve(result);
+            };
             dialog.querySelector('.cancel').addEventListener('click', () => closeDialog(false));
             dialog.querySelector('.close-btn').addEventListener('click', () => closeDialog(false));
             dialog.querySelector(`.${type}`).addEventListener('click', () => closeDialog(true));
-            dialog.addEventListener('click', (e) => { if (e.target === dialog) closeDialog(false); });
+            dialog.addEventListener('click', (e) => {
+                if (e.target === dialog) closeDialog(false);
+            });
             setTimeout(() => dialog.classList.add('show'), 10);
         });
     }
@@ -1287,16 +1705,24 @@ class DocumentEditorApp {
                 try {
                     await this.updateCollaborationStatus('closed');
                     await new Promise(resolve => setTimeout(resolve, 500));
-                } catch (error) { console.warn('上报离开状态失败:', error); }
+                } catch (error) {
+                    console.warn('上报离开状态失败:', error);
+                }
             }
             if (this.collabSocket?.readyState === WebSocket.OPEN) {
                 this.collabSocket.close(1000, 'Page unload');
                 await new Promise(resolve => setTimeout(resolve, 300));
             }
-            if (this.editor) { this.editor.destroyEditor(); this.editor = null; }
+            if (this.editor) {
+                this.editor.destroyEditor();
+                this.editor = null;
+            }
             this.config = null;
             window.close();
-        } catch (error) { console.error('关闭编辑器失败:', error); window.close(); }
+        } catch (error) {
+            console.error('关闭编辑器失败:', error);
+            window.close();
+        }
     }
 
     // 🔧 修复：修复了 type 未定义的 Bug
@@ -1313,8 +1739,16 @@ class DocumentEditorApp {
     }
 
     playSystemNotificationSound(title = '新消息', options = {}) {
-        if (Notification.permission !== 'granted') { this.playCustomSound(); return; }
-        const notification = new Notification('🔔' + title, { ...options, silent: false, requireInteraction: false, tag: `notification-${Date.now()}` });
+        if (Notification.permission !== 'granted') {
+            this.playCustomSound();
+            return;
+        }
+        const notification = new Notification('🔔' + title, {
+            ...options,
+            silent: false,
+            requireInteraction: false,
+            tag: `notification-${Date.now()}`
+        });
         setTimeout(() => notification.close(), 3000);
     }
 
@@ -1327,16 +1761,343 @@ class DocumentEditorApp {
             } else {
                 this.playCustomSound(type); // 🔧 修复：传递 type 参数
             }
-        } catch (e) { console.warn('播放音效失败:', e); }
+        } catch (e) {
+            console.warn('播放音效失败:', e);
+        }
+    }
+
+
+    /**
+     * 🔧 增强的错误处理 - 自动刷新 Token 并重试
+     */
+    async fetchWithAuth(url, options = {}) {
+        const maxRetries = 2;
+
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                // 获取带自动刷新的 headers
+                const headers = await TokenManagerCustom.getHeadersWithRefresh();
+                if (!headers) {
+                    throw new Error('认证失败');
+                }
+
+                const response = await fetch(url, {
+                    ...options,
+                    headers: {
+                        ...headers,
+                        ...options.headers
+                    }
+                });
+
+                // 401 未授权 - 尝试刷新 Token
+                if (response.status === 401) {
+                    if (attempt < maxRetries) {
+                        console.warn(`🔄 尝试刷新 Token (${attempt + 1}/${maxRetries})`);
+                        const newToken = await TokenManagerCustom.refreshToken();
+                        if (newToken) {
+                            continue; // 重试请求
+                        }
+                    }
+
+                    // 刷新失败，跳转登录
+                    this.handleAuthError();
+                    throw new Error('认证已过期');
+                }
+
+                return response;
+
+            } catch (error) {
+                if (attempt === maxRetries) {
+                    throw error;
+                }
+                await this.delay(1000 * (attempt + 1));
+            }
+        }
+    }
+
+    /**
+     * 🔧 延迟函数
+     */
+    delay(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /**
+     * 🔧 增强保存 - 确保文档内容不丢失
+     */
+    async saveDocumentWithRetry() {
+        const maxRetries = 3;
+        const saveUrl = `/api/cloud/documents/${this.fileId}/save/`;
+
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+                // 从 OnlyOffice 获取当前文档内容
+                const documentData = this.editor?.getDocumentData?.();
+
+                const response = await this.fetchWithAuth(saveUrl, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        content: documentData,
+                        force_save: attempt > 0, // 重试时强制保存
+                        timestamp: new Date().toISOString()
+                    })
+                });
+
+                if (response.ok) {
+                    console.log('✅ 文档保存成功');
+                    this.updateSaveStatus({data: false});
+                    return true;
+                }
+
+            } catch (error) {
+                console.warn(`⚠️ 保存失败 (${attempt + 1}/${maxRetries}):`, error);
+
+                // 最后一次尝试失败
+                if (attempt === maxRetries - 1) {
+                    // 保存到本地缓存
+                    this.saveToLocalCache();
+                    this.showToast('保存到服务器失败，已保存到本地缓存', 'warning', 5000);
+                    return false;
+                }
+
+                // 等待后重试
+                await this.delay(2000 * (attempt + 1));
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * 🔧 保存到本地缓存（防止内容丢失）
+     */
+    saveToLocalCache() {
+        try {
+            const cacheKey = `doc_cache_${this.fileId}`;
+            const documentData = this.editor?.getDocumentData?.();
+
+            if (documentData) {
+                const cacheData = {
+                    content: documentData,
+                    fileId: this.fileId,
+                    timestamp: Date.now(),
+                    savedAt: new Date().toISOString()
+                };
+
+                localStorage.setItem(cacheKey, JSON.stringify(cacheData));
+                console.log('💾 文档已保存到本地缓存');
+            }
+        } catch (error) {
+            console.warn('保存到本地缓存失败:', error);
+        }
+    }
+
+    /**
+     * 🔧 从本地缓存恢复
+     */
+    restoreFromLocalCache() {
+        try {
+            const cacheKey = `doc_cache_${this.fileId}`;
+            const cached = localStorage.getItem(cacheKey);
+
+            if (cached) {
+                const cacheData = JSON.parse(cached);
+                const cacheAge = Date.now() - cacheData.timestamp;
+
+                // 只恢复 1 小时内的缓存
+                if (cacheAge < 60 * 60 * 1000) {
+                    console.log('💾 发现本地缓存，尝试恢复...');
+                    return cacheData.content;
+                } else {
+                    // 清除过期缓存
+                    localStorage.removeItem(cacheKey);
+                }
+            }
+        } catch (error) {
+            console.warn('恢复本地缓存失败:', error);
+        }
+
+        return null;
+    }
+
+    /**
+     * 🔧 定期自动保存（每 30 秒）
+     */
+    startAutoSave() {
+        // 清除旧的定时器
+        if (this.autoSaveTimer) {
+            clearInterval(this.autoSaveTimer);
+        }
+
+        // 每 30 秒自动保存
+        this.autoSaveTimer = setInterval(() => {
+            // 只在文档有修改时保存
+            if (this.editor?.isDocumentModified?.()) {
+                console.log('⏰ 自动保存触发');
+                this.saveDocumentWithRetry();
+            }
+        }, 30000); // 30 秒
+
+        console.log('⏰ 自动保存已启用（每30秒）');
+    }
+
+    /**
+     * 🔧 停止自动保存
+     */
+    stopAutoSave() {
+        if (this.autoSaveTimer) {
+            clearInterval(this.autoSaveTimer);
+            this.autoSaveTimer = null;
+        }
+    }
+
+
+    /**
+     * 🔧 Token 心跳检查
+     */
+    startTokenHeartbeat() {
+        // 清除旧的定时器
+        if (this.tokenHeartbeatTimer) {
+            clearInterval(this.tokenHeartbeatTimer);
+        }
+
+        // 每 5 分钟检查 Token 状态
+        this.tokenHeartbeatTimer = setInterval(async () => {
+            console.log('🔍 检查 Token 有效性...');
+
+            const token = TokenManagerCustom.getToken();
+            if (!token) {
+                return;
+            }
+
+            const tokenData = TokenManagerCustom.parseToken(token);
+            if (!tokenData || !tokenData.exp) {
+                return;
+            }
+
+            const expiryTime = tokenData.exp * 1000;
+            const timeUntilExpiry = expiryTime - Date.now();
+
+            // 如果 10 分钟内过期，提前刷新
+            if (timeUntilExpiry < 10 * 60 * 1000) {
+                console.log('⏰ Token 即将过期，提前刷新...');
+
+                // 先保存文档（确保刷新 token 过程中的修改不丢失）
+                if (this.editor?.isDocumentModified?.()) {
+                    await this.saveDocumentWithRetry();
+                }
+
+                // 再刷新 Token
+                const newToken = await TokenManagerCustom.refreshToken();
+                if (newToken) {
+                    console.log('✅ Token 已刷新');
+                    // 保存到本地缓存作为保险
+                    this.saveToLocalCache();
+                    // 重新初始化 WebSocket（传入新 token）
+                    this.initCollabWebSocket();
+                } else {
+                    console.warn('⚠️ Token 刷新失败');
+                    this.showToast('认证即将过期，请保存工作', 'warning');
+                }
+            }
+        }, 300000); // 5 分钟
+    }
+
+
+    // 🔧 新增：跟踪文档是否有未保存的修改
+    _hasUnsavedChanges = false;
+
+    // ==================== Token 刷新方法 ====================
+
+    // token 刷新方法
+    async refreshToken() {
+        const refreshToken = localStorage.getItem('refresh_token');
+        if (!refreshToken) {
+            // 先尝试保存，再跳转
+            await this._emergencySaveBeforeExit();
+            this.handleAuthError();
+            return null;
+        }
+
+        try {
+            const response = await fetch('/api/auth/token/refresh/', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({refresh: refreshToken})
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                localStorage.setItem('access_token', data.access);
+                if (data.refresh) {
+                    localStorage.setItem('refresh_token', data.refresh);
+                }
+                console.log('✅ Token 刷新成功');
+                return data.access;
+            } else {
+                console.error('刷新 token 失败:', response.status);
+                await this._emergencySaveBeforeExit();
+                this.handleAuthError();
+                return null;
+            }
+        } catch (error) {
+            console.error('刷新 token 请求失败:', error);
+            await this._emergencySaveBeforeExit();
+            this.handleAuthError();
+            return null;
+        }
+    }
+
+    // 辅助方法：解析 token 过期时间
+    getTokenExpiry(token) {
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            return payload.exp * 1000; // 转换为毫秒
+        } catch (e) {
+            return null;
+        }
     }
 
     handleAuthError() {
+        // 先尝试保存文档（同步保存到本地缓存）
+        this._emergencySaveBeforeExit();
+
+        // 清除所有本地存储的认证信息
         localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
         localStorage.removeItem('user_id');
         localStorage.removeItem('user_type');
         localStorage.removeItem('current_user');
+
+        // 关闭 WebSocket 连接
+        if (this.collabSocket) {
+            try {
+                this.collabSocket.close(1000, 'Auth error');
+            } catch (e) {
+                // ignore
+            }
+            this.collabSocket = null;
+        }
+
+        // 保存重定向地址
         localStorage.setItem('redirect_url', window.location.href);
+
+        // 跳转到登录页
         window.location.href = '/cloud/login/';
+    }
+
+    // 🔧 强制保存到本地缓存（跳转前保护文档内容）
+    async _emergencySaveBeforeExit() {
+        try {
+            // 先尝试同步到服务器
+            if (this.editor?.isDocumentModified?.()) {
+                await this.saveDocumentWithRetry();
+            }
+        } catch (e) {
+            // 服务器保存失败不阻塞
+        }
+        // 无论如何都保存到本地缓存
+        this.saveToLocalCache();
     }
 }
 
@@ -1356,24 +2117,70 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // 🔧 移动端锁屏优化
+// 替换原有的 visibilitychange 监听器
 document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') {
-        console.log('页面隐藏，依赖 WebSocket 保持连接');
-    } else {
-        try {
-            if (window.editorApp) window.editorApp.loadCollaborators();
-        } catch (error) { console.warn('页面恢复时同步失败:', error); }
+    if (document.visibilityState === 'visible') {
+        // 页面重新可见时检查 token 是否有效
+        if (window.editorApp) {
+            const token = localStorage.getItem('access_token');
+            if (!token) {
+                console.warn('页面恢复时发现 token 已丢失');
+                window.editorApp.handleAuthError();
+                return;
+            }
+
+            // 检查 token 是否过期
+            const editorApp = window.editorApp;
+            const tokenExpiry = editorApp.getTokenExpiry?.(token);
+            if (tokenExpiry && tokenExpiry < Date.now()) {
+                console.warn('页面恢复时发现 token 已过期');
+                // 先保存文档
+                if (editorApp.editor?.isDocumentModified?.()) {
+                    editorApp.saveDocumentWithRetry().finally(() => {
+                        editorApp.saveToLocalCache();
+                    });
+                }
+                // 尝试静默刷新
+                editorApp.refreshToken().then(newToken => {
+                    if (newToken) {
+                        console.log('Token 刷新成功，重新连接 WebSocket');
+                        editorApp.initCollabWebSocket();
+                    }
+                });
+            } else {
+                // token 有效，但可能需要同步最新状态
+                try {
+                    editorApp.loadCollaborators();
+                } catch (error) {
+                    console.warn('页面恢复时同步失败:', error);
+                }
+            }
+        }
     }
 });
 
 // 🔧 页面卸载时的清理 (移除 async/await，防止阻塞浏览器卸载流程)
 window.addEventListener('beforeunload', (event) => {
     if (window.editorApp) {
-        // 直接调用，不 await。得益于 fetch 的 keepalive: true，请求会在后台发送完成
-        window.editorApp.updateCollaborationStatus('closed').catch(err => console.warn('页面卸载时上报失败:', err));
+        const app = window.editorApp;
 
-        if (window.editorApp.collabSocket?.readyState === WebSocket.OPEN) {
-            window.editorApp.collabSocket.close(1000, 'Page unload');
+        // 如果文档有未保存的修改，弹出浏览器原生确认对话框
+        if (app._hasUnsavedChanges || app.editor?.isDocumentModified?.()) {
+            // 保存到本地缓存
+            app.saveToLocalCache();
+            // 弹出浏览器原生确认对话框
+            event.preventDefault();
+            event.returnValue = '文档尚未保存，确定离开吗？';
+        }
+
+        // 尝试同步到服务器
+        app.updateCollaborationStatus('closed').catch(err => {
+            console.warn('页面卸载时上报失败:', err);
+        });
+
+        // 关闭 WebSocket
+        if (app.collabSocket?.readyState === WebSocket.OPEN) {
+            app.collabSocket.close(1000, 'Page unload');
         }
     }
 });

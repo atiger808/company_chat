@@ -112,6 +112,9 @@
                 </button>
             </div>
             <div class="admin-header-right">
+                <a href="/" class="btn-icon" title="官网主页" style="text-decoration:none;color:inherit;">
+                    <i class="fas fa-home"></i>
+                </a>
                 <span id="adminUsername"></span>
                 <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260623-28bf256" alt="头像">
             </div>
@@ -471,7 +474,7 @@
 <div class="modal" id="uploadModal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3 class="modal-title">上传文件</h3>
+            <h3 class="modal-title"><i class="fas fa-cloud-upload-alt"></i> 上传文件</h3>
             <button class="close-btn">&times;</button>
         </div>
         <div class="modal-body">
@@ -491,7 +494,7 @@
 <div class="modal" id="newFolderModal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>新建文件夹</h3>
+            <h3><i class="fas fa-folder-plus"></i> 新建文件夹</h3>
             <span class="text-muted">默认在当前目录下创建</span>
             <button class="close-btn">&times;</button>
         </div>
@@ -524,7 +527,7 @@
 <div class="modal" id="shareModal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3 class="modal-title">分享文件</h3>
+            <h3 class="modal-title"><i class="fas fa-share-alt"></i> 分享文件</h3>
             <button class="close-btn" onclick="cloudApp.closeModal('shareModal')">&times;</button>
         </div>
         <div class="modal-body">
@@ -606,7 +609,7 @@
 <div class="modal" id="renameModal">
     <div class="modal-content modal-sm">
         <div class="modal-header">
-            <h3 class="modal-title" id="renameModalTitle">重命名</h3>
+            <h3 class="modal-title" id="renameModalTitle"><i class="fas fa-edit"></i> 重命名</h3>
             <button class="close-btn" onclick="cloudApp.closeModal('renameModal')">&times;</button>
         </div>
         <div class="modal-body">
@@ -626,7 +629,7 @@
 <div class="modal" id="moveModal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3 class="modal-title">移动到</h3>
+            <h3 class="modal-title"><i class="fas fa-cut"></i> 移动到</h3>
             <button class="close-btn" onclick="cloudApp.closeModal('moveModal')">&times;</button>
         </div>
         <div class="modal-body">
@@ -646,7 +649,7 @@
 <div class="modal" id="batchMoveModal">
     <div class="modal-content modal-lg">
         <div class="modal-header">
-            <h3 class="modal-title"><i class="fas fa-folder-open"></i> 批量移动</h3>
+            <h3 class="modal-title"><i class="fas fa-cut"></i> 批量移动</h3>
             <button class="close-btn" onclick="cloudApp.closeModal('batchMoveModal')">&times;</button>
         </div>
         <div class="modal-body">
@@ -681,9 +684,9 @@
 
 <!-- 🔧 新建协作文档模态框 -->
 <div class="modal" id="createCollabDocModal">
-    <div class="modal-content" style="max-width: 600px;">
+    <div class="modal-content" style="max-width: 800px;">
         <div class="modal-header">
-            <h3 class="modal-title">创建协作文档</h3>
+            <h3 class="modal-title"><i class="fas fa-file-alt"></i> 创建协作文档</h3>
             <button class="close-btn" onclick="cloudApp.closeCreateCollabDocModal()">&times;</button>
         </div>
         <div class="modal-body">
@@ -810,7 +813,7 @@
 <div id="createSharedFolderModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3 class="modal-title">新建共享文件夹</h3>
+            <h3 class="modal-title"><i class="fas fa-folder-plus"></i> 新建共享文件夹</h3>
             <span class="text-muted">默认在当前目录下创建</span>
             <button class="close-btn" onclick="cloudApp.closeModal('createSharedFolderModal')">&times;</button>
         </div>
@@ -835,7 +838,7 @@
 <div id="manageSharedFolderMembersModal" class="modal">
     <div class="modal-content" style="max-width: 600px;">
         <div class="modal-header">
-            <h3 class="modal-title">管理成员 - <span id="manageSharedFolderName"></span></h3>
+            <h3 class="modal-title"><i class="fas fa-users"></i> 管理成员 - <span id="manageSharedFolderName"></span></h3>
             <button class="close-btn" onclick="cloudApp.closeModal('manageSharedFolderMembersModal')">&times;</button>
         </div>
         <div class="modal-body">
@@ -864,7 +867,7 @@
 <div class="modal" id="commentModal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3 class="modal-title">文件评论</h3>
+            <h3 class="modal-title"><i class="fas fa-comments"></i> 文件评论</h3>
             <button class="close-btn" onclick="cloudApp.closeModal('commentModal')">&times;</button>
         </div>
         <div class="modal-body">
@@ -883,7 +886,7 @@
 <div class="modal" id="dashboardModal">
     <div class="modal-content modal-lg">
         <div class="modal-header">
-            <h3 class="modal-title">网盘统计</h3>
+            <h3 class="modal-title"><i class="fas fa-chart-bar"></i> 网盘统计</h3>
             <button class="close-btn" onclick="cloudApp.closeModal('dashboardModal')">&times;</button>
         </div>
         <div class="modal-body">
@@ -900,7 +903,7 @@
 <script src="/static/js/utils.js?v=20260623-28bf256"></script>
 <script src="/static/js/frontend_cloud_config.js?v=20260623-28bf256"></script>
 <script src="/static/js/api.js?v=20260623-28bf256"></script>
-<script src="/static/js/cloud.js?v=20260623-28bf257"></script>
+<script src="/static/js/cloud.js?v=20260623-28bf259"></script>
 
 <script>
     // 🔧 初始化侧边栏按钮显示状态

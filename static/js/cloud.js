@@ -2834,7 +2834,7 @@ class CloudApp {
         // 更新标题
         const titleEl = modal.querySelector('.modal-title');
         if (titleEl) {
-            titleEl.textContent = `创建协作文档：${this.currentCreateFileName}`;
+            titleEl.innerHTML = `<i class="fas fa-file-alt"></i> 创建协作文档：${this.currentCreateFileName}`;
         }
 
         // 清空并显示
@@ -2856,7 +2856,7 @@ class CloudApp {
         modal.innerHTML = `
         <div class="modal-content" style="max-width: 600px;">
             <div class="modal-header">
-                <h3 class="modal-title">创建协作文档</h3>
+                <h3 class="modal-title"><i class="fas fa-file-alt"></i> 创建协作文档</h3>
                 <button class="close-btn" onclick="cloudApp.closeCreateCollabDocModal()">&times;</button>
             </div>
             <div class="modal-body">
@@ -2956,13 +2956,13 @@ class CloudApp {
         let html = '';
         users.forEach(user => {
             html += `
-            <div class="user-result-item" onclick="cloudApp.addCollabUser(${user.id}, '${this.escapeHtml(user.real_name || user.username)}')">
+            <div class="user-result-item" onclick="cloudApp.addCollabUser(${user.id}, '${this.escapeHtml(user.real_name || user.username)}', this)">
                 <img src="${user.avatar_url || '/static/images/default-avatar.png'}" class="user-avatar">
                 <div class="user-info">
                     <div class="user-name">${this.escapeHtml(user.real_name || user.username)}</div>
                     <div class="user-dept">${user.department_info?.name || ''}</div>
                 </div>
-                <i class="fas fa-plus-circle add-icon"></i>
+                <i class="fas fa-plus-circle add-icon" data-user-id="${user.id}" title="添加协作者"></i>
             </div>
         `;
         });
@@ -2996,17 +2996,23 @@ class CloudApp {
     /**
      * 🔧 添加协作者
      */
-    addCollabUser(userId, userName, permission = 'write') {
+    addCollabUser(userId, userName, element) {
         if (this.selectedCollabUsers.has(userId)) return;
 
         this.selectedCollabUsers.set(userId, {
             name: userName,
-            permission: permission
+            permission: 'write'
         });
 
+        let iconElement = element.querySelector('i') || element;
+        if (iconElement) {
+            iconElement.className = 'fas fa-check-circle';
+            iconElement.style.color = '#28a745';
+        }
+
         this.updateSelectedCollabsDisplay();
-        document.getElementById(this.collabSearchElementId).value = '';
-        document.getElementById(this.collabResultsElementId).classList.remove('show');
+        // document.getElementById(this.collabSearchElementId).value = '';
+        // document.getElementById(this.collabResultsElementId).classList.remove('show');
 
         this.showSuccess('已添加', `${userName} 已添加到协作者列表`);
     }
@@ -3017,6 +3023,17 @@ class CloudApp {
     removeCollabUser(userId) {
         const user = this.selectedCollabUsers.get(userId);
         this.selectedCollabUsers.delete(userId);
+
+
+        const collabSearchResults = document.getElementById(this.collabResultsElementId);
+        let iconElement = collabSearchResults.querySelector(`[data-user-id="${userId}"]`);
+        if (iconElement) {
+            iconElement.className = 'fas fa-plus-circle';
+            iconElement.style.color = '#409EFF'
+        } else {
+            console.log(`iconElement not found userId=${userId}`);
+        }
+
         this.updateSelectedCollabsDisplay();
 
         if (user?.name) {
@@ -3254,7 +3271,7 @@ class CloudApp {
         modal.innerHTML = `
         <div class="modal-content" style="max-width: 800px; max-height: 80vh;">
             <div class="modal-header">
-                <h3>选择文件 - ${filterLabels[filterType] || '全部文件'}</h3>
+                <h3><i class="fas fa-file-alt"></i> 选择文件 - ${filterLabels[filterType] || '全部文件'}</h3>
                 <button class="close-btn" onclick="cloudApp.closeFileSelectModal()">&times;</button>
             </div>
             <div class="modal-body">
@@ -5063,7 +5080,7 @@ class CloudApp {
 
         // 更新模态框标题
         const modalTitle = document.querySelector('#shareModal .modal-header h3');
-        if (modalTitle) modalTitle.innerHTML = isFolder ? `分享文件夹：<strong>${sourceName}</strong> ` : `分享文件：<strong>${sourceName}</strong> `;
+        if (modalTitle) modalTitle.innerHTML = isFolder ? `<i class="fas fa-share-alt"></i> 分享文件夹：<strong>${sourceName}</strong> ` : `<i class="fas fa-share-alt"></i> 分享文件：<strong>${sourceName}</strong> `;
 
         this.openModal('shareModal');
     }
@@ -5239,7 +5256,7 @@ class CloudApp {
         // 🔧 更新模态框标题
         const modalTitle = document.querySelector('#renameModal .modal-header h3');
         if (modalTitle) {
-            modalTitle.textContent = isFolder ? '重命名文件夹' : '重命名文件';
+            modalTitle.innerHTML = isFolder ? '<i class="fas fa-edit"></i> 重命名文件夹' : '<i class="fas fa-edit"></i> 重命名文件';
         }
 
         this.openModal('renameModal');
@@ -6089,7 +6106,7 @@ class CloudApp {
         if (listView) {
             let listHtml = '';
             items.forEach(item => {
-                console.log('item:::', item)
+
                 if (item.is_folder) {
                     const memberCount = item.member_count || (item.folder_collaborations ? item.folder_collaborations.length + 1 : 1);
                     const fileCount = item.file_count || (item.folder_contents ? item.folder_contents.length : 0);
@@ -6178,7 +6195,7 @@ class CloudApp {
         if (gridView) {
             let gridHtml = '';
             items.forEach(item => {
-                console.log('item:::', item)
+
                 if (item.is_folder) {
                     const memberCount = item.member_count || (item.folder_collaborations ? item.folder_collaborations.length + 1 : 1);
                     const fileCount = item.file_count || (item.folder_contents ? item.folder_contents.length : 0);
@@ -6997,7 +7014,7 @@ class CloudApp {
             document.addEventListener('click', (e) => {
                 if (!e.target.closest('.collab-user-search')) {
                     const results = document.getElementById('collabUserResults');
-                    if (results) results.classList.remove('show');
+                    // if (results) results.classList.remove('show');
                 }
             });
         }
@@ -7007,7 +7024,7 @@ class CloudApp {
         document.addEventListener('click', (e) => {
             if (!e.target.closest('#collabUserResults') &&
                 !e.target.closest('#collabUserSearch')) {
-                document.getElementById('collabUserResults')?.classList.remove('show');
+                // document.getElementById('collabUserResults')?.classList.remove('show');
             }
         });
 
@@ -7111,7 +7128,7 @@ class CloudApp {
             // 更新标题
             const titleEl = modal.querySelector('.modal-title');
             if (titleEl && sourceName && modalId === 'moveModal') {
-                titleEl.innerHTML = `移动：<strong>${sourceName}</strong> 到`;
+                titleEl.innerHTML = `<i class="fas fa-cut"></i> 移动：<strong>${sourceName}</strong> 到`;
             }
         }
     }

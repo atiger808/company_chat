@@ -5661,6 +5661,73 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def save(self, request, pk=None):
+        """
+        🔧 前端手动保存文档内容
+        POST /api/cloud/documents/{id}/save/
+        """
+        try:
+            user = request.user
+            file_obj = CloudFile.objects.select_related('owner').get(id=pk)
+
+            is_owner = file_obj.owner == user
+            is_collab = FileCollaboration.objects.filter(
+                file=file_obj, user=user, is_active=True,
+                permission__in=['write', 'admin']
+            ).exists()
+            if not is_owner and not is_collab and not user.is_superuser:
+                return Response({'error': '没有编辑权限'}, status=403)
+
+            content_data = request.data.get('content')
+            if not content_data:
+                return Response({'error': '内容不能为空'}, status=400)
+
+            with transaction.atomic():
+                if isinstance(content_data, str):
+                    content_bytes = content_data.encode('utf-8')
+                else:
+                    content_bytes = content_data
+
+                content_file = ContentFile(content_bytes)
+                version = self._save_document_version(file_obj, content_bytes, user.id)
+
+                file_obj.file.save(
+                    file_obj.original_name or 'document.docx',
+                    content_file, save=True
+                )
+                file_obj.size = len(content_bytes)
+                file_obj.current_version = version
+                file_obj.save(update_fields=['size', 'updated_at', 'current_version'])
+
+                try:
+                    from cloud.websocket_utils import CollabMessageBroadcaster
+                    async_to_sync(CollabMessageBroadcaster.abroadcast_collab_message)(
+                        file_id=str(file_obj.id),
+                        message_type='document_saved',
+                        data={
+                            'versionNumber': version.version_number,
+                            'savedBy': user.username,
+                            'timestamp': timezone.now().isoformat(),
+                        },
+                        exclude_user_id=None,
+                    )
+                except Exception as ws_err:
+                    logger.warning(f'广播保存通知失败: {ws_err}')
+
+                logger.info(f'✅ 文档手动保存成功: file={file_obj.name}, v{version.version_number}')
+                return Response({
+                    'message': '保存成功',
+                    'version_number': version.version_number,
+                    'version_id': str(version.id),
+                })
+
+        except CloudFile.DoesNotExist:
+            return Response({'error': '文档不存在'}, status=404)
+        except Exception as e:
+            logger.error(f'保存文档失败: {e}', exc_info=True)
+            return Response({'error': f'保存失败：{str(e)}'}, status=500)
+
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def list_collabs(self, request):
         """

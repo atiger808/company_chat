@@ -14,9 +14,9 @@ from email.header import Header  # 👈 1. 引入 Header
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 
-
 # 生成 JWT token
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
+from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 
 from django.contrib.auth.models import AnonymousUser
 from django.utils import timezone
@@ -29,7 +29,6 @@ from loguru import logger
 
 from utils.request_util import get_browser, get_request_ip, get_os, get_ip_analysis, get_request_path, save_login_log
 from utils.utils import SystemConfigManager, CloudSystemConfigManager
-
 
 from .serializers import (
     UserSerializer,
@@ -227,7 +226,6 @@ class AdminStatsViewSet(viewsets.ViewSet):
         })
 
 
-
 class UserAdminViewSet(viewsets.ModelViewSet):
     """用户管理视图集（管理员专用）"""
     queryset = CustomUser.objects.all()
@@ -292,8 +290,8 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             #         user_type__in=['user', 'normal', 'admin']
             #     )
         # else:
-            # 超级管理员排除自己
-            # queryset = queryset.exclude(id=user.id)
+        # 超级管理员排除自己
+        # queryset = queryset.exclude(id=user.id)
 
         # 支持搜索
         search = self.request.query_params.get('search', '')
@@ -642,7 +640,6 @@ class DepartmentViewSet(viewsets.ModelViewSet):
 
         return response
 
-
     def list(self, request):
         queryset = self.get_queryset()
         name = request.query_params.get('name', '')
@@ -698,7 +695,6 @@ class DepartmentListViewSet(viewsets.ViewSet):
             )
 
 
-
 class UserViewSet(viewsets.ModelViewSet):
     queryset = CustomUser.objects.all()
     serializer_class = UserDetailSerializer
@@ -729,7 +725,6 @@ class UserViewSet(viewsets.ModelViewSet):
     #             }, status=response.status_code)
     #
     #     return response
-
 
     def get_serializer_class(self):
 
@@ -795,7 +790,6 @@ class UserViewSet(viewsets.ModelViewSet):
                 'error': '当前不允许新用户注册'
             }, status=status.HTTP_403_FORBIDDEN)
 
-
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
@@ -842,17 +836,27 @@ class UserViewSet(viewsets.ModelViewSet):
             'message': '登录成功'
         })
 
-
-
     @action(detail=False, methods=['post'])
     def logout(self, request):
-        """用户登出"""
+        """用户登出（同时将 JWT refresh token 加入黑名单）"""
         # 🔒 验证用户是否已认证
         if not request.user.is_authenticated:
             return Response({'error': '用户未登录'}, status=status.HTTP_401_UNAUTHORIZED)
 
         try:
             logger.info(f'登出用户：{request.user.username} (ID: {request.user.id})')
+
+            # 🔧 黑名单处理：将 refresh token 加入黑名单使其立即失效
+            refresh_token = request.data.get('refresh')
+            if refresh_token:
+                try:
+                    token = RefreshToken(refresh_token)
+                    token.blacklist()
+                    logger.info(f'✅ refresh token 已加入黑名单: user={request.user.username}')
+                except TokenError as e:
+                    logger.warning(f'⚠️ refresh token 已过期或无效，无需黑名单: {e}')
+                except Exception as e:
+                    logger.warning(f'⚠️ 将 refresh token 加入黑名单失败（不影响登出）: {e}')
 
             # 🔧 更新在线状态（带异常处理）
             request.user.update_online_status(False)
@@ -941,7 +945,6 @@ class UserViewSet(viewsets.ModelViewSet):
         serializer.save()
         return Response(UserDetailSerializer(request.user, context={'request': request}).data)
 
-
     @action(detail=True, methods=['get'])
     def get_friends(self, request):
         user = self.get_object()
@@ -1023,7 +1026,7 @@ class UserViewSet(viewsets.ModelViewSet):
             ).select_related('department')
 
         # 排除当前用户，按多个维度搜索
-        queryset =queryset.filter(
+        queryset = queryset.filter(
             Q(username__icontains=query) |
             Q(real_name__icontains=query) |
             Q(email__icontains=query) |
@@ -1045,8 +1048,6 @@ class UserViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(queryset, many=True, context={'request': request})
         return Response(serializer.data)
 
-
-
     @action(detail=True, methods=['post'])
     def promote_user(self, request, pk=None):
         """提升用户权限"""
@@ -1065,7 +1066,6 @@ class UserViewSet(viewsets.ModelViewSet):
         user.user_type = 'normal'
         user.save()
         return Response({'message': '用户权限已降级'})
-
 
     @action(detail=False, methods=['post'])
     def change_password(self, request):
@@ -1138,7 +1138,6 @@ class UserViewSet(viewsets.ModelViewSet):
             'message': '密码修改成功'
         }, status=status.HTTP_200_OK)
 
-
     @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
     def request_password_reset(self, request):
         """
@@ -1168,7 +1167,8 @@ class UserViewSet(viewsets.ModelViewSet):
 
         # 🔧 频率限制：同一邮箱1小时内只能请求1次
         if user.password_reset_token_expires and timezone.now() < user.password_reset_token_expires:
-            logger.warning(f"用户 {user.username} 请求密码重置，但已存在重置令牌，请检查邮箱（1小时内请勿重复请求）,请检查 password_reset_token_expires: {user.password_reset_token_expires}")
+            logger.warning(
+                f"用户 {user.username} 请求密码重置，但已存在重置令牌，请检查邮箱（1小时内请勿重复请求）,请检查 password_reset_token_expires: {user.password_reset_token_expires}")
             return Response({
                 'message': '已存在重置令牌，请检查邮箱（1小时内请勿重复请求）'
             }, status=status.HTTP_429_TOO_MANY_REQUESTS)
@@ -1207,7 +1207,7 @@ class UserViewSet(viewsets.ModelViewSet):
             send_mail(
                 subject=f"{context['site_name']} - 密码重置请求",
                 message=text_message,
-                from_email=custom_from_email,   # 👈 4. 使用编码后的纯 ASCII 字符串
+                from_email=custom_from_email,  # 👈 4. 使用编码后的纯 ASCII 字符串
                 recipient_list=[email],
                 html_message=html_message,
                 fail_silently=False
@@ -1225,7 +1225,6 @@ class UserViewSet(viewsets.ModelViewSet):
             return Response({
                 'error': '发送重置邮件失败，请稍后重试'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
     def confirm_password_reset(self, request):
@@ -1291,9 +1290,6 @@ class UserViewSet(viewsets.ModelViewSet):
         }, status=status.HTTP_200_OK)
 
 
-
-
-
 # chat/views.py - 在文件末尾添加
 from django.shortcuts import render
 from django.http import JsonResponse
@@ -1327,7 +1323,6 @@ def reset_password_page(request):
                 'error_message': '重置链接已过期或无效，请重新申请'
             })
 
-
         # 渲染重置密码页面
         return render(request, 'chat/reset-password.html', {
             'initial_token': token,
@@ -1343,7 +1338,6 @@ def reset_password_page(request):
         return render(request, 'chat/reset-password-error.html', {
             'error_message': '页面加载失败，请刷新重试或重新申请重置链接'
         }, status=200)
-
 
 
 # 频率限制：同一 IP 每小时最多提交 3 次
@@ -1434,3 +1428,156 @@ class ConsultationRequestView(APIView):
         except Exception as e:
             # 邮件发送失败仅记录日志，不影响主流程
             logger.warning(f"发送咨询通知邮件失败: {e}")
+
+
+class TokenRefreshView(APIView):
+    """
+    🔧 自定义 Token 刷新接口
+    - 支持更长有效期（24小时）
+    - 自动延长 refresh token
+    - 记录刷新日志
+    POST /api/auth/token/refresh/
+    {
+        "refresh": "refresh_token_value"
+    }
+    """
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = []  # 不限制频率，保证编辑时能正常刷新
+    authentication_classes = []  # 不需要认证
+
+    def post(self, request):
+        refresh_token = request.data.get('refresh')
+
+        if not refresh_token:
+            return Response({
+                'error': '缺少 refresh_token'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # 验证 refresh token
+            refresh = RefreshToken(refresh_token)
+
+            # 获取用户信息（用于日志）
+            user_id = refresh.get('user_id')
+            logger.info(f"用户 {user_id} 刷新了 Token")
+
+            # 检查是否即将过期（7天内过期则延长）
+            from django.utils import timezone
+            from datetime import timedelta
+            exp_timestamp = refresh.get('exp')
+            if exp_timestamp:
+                exp_time = timezone.datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)
+                remaining = exp_time - timezone.now()
+                # 如果7天内过期，自动延长
+                if remaining < timedelta(days=7):
+                    refresh.set_exp(lifetime=timedelta(days=30))
+                    logger.info(f"延长 refresh token: user_id={user_id}")
+
+            # 生成新的 access token
+            access = refresh.access_token
+
+            # 可选：设置 access token 更长的有效期（编辑场景）
+            access.set_exp(lifetime=timedelta(hours=24))
+
+            logger.info(f"Token 刷新成功: user_id={user_id}")
+
+            return Response({
+                'access': str(access),
+                'refresh': str(refresh),
+                'expires_in': 24 * 60 * 60,  # 过期时间（秒）
+                'token_type': 'Bearer'
+            })
+
+
+        except InvalidToken as e:
+            logger.warning(f"无效的 refresh token: {e}")
+
+            return Response({
+                'error': 'Token 无效或已过期',
+                'code': 'invalid_token',
+                'detail': str(e)
+            }, status=status.HTTP_401_UNAUTHORIZED)
+
+
+        except TokenError as e:
+            logger.warning(f"Token 解析错误: {e}")
+
+            return Response({
+                'error': 'Token 解析失败',
+                'code': 'token_error',
+                'detail': str(e)
+            }, status=status.HTTP_401_UNAUTHORIZED)
+
+
+        except Exception as e:
+            logger.error(f"Token 刷新异常: {e}", exc_info=True)
+
+            return Response({
+                'error': '服务器内部错误',
+                'code': 'server_error'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class TokenVerifyView(APIView):
+    """
+    🔧 验证 Token 有效性
+    POST /api/auth/token/verify/
+    {
+        "token": "access_token_value"
+    }
+    """
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        token = request.data.get('token')
+
+        if not token:
+            return Response({
+                'valid': False,
+                'error': '缺少 token'
+            })
+
+        try:
+            # 验证 access token
+            access_token = AccessToken(token)
+
+            # 获取 Token 信息
+            payload = {
+                'user_id': access_token.get('user_id'),
+                'exp': access_token.get('exp'),
+                'iat': access_token.get('iat'),
+                'token_type': access_token.get('token_type')
+            }
+
+            # 计算剩余时间
+            exp_timestamp = payload.get('exp', 0)
+            remaining = exp_timestamp - timezone.now().timestamp()
+
+            return Response({
+                'valid': True,
+                'payload': payload,
+                'expires_in': max(0, int(remaining)),
+                'is_expiring_soon': remaining < 300  # 5分钟内即将过期
+            })
+
+        except InvalidToken:
+            return Response({
+                'valid': False,
+                'error': 'Token 无效',
+                'code': 'invalid_token'
+            })
+
+        except TokenError:
+            return Response({
+                'valid': False,
+                'error': 'Token 已过期',
+                'code': 'expired_token'
+            })
+
+        except Exception as e:
+            return Response({
+                'valid': False,
+                'error': str(e),
+                'code': 'error'
+            })
