@@ -733,7 +733,7 @@ class MessageViewSet(viewsets.ModelViewSet):
                 pass
 
         if quote_content:
-            message.quote_content = quote_content[:500]  # 限制长度
+            message.quote_content = quote_content[:]  # 限制长度
 
         if quote_sender:
             message.quote_sender = quote_sender[:100]

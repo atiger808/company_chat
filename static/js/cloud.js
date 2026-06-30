@@ -609,6 +609,7 @@ class CloudApp {
             this.setupEventListeners();
             this.setupSidebar();
             this.setupContextMenu();
+            this._setupGlobalClickHandler();
 
             console.log('✅ CloudApp 初始化完成');
 
@@ -7106,8 +7107,10 @@ class CloudApp {
 
     renderAdminInfo() {
         if (this.currentUser) {
-            document.getElementById('adminUsername').textContent = this.currentUser.username;
+            document.getElementById('adminUsername').textContent = this.currentUser.real_name || this.currentUser.username;
+            document.getElementById('adminUsername').title = `当前账号：${this.currentUser.username}`;
             document.getElementById('adminAvatar').src = this.currentUser.avatar_url || '/static/images/default-avatar.png';
+            document.getElementById('adminAvatar').title = `当前账号：${this.currentUser.username}`;
         }
     }
 
@@ -7379,6 +7382,26 @@ class CloudApp {
                 window.location.href = this.cloud_login_url;
             }
         }
+    }
+
+    // 🔧 全局点击关闭下拉菜单
+    _setupGlobalClickHandler() {
+        document.addEventListener('click', () => {
+            document.querySelectorAll('.user-dropdown-menu').forEach(d => {
+                d.style.display = 'none';
+            });
+        });
+    }
+
+    // 🔧 用户下拉菜单切换
+    toggleUserDropdown(event) {
+        event.stopPropagation();
+        const dropdown = document.getElementById('userDropdownMenu');
+        if (!dropdown) return;
+        document.querySelectorAll('.user-dropdown-menu').forEach(d => {
+            if (d !== dropdown) d.style.display = 'none';
+        });
+        dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
     }
 
 

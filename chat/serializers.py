@@ -12,6 +12,7 @@ from .models import ChatRoom, Message, FileUpload, MessageReadStatus, MessageDel
 from accounts.models import CustomUser
 from accounts.serializers import UserListSerializer, DepartmentSerializer
 from loguru import logger
+import json
 
 
 
@@ -50,10 +51,21 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         """🔧 优先使用预取的缓存数据，实现毫秒级响应"""
         # 1. 优先读取视图层批量预取的数据
         if hasattr(obj, '_cached_last_message') and obj._cached_last_message:
-            msg = obj._cached_last_message
-            # logger.info(f"Hit cache for {obj.id} last msg: {msg}")
-            # 返回序列化后的数据
-            return MessageSerializer(msg, context=self.context).data
+            last_msg = obj._cached_last_message
+            if last_msg.message_type == 'task_card':
+                try:
+                    card_data = json.loads(last_msg.content)
+                    status_map = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成', 'archived': '已归档'}
+                    if card_data.get('status') == 'todo':
+                        content_text = f"📋 {card_data.get('creator_info', {}).get('real_name') or card_data.get('creator_info', {}).get('username')} 创建了任务: {card_data.get('title')}"
+                    else:
+                        content_text = f"✅ 任务状态已更新为: {status_map.get(card_data.get('status'), card_data.get('status'))}"
+                    last_msg.content = content_text
+                except Exception as e:
+                    logger.error(f"Error in get_last_message: {e}")
+            # logger.info(f"Hit cache for {obj.id} last msg: {last_msg}")
+            # # 返回序列化后的数据
+            return MessageSerializer(last_msg, context=self.context).data
 
         # 2. 降级方案（仅当缓存未命中时执行，如单独获取详情时）
         try:
@@ -72,6 +84,18 @@ class ChatRoomSerializer(serializers.ModelSerializer):
             ).order_by('-timestamp').first()
 
             if last_msg:
+                if last_msg.message_type == 'task_card':
+                    try:
+                        card_data = json.loads(last_msg.content)
+                        status_map = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成', 'archived': '已归档'}
+                        if card_data.get('status') == 'todo':
+                            content_text = f"📋 {card_data.get('creator_info', {}).get('real_name') or card_data.get('creator_info', {}).get('username')} 创建了任务: {card_data.get('title')}"
+                        else:
+                            content_text = f"✅ 任务状态已更新为: {status_map.get(card_data.get('status'), card_data.get('status'))}"
+                        last_msg.content = content_text
+                        logger.info(f"not Hit cache for {obj.id} last msg: {last_msg}")
+                    except Exception as e:
+                        logger.error(f"Error in get_last_message: {e}")
                 return MessageSerializer(last_msg, context=self.context).data
             return None
         except Exception as e:
@@ -198,6 +222,8 @@ class MessageSerializer(serializers.ModelSerializer):
     # 🔧 新增：序列化提及的用户列表（仅读）
     mentioned_users = UserListSerializer(many=True, read_only=True)
 
+    task_data = serializers.SerializerMethodField()
+
     def create(self, validated_data):
         file_id = validated_data.pop('file_id', None)
         message = Message.objects.create(**validated_data)
@@ -224,7 +250,7 @@ class MessageSerializer(serializers.ModelSerializer):
             # 🔧 添加语音时长字段
             'voice_duration', 'mentioned_users', 'mentioned_all',  # 🔧 加入列表
             'call_duration', 'call_type', 'call_status',
-            'cloud_file_id',  # 🔧 新增字段
+            'cloud_file_id', 'task_data',  # 🔧 新增字段
         ]
         read_only_fields = ['id', 'timestamp', 'is_read', 'is_deleted', 'deleted_at', 'sender', 'sender_id', 'sender_name', 'voice_duration', 'mentioned_users', 'mentioned_all']
 
@@ -359,7 +385,7 @@ class MessageSerializer(serializers.ModelSerializer):
 
                 # 🔧 关键修复：如果quote_content等字段为空，从原消息中提取
                 if not quote_content:
-                    message.quote_content = quote_message.content[:500] if quote_message.content else ''
+                    message.quote_content = quote_message.content[:] if quote_message.content else ''
 
                 if not quote_sender:
                     message.quote_sender = quote_message.sender.real_name or quote_message.sender.username if quote_message.sender else '未知用户'
@@ -377,7 +403,7 @@ class MessageSerializer(serializers.ModelSerializer):
                 pass
 
         if quote_content:
-            message.quote_content = quote_content[:500]  # 限制长度
+            message.quote_content = quote_content[:]  # 限制长度
 
         if quote_sender:
             message.quote_sender = quote_sender[:100]
@@ -397,6 +423,18 @@ class MessageSerializer(serializers.ModelSerializer):
         message.save()
 
         return message
+
+
+
+    def get_task_data(self, obj):
+
+        if obj.message_type == 'task_card':
+            try:
+                return json.loads(obj.content)
+            except Exception as e:
+                logger.error(f"Error parsing task card content: {e}")
+                return None
+        return None
 
 
 class MemberListSerializer(serializers.ModelSerializer):

@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'accounts',  # 自定义用户模型应用
     'chat',
     'cloud',
+    'tasks',
 
     # JWT token 黑名单管理（需执行 migrate 创建表）
     'rest_framework_simplejwt.token_blacklist',

@@ -933,8 +933,13 @@ class NotificationConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.error(f"ice_candidate forward failed: {e}", exc_info=True)
 
-
-
+    async def task_notification(self, event):
+        """处理任务通知消息"""
+        await self.send(text_data=json.dumps({
+            'type': 'task.notification',
+            'event_type': event.get('event_type'),
+            'task': event.get('task')
+        }))
 
 # chat/consumers.py - 添加 CallConsumer 类
 

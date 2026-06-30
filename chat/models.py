@@ -232,6 +232,8 @@ class Message(models.Model):
         # 🔧 新增：通话相关类型
         ('call_audio', '语音通话'),
         ('call_video', '视频通话'),
+
+        ('task_card', '任务卡片'),
     )
 
     chat_room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='messages', verbose_name='聊天室')
@@ -305,7 +307,7 @@ class Message(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.sender.username}: {self.content[:50]}"
+        return f"{self.content[:]}"
 
     def mark_as_read(self,  user=None):
         """标记为已读"""

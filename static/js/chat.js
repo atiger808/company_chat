@@ -730,6 +730,11 @@ class ChatClient {
             this.currentUser = await API.getCurrentUser();
             this.renderCurrentUser();
 
+            if (this.currentUser?.id) {
+                localStorage.setItem('user_id', this.currentUser.id);
+                localStorage.setItem('user_type', this.currentUser?.user_type);
+            }
+
             // 检查是否为管理员，显示控制台按钮
             if (this.currentUser.user_type === 'super_admin' || this.currentUser.user_type === 'admin') {
                 const adminConsoleBtn = document.getElementById('adminConsoleBtn');
@@ -738,33 +743,26 @@ class ChatClient {
                     adminConsoleBtn.addEventListener('click', (e) => {
                         e.preventDefault();
                         window.location.href = '/control/';
-                        // 以新页面形式打开
-                        // window.open('/control/', '_blank');
                     });
                 }
+            }
 
-                const cloudBtn = document.getElementById('cloudBtn');
-                if (cloudBtn) {
-                    cloudBtn.style.display = 'flex';
-                    cloudBtn.addEventListener('click', (e) => {
-                        e.preventDefault();
-                        window.location.href = '/cloud/';
-                        // 以新页面形式打开
-                        // window.open('/cloud/', '_blank');
-                    });
-                }
+            const cloudBtn = document.getElementById('cloudBtn');
+            if (cloudBtn) {
+                cloudBtn.style.display = 'flex';
+                cloudBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    window.location.href = '/cloud/';
+                });
+            }
 
-            } else {
-                let cloudBtn = document.getElementById('cloudBtn');
-                if (cloudBtn) {
-                    cloudBtn.style.display = 'flex';
-                    cloudBtn.addEventListener('click', (e) => {
-                        e.preventDefault();
-                        window.location.href = '/cloud/';
-                        // 以新页面形式打开
-                        // window.open('/cloud/', '_blank');
-                    });
-                }
+            const tasksBtn = document.getElementById('tasksBtn');
+            if (tasksBtn) {
+                tasksBtn.style.display = 'flex';
+                tasksBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    window.location.href = '/tasks/';
+                });
             }
 
             // 连接全局 WebSocket
@@ -1050,6 +1048,9 @@ class ChatClient {
             // 🔧 新增：处理云盘协作邀请通知
             case 'collaboration_invite':
                 this.handleCollaborationInvite(data);
+                break;
+            case 'task.notification':
+                this.handleTaskNotification(data);
                 break;
             default:
                 console.log('Unknown global message type:', data.type, data);
@@ -1385,6 +1386,9 @@ class ChatClient {
         switch (data.type) {
             case 'chat_message':
                 this.handleNewMessage(data);
+                break;
+            case 'task.update': // 🔧 新增：处理任务状态变更
+                this.handleTaskUpdate(data);
                 break;
             case 'message_revoked':
                 this.handleMessageRevoked(data);
@@ -2438,6 +2442,203 @@ class ChatClient {
                 notif.close();
             };
         }
+    }
+
+
+    handleTaskNotification(data) {
+        const {event_type, task} = data;
+        const isAssignee = task.assignee_info?.id === this.currentUser.id;
+
+        // 1. 显示桌面通知
+        if (isAssignee && event_type === 'assigned') {
+            this.showNotification('📋 您有一个新任务', {
+                body: task.title,
+                icon: task.creator_info?.avatar_url || '/static/images/default-avatar.png',
+                data: {url: '/tasks/'}
+            });
+        }
+
+        // 2. 在聊天室渲染“任务卡片” (如果关联了当前聊天室)
+        if (task.related_chat_room_id == this.currentRoomId && event_type === 'assigned') {
+            const cardHtml = `
+            <div class="message-task-card" style="border: 1px solid #dcdfe6; border-radius: 8px; padding: 12px; margin-top: 8px; background: #f5f7fa; cursor: pointer; max-width: 300px;" onclick="window.open('/tasks/', '_blank')">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-weight: bold; color: #303133;"><i class="fas fa-tasks"></i> 任务卡片</span>
+                    <span style="font-size: 12px; padding: 2px 8px; border-radius: 4px; color: white; background: #409EFF;">待处理</span>
+                </div>
+                <div style="font-size: 14px; color: #606266; margin-bottom: 8px;">${task.title}</div>
+                <div style="font-size: 12px; color: #909399; display: flex; gap: 12px;">
+                    <span><i class="fas fa-user"></i> ${task.assignee_info?.real_name || '未指派'}</span>
+                </div>
+            </div>
+        `;
+
+            const messagesList = document.getElementById('messagesList');
+            const systemMsg = document.createElement('div');
+            systemMsg.className = 'message-wrapper received';
+            systemMsg.innerHTML = `<div class="message-content message-left">${cardHtml}</div>`;
+            messagesList.appendChild(systemMsg);
+            Utils.scrollToBottom(messagesList);
+        }
+    }
+
+    /**
+     * 🔧 处理任务状态更新推送
+     */
+    handleTaskUpdate(data) {
+        const {event, task} = data;
+        console.log('📥 收到任务更新:', event, task);
+        if (!task || !task.related_chat_room) return;
+
+        // 1. 渲染或更新聊天室中的任务卡片
+        this.renderTaskCardInChat_realtime(task, event);
+
+        // 2. 如果任务指派给了当前用户，且状态发生了变更，弹出系统通知
+        if (event === 'status_changed' && task.assignee_info?.id === this.currentUser.id) {
+            const statusText = {
+                'todo': '待处理',
+                'in_progress': '进行中',
+                'done': '已完成'
+            }[task.status] || task.status;
+            this.showNotification(`任务状态更新: ${task.title}`, {
+                body: `任务状态已变更为: ${statusText}`,
+                icon: task.creator_info?.avatar_url || '/static/images/default-avatar.png',
+                tag: `task-${task.id}-${Date.now()}`
+            });
+        }
+    }
+
+    /**
+     * 🔧 渲染任务卡片到聊天室（支持增量更新与闪烁动画）
+     */
+    renderTaskCardInChat_realtime(task, event) {
+        const messagesList = document.getElementById('messagesList');
+        if (!messagesList) return;
+
+        const statusColors = {'todo': '#909399', 'in_progress': '#E6A23C', 'done': '#67C23A', 'overdue': '#F56C6C'};
+        const statusText = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成', 'overdue': '已逾期'};
+
+        const currentStatus = task.status;
+        const color = statusColors[currentStatus] || '#909399';
+        const text = statusText[currentStatus] || currentStatus;
+
+        const assigneeName = task.assignee_info ? (task.assignee_info.real_name || task.assignee_info.username) : '未指派';
+        const dueDateStr = task.due_date ? new Date(task.due_date).toLocaleDateString('zh-CN', {
+            month: 'short',
+            day: 'numeric'
+        }) : '无期限';
+
+        // 🔧 核心优化：如果卡片已存在，直接更新状态并闪烁，避免重复插入
+        const existingCard = messagesList.querySelector(`.task-card-message[data-task-id="${task.id}"]`);
+        if (existingCard) {
+            const statusBadge = existingCard.querySelector('.task-status-badge');
+            if (statusBadge) {
+                statusBadge.style.background = color;
+                statusBadge.textContent = text;
+            }
+            existingCard.classList.add('task-card-flash');
+            setTimeout(() => existingCard.classList.remove('task-card-flash'), 2000);
+            Utils.scrollToBottom(messagesList);
+            return;
+        }
+
+        // 构建精美的任务卡片 HTML
+        const cardHtml = `
+            <div class="message-wrapper received">
+                <div class="message-content message-left task-card-message" data-task-id="${task.id}" 
+                     style="max-width: 320px; padding: 0; overflow: hidden; border-radius: 8px; border: 1px solid #e4e7ed; background: #fff; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); cursor: pointer; transition: all 0.3s;" 
+                     >
+                    
+                    <!-- 卡片头部 -->
+                    <div style="padding: 12px 16px; gap: 8px; background: linear-gradient(135deg, #f5f7fa 0%, #e4e7ed 100%); border-bottom: 1px solid #e4e7ed; display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-weight: 600; color: #303133; font-size: 14px; display: flex; align-items: center; gap: 6px;">
+                            <i class="fas fa-tasks" style="color: var(--primary-color);"></i> 任务卡片
+                        </span>
+                        <span class="task-status-badge" style="font-size: 12px; padding: 2px 8px; border-radius: 10px; color: #fff; background: ${color}; transition: all 0.3s;">${text}</span>
+                    </div>
+                    
+                    <!-- 卡片内容 -->
+                    <div style="padding: 12px 16px;">
+                        <div class="task-title" style="font-size: 14px; color: #303133; margin-bottom: 8px; font-weight: 500; line-height: 1.0;">${this.escapeHtml(task.title)}</div>
+                        <div class="task-meta" style="font-size: 12px; color: #909399; display: flex; flex-direction: column; gap: 4px;">
+                            <span title="执行人"><i class="fas fa-user-circle" style="width: 14px;"></i> ${assigneeName}</span>
+                            <span title="截止日期"><i class="fas fa-clock" style="width: 14px;"></i> 截止: ${dueDateStr}</span>
+                        </div>
+                    </div>
+                    
+                    <!-- 卡片底部 -->
+                    <div style="padding: 8px 16px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;"
+                        onclick="window.open('/tasks/', '_blank')">
+                        点击查看详情 <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        messagesList.insertAdjacentHTML('beforeend', cardHtml);
+        Utils.scrollToBottom(messagesList);
+
+        // 添加入场闪烁动画
+        const newCard = messagesList.querySelector(`.task-card-message[data-task-id="${task.id}"]`);
+        if (newCard) {
+            newCard.classList.add('task-card-flash');
+            setTimeout(() => newCard.classList.remove('task-card-flash'), 2000);
+        }
+    }
+
+
+    /**
+     * 渲染任务卡片到聊天室（静态渲染）
+     */
+    renderTaskCardInChat(task, container) {
+        container.className = '';
+
+        const statusColors = {'todo': '#909399', 'in_progress': '#E6A23C', 'done': '#67C23A', 'overdue': '#F56C6C'};
+        const statusText = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成', 'overdue': '已逾期'};
+
+        const currentStatus = task.status;
+        const color = statusColors[currentStatus] || '#909399';
+        const text = statusText[currentStatus] || currentStatus;
+
+        const assigneeName = task.assignee_info ? (task.assignee_info.real_name || task.assignee_info.username) : '未指派';
+        const dueDateStr = task.due_date ? new Date(task.due_date).toLocaleDateString('zh-CN', {
+            month: 'short',
+            day: 'numeric'
+        }) : '无期限';
+
+
+        // 构建任务卡片内容 HTML（不带外层 message-wrapper，供 renderMessageContent 嵌入使用）
+        const cardHtml = `
+            <div class="message-content message-left task-card-message" data-task-card-id="${task.id}"
+                 style="max-width: 320px; padding: 0; overflow: hidden; border-radius: 8px; border: 1px solid #e4e7ed; background: #fff; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); cursor: pointer; transition: all 0.3s;"
+                 >
+
+                <!-- 卡片头部 -->
+                <div style="padding: 12px 16px; gap: 8px; background: linear-gradient(135deg, #f5f7fa 0%, #e4e7ed 100%); border-bottom: 1px solid #e4e7ed; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: 600; color: #303133; font-size: 14px; display: flex; align-items: center; gap: 6px;">
+                        <i class="fas fa-tasks" style="color: var(--primary-color);"></i> 任务卡片
+                    </span>
+                    <span class="task-status-badge" style="font-size: 10px; padding: 8px; border-radius: 10px; color: #fff; background: ${color}; transition: all 0.3s;">${text}</span>
+                </div>
+
+                <!-- 卡片内容 -->
+                <div style="padding: 12px 16px;">
+                    <div class="task-title" style="font-size: 14px; color: #303133; margin-bottom: 8px; font-weight: 500; line-height: 1.0;">${this.escapeHtml(task.title)}</div>
+                    <div class="task-meta" style="font-size: 12px; color: #909399; display: flex; flex-direction: column; gap: 4px;">
+                        <span title="执行人"><i class="fas fa-user-circle" style="width: 14px;"></i> ${assigneeName}</span>
+                        <span title="截止日期"><i class="fas fa-clock" style="width: 14px;"></i> 截止: ${dueDateStr}</span>
+                    </div>
+                </div>
+
+                <!-- 卡片底部 -->
+                <div style="padding: 8px 16px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;"
+                    onclick="window.open('/tasks/', '_blank')">
+                    点击查看详情 <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
+                </div>
+            </div>
+        `;
+
+        container.innerHTML = cardHtml;
     }
 
     // 更新聊天列表中的用户状态
@@ -4006,6 +4207,37 @@ class ChatClient {
             previewContent = '[图片]';
         } else if (message.message_type === 'file') {
             previewContent = `[文件] ${message.file_info?.name || ''}`;
+        } else if (message.message_type === 'task_card') {
+            let taskTitle = '';
+            let taskStatus = '';
+            let taskStatusRaw = '';
+            let taskAssignee = '';
+            const statusMapPreview = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成', 'overdue': '已逾期'};
+            const statusColorPreview = {'todo': '#909399', 'in_progress': '#E6A23C', 'done': '#67C23A', 'overdue': '#F56C6C'};
+            try {
+                const taskData = typeof message.content === 'string' ? JSON.parse(message.content) : (message.task_data || {});
+                taskTitle = taskData.title || taskData.task_title || '';
+                taskStatusRaw = taskData.status || '';
+                taskStatus = statusMapPreview[taskData.status] || '';
+                taskAssignee = (taskData.assignee_info?.real_name || taskData.assignee_info?.username || taskData.assignee_name || '');
+            } catch (e) {
+                taskTitle = '';
+            }
+            // 使用 innerHTML 的标记，后面会在渲染时检测
+            const escTitle = this.escapeHtml(taskTitle || '任务卡片');
+            const statusBg = statusColorPreview[taskStatusRaw] || '#909399';
+            previewContent =`
+                    <div class="forward-task-card-preview" title="任务卡片" style="padding:6px 8px;border-left:3px solid #409EFF;display:flex;align-items:center;gap:8px;">
+                        <div style="font-weight:500;font-size:13px;color:#303133;display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+                            <i class="fas fa-tasks" style="color:#409EFF;"></i> 
+                            <span>${escTitle}</span>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#909399;">
+                            ${taskStatus ? `<span style="background:${statusBg};color:#fff;padding:1px 6px;border-radius:8px;">${taskStatus}</span>` : ''}
+                            ${taskAssignee ? `<span title="执行人">${this.escapeHtml(taskAssignee)}</span>` : ''}
+                        </div>
+                    </div>
+                `;
         } else {
             previewContent = this.escapeHtml(message.content || '[未知类型]');
         }
@@ -4018,7 +4250,7 @@ class ChatClient {
             </div>
             <div class="modal-body">
                 <!-- 预览转发的消息 -->
-                <div class="forward-preview">
+                <div class="forward-preview" id="forwardPreviewContainer">
                     <div class="preview-content">${previewContent}</div>
                     ${message.file_info ? `
                         <div class="preview-file">
@@ -4027,7 +4259,7 @@ class ChatClient {
                         </div>
                     ` : ''}
                 </div>
-                
+
                 <!-- 搜索聊天对象 -->
                 <div class="search-box">
                     <i class="fas fa-search"></i>
@@ -4299,6 +4531,18 @@ class ChatClient {
                     message_type: 'emoji'
                 };
 
+            // 🔧 新增：转发任务卡片（携带完整任务数据）
+            case 'task_card':
+                let taskData = originalMessage.task_data || null;
+                if (!taskData && originalMessage.content) {
+                    try { taskData = JSON.parse(originalMessage.content); } catch (_) {}
+                }
+                return {
+                    content: taskData ? JSON.stringify(taskData) : (originalMessage.content || '{}'),
+                    message_type: 'task_card',
+                    task_data: taskData
+                };
+
             default:
                 return {
                     content: `「转发消息」\n${sender}: ${originalMessage.content || '[未知类型]'}`,
@@ -4458,7 +4702,7 @@ class ChatClient {
 
 
     // 🔧 新增：根据引用消息类型生成 HTML
-    renderQuotedContent(type, content, fileInfo = null, messageId = null) {
+    renderQuotedContent(type, content, fileInfo = null, messageId = null, message= null) {
         const escape = (str) => this.escapeHtml(str || '');
 
         // 生成点击跳转的处理函数，如果 messageId 存在则跳转，否则阻止冒泡
@@ -4547,9 +4791,43 @@ class ChatClient {
                 return `<div class="quoted-file-link" "
                              onclick="${getClickHandler()}"
                              title="点击跳转到原消息">
-                            <i class="fas fa-link"></i> 
+                            <i class="fas fa-link"></i>
                             <span class="quote-text-content" style="color: #909399; font-size: 12px;"><i class="${_iconClass}" style="color: ${iconColor};"></i> ${callType === 'video' ? '视频通话' : '语音通话'} ${statusText}</span>
                             <i class="fas fa-location-arrow" style="color: #909399; font-size: 11px;"></i>
+                        </div>`;
+
+            // 🔧 新增：渲染被引用的任务卡片消息（迷你卡片风格）
+            case 'task_card':
+                let qTaskTitle = '';
+                let qTaskStatus = '';
+                let qTaskAssignee = '';
+                let qTaskStatusRaw = '';
+                const qStatusMap = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成', 'overdue': '已逾期'};
+                const qStatusColors = {'todo': '#909399', 'in_progress': '#E6A23C', 'done': '#67C23A', 'overdue': '#F56C6C'};
+                try {
+                    const tcData = (typeof content === 'string' && (content.startsWith('{') || content.startsWith('['))) ? JSON.parse(content) : (message?.task_data || {});
+                    qTaskTitle = tcData.title || tcData.task_title || content || '[任务卡片]';
+                    qTaskStatusRaw = tcData.status || '';
+                    qTaskStatus = qStatusMap[tcData.status] || '';
+                    qTaskAssignee = (tcData.assignee_info?.real_name || tcData.assignee_info?.username || tcData.assignee_name || '');
+                } catch (e) {
+                    console.log('task_card error:', e)
+                    qTaskTitle = content || '[任务卡片]';
+                }
+                const qStatusColor = qStatusColors[qTaskStatusRaw] || '#909399';
+                if (qTaskTitle.length > 40) qTaskTitle = qTaskTitle.substring(0, 40) + '...';
+                return `<div class="quoted-file-link" style="padding: 6px 8px; border-left: 3px solid #409EFF; background: #f0f7ff; border-radius: 4px;"
+                             onclick="${getClickHandler()}"
+                             title="点击跳转到原消息">
+                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+                                <i class="fas fa-tasks" style="color:#409EFF;font-size:12px;"></i>
+                                <span style="font-weight:500;font-size:12px;color:#303133;">${escape(qTaskTitle)}</span>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#909399;">
+                                ${qTaskStatus ? `<span style="background:${qStatusColor};color:#fff;padding:1px 6px;border-radius:8px;">${qTaskStatus}</span>` : ''}
+                                ${qTaskAssignee ? `<span title="执行人"><i class="fas fa-user-circle" style="margin-right:2px;"></i>${escape(qTaskAssignee)}</span>` : ''}
+                                <i class="fas fa-location-arrow" style="margin-left:auto;color:#ccc;"></i>
+                            </div>
                         </div>`;
 
 
@@ -4751,7 +5029,28 @@ class ChatClient {
             case 'call_video':
                 this.renderCallRecordMessage(message, container);
                 break;
-
+            case 'task_card':
+                try {
+                    // 🔧 从 content(JSON) 或 task_data 获取任务数据
+                    let taskData = message.task_data || null;
+                    if (!taskData && message.content) {
+                        try {
+                            const parsed = JSON.parse(message.content);
+                            if (parsed && parsed.title !== undefined) {
+                                taskData = parsed;
+                            }
+                        } catch (_) {}
+                    }
+                    if (taskData) {
+                        this.renderTaskCardInChat(taskData, container);
+                    } else {
+                        container.innerHTML = '<div class="message-text" style="color:#909399;"><i class="fas fa-tasks"></i> [任务卡片]</div>';
+                    }
+                } catch (e) {
+                    console.error('解析任务卡片数据失败', e);
+                    container.innerHTML = '<div class="message-text" style="color:#909399;"><i class="fas fa-tasks"></i> [任务卡片]</div>';
+                }
+                break;
             default:
                 container.innerHTML += message.content || '[未知消息类型]';
         }
@@ -4782,7 +5081,8 @@ class ChatClient {
                 message.quote_message_type || 'text',
                 message.quote_message_type === 'file' ? message.quote_file_info?.name || message.quote_content || '' : message.quote_content || message.quote_info?.content || '',
                 message.quote_file_info || message.quote_info || null,
-                message.quote_message_id || message.quote_info?.id || null
+                message.quote_message_id || message.quote_info?.id || null,
+                message
             );
 
             quoteElement.appendChild(quoteHeader);
@@ -9119,6 +9419,8 @@ class ChatClient {
 
         this.currentQuoteMessage = message;
 
+        console.log('currentQuoteMessage: ', this.currentQuoteMessage);
+
         // 显示引用预览
         const quotePreview = document.getElementById('quotePreview');
         const quoteSender = document.getElementById('quoteSender');
@@ -9126,9 +9428,42 @@ class ChatClient {
 
         if (quotePreview && quoteSender && quoteContent) {
             quotePreview.style.display = 'block';
-            quoteSender.textContent = `${message.sender?.real_name || message.sender?.username || message.sender_name || '未知用户'}：`
+            const tcData = message.task_data;
+            if (tcData) {
+                let qTaskTitle = '';
+                let qTaskStatus = '';
+                let qTaskAssignee = '';
+                let qTaskStatusRaw = '';
+                const qStatusMap = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成', 'overdue': '已逾期'};
+                const qStatusColors = {'todo': '#909399', 'in_progress': '#E6A23C', 'done': '#67C23A', 'overdue': '#F56C6C'};
+                qTaskTitle = tcData.title || tcData.task_title || content || '[任务卡片]';
+                qTaskStatusRaw = tcData.status || '';
+                qTaskStatus = qStatusMap[tcData.status] || '';
+                qTaskAssignee = (tcData.assignee_info?.real_name || tcData.assignee_info?.username || tcData.assignee_name || '');
 
-            quoteContent.textContent = message.content.substring(0, 100) + (message.content.length > 100 ? '...' : '');
+                const qStatusColor = qStatusColors[qTaskStatusRaw] || '#909399';
+                if (qTaskTitle.length > 40) qTaskTitle = qTaskTitle.substring(0, 40) + '...';
+
+                quoteSender.innerHTML = `<div class="quoted-file-link" style="padding: 6px 8px; border-left: 3px solid #409EFF; background: #f0f7ff; border-radius: 4px;"
+                             >
+                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+                                <i class="fas fa-tasks" style="color:#409EFF;font-size:12px;"></i>
+                                <span style="font-weight:500;font-size:12px;color:#303133;">${qTaskTitle}</span>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#909399;">
+                                ${qTaskStatus ? `<span style="background:${qStatusColor};color:#fff;padding:1px 6px;border-radius:8px;">${qTaskStatus}</span>` : ''}
+                                ${qTaskAssignee ? `<span><i class="fas fa-user-circle" style="margin-right:2px;"></i>${qTaskAssignee}</span>` : ''}
+                                <i class="fas fa-location-arrow" style="margin-left:auto;color:#ccc;"></i>
+                            </div>
+                        </div>`;
+
+            } else {
+                quoteSender.textContent = `${message.sender?.real_name || message.sender?.username || message.sender_name || '未知用户'}：`
+                quoteContent.textContent = message.content.substring(0, 100) + (message.content.length > 100 ? '...' : '');
+            }
+
+
+
 
             // 自动聚焦输入框
             const messageInput = document.getElementById('messageInput');
@@ -9267,6 +9602,17 @@ class ChatClient {
                 }
             }
 
+            if (message.message_type !== 'task_card') {
+                menuHtml += `
+                    <div class="menu-divider"></div>
+                    <div class="menu-item" onclick="chatClient.convertToTask(${message.id})">
+                        <i class="fas fa-tasks"></i> 转为任务
+                    </div>
+                `;
+            }
+
+
+
             menu.innerHTML = menuHtml;
 
             // 菜单位置
@@ -9290,6 +9636,132 @@ class ChatClient {
         this.contextTarget = null;
     }
 
+
+    /**
+     * 🔧 优雅的消息转任务模态框
+     */
+    async convertToTask(messageId) {
+        const message = this.messages.find(m => m.id === messageId || m.message_id === messageId);
+        if (!message) return;
+
+        // 获取当前聊天室成员用于指派
+        const room = this.chatRooms.find(r => r.id == this.currentRoomId);
+        const members = room?.members || [];
+
+        // 生成成员下拉选项，默认选中自己
+        const memberOptions = members.map(m =>
+            `<option value="${m.id}" ${m.id === this.currentUser.id ? 'selected' : ''}>${m.real_name || m.username}</option>`
+        ).join('');
+
+        // 移除可能存在的旧模态框
+        const oldModal = document.getElementById('taskConvertModal');
+        if (oldModal) oldModal.remove();
+
+        const modalHtml = `
+        <div class="modal show" id="taskConvertModal" style="z-index: 10000;">
+            <div class="modal-content" style="max-width: 500px; animation: slideUp 0.3s ease;">
+                <div class="modal-header">
+                    <h3><i class="fas fa-tasks" style="color: var(--primary-color); margin-right: 8px;"></i> 消息转为任务</h3>
+                    <button class="close-btn" onclick="chatClient.closeModal('taskConvertModal')">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                    <label>任务标题 <span style="color: var(--danger-color);">*</span></label>
+                    <div class="input-with-icon">
+                        <i class="fas fa-link"></i>
+                        <input type="text" id="taskConvertTitle" class="form-control" value="${this.escapeHtml(message.content.substring(0, 50))}" placeholder="请输入任务标题">
+                    </div>
+                        
+                        
+                    </div>
+                    <div class="form-group">
+                        <label>任务描述</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-link"></i>
+                            <textarea id="taskConvertDesc" class="form-control" rows="3" placeholder="任务详情...">${this.escapeHtml(message.content)}</textarea>
+                        </div>
+                    </div>
+                    <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        <div class="form-group">
+                            <label>指派给</label>
+                            <select id="taskConvertAssignee" class="form-control" style="padding-left: 12px;">
+                                <option value="">不指派</option>
+                                ${memberOptions}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>截止日期</label>
+                            <input type="datetime-local" id="taskConvertDueDate" class="form-control" style="padding-left: 12px;">
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label style="display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px;">
+                            <i class="fas fa-link" style="color: var(--primary-color);"></i> 
+                            自动关联当前聊天上下文与原始消息
+                        </label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="chatClient.closeModal('taskConvertModal')">取消</button>
+                    <button class="btn btn-primary" onclick="chatClient.submitConvertTask(${messageId})">
+                        <i class="fas fa-plus-circle"></i> 创建任务
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        this.hideContextMenu();
+    }
+
+    /**
+     * 🔧 提交任务创建请求
+     */
+    async submitConvertTask(messageId) {
+        const title = document.getElementById('taskConvertTitle').value.trim();
+        const desc = document.getElementById('taskConvertDesc').value.trim();
+        const assigneeId = document.getElementById('taskConvertAssignee').value;
+        const dueDate = document.getElementById('taskConvertDueDate').value;
+
+        if (!title) {
+            this.showError('请输入任务标题');
+            return;
+        }
+
+        const btn = document.querySelector('#taskConvertModal .btn-primary');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 创建中...';
+
+        try {
+            const response = await fetch('/api/tasks/', {
+                method: 'POST',
+                headers: {...TokenManager.getHeaders(), 'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    title: title,
+                    description: desc,
+                    assignee_id: assigneeId || null,
+                    due_date: dueDate || null,
+                    related_chat_room_id: this.currentRoomId, // 🔧 关联聊天室
+                    related_message_id: messageId             // 🔧 关联原始消息
+                })
+            });
+
+            if (response.ok) {
+                this.showSuccess('任务创建成功', '已添加到任务中心并通知相关人员');
+                this.closeModal('taskConvertModal');
+            } else {
+                const err = await response.json();
+                this.showError('创建失败', err.detail || err.error || '未知错误');
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-plus-circle"></i> 创建任务';
+            }
+        } catch (error) {
+            this.showError('网络错误', error.message);
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-plus-circle"></i> 创建任务';
+        }
+    }
 
     forwardSelectedItem() {
         if (this.contextTarget) {

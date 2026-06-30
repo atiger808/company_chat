@@ -525,16 +525,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # 🔧 关键修复：转发所有引用字段给前端
             await self.send_encrypt({
                 'type': 'chat_message',
-                'chat_room': event['chat_room'],
-                'message_id': event['message_id'],
-                'is_read': event['is_read'],
-                'sender': event['sender'],
-                'sender_id': event['sender_id'],
-                'sender_name': event['sender_name'],
-                'content': event['content'],
-                'message_type': event['message_type'],
+                'chat_room': event.get('chat_room'),
+                'message_id': event.get('message_id'),
+                'is_read': event.get('is_read'),
+                'sender': event.get('sender'),
+                'sender_id': event.get('sender_id'),
+                'sender_name': event.get('sender_name'),
+                'content': event.get('content'),
+                'message_type': event.get('message_type'),
                 'file_info': event.get('file_info'),
-                'timestamp': event['timestamp'],
+                'timestamp': event.get('timestamp'),
                 'temp_id': event.get('temp_id'),
                 # 🔧 必须转发引用字段
                 'quote_message_id': event.get('quote_message_id'),
@@ -545,7 +545,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'quote_message_type': event.get('quote_message_type'),
                 'quote_file_info': event.get('quote_file_info'),  # 🔧 新增
                 'call_duration': event.get('call_duration'),
+                'task_data': event.get('task_data'),
             })
+
+    # 👇 新增：处理任务更新事件
+    async def task_update(self, event):
+        """
+        接收任务更新事件并转发给前端（加密传输）
+        对应 tasks/views.py 中 channel_layer.group_send 的 type: 'task.update'
+        """
+        await self.send_encrypt({
+            'type': 'task.update',
+            'event': event.get('event'),
+            'task': event.get('task')
+        })
 
     async def user_typing(self, event):
         """接收用户输入状态事件"""
@@ -616,7 +629,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 pass
 
         if quote_content:
-            message.quote_content = quote_content[:500]
+            message.quote_content = quote_content[:]
 
         if quote_sender:
             message.quote_sender = quote_sender[:100]
@@ -944,6 +957,15 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             }))
         except Exception as e:
             logger.error(f"ice_candidate forward failed: {e}", exc_info=True)
+
+
+    async def task_notification(self, event):
+        """处理任务通知消息"""
+        await self.send(text_data=json.dumps({
+            'type': 'task.notification',
+            'event_type': event.get('event_type'),
+            'task': event.get('task')
+        }))
 
 
 # chat/consumers.py - 添加 CallConsumer 类

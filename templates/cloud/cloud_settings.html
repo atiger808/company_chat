@@ -5,7 +5,7 @@
 
 {% block extra_css %}
 <!--<link rel="stylesheet" href="{% static 'css/cloud_settings.css' %}">-->
-<link rel="stylesheet" href="/static/css/cloud_settings.css?v=20260623-6788024">
+<link rel="stylesheet" href="/static/css/cloud_settings.css?v=20260629-243ce41">
 <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
 {% endblock %}
 
@@ -24,9 +24,12 @@
             <div class="loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</div>
         </nav>
         <div class="settings-actions">
-            <a href="/" class="btn btn-outline">
-                <i class="fas fa-home"></i> 官网主页
-            </a>
+<!--            <button class="btn btn-outline" id="themeToggleSidebarBtn" onclick="cloudSettings.toggleTheme()" style="width:100%;">-->
+<!--                <i class="fas fa-moon" id="themeToggleSidebarIcon"></i> <span id="themeToggleSidebarText">暗色主题</span>-->
+<!--            </button>-->
+<!--            <a href="/" class="btn btn-outline">-->
+<!--                <i class="fas fa-home"></i> 官网主页-->
+<!--            </a>-->
             <a href="/cloud/" class="btn btn-outline">
                 <i class="fas fa-cloud"></i> 返回企业网盘
             </a>
@@ -49,10 +52,26 @@
     <!-- 右侧内容区 -->
     <main class="settings-content">
         <header class="settings-header-mobile">
-            <button class="sidebar-toggle-btn" id="sidebarToggleBtn" title="切换导航">
+            <button class="btn-icon" id="sidebarToggleBtn" title="切换导航">
                 <i class="fas fa-bars"></i>
             </button>
             <h2 id="currentCategoryName">加载中...</h2>
+            <a class="btn-icon" id="themeToggleBtn" title="切换主题" onclick="cloudSettings.toggleTheme()" style="margin-left:auto;">
+                <i class="fas fa-moon"></i>
+            </a>
+            <a href="/" class="btn-icon" title="官网主页" style="text-decoration:none;color:inherit;">
+                    <i class="fas fa-home"></i>
+            </a>
+            <div class="user-info-dropdown" id="userInfoDropdown" onclick="cloudSettings.toggleUserDropdown(event)">
+                    <span id="adminUsername"></span>
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260629-243ce40" alt="头像">
+                    <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
+                    <div class="user-dropdown-menu show" id="userDropdownMenu" style="display:none;">
+                        <div class="dropdown-item text-danger" onclick="event.stopPropagation();cloudSettings.logout()">
+                            <i class="fas fa-sign-out-alt"></i> 退出登录
+                        </div>
+                    </div>
+                </div>
         </header>
 
         <div class="settings-body">
@@ -118,5 +137,5 @@
 
 {% block extra_js %}
 <!--<script src="{% static 'js/cloud_settings.js' %}"></script>-->
-<script src="/static/js/cloud_settings.js?v=20260623-6788024"></script>
+<script src="/static/js/cloud_settings.js?v=20260629-243ce41"></script>
 {% endblock %}

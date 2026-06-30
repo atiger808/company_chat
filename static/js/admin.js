@@ -81,6 +81,7 @@ class AdminConsole {
             //  🔧 根据权限初始化界面
             this.renderAdminInfo();
             this.setupPermissionUI();
+            this.initTheme();
 
             // 🔧 关键修复：根据用户类型加载默认标签页
             if (this.isSuperAdmin) {
@@ -100,6 +101,7 @@ class AdminConsole {
             this.setupEventListeners();
             this.setupSidebar();
             this.initTableScroll();
+            this._setupGlobalClickHandler();
 
             // 添加跳转到聊天室按钮事件
             const gotoChatBtn = document.getElementById('gotoChatBtn');
@@ -2128,6 +2130,15 @@ class AdminConsole {
     }
 
 
+    // 全局点击关闭下拉菜单
+    _setupGlobalClickHandler() {
+        document.addEventListener('click', () => {
+            document.querySelectorAll('.user-dropdown-menu').forEach(d => {
+                d.style.display = 'none';
+            });
+        });
+    }
+
     // ==================== 聊天室管理初始化 ====================
     initChatRoomManagement() {
         // 仅超级管理员显示聊天室管理菜单
@@ -2216,6 +2227,29 @@ class AdminConsole {
         window.location.href = this.chat_login_url;
     }
 
+    // ==================== 主题切换 ====================
+
+    initTheme() {
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        this.updateThemeIcon(savedTheme);
+    }
+
+    toggleTheme() {
+        const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', newTheme);
+        localStorage.setItem('theme', newTheme);
+        this.updateThemeIcon(newTheme);
+    }
+
+    updateThemeIcon(theme) {
+        const icon = document.querySelector('#themeToggleBtn i');
+        if (icon) {
+            icon.className = theme === 'light' ? 'fas fa-moon' : 'fas fa-sun';
+        }
+    }
+
     // 退出登录
     async logout() {
         const confirmed = await this.showConfirmDialog('退出登录', '确定要退出登录吗？', 'confirm');
@@ -2229,6 +2263,18 @@ class AdminConsole {
                 this.handleAuthError();
             }
         }
+    }
+
+    // 🔧 用户下拉菜单切换
+    toggleUserDropdown(event) {
+        event.stopPropagation();
+        const dropdown = document.getElementById('userDropdownMenu');
+        if (!dropdown) return;
+        // 关闭其他下拉
+        document.querySelectorAll('.user-dropdown-menu').forEach(d => {
+            if (d !== dropdown) d.style.display = 'none';
+        });
+        dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
     }
 
 }

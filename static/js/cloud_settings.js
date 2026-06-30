@@ -43,12 +43,13 @@ class CloudSettingsApp {
                 return;
             }
 
-
+            this.renderAdminInfo();
             await this.loadCategories();
             await this.loadConfigs(this.currentCategory);
             const categoryInfo = this.categories.find(c => c.key === this.currentCategory);
             document.getElementById('currentCategoryName').textContent = categoryInfo?.name || '配置';
 
+            this.initTheme();
             this.setupEventListeners();
             console.log('✅ 系统配置管理初始化完成');
         } catch (error) {
@@ -66,6 +67,69 @@ class CloudSettingsApp {
         localStorage.setItem('redirect_url', window.location.href);
         window.location.href = this.cloud_login_url;
     }
+
+    // ==================== 主题切换 ====================
+
+    initTheme() {
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        this.updateThemeIcon(savedTheme);
+    }
+
+    toggleTheme() {
+        const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', newTheme);
+        localStorage.setItem('theme', newTheme);
+        this.updateThemeIcon(newTheme);
+    }
+
+    updateThemeIcon(theme) {
+        const icon = document.querySelector('#themeToggleBtn i');
+        if (icon) icon.className = theme === 'light' ? 'fas fa-moon' : 'fas fa-sun';
+        const sidebarIcon = document.querySelector('#themeToggleSidebarIcon');
+        if (sidebarIcon) sidebarIcon.className = theme === 'light' ? 'fas fa-moon' : 'fas fa-sun';
+        const sidebarText = document.querySelector('#themeToggleSidebarText');
+        if (sidebarText) sidebarText.textContent = theme === 'light' ? '暗色主题' : '亮色主题';
+    }
+
+
+    renderAdminInfo() {
+        if (this.currentUser) {
+            document.getElementById('adminUsername').textContent = this.currentUser.real_name || this.currentUser.username;
+            document.getElementById('adminUsername').title = `当前账号：${this.currentUser.username}`;
+            document.getElementById('adminAvatar').src = this.currentUser.avatar_url || '/static/images/default-avatar.png';
+            document.getElementById('adminAvatar').title = `当前账号：${this.currentUser.username}`;
+        }
+    }
+
+    // 退出登录
+    async logout() {
+        const confirmed = await this.showConfirmDialog('退出登录', '确定要退出登录吗？', 'confirm');
+        if (confirmed) {
+            try {
+                await API.logout();
+                console.log('登出成功');
+            } catch (error) {
+                console.error('登出失败:', error);
+            } finally {
+                this.handleAuthError();
+            }
+        }
+    }
+
+    // 🔧 用户下拉菜单切换
+    toggleUserDropdown(event) {
+        event.stopPropagation();
+        const dropdown = document.getElementById('userDropdownMenu');
+        if (!dropdown) return;
+        // 关闭其他下拉
+        document.querySelectorAll('.user-dropdown-menu').forEach(d => {
+            if (d !== dropdown) d.style.display = 'none';
+        });
+        dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+    }
+
 
     // 加载配置分类
     async loadCategories() {

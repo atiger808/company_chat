@@ -6086,132 +6086,7 @@ input:checked + .toggle-slider:before {
 }
 
 
-/* ==================== 管理控制台表格固定操作列 ==================== */
-.admin-table-container {
-    background: white;
-    border-radius: 8px;
-    box-shadow: var(--shadow);
-    overflow-x: auto;
-    overflow-y: hidden;
-    position: relative;
-    width: 100%;
-    margin-bottom: 20px;
-}
 
-.admin-table-container::-webkit-scrollbar {
-    height: 8px;
-}
-
-.admin-table-container::-webkit-scrollbar-track {
-    background: var(--bg-secondary);
-    border-radius: 4px;
-}
-
-.admin-table-container::-webkit-scrollbar-thumb {
-    background: var(--border-color);
-    border-radius: 4px;
-}
-
-.admin-table-container::-webkit-scrollbar-thumb:hover {
-    background: var(--text-light);
-}
-
-.admin-table {
-    width: 100%;
-    min-width: 1000px; /* 确保表格有最小宽度 */
-    border-collapse: collapse;
-    table-layout: auto;
-}
-
-.admin-table th,
-.admin-table td {
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--border-color);
-    white-space: nowrap;
-    text-align: left;
-}
-
-.admin-table th {
-    background: var(--bg-secondary);
-    font-weight: 600;
-    color: var(--text-primary);
-    border-bottom: 2px solid var(--border-color);
-    position: sticky;
-    top: 0;
-    z-index: 10;
-}
-
-.admin-table td {
-    color: var(--text-secondary);
-}
-
-.admin-table tr:hover {
-    background: var(--bg-secondary);
-}
-
-.admin-table tr.user-disabled-row {
-    opacity: 0.5;
-    background-color: #fafafa;
-}
-
-.admin-table img {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    object-fit: cover;
-}
-
-/* 🔧 关键修复：固定操作列 */
-.admin-table td:last-child,
-.admin-table th:last-child {
-    position: sticky;
-    right: 0;
-    background: white;
-    z-index: 20;
-    box-shadow: -4px 0 8px rgba(0, 0, 0, 0.05);
-}
-
-.admin-table th:last-child {
-    background: var(--bg-secondary);
-    box-shadow: -4px 0 8px rgba(0, 0, 0, 0.1);
-}
-
-/* 滚动阴影效果 */
-.admin-table-container::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: 30px;
-    background: linear-gradient(to right, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0) 100%);
-    pointer-events: none;
-    z-index: 30;
-    opacity: 0;
-    transition: opacity 0.3s ease;
-}
-
-.admin-table-container::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 30px;
-    background: linear-gradient(to left, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0) 100%);
-    pointer-events: none;
-    z-index: 30;
-    opacity: 0;
-    transition: opacity 0.3s ease;
-}
-
-.admin-table-container.show-shadow::before {
-    opacity: 1;
-}
-
-.admin-table-container.show-shadow::after {
-    opacity: 1;
-}
 
 /* 滚动指示器 */
 .scroll-indicator {
@@ -6240,87 +6115,6 @@ input:checked + .toggle-slider:before {
     to {
         transform: translateX(0);
         opacity: 1;
-    }
-}
-
-/* ==================== 移动端优化 ==================== */
-@media (max-width: 768px) {
-    .admin-table-container {
-        border-radius: 0;
-        box-shadow: none;
-    }
-
-    .admin-table {
-        min-width: 800px;
-    }
-
-    .admin-table th,
-    .admin-table td {
-        padding: 10px 12px;
-        font-size: 13px;
-    }
-
-    .admin-table img {
-        width: 32px;
-        height: 32px;
-    }
-
-    .user-type-badge {
-        font-size: 11px;
-        padding: 2px 8px;
-    }
-
-    .user-status {
-        font-size: 12px;
-    }
-
-    .action-buttons {
-        gap: 4px;
-    }
-
-    .action-btn {
-        width: 28px;
-        height: 28px;
-        padding: 0;
-    }
-
-    .action-btn i {
-        font-size: 14px;
-    }
-}
-
-@media (max-width: 480px) {
-    .admin-table {
-        min-width: 600px;
-    }
-
-    .admin-table th,
-    .admin-table td {
-        padding: 8px 10px;
-        font-size: 12px;
-    }
-
-    .admin-table img {
-        width: 28px;
-        height: 28px;
-    }
-
-    .user-type-badge {
-        font-size: 10px;
-        padding: 2px 6px;
-    }
-
-    .user-status {
-        font-size: 11px;
-    }
-
-    .action-btn {
-        width: 26px;
-        height: 26px;
-    }
-
-    .action-btn i {
-        font-size: 12px;
     }
 }
 
@@ -10277,4 +10071,62 @@ body.pwa-mode .chat-input-area {
 [data-theme="dark"] .msg-action-btn:hover {
     background: var(--primary-color);
     color: white;
+}
+
+
+
+
+
+
+/* ==================== 任务卡片专属样式 ==================== */
+
+/* 状态更新时的闪烁动画 */
+@keyframes taskCardFlash {
+    0% { box-shadow: 0 0 0 0 rgba(64, 158, 255, 0.4); transform: scale(1); }
+    50% { box-shadow: 0 0 15px 5px rgba(64, 158, 255, 0.2); transform: scale(1.02); }
+    100% { box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); transform: scale(1); }
+}
+
+.task-card-flash {
+    animation: taskCardFlash 2s ease-out;
+}
+
+/* 悬停效果 */
+.task-card-message:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px 0 rgba(0,0,0,0.1) !important;
+    border-color: var(--primary-color) !important;
+}
+
+/* 🔧 暗色模式完美适配 */
+@media (prefers-color-scheme: dark) {
+    .task-card-message {
+        background: var(--bg-primary) !important;
+        border-color: var(--border-color) !important;
+        box-shadow: 0 2px 12px 0 rgba(0,0,0,0.2) !important;
+    }
+
+    .task-card-message > div:first-child {
+        background: linear-gradient(135deg, #2c2c2c 0%, #1e1e1e 100%) !important;
+        border-color: var(--border-color) !important;
+    }
+
+    .task-card-message .task-title {
+        color: var(--text-primary) !important;
+    }
+
+    .task-card-message .task-meta {
+        color: var(--text-secondary) !important;
+    }
+
+    .task-card-message > div:last-child {
+        background: var(--bg-secondary) !important;
+        border-color: var(--border-color) !important;
+        color: var(--text-secondary) !important;
+    }
+
+    .task-card-message:hover {
+        border-color: var(--primary-color) !important;
+        box-shadow: 0 4px 16px 0 rgba(0,0,0,0.3) !important;
+    }
 }

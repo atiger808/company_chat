@@ -893,6 +893,50 @@ class AdminChatRoomsClient {
                 }
                 break;
 
+            // 🔧 新增：渲染任务卡片
+            case 'task_card':
+                try {
+                    let taskCardData = message.task_data || null;
+                    if (!taskCardData && message.content) {
+                        try { taskCardData = JSON.parse(message.content); } catch (_) {}
+                    }
+                    if (taskCardData) {
+                        const statusColors = {'todo': '#909399', 'in_progress': '#E6A23C', 'done': '#67C23A', 'overdue': '#F56C6C'};
+                        const statusText = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成', 'overdue': '已逾期'};
+                        const st = taskCardData.status;
+                        const color = statusColors[st] || '#909399';
+                        const text = statusText[st] || st || '未知';
+                        const assigneeName = taskCardData.assignee_info ? (taskCardData.assignee_info.real_name || taskCardData.assignee_info.username) : (taskCardData.assignee_name || '未指派');
+                        const dueDateStr = taskCardData.due_date ? new Date(taskCardData.due_date).toLocaleDateString('zh-CN', {month: 'short', day: 'numeric'}) : '无期限';
+                        const title = taskCardData.title || taskCardData.task_title || '任务卡片';
+                        contentHtml = `
+                            <div class="task-card-message" data-task-id="${taskCardData.id || ''}"
+                                 style="max-width: 320px; overflow: hidden; border-radius: 8px; border: 1px solid #e4e7ed; background: #fff; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05);">
+                                <div style="padding: 10px 14px; background: linear-gradient(135deg, #f5f7fa 0%, #e4e7ed 100%); border-bottom: 1px solid #e4e7ed; display: flex; justify-content: space-between; align-items: center;">
+                                    <span style="font-weight: 600; color: #303133; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+                                        <i class="fas fa-tasks" style="color: #409EFF;"></i> 任务卡片
+                                    </span>
+                                    <span style="font-size: 11px; padding: 2px 8px; border-radius: 10px; color: #fff; background: ${color};">${this.escapeHtml(text)}</span>
+                                </div>
+                                <div style="padding: 10px 14px;">
+                                    <div style="font-size: 14px; color: #303133; margin-bottom: 6px; font-weight: 500;">${this.escapeHtml(title)}</div>
+                                    <div style="font-size: 12px; color: #909399; display: flex; flex-direction: column; gap: 3px;">
+                                        <span><i class="fas fa-user-circle" style="width: 14px;"></i> ${this.escapeHtml(assigneeName)}</span>
+                                        <span><i class="fas fa-clock" style="width: 14px;"></i> 截止: ${dueDateStr}</span>
+                                    </div>
+                                </div>
+                                <div style="padding: 6px 14px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 11px; color: #909399; text-align: center;">
+                                    点击查看详情 <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
+                                </div>
+                            </div>`;
+                    } else {
+                        contentHtml = '<span style="color:#909399;"><i class="fas fa-tasks"></i> [任务卡片]</span>';
+                    }
+                } catch (e) {
+                    contentHtml = '<span style="color:#909399;"><i class="fas fa-tasks"></i> [任务卡片]</span>';
+                }
+                break;
+
             default:
                 contentHtml = `<div class="message-text">${this.escapeHtml(message.content || '[未知消息类型]')}</div>`;
         }
@@ -1073,6 +1117,48 @@ class AdminChatRoomsClient {
                 }
                 break;
 
+            // 🔧 新增：渲染被引用的任务卡片消息（迷你卡片风格）
+            case 'task_card':
+                let taskCardTitle = '';
+                let taskCardStatus = '';
+                let taskCardStatusRaw = '';
+                let taskCardAssignee = '';
+                const aStatusMap = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成', 'overdue': '已逾期'};
+                const aStatusColors = {'todo': '#909399', 'in_progress': '#E6A23C', 'done': '#67C23A', 'overdue': '#F56C6C'};
+                try {
+                    const acData = typeof quoteContent === 'string' ? JSON.parse(quoteContent) : {};
+                    taskCardTitle = acData.title || acData.task_title || quoteContent;
+                    taskCardStatusRaw = acData.status || '';
+                    taskCardStatus = aStatusMap[acData.status] || '';
+                    taskCardAssignee = (acData.assignee_info?.real_name || acData.assignee_info?.username || acData.assignee_name || '');
+                } catch (e) {
+                    taskCardTitle = quoteContent || '[任务卡片]';
+                }
+                const acolor = aStatusColors[taskCardStatusRaw] || '#909399';
+                const displayTitle = typeof taskCardTitle === 'string' && taskCardTitle.length > 30 ? taskCardTitle.substring(0, 30) + '...' : (taskCardTitle || '[任务卡片]');
+                if (quoteMessageId) {
+                    quotedContentHtml = `<div class="quoted-file-link"
+                             style="cursor: pointer; padding: 6px 8px; background: #f0f7ff; border-radius: 4px; border-left: 3px solid #409EFF; display: flex; flex-direction: column; gap: 3px;"
+                             onclick="window.adminChatRoomsClient.scrollToQuotedMessage('${quoteMessageId}')"
+                             title="点击跳转到原消息">
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <i class="fas fa-tasks" style="color:#409EFF;font-size:12px;"></i>
+                                <span style="font-weight:500;font-size:12px;color:#303133;">${this.escapeHtml(displayTitle)}</span>
+                                <i class="fas fa-location-arrow" style="margin-left:auto;color:#909399;font-size:11px;"></i>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#909399;">
+                                ${taskCardStatus ? `<span style="background:${acolor};color:#fff;padding:1px 6px;border-radius:8px;font-size:10px;">${taskCardStatus}</span>` : ''}
+                                ${taskCardAssignee ? `<span><i class="fas fa-user-circle" style="margin-right:2px;"></i>${this.escapeHtml(taskCardAssignee)}</span>` : ''}
+                            </div>
+                        </div>`;
+                } else {
+                    quotedContentHtml = `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;">
+                        <i class="fas fa-tasks" style="color:#409EFF;"></i>
+                        <span style="font-weight:500;font-size:12px;">${this.escapeHtml(displayTitle)}</span>
+                        ${taskCardStatus ? `<span style="background:${acolor};color:#fff;padding:1px 6px;border-radius:8px;font-size:10px;">${taskCardStatus}</span>` : ''}
+                    </div>`;
+                }
+                break;
 
             default:
                 quotedContentHtml = this.escapeHtml(quoteContent || '[未知类型]');

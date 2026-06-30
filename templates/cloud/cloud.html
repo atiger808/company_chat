@@ -5,12 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>企业网盘 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/cloud.css?v=20260623-28bf256">
+    <link rel="stylesheet" href="/static/css/cloud.css?v=20260629-243ce41">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
     <!-- 🔧 添加二维码库 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>-->
-    <script src="/static/js/dist/qrcode.min.js?v=20260623-28bf256"></script>
+    <script src="/static/js/dist/qrcode.min.js?v=20260629-243ce40"></script>
 </head>
 <body>
 <div class="cloud-layout">
@@ -107,16 +107,24 @@
                         <i class="fas fa-list"></i>
                     </button>
                 </div>
-                <button class="btn-icon" id="themeToggleBtn" title="切换主题" onclick="cloudApp.toggleTheme()">
-                    <i class="fas fa-moon"></i>
-                </button>
             </div>
             <div class="admin-header-right">
+                <a class="btn-icon" id="themeToggleBtn" title="切换主题" onclick="cloudApp.toggleTheme()">
+                    <i class="fas fa-moon"></i>
+                </a>
                 <a href="/" class="btn-icon" title="官网主页" style="text-decoration:none;color:inherit;">
                     <i class="fas fa-home"></i>
                 </a>
-                <span id="adminUsername"></span>
-                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260623-28bf256" alt="头像">
+                <div class="user-info-dropdown" id="userInfoDropdown" onclick="cloudApp.toggleUserDropdown(event)">
+                    <span id="adminUsername"></span>
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260629-243ce40" alt="头像">
+                    <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
+                    <div class="user-dropdown-menu" id="userDropdownMenu" style="display:none;">
+                        <div class="dropdown-item text-danger" onclick="event.stopPropagation();cloudApp.logout()">
+                            <i class="fas fa-sign-out-alt"></i> 退出登录
+                        </div>
+                    </div>
+                </div>
             </div>
         </header>
 
@@ -899,11 +907,11 @@
 
 <!-- 脚本引入 -->
 <!--<script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>-->
-<script src="/static/js/dist/spark-md5.min.js?v=20260623-28bf256"></script>
-<script src="/static/js/utils.js?v=20260623-28bf256"></script>
-<script src="/static/js/frontend_cloud_config.js?v=20260623-28bf256"></script>
-<script src="/static/js/api.js?v=20260623-28bf256"></script>
-<script src="/static/js/cloud.js?v=20260623-28bf259"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260629-243ce40"></script>
+<script src="/static/js/utils.js?v=20260629-243ce40"></script>
+<script src="/static/js/frontend_cloud_config.js?v=20260629-243ce40"></script>
+<script src="/static/js/api.js?v=20260629-243ce40"></script>
+<script src="/static/js/cloud.js?v=20260629-243ce41"></script>
 
 <script>
     // 🔧 初始化侧边栏按钮显示状态

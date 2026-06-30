@@ -31,6 +31,9 @@ urlpatterns = [
     # 🔧 聊天相关
     path('api/chat/', include('chat.urls')),
 
+    # 任务与项目管理
+    path('api/tasks/', include('tasks.urls')),  # 新增
+
     # 官网主页路由
     path('', TemplateView.as_view(template_name='index.html'), name='index'),
     path('contact/', TemplateView.as_view(template_name='contact.html'), name='contact'),
@@ -42,6 +45,10 @@ urlpatterns = [
     path('register/', TemplateView.as_view(template_name='chat/register.html'), name='register'),
     path('control/', TemplateView.as_view(template_name='chat/admin.html'), name='admin-control'),
     path('manifest.json', TemplateView.as_view(template_name='manifest.json',content_type='application/json'), name='manifest'),
+
+
+    # 任务与项目管理页面路由
+    path('tasks/', TemplateView.as_view(template_name='tasks/tasks.html'), name='tasks'),
 
 
     # 网盘相关路由

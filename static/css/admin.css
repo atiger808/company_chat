@@ -555,6 +555,53 @@
     right: 0px;
 }
 
+/* 用户下拉菜单样式 */
+.user-info-dropdown {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    position: relative;
+    user-select: none;
+}
+
+.user-dropdown-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 8px;
+    background: #fff;
+    border: 1px solid #e4e7ed;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    z-index: 300;
+    min-width: 140px;
+    overflow: hidden;
+}
+
+.user-dropdown-menu .dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    font-size: 14px;
+    color: #303133;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.user-dropdown-menu .dropdown-item:hover {
+    background: #f5f7fa;
+}
+
+.user-dropdown-menu .dropdown-item.text-danger {
+    color: #f56c6c;
+}
+
+.user-dropdown-menu .dropdown-item.text-danger:hover {
+    background: #fef0f0;
+}
+
 /* 文件消息样式 */
 .message-file-link {
     text-decoration: none;
@@ -1818,6 +1865,7 @@ input:checked + .slider:before {
 }
 
 @keyframes highlightPulse {
+
     0%, 100% {
         box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.3);
     }
@@ -1844,6 +1892,401 @@ input:checked + .slider:before {
 }
 
 
+/* ==================== 管理控制台表格固定操作列 ==================== */
+.admin-table-container {
+    background: white;
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    overflow-x: auto;
+    overflow-y: hidden;
+    position: relative;
+    width: 100%;
+    margin-bottom: 20px;
+}
+
+.admin-table-container::-webkit-scrollbar {
+    height: 8px;
+}
+
+.admin-table-container::-webkit-scrollbar-track {
+    background: var(--bg-secondary);
+    border-radius: 4px;
+}
+
+.admin-table-container::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 4px;
+}
+
+.admin-table-container::-webkit-scrollbar-thumb:hover {
+    background: var(--text-light);
+}
+
+.admin-table {
+    width: 100%;
+    min-width: 1000px; /* 确保表格有最小宽度 */
+    border-collapse: collapse;
+    table-layout: auto;
+}
+
+.admin-table th,
+.admin-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-color);
+    white-space: nowrap;
+    text-align: left;
+}
+
+.admin-table th {
+    background: var(--bg-secondary);
+    font-weight: 600;
+    color: var(--text-primary);
+    border-bottom: 2px solid var(--border-color);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.admin-table td {
+    color: var(--text-secondary);
+}
+
+.admin-table tr:hover {
+    background: var(--bg-secondary);
+}
+
+.admin-table tr.user-disabled-row {
+    opacity: 0.5;
+    background-color: #fafafa;
+}
+
+.admin-table img {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+/* 🔧 关键修复：固定操作列 */
+.admin-table td:last-child,
+.admin-table th:last-child {
+    position: sticky;
+    right: 0;
+    /*background: white;*/
+    z-index: 20;
+    box-shadow: -4px 0 8px rgba(0, 0, 0, 0.05);
+}
+
+.admin-table th:last-child {
+    background: var(--bg-secondary);
+    box-shadow: -4px 0 8px rgba(0, 0, 0, 0.1);
+}
+
+/* 滚动阴影效果 */
+.admin-table-container::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 30px;
+    background: linear-gradient(to right, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0) 100%);
+    pointer-events: none;
+    z-index: 30;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.admin-table-container::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 30px;
+    background: linear-gradient(to left, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0) 100%);
+    pointer-events: none;
+    z-index: 30;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.admin-table-container.show-shadow::before {
+    opacity: 1;
+}
+
+.admin-table-container.show-shadow::after {
+    opacity: 1;
+}
+
+/* ==================== 移动端优化 ==================== */
+@media (max-width: 768px) {
+    .admin-table-container {
+        border-radius: 0;
+        box-shadow: none;
+    }
+
+    .admin-table {
+        min-width: 800px;
+    }
+
+    .admin-table th,
+    .admin-table td {
+        padding: 10px 12px;
+        font-size: 13px;
+    }
+
+    .admin-table img {
+        width: 32px;
+        height: 32px;
+    }
+
+    .user-type-badge {
+        font-size: 11px;
+        padding: 2px 8px;
+    }
+
+    .user-status {
+        font-size: 12px;
+    }
+
+    .action-buttons {
+        gap: 4px;
+    }
+
+    .action-btn {
+        width: 28px;
+        height: 28px;
+        padding: 0;
+    }
+
+    .action-btn i {
+        font-size: 14px;
+    }
+}
+
+@media (max-width: 480px) {
+    .admin-table {
+        min-width: 600px;
+    }
+
+    .admin-table th,
+    .admin-table td {
+        padding: 8px 10px;
+        font-size: 12px;
+    }
+
+    .admin-table img {
+        width: 28px;
+        height: 28px;
+    }
+
+    .user-type-badge {
+        font-size: 10px;
+        padding: 2px 6px;
+    }
+
+    .user-status {
+        font-size: 11px;
+    }
+
+    .action-btn {
+        width: 26px;
+        height: 26px;
+    }
+
+    .action-btn i {
+        font-size: 12px;
+    }
+}
 
 
 
+
+
+/* ==================== 暗色主题 ==================== */
+[data-theme="dark"] {
+    --bg-primary: #1e1e1e;
+    --bg-secondary: #2d2d2d;
+    --bg-color: #121212;
+    --text-primary: #e0e0e0;
+    --text-secondary: #b0b0b0;
+    --text-muted: #121212;
+    --text-light: #888;
+    --border-color: #333;
+    --primary-light: rgba(64, 158, 255, 0.15);
+    --shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] body {
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+}
+
+[data-theme="dark"] .admin-container,
+[data-theme="dark"] .admin-main {
+    background-color: var(--bg-primary);
+}
+
+[data-theme="dark"] .admin-sidebar {
+    background-color: #1e1e1e;
+    border-right-color: #333;
+}
+
+[data-theme="dark"] .sidebar-header,
+[data-theme="dark"] .admin-header {
+    background-color: #1e1e1e;
+    border-bottom-color: #333;
+    color: var(--text-primary);
+}
+
+[data-theme="dark"] .admin-nav .nav-item {
+    color: var(--text-secondary);
+}
+
+[data-theme="dark"] .admin-nav .nav-item:hover,
+[data-theme="dark"] .admin-nav .nav-item.active {
+    background-color: #2d2d2d;
+    color: var(--primary-color);
+}
+
+[data-theme="dark"] .sidebar-footer {
+    border-top-color: #333;
+}
+
+[data-theme="dark"] .btn-back-chat {
+    background-color: #2d2d2d;
+    color: var(--text-secondary);
+}
+
+[data-theme="dark"] .btn-back-chat:hover {
+    background-color: #333;
+    color: var(--primary-color);
+}
+
+[data-theme="dark"] .admin-table-container {
+    background-color: #1e1e1e;
+}
+
+[data-theme="dark"] .admin-table thead {
+    background-color: #252525;
+}
+
+[data-theme="dark"] .admin-table th {
+    background-color: #2d2d2d;
+    color: var(--text-secondary);
+    border-bottom-color: #333;
+}
+
+[data-theme="dark"] .admin-table td {
+    border-bottom-color: #333;
+    color: var(--text-primary);
+}
+
+[data-theme="dark"] .admin-table tbody tr:hover {
+    background-color: #2d2d2d;
+}
+
+[data-theme="dark"] .btn.btn-secondary
+[data-theme="dark"] .settings-tabs.tab-btn {
+    background-color: #2d2d2d;
+    border-color: #444;
+    color: var(--text-primary);
+}
+
+[data-theme="dark"] .btn.btn-secondary:hover
+[data-theme="dark"] .settings-tabs.tab-btn:hover {
+    background-color: #333;
+    border-color: var(--primary-color);
+}
+
+[data-theme="dark"] .search-box input {
+    background-color: #2d2d2d;
+    border-color: #444;
+    color: var(--text-primary);
+}
+
+[data-theme="dark"] .modal-content {
+    background-color: #1e1e1e;
+    color: var(--text-primary);
+}
+
+[data-theme="dark"] .modal-header,
+[data-theme="dark"] .modal-footer {
+    background-color: #252525;
+    border-color: #333;
+}
+
+[data-theme="dark"] .form-group input,
+[data-theme="dark"] .form-group select,
+[data-theme="dark"] .form-input,
+[data-theme="dark"] .stat-card,
+[data-theme="dark"] .config-item,
+[data-theme="dark"] .chart-box,
+[data-theme="dark"] .info-card,
+[data-theme="dark"] .messages-history-container,
+[data-theme="dark"] .form-select {
+    background-color: #2d2d2d;
+    border-color: #444;
+    color: var(--text-primary);
+}
+
+[data-theme="dark"] .message-bubble {
+    /*background-color: #2d2d2d;*/
+    border-color: #444;
+    color: var(--text-primary);
+}
+[data-theme="dark"] .message-text {
+    /*background-color: #2d2d2d;*/
+    border-color: #444;
+    color: var(--text-muted);
+}
+
+
+[data-theme="dark"] .search-box input:focus {
+    border-color: var(--primary-color);
+}
+
+[data-theme="dark"] .highlight {
+    color: #66b1ff;
+}
+
+[data-theme="dark"] .text-muted {
+    color: #888;
+}
+
+[data-theme="dark"] .user-dropdown-menu {
+    background-color: #2d2d2d;
+    border-color: #444;
+}
+
+[data-theme="dark"] .user-dropdown-menu .dropdown-item {
+    color: var(--text-primary);
+}
+
+[data-theme="dark"] .user-dropdown-menu .dropdown-item:hover {
+    background-color: #333;
+}
+
+[data-theme="dark"] .user-dropdown-menu .dropdown-item.text-danger:hover {
+    background-color: rgba(245, 108, 108, 0.15);
+}
+
+[data-theme="dark"] .admin-toolbar {
+    background-color: #1e1e1e;
+}
+
+[data-theme="dark"] .room-count {
+    color: var(--text-light);
+}
+
+[data-theme="dark"] .batch-actions {
+    background-color: rgba(245, 108, 108, 0.1);
+    border-color: rgba(245, 108, 108, 0.2);
+}
+
+[data-theme="dark"] ::-webkit-scrollbar { width: 8px; }
+[data-theme="dark"] ::-webkit-scrollbar-track { background: #121212; }
+[data-theme="dark"] ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: #555; }
