@@ -893,18 +893,6 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             'timestamp': event['timestamp'],
         }))
 
-    async def call_answer(self, event):
-        """处理接听信令（转发给前端）"""
-        try:
-            await self.send(text_data=json.dumps({
-                'type': 'call_answer',
-                'data': event.get('data', {}),
-                'from_user_id': event.get('from_user_id'),
-                'room_id': event.get('room_id'),
-            }))
-        except Exception as e:
-            logger.error(f"call_answer forward failed: {e}")
-
     async def call_end(self, event):
         """处理挂断信令（转发给前端）"""
         try:
@@ -952,12 +940,34 @@ class NotificationConsumer(AsyncWebsocketConsumer):
 
             await self.send(text_data=json.dumps({
                 'type': 'ice_candidate',
-                'candidate': candidate,  # 🔧 直接传递 candidate 对象
+                'candidate': candidate,
                 'from_user_id': event.get('from_user_id'),
             }))
         except Exception as e:
             logger.error(f"ice_candidate forward failed: {e}", exc_info=True)
 
+    async def call_answer(self, event):
+        """处理接听信令（转发给前端）- 通知组回退"""
+        try:
+            await self.send(text_data=json.dumps({
+                'type': 'call_answer',
+                'data': event.get('data', {}),
+                'from_user_id': event.get('from_user_id'),
+                'room_id': event.get('room_id'),
+                'valid': event.get('valid', True),
+            }))
+        except Exception as e:
+            logger.error(f"call_answer forward failed in NotificationConsumer: {e}")
+
+    async def call_missed(self, event):
+        """处理未接听信令（转发给前端）- 通知组回退"""
+        try:
+            await self.send(text_data=json.dumps({
+                'type': 'call_missed',
+                'from_user_id': event.get('from_user_id'),
+            }))
+        except Exception as e:
+            logger.error(f"call_missed forward failed in NotificationConsumer: {e}")
 
     async def task_notification(self, event):
         """处理任务通知消息"""
@@ -1284,7 +1294,7 @@ class CallConsumer(AsyncWebsocketConsumer):
         }
 
         await self.channel_layer.group_send(call_group, message_data)
-        # await self.channel_layer.group_send(notification_group, message_data)
+        await self.channel_layer.group_send(notification_group, message_data)
 
     async def handle_call_end_v1(self, data):
         """转发挂断信令（修复版）"""
@@ -1350,9 +1360,8 @@ class CallConsumer(AsyncWebsocketConsumer):
                 }
 
                 await self.channel_layer.group_send(call_group, message_data)
-                # await self.channel_layer.group_send(notification_group, message_data)
-                # logger.info(f"✅ call_end 已发送到 {call_group} 和 {notification_group}")
-                logger.info(f"✅ call_end 已发送到 {call_group}")
+                await self.channel_layer.group_send(notification_group, message_data)
+                logger.info(f"✅ call_end 已发送到 {call_group} 和 {notification_group}")
 
         except Exception as e:
             logger.error(f"❌ 转发 call_end 失败: {e}", exc_info=True)
@@ -1385,8 +1394,8 @@ class CallConsumer(AsyncWebsocketConsumer):
         }
 
         await self.channel_layer.group_send(call_group, message_data)
-        # await self.channel_layer.group_send(notification_group, message_data)
-        logger.info(f"✅ ICE candidate 已转发给用户 {target_id}")
+        await self.channel_layer.group_send(notification_group, message_data)
+        logger.info(f"✅ ICE candidate 已转发给用户 {target_id}（通话组+通知组）")
 
     async def handle_call_reject(self, data):
         """转发拒绝信令（修复版）"""
@@ -1421,7 +1430,7 @@ class CallConsumer(AsyncWebsocketConsumer):
         }
 
         await self.channel_layer.group_send(call_group, message_data)
-        # await self.channel_layer.group_send(notification_group, message_data)
+        await self.channel_layer.group_send(notification_group, message_data)
 
     async def handle_call_missed(self, data):  # 🔧 新增：处理未接听信令
         """转发未接听信令"""
@@ -1456,7 +1465,7 @@ class CallConsumer(AsyncWebsocketConsumer):
         }
 
         await self.channel_layer.group_send(call_group, message_data)
-        # await self.channel_layer.group_send(notification_group, message_data)
+        await self.channel_layer.group_send(notification_group, message_data)
 
     async def create_call_record_message(self, room_id, from_user_id, duration=0, media_type='audio', reason='ended'):
         """🔧 新增：创建通话记录消息（只创建一条）"""

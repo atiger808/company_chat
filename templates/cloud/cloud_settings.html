@@ -5,7 +5,7 @@
 
 {% block extra_css %}
 <!--<link rel="stylesheet" href="{% static 'css/cloud_settings.css' %}">-->
-<link rel="stylesheet" href="/static/css/cloud_settings.css?v=20260629-243ce41">
+<link rel="stylesheet" href="/static/css/cloud_settings.css?v=20260704-b381ed1">
 <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
 {% endblock %}
 
@@ -64,7 +64,7 @@
             </a>
             <div class="user-info-dropdown" id="userInfoDropdown" onclick="cloudSettings.toggleUserDropdown(event)">
                     <span id="adminUsername"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260629-243ce40" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260704-b381ed1" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu show" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item text-danger" onclick="event.stopPropagation();cloudSettings.logout()">
@@ -137,5 +137,5 @@
 
 {% block extra_js %}
 <!--<script src="{% static 'js/cloud_settings.js' %}"></script>-->
-<script src="/static/js/cloud_settings.js?v=20260629-243ce41"></script>
+<script src="/static/js/cloud_settings.js?v=20260704-b381ed1"></script>
 {% endblock %}

@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理控制台 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260629-243ce41">
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260629-243ce41">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260704-b381ed1">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260704-b381ed1">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260305-1">
     <!-- 🔧 新增：Chart.js 用于图表展示 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>-->
-    <script src="/static/js/dist/chart.min.js?v=20260629-243ce40"></script>
+    <script src="/static/js/dist/chart.min.js?v=20260704-b381ed1"></script>
     <!-- 🔧 关键修复2: 添加 Chart.js 加载失败的回退方案 -->
     <script>
         // 检查 Chart.js 是否加载成功
@@ -101,7 +101,7 @@
                 </a>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="adminConsole.toggleUserDropdown(event)">
                     <span id="adminUsername"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260629-243ce40" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260704-b381ed1" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu show" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item text-danger" onclick="event.stopPropagation();adminConsole.logout()">
@@ -787,13 +787,13 @@
     </div>
 </div>
 
-<script src="/static/js/utils.js?v=20260629-243ce40"></script>
-<script src="/static/js/api.js?v=20260629-243ce40"></script>
-<script src="/static/js/admin.js?v=20260629-243ce40"></script>
-<script src="/static/js/admin_chat_rooms.js?v=20260629-243ce40"></script>
+<script src="/static/js/utils.js?v=20260704-b381ed1"></script>
+<script src="/static/js/api.js?v=20260704-b381ed1"></script>
+<script src="/static/js/admin.js?v=20260704-b381ed1"></script>
+<script src="/static/js/admin_chat_rooms.js?v=20260704-b381ed1"></script>
 <!-- 🔧 新增：数据统计和系统设置 JS -->
-<script src="/static/js/admin_statistics.js?v=20260629-243ce40"></script>
-<script src="/static/js/admin_settings.js?v=20260629-243ce40"></script>
+<script src="/static/js/admin_statistics.js?v=20260704-b381ed1"></script>
+<script src="/static/js/admin_settings.js?v=20260704-b381ed1"></script>
 
 
 <script>

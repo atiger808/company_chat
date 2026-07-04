@@ -454,6 +454,7 @@ class ChatClient {
         this.pendingIceCandidates = [];       // 🔧 缓存未处理的 ICE 候选
         this.isRemoteDescriptionSet = false;  // 🔧 标记 remoteDescription 是否已设置
         this.iceTimeoutTimer = null;          // 🔧 ICE 协商超时定时器
+        this.iceCandidatesCollected = [];     // 🔧 已收集的 ICE 候选
 
         this.processedSignals = new Set();  // 🔧 新增：已处理的信令ID集合
         this.signalCacheTimeout = 5000;     // 🔧 信令缓存超时时间(5秒)
@@ -1021,19 +1022,14 @@ class ChatClient {
                 // 🔧 新增：处理用户在线状态变化
                 this.handleUserOnlineStatus(data);
                 break;
-            // 🔧 新增：通话信令处理
+            // 🔧 新增：通话信令处理（直接处理，避免 callWs.send 循环）
             case 'call_offer':
             case 'call_answer':
             case 'call_end':
             case 'call_reject':
+            case 'call_missed':
             case 'ice_candidate':
-                // 转发给通话处理器
-                if (this.callWs && this.callWs.readyState === WebSocket.OPEN) {
-                    this.callWs.send(JSON.stringify(data));
-                } else {
-                    // 如果 callWs 未连接，直接处理（兼容模式）
-                    this.handleCallSignaling(data);
-                }
+                this.handleCallSignaling(data);
                 break;
             // 🔧 关键修复：添加 heartbeat 处理（保活消息，无需处理）
             case 'heartbeat':
@@ -12532,6 +12528,21 @@ class ChatClient {
             console.log('🔧 设置 RemoteDescription (offer)');
             await this.peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
 
+            // 🔧 关键修复：设置 RemoteDescription 后立即启用 ICE candidate 队列
+            this.isRemoteDescriptionSet = true;
+            // 清空已缓存的 ICE 候选（offer SDP 处理前到达的）
+            if (this.pendingIceCandidates.length > 0) {
+                console.log('🧊 处理已缓存的 ICE 候选:', this.pendingIceCandidates.length);
+                for (const cand of this.pendingIceCandidates) {
+                    try {
+                        await this.peerConnection.addIceCandidate(cand);
+                    } catch (e) {
+                        console.warn('⚠️ 注入缓存的 ICE 候选失败:', e);
+                    }
+                }
+                this.pendingIceCandidates = [];
+            }
+
             // 🔧 关键修复4: 在设置 RemoteDescription 之后、创建 Answer 之前添加本地轨道
             if (this.localStream) {
                 console.log('🎬 添加本地轨道到 PeerConnection');
@@ -13013,6 +13024,13 @@ class ChatClient {
         this.callStartTime = null;
         this.answerProcessed = false;
         this.isCallInProgress = false;
+
+        // 🔧 重置 ICE 相关状态
+        this.pendingIceCandidates = [];
+        this.isRemoteDescriptionSet = false;
+        this.iceCandidatesCollected = [];
+        this.iceTimeoutTimer = null;
+        this.processedSignals = new Set();
 
         this.updateCallUI('idle');
         this.closeIncomingCallModal();
