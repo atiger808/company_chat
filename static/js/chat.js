@@ -13400,6 +13400,7 @@ class ChatClient {
                 controls.style.display = 'flex';
                 console.log('🎮 通话控制按钮已显示 (state:', state, ')');
             } else {
+                console.log('state: ', state)
                 controls.style.display = 'none';
             }
         }

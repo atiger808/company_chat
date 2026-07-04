@@ -10,13 +10,14 @@ class TaskApp {
         this.selectedTaskId = null;
         this.searchKeyword = '';
         this.sortableInstances = [];
-        
+        this.chat_login_url = '/login/';
+
         this.init();
     }
 
     async init() {
         if (!localStorage.getItem('access_token')) {
-            window.location.href = '/login/';
+            window.location.href = this.chat_login_url;
             return;
         }
         await this.loadCurrentUser();
@@ -37,6 +38,10 @@ class TaskApp {
     async loadCurrentUser() {
         try {
             const res = await fetch('/api/auth/me/', { headers: TokenManager.getHeaders() });
+            if (res.status === 401) {
+                this.handleAuthError();
+                return;
+            }
             if (res.ok) {
                 this.currentUser = await res.json();
                 const userEl = document.getElementById('currentUser');
@@ -49,6 +54,10 @@ class TaskApp {
     async loadUsers() {
         try {
             const res = await fetch('/api/auth/users/?page_size=100', { headers: TokenManager.getHeaders() });
+            if (res.status === 401) {
+                this.handleAuthError();
+                return;
+            }
             const data = await res.json();
             this.users = data.results || data || [];
             this.renderAssigneeOptions();
@@ -58,6 +67,10 @@ class TaskApp {
     async loadStats() {
         try {
             const res = await fetch('/api/tasks/stats/', { headers: TokenManager.getHeaders() });
+            if (res.status === 401) {
+                this.handleAuthError();
+                return;
+            }
             if (res.ok) {
                 const stats = await res.json();
                 document.getElementById('badge-my').textContent = stats.my || 0;
@@ -78,6 +91,11 @@ class TaskApp {
             if (this.searchKeyword) params.append('search', this.searchKeyword);
 
             const res = await fetch(`/api/tasks/?${params.toString()}`, { headers: TokenManager.getHeaders() });
+
+            if (res.status === 401) {
+                this.handleAuthError();
+                return;
+            }
             const data = await res.json();
             this.tasks = data.results || data || [];
             
@@ -91,6 +109,15 @@ class TaskApp {
                 else this.closeDetail();
             }
         } catch (e) { console.error('加载任务失败', e); }
+    }
+    
+    handleAuthError() {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('user_id');
+        localStorage.removeItem('user_type');
+        localStorage.removeItem('current_user');
+        localStorage.setItem('redirect_url', window.location.href);
+        window.location.href = this.chat_login_url;
     }
 
     // ==================== 视图渲染 ====================
@@ -448,7 +475,7 @@ class TaskApp {
         localStorage.removeItem('user_id');
         localStorage.removeItem('user_type');
         localStorage.removeItem('current_user');
-        window.location.href = '/login/';
+        window.location.href = this.chat_login_url;
     }
 
     showConfirm(title, message) {
