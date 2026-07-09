@@ -12,6 +12,18 @@ from django.conf import settings
 import secrets
 import hashlib
 
+def get_request_ip(request):
+    """
+    获取请求IP
+    :param request:
+    :return:
+    """
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR', '')
+    if x_forwarded_for:
+        ip = x_forwarded_for.split(',')[-1].strip()
+        return ip
+    ip = request.META.get('REMOTE_ADDR', '') or getattr(request, 'request_ip', None)
+    return ip or 'unknown'
 
 class Department(models.Model):
     """部门模型"""
@@ -460,7 +472,7 @@ def update_user_login_status(sender, request, user, **kwargs):
         UserActivity.objects.create(
             user=user,
             action='login',
-            ip_address=request.META.get('REMOTE_ADDR'),
+            ip_address=get_request_ip(request),
             description=f"用户 {user.username} 登录系统"
         )
 
@@ -475,7 +487,7 @@ def update_user_logout_status(sender, request, user, **kwargs):
         UserActivity.objects.create(
             user=user,
             action='logout',
-            ip_address=request.META.get('REMOTE_ADDR'),
+            ip_address=get_request_ip(request),
             description=f"用户 {user.username} 登出系统"
         )
 

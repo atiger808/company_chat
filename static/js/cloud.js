@@ -931,6 +931,10 @@ class CloudApp {
                 document.getElementById('dashboardView').classList.add('active');
                 await this.loadDashboardStats();
                 break;
+            case 'operation-log':
+                document.getElementById('operationLogView').classList.add('active');
+                await this.loadOperationLogs();
+                break;
         }
 
 
@@ -5662,6 +5666,106 @@ class CloudApp {
 
     }
 
+    // ==================== 操作日志功能 ====================
+
+    async loadOperationLogs(page = 1) {
+        const container = document.getElementById('logListContainer');
+        const pagination = document.getElementById('paginationContainerLogs');
+        const searchInput = document.getElementById('logSearchInput');
+        const operationFilter = document.getElementById('logOperationFilter');
+
+        try {
+            const search = searchInput ? encodeURIComponent(searchInput.value.trim()) : '';
+            const operation = operationFilter ? operationFilter.value : '';
+            let url = `/api/cloud/operation-logs/?page=${page}&page_size=20`;
+            if (search) url += `&search=${search}`;
+            if (operation) url += `&operation=${operation}`;
+
+            const response = await fetch(url, { headers: TokenManager.getHeaders() });
+            if (!response.ok) throw new Error('加载操作日志失败');
+            const data = await response.json();
+
+            this.renderOperationLogs(data, container);
+            this.renderLogPagination(data, pagination);
+        } catch (error) {
+            console.error('加载操作日志失败:', error);
+            container.innerHTML = `<div class="empty-state"><i class="fas fa-history"></i><p>${error.message}</p></div>`;
+            pagination.style.display = 'none';
+        }
+    }
+
+    renderOperationLogs(data, container) {
+        const logs = data.results || [];
+        if (logs.length === 0) {
+            container.innerHTML = '<div class="empty-state"><i class="fas fa-history"></i><p>暂无操作日志</p></div>';
+            return;
+        }
+
+        let html = '<div class="log-list">';
+        logs.forEach(log => {
+            const date = new Date(log.created_at);
+            const dateStr = date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+            const timeStr = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+            const avatar = log.user_avatar || '/static/images/default-avatar.png';
+            const isDocAndEditable = log.is_document && log.cloud_file_id;
+            const fileLink = isDocAndEditable
+                ? `<a href="/cloud/editor/?id=${log.cloud_file_id}" target="_blank" class="log-file-link" title="点击在线编辑"><i class="fas fa-edit"></i> ${this.escapeHtml(log.file_name)}</a>`
+                : log.file_name
+                    ? `<span class="log-file-name"><i class="fas fa-file"></i> ${this.escapeHtml(log.file_name)}</span>`
+                    : '<span class="text-muted">-</span>';
+
+            html += `
+            <div class="log-item">
+                <div class="log-icon-wrapper">
+                    <img src="${avatar}" alt="头像" class="log-avatar" onerror="this.src='/static/images/default-avatar.png'">
+                </div>
+                <div class="log-content">
+                    <div class="log-header">
+                        <span class="log-user">${this.escapeHtml(log.user_name)}</span>
+                        <span class="log-time" title="${dateStr} ${timeStr}">${dateStr} ${timeStr}</span>
+                    </div>
+                    <div class="log-body">
+                        <span class="log-description">${this.escapeHtml(log.description || log.operation_display)}</span>
+                        <span class="log-operation-badge log-op-${log.operation}">${log.operation_display}</span>
+                    </div>
+                    <div class="log-file-row">${fileLink}</div>
+                </div>
+            </div>`;
+        });
+        html += '</div>';
+        container.innerHTML = html;
+    }
+
+    renderLogPagination(data, container) {
+        if (!data.total_pages || data.total_pages <= 1) {
+            container.style.display = 'none';
+            return;
+        }
+        container.style.display = 'flex';
+        const page = data.page || 1;
+        const total = data.total_pages;
+        let html = `<div class="pagination-wrapper"><div class="pagination-info">共 ${data.count} 条</div><div class="pagination-controls">`;
+        html += `<button class="pagination-btn" onclick="cloudApp.loadOperationLogs(${page - 1})" ${page <= 1 ? 'disabled' : ''}><i class="fas fa-chevron-left"></i></button>`;
+        const startPage = Math.max(1, page - 2);
+        const endPage = Math.min(total, page + 2);
+        for (let i = startPage; i <= endPage; i++) {
+            html += `<button class="pagination-btn ${i === page ? 'active' : ''}" onclick="cloudApp.loadOperationLogs(${i})">${i}</button>`;
+        }
+        html += `<button class="pagination-btn" onclick="cloudApp.loadOperationLogs(${page + 1})" ${page >= total ? 'disabled' : ''}><i class="fas fa-chevron-right"></i></button>`;
+        html += '</div></div>';
+        container.innerHTML = html;
+    }
+
+    searchLogs(keyword) {
+        clearTimeout(this._logSearchTimer);
+        this._logSearchTimer = setTimeout(() => {
+            this.loadOperationLogs(1);
+        }, 300);
+    }
+
+    filterLogsByOperation(operation) {
+        this.loadOperationLogs(1);
+    }
 
     /**
      * 🔧 同步聊天室文档到网盘

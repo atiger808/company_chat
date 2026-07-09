@@ -23,7 +23,7 @@ from django.utils import timezone
 from django.contrib.auth import logout
 from django.db.models import Q
 from django.conf import settings
-from .models import CustomUser, Department, ConsultationRequest
+from .models import CustomUser, Department, ConsultationRequest, LoginLog, OperationLog
 from chat.models import ChatRoom
 from loguru import logger
 
@@ -1581,3 +1581,125 @@ class TokenVerifyView(APIView):
                 'error': str(e),
                 'code': 'error'
             })
+
+
+class AdminLoginLogViewSet(viewsets.ViewSet):
+    """🔧 登录日志视图集"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def list(self, request):
+        """获取登录日志列表"""
+        user = request.user
+        if user.user_type not in ['super_admin', 'admin']:
+            return Response({'error': '权限不足'}, status=403)
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 20))
+        search = request.query_params.get('search', '').strip()
+
+        if user.user_type == 'super_admin':
+            qs = LoginLog.objects.select_related('creator').all()
+        else:
+            qs = LoginLog.objects.select_related('creator').filter(creator=user)
+
+        if search:
+            qs = qs.filter(Q(username__icontains=search) | Q(creator__username__icontains=search) | Q(creator__real_name__icontains=search) | Q(ip__icontains=search) | Q(browser__icontains=search) | Q(os__icontains=search))
+        qs = qs.order_by('-create_time')
+        total = qs.count()
+        tp = max(1, (total + page_size - 1) // page_size)
+        start = (page - 1) * page_size
+        items = qs[start:start + page_size]
+        results = [{
+            'id': l.id, 'username': l.username or '', 'ip': l.ip or '',
+            'browser': l.browser or '', 'os': l.os or '',
+            'country': l.country or '', 'province': l.province or '', 'city': l.city or '',
+            'login_type_display': dict(LoginLog.LOGIN_TYPE_CHOICES).get(l.login_type, ''),
+            'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '',
+            'created_at': l.create_time.isoformat() if l.create_time else '',
+        } for l in items]
+        return Response({'results': results, 'count': total, 'page': page, 'page_size': page_size, 'total_pages': tp})
+
+    def retrieve(self, request, pk=None):
+        """
+        🔧 关键修复：将 detail 改为 retrieve
+        获取登录日志详情
+        """
+        try:
+            logger.info(f"{request.user} 获取登录日志pk: {pk}")
+            l = LoginLog.objects.get(id=pk)
+            return Response({
+                'id': l.id, 'username': l.username or '', 'ip': l.ip or '',
+                'agent': l.agent or '', 'browser': l.browser or '', 'os': l.os or '',
+                'continent': l.continent or '', 'country': l.country or '', 'province': l.province or '',
+                'city': l.city or '', 'district': l.district or '', 'isp': l.isp or '',
+                'longitude': l.longitude or '', 'latitude': l.latitude or '',
+                'login_type': l.login_type,
+                'login_type_display': dict(LoginLog.LOGIN_TYPE_CHOICES).get(l.login_type, ''),
+                'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '',
+                'created_at': l.create_time.isoformat() if l.create_time else '',
+                'creator_name': l.creator.username if l.creator else '',
+            })
+        except LoginLog.DoesNotExist:
+            return Response({'error': '日志不存在'}, status=404)
+        except Exception as e:
+            logger.error(f"获取登录日志详情失败: {e}", exc_info=True)
+            return Response({'error': str(e)}, status=500)
+
+
+class AdminOperationLogViewSet(viewsets.ViewSet):
+    """🔧 操作日志视图集"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def list(self, request):
+        """获取操作日志列表"""
+        user = request.user
+        if user.user_type not in ['super_admin', 'admin']:
+            return Response({'error': '权限不足'}, status=403)
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 20))
+        search = request.query_params.get('search', '').strip()
+
+        if user.user_type == 'super_admin':
+            qs = OperationLog.objects.select_related('creator').all()
+        else:
+            qs = OperationLog.objects.select_related('creator').filter(creator=user)
+
+        if search:
+            qs = qs.filter(Q(creator__username__icontains=search) | Q(creator__real_name__icontains=search) | Q(request_modular__icontains=search) | Q(request_path__icontains=search) | Q(request_ip__icontains=search))
+        qs = qs.order_by('-create_time')
+        total = qs.count()
+        tp = max(1, (total + page_size - 1) // page_size)
+        start = (page - 1) * page_size
+        items = qs[start:start + page_size]
+        results = [{
+            'id': l.id, 'creator_name': l.creator.username if l.creator else '',
+            'request_modular': l.request_modular or '', 'request_path': l.request_path or '',
+            'request_method': l.request_method or '', 'request_msg': l.request_msg or '',
+            'request_ip': l.request_ip or '', 'response_code': l.response_code or '',
+            'status': l.status, 'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '',
+            'created_at': l.create_time.isoformat() if l.create_time else '',
+        } for l in items]
+        return Response({'results': results, 'count': total, 'page': page, 'page_size': page_size, 'total_pages': tp})
+
+    def retrieve(self, request, pk=None):
+        """
+        🔧 关键修复：将 detail 改为 retrieve
+        获取操作日志详情
+        """
+        try:
+            logger.info(f"{request.user} 获取操作日志pk: {pk}")
+            l = OperationLog.objects.get(id=pk)
+            return Response({
+                'id': l.id, 'creator_name': l.creator.username if l.creator else '',
+                'request_modular': l.request_modular or '', 'request_path': l.request_path or '',
+                'request_body': l.request_body or '', 'request_method': l.request_method or '',
+                'request_msg': l.request_msg or '', 'request_ip': l.request_ip or '',
+                'request_browser': l.request_browser or '', 'request_os': l.request_os or '',
+                'response_code': l.response_code or '', 'json_result': l.json_result or '',
+                'status': l.status, 'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '',
+                'created_at': l.create_time.isoformat() if l.create_time else '',
+            })
+        except OperationLog.DoesNotExist:
+            return Response({'error': '日志不存在'}, status=404)
+        except Exception as e:
+            logger.error(f"获取操作日志详情失败: {e}", exc_info=True)
+            return Response({'error': str(e)}, status=500)

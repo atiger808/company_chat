@@ -4054,3 +4054,167 @@ body {
     border-color: rgba(102, 126, 234, 0.5);
     background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
 }
+
+/* ==================== 操作日志样式 ==================== */
+.log-list-container {
+    background: var(--bg-primary, #fff);
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    overflow: hidden;
+    min-height: 200px;
+}
+
+.log-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.log-item {
+    display: flex;
+    gap: 12px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border-color, #ebeef5);
+    transition: background 0.2s;
+}
+
+.log-item:hover {
+    background: var(--bg-secondary, #f5f7fa);
+}
+
+.log-item:last-child {
+    border-bottom: none;
+}
+
+.log-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.log-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.log-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+}
+
+.log-user {
+    font-weight: 500;
+    font-size: 14px;
+    color: var(--text-primary, #303133);
+}
+
+.log-time {
+    font-size: 12px;
+    color: var(--text-light, #909399);
+    white-space: nowrap;
+}
+
+.log-body {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+}
+
+.log-description {
+    font-size: 13px;
+    color: var(--text-secondary, #606266);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.log-operation-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.log-op-upload { background: #ecf5ff; color: #409eff; }
+.log-op-download { background: #f0f9eb; color: #67c23a; }
+.log-op-delete { background: #fef0f0; color: #f56c6c; }
+.log-op-rename { background: #fdf6ec; color: #e6a23c; }
+.log-op-move { background: #f4f4f5; color: #909399; }
+.log-op-share { background: #f0f9eb; color: #67c23a; }
+.log-op-edit_save { background: #ecf5ff; color: #409eff; }
+.log-op-add_collaborator { background: #f0f9eb; color: #67c23a; }
+.log-op-remove_collaborator { background: #fef0f0; color: #f56c6c; }
+
+.log-file-row {
+    margin-top: 2px;
+}
+
+.log-file-link {
+    font-size: 13px;
+    color: var(--primary-color, #409EFF);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.log-file-link:hover {
+    text-decoration: underline;
+}
+
+.log-file-name {
+    font-size: 13px;
+    color: var(--text-secondary, #606266);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.log-filter-select {
+    padding: 6px 10px;
+    border: 1px solid var(--border-color, #dcdfe6);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--text-primary, #303133);
+    background: var(--bg-primary, #fff);
+    cursor: pointer;
+    min-width: 110px;
+}
+
+.log-filter-select:focus {
+    outline: none;
+    border-color: var(--primary-color, #409EFF);
+}
+
+@media (max-width: 768px) {
+    .log-item { padding: 12px 14px; }
+    .log-body { flex-direction: column; align-items: flex-start; gap: 4px; }
+    .log-header { flex-wrap: wrap; gap: 4px; }
+}
+
+/* 暗色主题操作日志适配 */
+[data-theme="dark"] .log-item {
+    border-bottom-color: #333;
+}
+[data-theme="dark"] .log-item:hover {
+    background-color: #2d2d2d;
+}
+[data-theme="dark"] .log-user {
+    color: var(--cloud-text-primary, #e0e0e0);
+}
+[data-theme="dark"] .log-description {
+    color: var(--cloud-text-secondary, #a0a0a0);
+}
+[data-theme="dark"] .log-file-name {
+    color: var(--cloud-text-secondary, #a0a0a0);
+}

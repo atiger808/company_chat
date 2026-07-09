@@ -272,8 +272,8 @@ class AdminConsole {
      * 🔧 切换标签页（支持权限控制）
      */
     async switchTab(tabName) {
-        // 🔧 权限检查：普通管理员只能访问用户管理
-        if (!this.isSuperAdmin && tabName !== 'users') {
+        // 🔧 权限检查：普通管理员只能访问用户管理和操作日志
+        if (!this.isSuperAdmin && tabName !== 'users' && tabName !== 'operation-logs') {
             this.showError('权限不足', '您无权访问此功能');
             // 强制切回用户管理
             tabName = 'users';
@@ -334,6 +334,12 @@ class AdminConsole {
                     }
                 }
                 break;
+            case 'login-logs':
+                if (this.isSuperAdmin) this.loadLoginLogs();
+                break;
+            case 'operation-logs':
+                this.loadOperationLogs();
+                break;
         }
     }
 
@@ -350,11 +356,17 @@ class AdminConsole {
             item.style.display = this.isSuperAdmin ? '' : 'none';
         });
 
-        // 🔧 隐藏/显示超级管理员专属内容区域
-        const superAdminTabs = document.querySelectorAll('.admin-tab:not(#usersTab)');
+        // 🔧 隐藏/显示超级管理员专属内容区域（但操作日志对所有管理员可见）
+        const superAdminTabs = document.querySelectorAll('.admin-tab:not(#usersTab):not(#operation-logsTab)');
         superAdminTabs.forEach(tab => {
             tab.style.display = this.isSuperAdmin ? '' : 'none';
         });
+
+        // 🔧 操作日志为所有管理员开放
+        const opLogNav = document.querySelector('[data-tab="operation-logs"]');
+        if (opLogNav) opLogNav.style.display = '';
+        const opLogTab = document.getElementById('operation-logsTab');
+        if (opLogTab) opLogTab.style.display = '';
 
         // 🔧 如果普通管理员，确保只显示用户管理
         if (!this.isSuperAdmin) {
@@ -1856,6 +1868,12 @@ class AdminConsole {
                             }
                         }
                         break;
+                    case 'login-logs':
+                        if (this.isSuperAdmin) this.loadLoginLogs();
+                        break;
+                    case 'operation-logs':
+                        this.loadOperationLogs();
+                        break;
                 }
 
 
@@ -2277,6 +2295,180 @@ class AdminConsole {
         dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
     }
 
+
+    escapeHtml(text) {
+        if (!text) return '';
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    // ==================== 日志相关方法 ====================
+
+    async loadLoginLogs(page = 1) {
+        const tbody = document.getElementById('loginLogsTableBody');
+        const pagination = document.getElementById('loginLogPagination');
+        const searchEl = document.getElementById('loginLogSearch');
+        if (!tbody) return;
+        try {
+            const search = searchEl ? encodeURIComponent(searchEl.value.trim()) : '';
+            let url = '/api/auth/admin/login-logs/?page=' + page + '&page_size=20';
+            if (search) url += '&search=' + search;
+            const resp = await fetch(url, { headers: TokenManager.getHeaders() });
+            if (!resp.ok) throw new Error('Failed');
+            const data = await resp.json();
+            this._renderLoginLogs(data, tbody);
+            this._renderLogPagination(data, pagination, 'loadLoginLogs');
+        } catch (e) {
+            tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:#909399;">Failed: ' + e.message + '</td></tr>';
+            pagination.style.display = 'none';
+        }
+    }
+
+    _renderLoginLogs(data, tbody) {
+        const rows = data.results || [];
+        if (!rows.length) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:#909399;">没有登录日志</td></tr>'; return; }
+        tbody.innerHTML = rows.map(function(r) {
+            const loc = [r.country, r.province, r.city].filter(Boolean).join(' ') || '-';
+            return '<tr style="cursor:pointer;">'
+                + '<td>' + adminConsole.escapeHtml(r.username) + '<br><small style="color:var(--text-light);font-size:11px;">' + adminConsole.escapeHtml(r.real_name || '-') + '</small></td>'
+                + '<td><code>' + (r.ip || '') + '</code></td>'
+                + '<td><span class="badge badge-info">' + r.login_type_display + '</span></td>'
+                + '<td>' + (adminConsole.escapeHtml(r.browser || '-').substring(0, 30)) + '</td>'
+                + '<td>' + adminConsole.escapeHtml(r.os || '-') + '</td>'
+                + '<td>' + loc + '</td>'
+                + '<td class="log-time-cell">' + adminConsole.formatLogTime(r.created_at) + '</td>'
+                + '<td><button class="action-btn" onclick="event.stopPropagation();adminConsole.showLoginLogDetail(' + r.id + ')" title="查看详情"><i class="fas fa-eye"></i></button></td></tr>';
+        }).join('');
+    }
+
+    async showLoginLogDetail(id) {
+        try {
+            const resp = await fetch('/api/auth/admin/login-logs/' + id + '/', { headers: TokenManager.getHeaders() });
+            if (!resp.ok) throw new Error('Failed');
+            const d = await resp.json();
+            const loc = [d.country, d.province, d.city, d.district].filter(Boolean).join(' ') || '-';
+            const html = '<div class="log-detail-grid">'
+                + '<div class="log-detail-item"><label>User</label><span>' + adminConsole.escapeHtml(d.username) + '</span></div>'
+                + '<div class="log-detail-item"><label>Real Name</label><span>' + adminConsole.escapeHtml(d.real_name || '-') + '</span></div>'
+                + '<div class="log-detail-item"><label>IP</label><span>' + d.ip + '</span></div>'
+                + '<div class="log-detail-item"><label>Type</label><span>' + d.login_type_display + '</span></div>'
+                + '<div class="log-detail-item"><label>Browser</label><span>' + adminConsole.escapeHtml(d.browser || '-') + '</span></div>'
+                + '<div class="log-detail-item"><label>OS</label><span>' + adminConsole.escapeHtml(d.os || '-') + '</span></div>'
+                + '<div class="log-detail-item"><label>Location</label><span>' + loc + '</span></div>'
+                + '<div class="log-detail-item"><label>ISP</label><span>' + (d.isp || '-') + '</span></div>'
+                + '<div class="log-detail-item" style="grid-column:1/-1;"><label>User Agent</label><span style="font-size:11px;word-break:break-all;">' + adminConsole.escapeHtml(d.agent || '-') + '</span></div>'
+                + '<div class="log-detail-item" style="grid-column:1/-1;"><label>Time</label><span>' + adminConsole.formatLogTime(d.created_at) + '</span></div>'
+                + '<div class="log-detail-item" style="grid-column:1/-1;"><label>Desc</label><span>' + adminConsole.escapeHtml(d.request_path || '-') + '</span></div></div>';
+            adminConsole._showLogDetailModal('登录日志详情', html);
+        } catch (e) { adminConsole.showError('Failed', e.message); }
+    }
+
+    searchLoginLogs() { clearTimeout(this._loginLogTimer); this._loginLogTimer = setTimeout(() => this.loadLoginLogs(1), 300); }
+
+    async loadOperationLogs(page) {
+        if (page === undefined) page = 1;
+        const tbody = document.getElementById('operationLogsTableBody');
+        const pagination = document.getElementById('operationLogPagination');
+        const searchEl = document.getElementById('operationLogSearch');
+        if (!tbody) return;
+        try {
+            const search = searchEl ? encodeURIComponent(searchEl.value.trim()) : '';
+            let url = '/api/auth/admin/operation-logs/?page=' + page + '&page_size=20';
+            if (search) url += '&search=' + search;
+            const resp = await fetch(url, { headers: TokenManager.getHeaders() });
+            if (!resp.ok) throw new Error('Failed');
+            const data = await resp.json();
+            this._renderOperationLogs(data, tbody);
+            this._renderLogPagination(data, pagination, 'loadOperationLogs');
+        } catch (e) {
+            tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:#909399;">Failed: ' + e.message + '</td></tr>';
+            pagination.style.display = 'none';
+        }
+    }
+
+    _renderOperationLogs(data, tbody) {
+        const rows = data.results || [];
+        if (!rows.length) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:#909399;">没有操作日志</td></tr>'; return; }
+        tbody.innerHTML = rows.map(function(r) {
+            const st = r.status ? '<span class="status-badge active">OK</span>' : '<span class="status-badge inactive">Fail</span>';
+            return '<tr style="cursor:pointer;">'
+                + '<td>' + adminConsole.escapeHtml(r.creator_name || '-') + '<br><small style="color:var(--text-light);font-size:11px;">' + adminConsole.escapeHtml(r.real_name || '-') + '</small></td>'
+                + '<td><span class="badge badge-info">' + adminConsole.escapeHtml(r.request_modular || '-') + '</span></td>'
+                + '<td title="' + adminConsole.escapeHtml(r.request_path) + '">' + (adminConsole.escapeHtml(r.request_path || '-').substring(0, 40)) + '</td>'
+                + '<td><code>' + (r.request_method || '-') + '</code></td>'
+                + '<td><code>' + (r.request_ip || '-') + '</code></td>'
+                + '<td>' + st + '</td>'
+                + '<td class="log-time-cell">' + adminConsole.formatLogTime(r.created_at) + '</td>'
+                + '<td><button class="action-btn" onclick="event.stopPropagation();adminConsole.showOperationLogDetail(' + r.id + ')" title="查看详情"><i class="fas fa-eye"></i></button></td></tr>';
+        }).join('');
+    }
+
+    async showOperationLogDetail(id) {
+        try {
+            const resp = await fetch('/api/auth/admin/operation-logs/' + id + '/', { headers: TokenManager.getHeaders() });
+            if (!resp.ok) throw new Error('Failed');
+            const d = await resp.json();
+            const st = d.status ? '<span class="status-badge active">OK</span>' : '<span class="status-badge inactive">Fail</span>';
+            const html = '<div class="log-detail-grid">'
+                + '<div class="log-detail-item"><label>User</label><span>' + adminConsole.escapeHtml(d.creator_name || '-') + '</span></div>'
+                + '<div class="log-detail-item"><label>Real Name</label><span>' + adminConsole.escapeHtml(d.real_name || '-') + '</span></div>'
+                + '<div class="log-detail-item"><label>Module</label><span>' + adminConsole.escapeHtml(d.request_modular || '-') + '</span></div>'
+                + '<div class="log-detail-item" style="grid-column:1/-1;"><label>Path</label><span style="word-break:break-all;font-size:12px;">' + adminConsole.escapeHtml(d.request_path || '-') + '</span></div>'
+                + '<div class="log-detail-item"><label>Method</label><span><code>' + (d.request_method || '-') + '</code></span></div>'
+                + '<div class="log-detail-item"><label>IP</label><span>' + (d.request_ip || '-') + '</span></div>'
+                + '<div class="log-detail-item"><label>Browser</label><span>' + adminConsole.escapeHtml(d.request_browser || '-') + '</span></div>'
+                + '<div class="log-detail-item"><label>OS</label><span>' + adminConsole.escapeHtml(d.request_os || '-') + '</span></div>'
+                + '<div class="log-detail-item"><label>Code</label><span>' + (d.response_code || '-') + '</span></div>'
+                + '<div class="log-detail-item"><label>Status</label><span>' + st + '</span></div>'
+                + '<div class="log-detail-item" style="grid-column:1/-1;"><label>Msg</label><span>' + adminConsole.escapeHtml(d.request_msg || '-') + '</span></div>'
+                + '<div class="log-detail-item" style="grid-column:1/-1;"><label>Params</label><pre class="log-pre">' + adminConsole.escapeHtml(d.request_body || '-') + '</pre></div>'
+                + '<div class="log-detail-item" style="grid-column:1/-1;"><label>Result</label><pre class="log-pre">' + adminConsole.escapeHtml(d.json_result || '-') + '</pre></div>'
+                + '<div class="log-detail-item" style="grid-column:1/-1;"><label>Time</label><span>' + adminConsole.formatLogTime(d.created_at) + '</span></div></div>';
+            adminConsole._showLogDetailModal('操作日志详情', html);
+        } catch (e) { adminConsole.showError('Failed', e.message); }
+    }
+
+    searchOperationLogs() { clearTimeout(this._opLogTimer); this._opLogTimer = setTimeout(() => this.loadOperationLogs(1), 300); }
+
+    _renderLogPagination(data, container, loadFn) {
+        if (!data.total_pages || data.total_pages <= 1) { container.style.display = 'none'; return; }
+        container.style.display = 'flex';
+        const p = data.page; const t = data.total_pages;
+        let html = '<div class="log-pagination-bar">'
+            + '<span class="log-pagination-total">共 ' + data.count + ' 条</span>'
+            + '<div class="log-pagination-btns">';
+        html += '<button class="pagination-btn" onclick="adminConsole.' + loadFn + '(' + (p - 1) + ')" ' + (p <= 1 ? 'disabled' : '') + '><i class="fas fa-chevron-left"></i></button>';
+        for (let i = Math.max(1, p - 2); i <= Math.min(t, p + 2); i++) {
+            html += '<button class="pagination-btn ' + (i === p ? 'active' : '') + '" onclick="adminConsole.' + loadFn + '(' + i + ')">' + i + '</button>';
+        }
+        html += '<button class="pagination-btn" onclick="adminConsole.' + loadFn + '(' + (p + 1) + ')" ' + (p >= t ? 'disabled' : '') + '><i class="fas fa-chevron-right"></i></button></div></div>';
+        container.innerHTML = html;
+    }
+
+    _showLogDetailModal(title, content) {
+        const existing = document.getElementById('logDetailModal');
+        if (existing) existing.remove();
+        const modal = document.createElement('div');
+        modal.className = 'modal show'; modal.id = 'logDetailModal'; modal.style.display = 'flex';
+        modal.innerHTML = '<div class="modal-content" style="max-width:700px;">'
+            + '<div class="modal-header"><h3><i class="fas fa-info-circle"></i> ' + title + '</h3><button class="close-btn">&times;</button></div>'
+            + '<div class="modal-body">' + content + '</div>'
+            + '<div class="modal-footer"><button class="btn btn-secondary" onclick="this.closest(\'.modal\').remove()">Close</button></div></div>';
+        document.body.appendChild(modal);
+        modal.querySelector('.close-btn').onclick = function() { modal.remove(); };
+        modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+    }
+
+    formatLogTime(iso) {
+        if (!iso) return '-';
+        const d = new Date(iso);
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
+
 }
 
 
@@ -2288,6 +2480,12 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 
+
+
+
+
+
+    
 
 
 

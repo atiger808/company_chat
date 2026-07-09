@@ -8949,3 +8949,81 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
             )
 
 
+# ==================== 文件操作日志视图集 ====================
+
+class FileOperationLogViewSet(viewsets.ViewSet):
+    """
+    🔧 文件操作日志视图集
+    GET /api/cloud/operation-logs/?page=1&page_size=20&search=xxx
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def list(self, request):
+        """分页获取当前用户的操作日志"""
+        user = request.user
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 20))
+        search = request.query_params.get('search', '').strip()
+        operation_filter = request.query_params.get('operation', '').strip()
+
+        # 获取当前用户的操作日志（超级管理员可以看所有）
+        if user.is_superuser:
+            queryset = FileOperationLog.objects.select_related('user', 'file').all()
+        else:
+            queryset = FileOperationLog.objects.select_related('user', 'file').filter(user=user)
+
+        # 搜索（按文件名或操作描述）
+        if search:
+            queryset = queryset.filter(
+                models.Q(description__icontains=search) |
+                models.Q(user__username__icontains=search) |
+                models.Q(user__real_name__icontains=search) |
+                models.Q(file__name__icontains=search)
+            )
+
+        # 按操作类型过滤
+        if operation_filter:
+            queryset = queryset.filter(operation=operation_filter)
+
+        # 按时间倒序排列
+        queryset = queryset.order_by('-created_at')
+
+        # 分页
+        total = queryset.count()
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_items = queryset[start:end]
+
+        # 构建返回数据
+        OPERATION_DISPLAY = dict(FileOperationLog.OPERATION_CHOICES)
+        results = []
+        for log in page_items:
+            item = {
+                'id': log.id,
+                'user_id': log.user.id if log.user else None,
+                'user_name': log.user.real_name or log.user.username if log.user else '系统',
+                'user_avatar': log.user.get_avatar_url() if log.user and hasattr(log.user, 'get_avatar_url') else '',
+                'file_id': str(log.file.id) if log.file else None,
+                'file_name': log.file.name if log.file else '',
+                'is_document': log.file.is_document if log.file and hasattr(log.file, 'is_document') else False,
+                'cloud_file_id': str(log.file.id) if log.file and hasattr(log.file, 'is_document') and log.file.is_document else None,
+                'operation': log.operation,
+                'operation_display': OPERATION_DISPLAY.get(log.operation, log.operation),
+                'description': log.description or '',
+                'ip_address': log.ip_address or '',
+                'created_at': log.created_at.isoformat(),
+            }
+            results.append(item)
+
+        return Response({
+            'results': results,
+            'count': total,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': total_pages,
+            'has_next': page < total_pages,
+            'has_previous': page > 1,
+        })
+
+

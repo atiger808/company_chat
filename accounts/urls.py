@@ -17,6 +17,8 @@ from .views import (
     ConsultationRequestView,
     TokenRefreshView,
     TokenVerifyView,
+    AdminLoginLogViewSet,
+    AdminOperationLogViewSet,
 )
 
 router = DefaultRouter()
@@ -59,6 +61,13 @@ urlpatterns = [
     # 获取用户的好友列表
     path('admin/users/<int:pk>/friends/', UserAdminViewSet.as_view({'get': 'get_friends'}), name='admin-get-friends'),
 
+    # 登录日志
+    path('admin/login-logs/', AdminLoginLogViewSet.as_view({'get': 'list'}), name='admin-login-logs'),
+    path('admin/login-logs/<int:pk>/', AdminLoginLogViewSet.as_view({'get': 'retrieve'}), name='admin-login-log-detail'),  # 🔧 关键修复
+
+    # 操作日志
+    path('admin/operation-logs/', AdminOperationLogViewSet.as_view({'get': 'list'}), name='admin-operation-logs'),
+    path('admin/operation-logs/<int:pk>/', AdminOperationLogViewSet.as_view({'get': 'retrieve'}), name='admin-operation-log-detail'),  # 🔧 关键修复
 
     # 便捷的URL
     path('me/', UserViewSet.as_view({'get': 'me'}), name='user-me'),

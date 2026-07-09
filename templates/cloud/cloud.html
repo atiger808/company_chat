@@ -5,12 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>企业网盘 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/cloud.css?v=20260704-b381ed1">
+    <link rel="stylesheet" href="/static/css/cloud.css?v=20260709-4930c7a">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
     <!-- 🔧 添加二维码库 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>-->
-    <script src="/static/js/dist/qrcode.min.js?v=20260704-b381ed1"></script>
+    <script src="/static/js/dist/qrcode.min.js?v=20260709-4930c7a"></script>
 </head>
 <body>
 <div class="cloud-layout">
@@ -67,6 +67,9 @@
             <a href="#" class="nav-item" data-view="dashboard">
                 <i class="fas fa-chart-pie"></i> 数据统计
             </a>
+            <a href="#" class="nav-item" data-view="operation-log">
+                <i class="fas fa-history"></i> 操作日志
+            </a>
         </nav>
 
         <div class="storage-status">
@@ -117,7 +120,7 @@
                 </a>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="cloudApp.toggleUserDropdown(event)">
                     <span id="adminUsername"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260704-b381ed1" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260709-4930c7a" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item text-danger" onclick="event.stopPropagation();cloudApp.logout()">
@@ -464,6 +467,41 @@
                 <div class="dashboard-stats-container" id="dashboardStatsContent">
                     <!-- 动态生成 -->
                 </div>
+            </div>
+
+            <!-- 🔧 8. 操作日志视图 -->
+            <div class="view-section" id="operationLogView">
+                <div class="view-header">
+                    <h3><i class="fas fa-history"></i> 操作日志</h3>
+                    <div class="toolbar-actions">
+                        <div class="search-box">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="logSearchInput" placeholder="搜索操作描述、文件名..." oninput="cloudApp.searchLogs(this.value)">
+                        </div>
+                        <select id="logOperationFilter" class="form-select log-filter-select" onchange="cloudApp.filterLogsByOperation(this.value)">
+                            <option value="">全部操作</option>
+                            <option value="upload">上传</option>
+                            <option value="download">下载</option>
+                            <option value="delete">删除</option>
+                            <option value="rename">重命名</option>
+                            <option value="move">移动</option>
+                            <option value="share">分享</option>
+                            <option value="edit_save">编辑保存</option>
+                            <option value="add_collaborator">添加协作者</option>
+                            <option value="remove_collaborator">移除协作者</option>
+                        </select>
+                        <button class="btn btn-secondary" onclick="cloudApp.loadOperationLogs()">
+                            <i class="fas fa-sync"></i> 刷新
+                        </button>
+                    </div>
+                </div>
+                <div class="log-list-container" id="logListContainer">
+                    <div class="empty-state">
+                        <i class="fas fa-history"></i>
+                        <p>暂无操作日志</p>
+                    </div>
+                </div>
+                <div id="paginationContainerLogs" class="pagination-container" style="display:none;"></div>
             </div>
         </div>
     </main>
@@ -907,11 +945,11 @@
 
 <!-- 脚本引入 -->
 <!--<script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>-->
-<script src="/static/js/dist/spark-md5.min.js?v=20260704-b381ed1"></script>
-<script src="/static/js/utils.js?v=20260704-b381ed1"></script>
-<script src="/static/js/frontend_cloud_config.js?v=20260704-b381ed1"></script>
-<script src="/static/js/api.js?v=20260704-b381ed1"></script>
-<script src="/static/js/cloud.js?v=20260704-b381ed1"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260709-4930c7a"></script>
+<script src="/static/js/utils.js?v=20260709-4930c7a"></script>
+<script src="/static/js/frontend_cloud_config.js?v=20260709-4930c7a"></script>
+<script src="/static/js/api.js?v=20260709-4930c7a"></script>
+<script src="/static/js/cloud.js?v=20260709-4930c7a"></script>
 
 <script>
     // 🔧 初始化侧边栏按钮显示状态

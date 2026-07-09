@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import CustomUser, Department, LoginLog, OperationLog, ConsultationRequest
+from .models import CustomUser, Department, LoginLog, OperationLog, ConsultationRequest, UserActivity
 
 @admin.register(CustomUser)
 class CustomUserAdmin(admin.ModelAdmin):
@@ -10,6 +10,14 @@ class CustomUserAdmin(admin.ModelAdmin):
 @admin.register(Department)
 class DepartmentAdmin(admin.ModelAdmin):
     list_display = ('id', 'name', 'code', 'updated_at', 'created_at')
+    list_per_page = 20
+
+
+@admin.register(UserActivity)
+class UserActivityAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'action', 'description', 'ip_address', 'created_at')
+    list_filter = ['action']
+    search_fields = ('description', 'ip_address', 'id')
     list_per_page = 20
 
 

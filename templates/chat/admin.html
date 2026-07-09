@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理控制台 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260704-b381ed1">
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260704-b381ed1">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260709-4930c7a">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260709-4930c7a">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260305-1">
     <!-- 🔧 新增：Chart.js 用于图表展示 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>-->
-    <script src="/static/js/dist/chart.min.js?v=20260704-b381ed1"></script>
+    <script src="/static/js/dist/chart.min.js?v=20260709-4930c7a"></script>
     <!-- 🔧 关键修复2: 添加 Chart.js 加载失败的回退方案 -->
     <script>
         // 检查 Chart.js 是否加载成功
@@ -69,6 +69,16 @@
             <a href="#" class="nav-item super-admin-only" data-tab="settings" style="display: none">
                 <i class="fas fa-cog"></i> 系统设置
             </a>
+
+            <!-- 登录日志：仅超级管理员可见 -->
+            <a href="#" class="nav-item super-admin-only" data-tab="login-logs" style="display: none">
+                <i class="fas fa-sign-in-alt"></i> 登录日志
+            </a>
+
+            <!-- 操作日志：所有管理员可见 -->
+            <a href="#" class="nav-item" data-tab="operation-logs" style="display: none">
+                <i class="fas fa-clipboard-list"></i> 操作日志
+            </a>
         </nav>
 
         <div class="sidebar-footer">
@@ -101,7 +111,7 @@
                 </a>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="adminConsole.toggleUserDropdown(event)">
                     <span id="adminUsername"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260704-b381ed1" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260709-4930c7a" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu show" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item text-danger" onclick="event.stopPropagation();adminConsole.logout()">
@@ -452,6 +462,42 @@
                 </div>
             </div>
 
+            <!-- 🔧 登录日志标签页：仅超级管理员 -->
+            <div id="login-logsTab" class="admin-tab super-admin-only">
+                <div class="admin-toolbar">
+                    <div class="search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" id="loginLogSearch" placeholder="搜索用户名、IP、浏览器..." oninput="adminConsole.searchLoginLogs(this.value)">
+                    </div>
+                    <button class="btn btn-secondary" onclick="adminConsole.loadLoginLogs()"><i class="fas fa-sync"></i> 刷新</button>
+                </div>
+                <div class="admin-table-container">
+                    <table class="admin-table">
+                        <thead><tr><th>用户</th><th>IP</th><th>登录类型</th><th>浏览器</th><th>系统</th><th>位置</th><th>时间</th><th>操作</th></tr></thead>
+                        <tbody id="loginLogsTableBody"></tbody>
+                    </table>
+                </div>
+                <div id="loginLogPagination" class="pagination-container" style="display:none;"></div>
+            </div>
+
+            <!-- 🔧 操作日志标签页：所有管理员可见 -->
+            <div id="operation-logsTab" class="admin-tab">
+                <div class="admin-toolbar">
+                    <div class="search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" id="operationLogSearch" placeholder="搜索用户名、路径、IP..." oninput="adminConsole.searchOperationLogs(this.value)">
+                    </div>
+                    <button class="btn btn-secondary" onclick="adminConsole.loadOperationLogs()"><i class="fas fa-sync"></i> 刷新</button>
+                </div>
+                <div class="admin-table-container">
+                    <table class="admin-table">
+                        <thead><tr><th>用户</th><th>模块</th><th>请求路由</th><th>方法</th><th>IP</th><th>状态</th><th>时间</th><th>操作</th></tr></thead>
+                        <tbody id="operationLogsTableBody"></tbody>
+                    </table>
+                </div>
+                <div id="operationLogPagination" class="pagination-container" style="display:none;"></div>
+            </div>
+
         </div>
     </main>
 </div>
@@ -787,13 +833,13 @@
     </div>
 </div>
 
-<script src="/static/js/utils.js?v=20260704-b381ed1"></script>
-<script src="/static/js/api.js?v=20260704-b381ed1"></script>
-<script src="/static/js/admin.js?v=20260704-b381ed1"></script>
-<script src="/static/js/admin_chat_rooms.js?v=20260704-b381ed1"></script>
+<script src="/static/js/utils.js?v=20260709-4930c7a"></script>
+<script src="/static/js/api.js?v=20260709-4930c7a"></script>
+<script src="/static/js/admin.js?v=20260709-4930c7a"></script>
+<script src="/static/js/admin_chat_rooms.js?v=20260709-4930c7a"></script>
 <!-- 🔧 新增：数据统计和系统设置 JS -->
-<script src="/static/js/admin_statistics.js?v=20260704-b381ed1"></script>
-<script src="/static/js/admin_settings.js?v=20260704-b381ed1"></script>
+<script src="/static/js/admin_statistics.js?v=20260709-4930c7a"></script>
+<script src="/static/js/admin_settings.js?v=20260709-4930c7a"></script>
 
 
 <script>
