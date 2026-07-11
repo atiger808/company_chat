@@ -6617,7 +6617,7 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
             logger.error(f'Get collaborators failed: {e}', exc_info=True)
             return Response({'error': f'获取失败：{str(e)}'}, status=500)
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated],
+    @action(detail=True, methods=['put'], permission_classes=[permissions.IsAuthenticated],
             url_path='collaboration/status')
     def update_collaboration_status(self, request, pk=None):
         """

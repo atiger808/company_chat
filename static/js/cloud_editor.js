@@ -1124,7 +1124,7 @@ class DocumentEditorApp {
     async updateCollaborationStatus(status) {
         try {
             const response = await fetch(`/api/cloud/documents/${this.fileId}/collaboration/status/`, {
-                method: 'POST',
+                method: 'PUT',
                 headers: {'Content-Type': 'application/json', ...TokenManagerCustom.getHeaders()},
                 body: JSON.stringify({status: status}),
                 keepalive: true // 🔧 关键：保证页面卸载时请求能发出去
