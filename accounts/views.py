@@ -48,6 +48,7 @@ from .serializers import (
     ConsultationRequestSerializer,
 )
 from .permissions import IsSuperAdmin, IsAdminOrSuperAdmin, IsAdminUserManagement
+from utils.encrypt_aes import encrypt_data
 
 
 class AdminDashboardViewSet(viewsets.ViewSet):
@@ -1616,7 +1617,7 @@ class AdminLoginLogViewSet(viewsets.ViewSet):
             'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '',
             'created_at': l.create_time.isoformat() if l.create_time else '',
         } for l in items]
-        return Response({'results': results, 'count': total, 'page': page, 'page_size': page_size, 'total_pages': tp})
+        return Response({'encrypt': True, 'data': encrypt_data({'results': results, 'count': total, 'page': page, 'page_size': page_size, 'total_pages': tp})})
 
     def retrieve(self, request, pk=None):
         """
@@ -1626,7 +1627,7 @@ class AdminLoginLogViewSet(viewsets.ViewSet):
         try:
             logger.info(f"{request.user} 获取登录日志pk: {pk}")
             l = LoginLog.objects.get(id=pk)
-            return Response({
+            return Response({'encrypt': True, 'data': encrypt_data({
                 'id': l.id, 'username': l.username or '', 'ip': l.ip or '',
                 'agent': l.agent or '', 'browser': l.browser or '', 'os': l.os or '',
                 'continent': l.continent or '', 'country': l.country or '', 'province': l.province or '',
@@ -1637,7 +1638,7 @@ class AdminLoginLogViewSet(viewsets.ViewSet):
                 'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '',
                 'created_at': l.create_time.isoformat() if l.create_time else '',
                 'creator_name': l.creator.username if l.creator else '',
-            })
+            })})
         except LoginLog.DoesNotExist:
             return Response({'error': '日志不存在'}, status=404)
         except Exception as e:
@@ -1678,7 +1679,7 @@ class AdminOperationLogViewSet(viewsets.ViewSet):
             'status': l.status, 'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '',
             'created_at': l.create_time.isoformat() if l.create_time else '',
         } for l in items]
-        return Response({'results': results, 'count': total, 'page': page, 'page_size': page_size, 'total_pages': tp})
+        return Response({'encrypt': True, 'data': encrypt_data({'results': results, 'count': total, 'page': page, 'page_size': page_size, 'total_pages': tp})})
 
     def retrieve(self, request, pk=None):
         """
@@ -1688,7 +1689,7 @@ class AdminOperationLogViewSet(viewsets.ViewSet):
         try:
             logger.info(f"{request.user} 获取操作日志pk: {pk}")
             l = OperationLog.objects.get(id=pk)
-            return Response({
+            return Response({'encrypt': True, 'data': encrypt_data({
                 'id': l.id, 'creator_name': l.creator.username if l.creator else '',
                 'request_modular': l.request_modular or '', 'request_path': l.request_path or '',
                 'request_body': l.request_body or '', 'request_method': l.request_method or '',
@@ -1697,7 +1698,7 @@ class AdminOperationLogViewSet(viewsets.ViewSet):
                 'response_code': l.response_code or '', 'json_result': l.json_result or '',
                 'status': l.status, 'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '',
                 'created_at': l.create_time.isoformat() if l.create_time else '',
-            })
+            })})
         except OperationLog.DoesNotExist:
             return Response({'error': '日志不存在'}, status=404)
         except Exception as e:

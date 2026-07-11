@@ -5683,7 +5683,8 @@ class CloudApp {
 
             const response = await fetch(url, { headers: TokenManager.getHeaders() });
             if (!response.ok) throw new Error('加载操作日志失败');
-            const data = await response.json();
+            const rawData = await response.json();
+            const data = window.EncryptUtils.decryptPacket(rawData);
 
             this.renderOperationLogs(data, container);
             this.renderLogPagination(data, pagination);

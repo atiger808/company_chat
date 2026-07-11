@@ -2319,7 +2319,8 @@ class AdminConsole {
             if (search) url += '&search=' + search;
             const resp = await fetch(url, { headers: TokenManager.getHeaders() });
             if (!resp.ok) throw new Error('Failed');
-            const data = await resp.json();
+            const rawData = await resp.json();
+            const data = window.EncryptUtils.decryptPacket(rawData);
             this._renderLoginLogs(data, tbody);
             this._renderLogPagination(data, pagination, 'loadLoginLogs');
         } catch (e) {
@@ -2349,7 +2350,8 @@ class AdminConsole {
         try {
             const resp = await fetch('/api/auth/admin/login-logs/' + id + '/', { headers: TokenManager.getHeaders() });
             if (!resp.ok) throw new Error('Failed');
-            const d = await resp.json();
+            const rawData = await resp.json();
+            const d = window.EncryptUtils.decryptPacket(rawData);
             const loc = [d.country, d.province, d.city, d.district].filter(Boolean).join(' ') || '-';
             const html = '<div class="log-detail-grid">'
                 + '<div class="log-detail-item"><label>User</label><span>' + adminConsole.escapeHtml(d.username) + '</span></div>'
@@ -2381,7 +2383,8 @@ class AdminConsole {
             if (search) url += '&search=' + search;
             const resp = await fetch(url, { headers: TokenManager.getHeaders() });
             if (!resp.ok) throw new Error('Failed');
-            const data = await resp.json();
+            const rawData = await resp.json();
+            const data = window.EncryptUtils.decryptPacket(rawData);
             this._renderOperationLogs(data, tbody);
             this._renderLogPagination(data, pagination, 'loadOperationLogs');
         } catch (e) {
@@ -2411,7 +2414,8 @@ class AdminConsole {
         try {
             const resp = await fetch('/api/auth/admin/operation-logs/' + id + '/', { headers: TokenManager.getHeaders() });
             if (!resp.ok) throw new Error('Failed');
-            const d = await resp.json();
+            const rawData = await resp.json();
+            const d = window.EncryptUtils.decryptPacket(rawData);
             const st = d.status ? '<span class="status-badge active">OK</span>' : '<span class="status-badge inactive">Fail</span>';
             const html = '<div class="log-detail-grid">'
                 + '<div class="log-detail-item"><label>User</label><span>' + adminConsole.escapeHtml(d.creator_name || '-') + '</span></div>'

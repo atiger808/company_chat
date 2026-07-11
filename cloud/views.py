@@ -50,6 +50,7 @@ from .pagination import CloudPagination, SharePagination
 from .filters import CloudFileFilter, FileShareFilter
 
 from utils.request_util import get_request_ip
+from utils.encrypt_aes import encrypt_data
 from urllib.parse import quote
 import zipfile
 import io
@@ -5273,8 +5274,8 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
             return True
 
         # 2. 超级管理员
-        if user.is_superuser:
-            return True
+        # if user.is_superuser:
+        #     return True
 
         # 3. 协作者（通过 FileCollaboration 验证权限）
         # 协作者
@@ -9016,7 +9017,7 @@ class FileOperationLogViewSet(viewsets.ViewSet):
             }
             results.append(item)
 
-        return Response({
+        return Response({'encrypt': True, 'data': encrypt_data({
             'results': results,
             'count': total,
             'page': page,
@@ -9024,6 +9025,6 @@ class FileOperationLogViewSet(viewsets.ViewSet):
             'total_pages': total_pages,
             'has_next': page < total_pages,
             'has_previous': page > 1,
-        })
+        })})
 
 

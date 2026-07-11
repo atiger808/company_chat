@@ -1123,12 +1123,17 @@ class DocumentEditorApp {
 
     async updateCollaborationStatus(status) {
         try {
-            await fetch(`/api/cloud/documents/${this.fileId}/collaboration/status/`, {
+            const response = await fetch(`/api/cloud/documents/${this.fileId}/collaboration/status/`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json', ...TokenManagerCustom.getHeaders()},
                 body: JSON.stringify({status: status}),
                 keepalive: true // 🔧 关键：保证页面卸载时请求能发出去
             });
+            if (!response.ok) {
+                console.error('更新协同状态失败:', response.status, response.statusText);
+                throw new Error('更新协同状态失败 ' + response.status);
+            }
+
         } catch (error) {
             console.error('更新协同状态失败:', error);
         }
@@ -1721,6 +1726,8 @@ class DocumentEditorApp {
             window.close();
         } catch (error) {
             console.error('关闭编辑器失败:', error);
+        } finally {
+            console.log('关闭编辑器!')
             window.close();
         }
     }
