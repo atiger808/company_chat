@@ -422,13 +422,53 @@ API_LOG_ENABLE = True
 # API_LOG_METHODS = 'ALL' # ['POST', 'DELETE']
 API_LOG_METHODS = ["POST", "UPDATE", "DELETE", "PUT", 'PATCH']  # ['POST', 'DELETE']
 API_MODEL_MAP = {
-    "/api/auth/profile/": "个人资料",
+    # ====== 认证模块 ======
     "/api/auth/login/": "登录",
     "/api/auth/logout/": "登出",
-    "/api/chat/upload/": "文件管理",
+    "/api/auth/register/": "用户注册",
+    "/api/auth/profile/": "个人资料",
+    "/api/auth/change-password/": "修改密码",
+    "/api/auth/upload-avatar/": "上传头像",
+    "/api/auth/me/": "用户信息",
+    "/api/auth/list/": "用户列表",
+    "/api/auth/friends/": "好友管理",
+    "/api/auth/search_users/": "搜索用户",
+    "/api/auth/online/": "在线用户",
+    "/api/auth/request_password_reset/": "密码重置请求",
+    "/api/auth/confirm_password_reset/": "密码重置确认",
+    "/api/auth/token/refresh/": "Token刷新",
+    "/api/auth/token/verify/": "Token验证",
+    "/api/auth/contact/submit/": "咨询提交",
+
+    # ====== 管理控制台 ======
+    "/api/auth/admin/users/": "用户管理",
+    "/api/auth/admin/dashboard/": "数据统计",
+    "/api/auth/admin/login-logs/": "登录日志",
+    "/api/auth/admin/operation-logs/": "操作日志",
+
+    # ====== 聊天模块 ======
     "/api/chat/rooms/": "聊天室管理",
     "/api/chat/messages/": "消息管理",
-    "/api/auth/admin/users/": "用户管理",
+    "/api/chat/upload/": "文件管理",
+    "/api/chat/admin/chat-rooms/": "聊天室管理",
+    "/api/chat/admin/statistics/": "聊天统计",
+    "/api/chat/admin/settings/": "系统设置",
+    "/api/chat/system/configs/": "系统配置",
+    "/api/chat/turn/credentials/": "TURN凭证",
+
+    # ====== 企业网盘 ======
+    "/api/cloud/folders/": "文件夹管理",
+    "/api/cloud/files/": "文件管理",
+    "/api/cloud/shares/": "文件分享",
+    "/api/cloud/comments/": "文件评论",
+    "/api/cloud/dashboard/": "网盘统计",
+    "/api/cloud/documents/": "文档编辑",
+    "/api/cloud/settings/": "网盘设置",
+    "/api/cloud/shared-folders/": "共享文件夹",
+    "/api/cloud/operation-logs/": "操作日志",
+
+    # ====== 任务中心 ======
+    "/api/tasks/": "任务中心",
 }
 EXLUDE_API_LOG = [
     "/api/chat/messages/mark_as_read/"  # 标记已读
