@@ -1614,7 +1614,7 @@ class AdminLoginLogViewSet(viewsets.ViewSet):
             'browser': l.browser or '', 'os': l.os or '',
             'country': l.country or '', 'province': l.province or '', 'city': l.city or '',
             'login_type_display': dict(LoginLog.LOGIN_TYPE_CHOICES).get(l.login_type, ''),
-            'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '',
+            'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '系统',
             'created_at': l.create_time.isoformat() if l.create_time else '',
         } for l in items]
         return Response({'encrypt': True, 'data': encrypt_data({'results': results, 'count': total, 'page': page, 'page_size': page_size, 'total_pages': tp})})
@@ -1635,7 +1635,7 @@ class AdminLoginLogViewSet(viewsets.ViewSet):
                 'longitude': l.longitude or '', 'latitude': l.latitude or '',
                 'login_type': l.login_type,
                 'login_type_display': dict(LoginLog.LOGIN_TYPE_CHOICES).get(l.login_type, ''),
-                'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '',
+                'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '系统',
                 'created_at': l.create_time.isoformat() if l.create_time else '',
                 'creator_name': l.creator.username if l.creator else '',
             })})
@@ -1676,7 +1676,7 @@ class AdminOperationLogViewSet(viewsets.ViewSet):
             'request_modular': l.request_modular or '', 'request_path': l.request_path or '',
             'request_method': l.request_method or '', 'request_msg': l.request_msg or '',
             'request_ip': l.request_ip or '', 'response_code': l.response_code or '',
-            'status': l.status, 'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '',
+            'status': l.status, 'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '系统',
             'created_at': l.create_time.isoformat() if l.create_time else '',
         } for l in items]
         return Response({'encrypt': True, 'data': encrypt_data({'results': results, 'count': total, 'page': page, 'page_size': page_size, 'total_pages': tp})})
@@ -1696,7 +1696,7 @@ class AdminOperationLogViewSet(viewsets.ViewSet):
                 'request_msg': l.request_msg or '', 'request_ip': l.request_ip or '',
                 'request_browser': l.request_browser or '', 'request_os': l.request_os or '',
                 'response_code': l.response_code or '', 'json_result': l.json_result or '',
-                'status': l.status, 'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '',
+                'status': l.status, 'description': l.description or '', 'real_name':l.creator.real_name if l.creator else '系统',
                 'created_at': l.create_time.isoformat() if l.create_time else '',
             })})
         except OperationLog.DoesNotExist:
