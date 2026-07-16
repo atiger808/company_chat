@@ -60,21 +60,3 @@ def baidu_geocoding(latitude, longitude, ak, coordtype='gcj02ll'):
         return None
 
 
-# if __name__ == '__main__':
-#     latitude = 29.311018058751003
-#     longitude = 120.02772703724952
-#
-#     latitude = 29.311925339307138
-#     longitude = 120.00695937816454
-#
-#     latitude = 29.311938574749444
-#     longitude = 120.00696074458808
-#
-#
-#     latitude = 29.311922284021353
-#     longitude = 120.00695702100275
-#
-#     ak = 'Qaq34wbYDjV1gTRbPi7POx5OxaiHfmT1'
-#     key = 'your_bigdatacloud_key'
-#     result = baidu_geocoding(latitude, longitude, ak)
-#     print(result)
