@@ -337,16 +337,6 @@ class Message(models.Model):
             return self.file.get_file_info()
         return None
 
-    # 添加兼容属性
-    @property
-    def file_id(self):
-        """获取文件 ID"""
-        # 返回 None 或者基于 file 字段生成的 ID
-        if self.file:
-            return self.file.id
-
-        return None
-
     def get_mime_type(self):
         """根据文件类型推断 MIME 类型"""
         if self.file:

@@ -766,6 +766,24 @@ class ChatClient {
                 });
             }
 
+            const attendanceBtn = document.getElementById('attendanceBtn');
+            if (attendanceBtn) {
+                attendanceBtn.style.display = 'flex';
+                attendanceBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    window.location.href = '/oa/attendance/';
+                });
+            }
+
+            const approvalBtn = document.getElementById('approvalBtn');
+            if (approvalBtn) {
+                approvalBtn.style.display = 'flex';
+                approvalBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    window.location.href = '/oa/approval/';
+                });
+            }
+
             // 连接全局 WebSocket
             this.connectGlobalWebSocket();
 
@@ -1047,6 +1065,16 @@ class ChatClient {
                 break;
             case 'task.notification':
                 this.handleTaskNotification(data);
+                break;
+            case 'work.notification':
+                if (data.event_type === 'new' && window.WorkNotif && window.WorkNotif.refreshCount) {
+                    window.WorkNotif.refreshCount();
+                }
+                break;
+            case 'collaboration_invite':
+                if (window.WorkNotif && window.WorkNotif.refreshCount) {
+                    window.WorkNotif.refreshCount();
+                }
                 break;
             default:
                 console.log('Unknown global message type:', data.type, data);
@@ -5356,8 +5384,110 @@ class ChatClient {
         const newChatModal = document.getElementById('newChatModal');
         if (newChatModal) {
             newChatModal.classList.add('show');
-            // 初始化模态框状态 - 默认显示私聊表单
             this.initNewChatModal();
+        }
+    }
+
+    // ==================== 工作通知 ====================
+
+    openNotifications() {
+        // 更新侧边栏激活状态
+        this.currentRoomId = null;
+        document.querySelectorAll('.chat-item.cursor-pointer').forEach(function(el) { el.classList.remove('active'); });
+        // 收起移动端侧边栏
+        if (window.innerWidth <= 768) {
+            document.querySelector('.sidebar').classList.remove('show');
+        }
+
+        // 设置聊天头
+        document.getElementById('chatTitle').textContent = '工作通知';
+        document.getElementById('chatStatus').textContent = '';
+        document.getElementById('chatAvatar').src = '/media/avatars/work-notify.png';
+
+        // 隐藏消息列表，显示通知容器
+        document.getElementById('messagesList').style.display = 'none';
+        document.getElementById('messagesEmpty').style.display = 'none';
+        var notifContainer = document.getElementById('notificationMessages');
+        if (!notifContainer) {
+            notifContainer = document.createElement('div');
+            notifContainer.className = 'messages-list';
+            notifContainer.id = 'notificationMessages';
+            notifContainer.style.cssText = 'display:flex;flex-direction:column;height:100%;overflow-y:auto;padding:15px;';
+            document.getElementById('messagesContainer').appendChild(notifContainer);
+        }
+        notifContainer.style.display = 'flex';
+        notifContainer.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-light);"><i class="fas fa-spinner fa-spin" style="font-size:32px;"></i><p style="margin-top:12px;">加载中...</p></div>';
+
+        // 加载通知数据
+        this._loadNotificationList();
+    }
+
+    async _loadNotificationList() {
+        var container = document.getElementById('notificationMessages');
+        if (!container) return;
+        try {
+            var resp = await fetch('/api/oa/notifications/?page=1&page_size=50', { headers: TokenManager.getHeaders() });
+            var raw = await resp.json();
+            var data = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+            var rows = data.results || [];
+            if (!rows.length) {
+                container.innerHTML = '<div style="text-align:center;padding:60px 20px;color:var(--text-light);"><i class="fas fa-bell-slash" style="font-size:48px;opacity:0.4;"></i><p style="margin-top:12px;">暂无工作通知</p></div>';
+                return;
+            }
+
+            var typeIcon = function(t) {
+                var map = { 'approval': 'fa-check-double', 'attendance': 'fa-clock', 'task': 'fa-tasks', 'collab': 'fa-users', 'system': 'fa-bell' };
+                return map[t] || 'fa-bell';
+            };
+
+            var typeColor = function(t) {
+                var map = { 'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'system': '#909399' };
+                return map[t] || '#909399';
+            };
+
+            var formatTime = function(iso) {
+                if (!iso) return '';
+                var d = new Date(iso);
+                var pad = function(n) { return String(n).padStart(2, '0'); };
+                return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+            };
+
+            var escapeHtml = function(text) {
+                if (!text) return '';
+                return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+            };
+
+            var self = this;
+            container.innerHTML = rows.map(function(n) {
+                var icon = typeIcon(n.type);
+                var color = typeColor(n.type);
+                var cls = n.is_read ? '' : 'notif-item-unread';
+                return '<div class="notif-chat-item ' + cls + '" onclick="chatClient._clickNotification(' + n.id + ',\'' + (n.related_url || '') + '\',' + (n.is_read ? 'true' : 'false') + ')" style="display:flex;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border-color,#f0f0f0);cursor:pointer;transition:background 0.15s;">'
+                    + '<div style="width:40px;height:40px;border-radius:50%;background:' + color + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff;font-size:16px;"><i class="fas ' + icon + '"></i></div>'
+                    + '<div style="flex:1;min-width:0;">'
+                    + '<div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:14px;font-weight:' + (n.is_read ? '400' : '600') + ';color:var(--text-primary,#303133);">' + escapeHtml(n.title) + '</span>'
+                    + '<span style="font-size:11px;color:var(--text-light,#909399);flex-shrink:0;margin-left:8px;">' + formatTime(n.created_at) + '</span></div>'
+                    + '<div style="font-size:13px;color:var(--text-secondary,#606266);margin-top:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">' + escapeHtml(n.content) + '</div></div></div>';
+            }).join('');
+        } catch(e) {
+            container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-light);"><i class="fas fa-exclamation-circle" style="font-size:36px;"></i><p style="margin-top:8px;">加载失败</p></div>';
+        }
+    }
+
+    async _clickNotification(id, url, isRead) {
+        if (!isRead) {
+            try {
+                await fetch('/api/oa/notifications/' + id + '/mark-read/', {
+                    method: 'POST', headers: TokenManager.getHeaders()
+                });
+            } catch(e) {}
+            // 刷新未读计数
+            if (window.WorkNotif && window.WorkNotif.refreshCount) {
+                window.WorkNotif.refreshCount();
+            }
+        }
+        if (url) {
+            window.location.href = url;
         }
     }
 
@@ -5760,6 +5890,10 @@ class ChatClient {
     // 选择聊天室
     selectChatRoom(roomId) {
         console.log('选择聊天室 roomId:', roomId, ' this.currentRoomId: ', this.currentRoomId);
+
+        // 隐藏通知消息列表（如果打开）
+        var notifContainer = document.getElementById('notificationMessages');
+        if (notifContainer) { notifContainer.style.display = 'none'; }
 
         // 🔧 新增：进入聊天室时清除未读@提及标记
         const targetRoom = this.chatRooms.find(r => r.id === parseInt(roomId));
@@ -6498,21 +6632,6 @@ class ChatClient {
                 this.openNewChatModal();
             }
         });
-
-        // 用户操作按钮
-        const userActionButtons = document.querySelectorAll('.user-actions .btn-icon');
-        if (userActionButtons[1]) {
-            userActionButtons[1].addEventListener('click', (e) => {
-                e.preventDefault();
-                this.showSettings();
-            });
-        }
-        if (userActionButtons[2]) {
-            userActionButtons[2].addEventListener('click', (e) => {
-                e.preventDefault();
-                this.logout();
-            });
-        }
 
         // 当前用户头像点击操作
         const currentUserAvatar = document.getElementById('currentUserAvatar');

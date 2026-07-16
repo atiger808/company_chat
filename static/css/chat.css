@@ -54,6 +54,7 @@ body {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    position: relative;
     z-index: 999;
     transition: var(--transition);
 }
@@ -305,6 +306,93 @@ body {
     font-size: 12px;
     font-weight: bold;
 }
+
+/* ==================== 工作通知侧边栏项 ==================== */
+.notif-sidebar-item {
+    display: flex !important;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    cursor: pointer;
+    transition: background 0.2s;
+    border-top: 1px solid var(--border-color,#ebeef5);
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--bg-primary,#fff);
+    z-index: 10;
+    box-shadow: 0 -1px 4px rgba(0,0,0,0.05);
+    min-height: 56px;
+}
+
+.chat-list, .contacts-list, .groups-list {
+    padding-bottom: 70px;
+}
+.notif-sidebar-item:hover {
+    background: var(--bg-secondary,#f5f7fa);
+}
+.notif-sidebar-item .group-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: var(--primary-color,#409eff);
+    color: #fff;
+    font-size: 18px;
+}
+.notif-sidebar-item .group-info {
+    flex: 1;
+    min-width: 0;
+}
+.notif-sidebar-item .group-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary,#303133);
+}
+.notif-sidebar-item .group-subtitle {
+    font-size: 12px;
+    color: var(--text-light,#909399);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.notif-sidebar-badge {
+    flex-shrink: 0;
+    margin-left: 4px;
+}
+.notif-sidebar-badge .chat-item-unread-count {
+    min-width: 20px;
+    height: 20px;
+    background-color: #ff4d4f;
+    color: white;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: bold;
+    padding: 0 5px;
+}
+
+/* 通知聊天区消息项 */
+.notif-chat-item:hover {
+    background: var(--bg-secondary,#f5f7fa);
+}
+.notif-chat-item.notif-item-unread {
+    background: #f0f7ff;
+}
+.notif-chat-item.notif-item-unread:hover {
+    background: #e6f0ff;
+}
+[data-theme="dark"] .notif-sidebar-item:hover { background: #2d2d2d; }
+[data-theme="dark"] .notif-chat-item:hover { background: #2d2d2d; }
+[data-theme="dark"] .notif-chat-item.notif-item-unread { background: #1a2740; }
+[data-theme="dark"] .notif-chat-item.notif-item-unread:hover { background: #1f3050; }
 
 /* ==================== @提及未读提示样式 ==================== */
 /*.chat-item-subtitle {*/

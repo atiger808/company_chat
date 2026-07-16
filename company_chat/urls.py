@@ -34,6 +34,9 @@ urlpatterns = [
     # 任务与项目管理
     path('api/tasks/', include('tasks.urls')),  # 新增
 
+    # OA办公（考勤打卡+审批）
+    path('api/oa/', include('oa.urls')),
+
     # 官网主页路由
     path('', TemplateView.as_view(template_name='index.html'), name='index'),
     path('contact/', TemplateView.as_view(template_name='contact.html'), name='contact'),
@@ -49,6 +52,10 @@ urlpatterns = [
 
     # 任务与项目管理页面路由
     path('tasks/', TemplateView.as_view(template_name='tasks/tasks.html'), name='tasks'),
+
+    # OA办公页面路由
+    path('oa/attendance/', TemplateView.as_view(template_name='oa/attendance.html'), name='oa-attendance'),
+    path('oa/approval/', TemplateView.as_view(template_name='oa/approval.html'), name='oa-approval'),
 
 
     # 网盘相关路由

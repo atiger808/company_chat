@@ -106,17 +106,49 @@ class TaskViewSet(viewsets.ModelViewSet):
         self._notify_task_participants(task, 'new_comment', comment)
         return Response(TaskCommentSerializer(comment).data, status=201)
 
+    def _create_work_notification(self, user_id, task, event_type):
+        """创建 WorkNotification 记录（懒导入避免循环依赖）"""
+        from oa.models import WorkNotification
+        from accounts.models import CustomUser
+        status_map = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成'}
+        try:
+            user = CustomUser.objects.get(id=user_id)
+            if event_type == 'assigned':
+                title = '新任务分配'
+                content = f'{task.creator.real_name or task.creator.username} 给您分配了任务：“{task.title}”'
+            elif event_type == 'status_changed':
+                title = '任务状态更新'
+                content = f'任务“{task.title}”状态变更为：{status_map.get(task.status, task.status)}'
+            elif event_type == 'new_comment':
+                title = '任务新评论'
+                content = f'任务“{task.title}”有新评论'
+            else:
+                title = '任务通知'
+                content = f'任务“{task.title}”有更新'
+            WorkNotification.objects.create(
+                recipient=user,
+                notification_type='task',
+                title=title,
+                content=content,
+                related_url='/tasks/',
+                extra_data={'task_id': task.id, 'event_type': event_type},
+            )
+        except CustomUser.DoesNotExist:
+            pass
+
     def _notify_user(self, user_id, task, event_type):
         """发送 WebSocket 通知到用户的全局通道"""
         channel_layer = get_channel_layer()
         async_to_sync(channel_layer.group_send)(
             f'user_{user_id}_notifications',
             {
-                'type': 'task.notification',  # # 对应 consumer 中的 task_notification 方法 对应前端 handleGlobalMessage 中的 case
+                'type': 'task.notification',
                 'event_type': event_type,
                 'task': TaskSerializer(task).data
             }
         )
+        # 同时创建工作通知记录
+        self._create_work_notification(user_id, task, event_type)
 
     def _notify_task_participants(self, task, event_type, extra_data=None):
         """通知所有相关人员"""

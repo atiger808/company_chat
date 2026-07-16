@@ -977,6 +977,14 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             'task': event.get('task')
         }))
 
+    async def work_notification(self, event):
+        """处理工作通知消息（审批、考勤等）"""
+        await self.send(text_data=json.dumps({
+            'type': 'work.notification',
+            'event_type': event.get('event_type'),
+            'notification': event.get('notification'),
+        }))
+
 
 # chat/consumers.py - 添加 CallConsumer 类
 

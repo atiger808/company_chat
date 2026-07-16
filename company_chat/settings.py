@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     'chat',
     'cloud',
     'tasks',
+    'oa',  # OA办公（考勤打卡+审批）
 
     # JWT token 黑名单管理（需执行 migrate 创建表）
     'rest_framework_simplejwt.token_blacklist',
@@ -469,6 +470,11 @@ API_MODEL_MAP = {
 
     # ====== 任务中心 ======
     "/api/tasks/": "任务中心",
+
+    # ====== OA办公 ======
+    "/api/oa/attendance/": "考勤打卡",
+    "/api/oa/approval/": "OA审批",
+    "/api/oa/notifications/": "工作通知",
 }
 EXLUDE_API_LOG = [
     "/api/chat/messages/mark_as_read/"  # 标记已读
@@ -587,6 +593,9 @@ ONLYOFFICE = {
 }
 
 CHANNELS_ENABLED = True
+
+# 允许同源 iframe 嵌套（管理控制台内嵌 OA 页面）
+X_FRAME_OPTIONS = 'SAMEORIGIN'
 
 # CORS_ALLOW_CREDENTIALS = True
 
@@ -921,3 +930,6 @@ CONFIG_CATEGORIES = [
 
 TURN_SECRET = config('TURN_SECRET')
 TURN_REALM = config('TURN_REALM')
+
+# 百度地图key
+BAIDU_MAP_SERVER_AK = config('BAIDU_MAP_SERVER_AK')

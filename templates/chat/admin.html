@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理控制台 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260709-4930c7a">
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260709-4930c7a">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260716-4d8a18f">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260716-4d8a18f">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260305-1">
     <!-- 🔧 新增：Chart.js 用于图表展示 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>-->
-    <script src="/static/js/dist/chart.min.js?v=20260709-4930c7a"></script>
+    <script src="/static/js/dist/chart.min.js?v=20260716-4d8a18f"></script>
     <!-- 🔧 关键修复2: 添加 Chart.js 加载失败的回退方案 -->
     <script>
         // 检查 Chart.js 是否加载成功
@@ -79,6 +79,14 @@
             <a href="#" class="nav-item" data-tab="operation-logs" style="display: none">
                 <i class="fas fa-clipboard-list"></i> 操作日志
             </a>
+
+            <!-- OA办公 -->
+            <a href="#" class="nav-item" data-tab="oa-attendance">
+                <i class="fas fa-clock"></i> 考勤打卡
+            </a>
+            <a href="#" class="nav-item" data-tab="oa-approval">
+                <i class="fas fa-check-double"></i> OA审批
+            </a>
         </nav>
 
         <div class="sidebar-footer">
@@ -109,11 +117,22 @@
                 <a href="/" class="btn-icon" title="官网主页" style="text-decoration:none;color:inherit;">
                     <i class="fas fa-home"></i>
                 </a>
+                <div class="notif-bell-wrap" id="notifBellWrap" title="工作通知" style="margin:0 4px;">
+                    <i class="fas fa-bell"></i>
+                    <span class="notif-badge hide" id="notifBadge">0</span>
+                </div>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="adminConsole.toggleUserDropdown(event)">
                     <span id="adminUsername"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260709-4930c7a" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260716-4d8a18f" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu show" id="userDropdownMenu" style="display:none;">
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/attendance/'">
+                            <i class="fas fa-clock"></i> 考勤打卡
+                        </div>
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/approval/'">
+                            <i class="fas fa-check-double"></i> OA审批
+                        </div>
+                        <div class="dropdown-divider"></div>
                         <div class="dropdown-item text-danger" onclick="event.stopPropagation();adminConsole.logout()">
                             <i class="fas fa-sign-out-alt"></i> 退出登录
                         </div>
@@ -498,6 +517,16 @@
                 <div id="operationLogPagination" class="pagination-container" style="display:none;"></div>
             </div>
 
+            <!-- OA考勤打卡标签页 -->
+            <div id="oa-attendanceTab" class="admin-tab" style="height:100%;">
+                <iframe src="/oa/attendance/" style="width:100%;height:calc(100vh - 60px);border:none;border-radius:0;"></iframe>
+            </div>
+
+            <!-- OA审批标签页 -->
+            <div id="oa-approvalTab" class="admin-tab" style="height:100%;">
+                <iframe src="/oa/approval/" style="width:100%;height:calc(100vh - 60px);border:none;border-radius:0;"></iframe>
+            </div>
+
         </div>
     </main>
 </div>
@@ -832,17 +861,18 @@
         <div class="spinner"></div>
     </div>
 </div>
-<script src="/static/js/dist/spark-md5.min.js?v=20260709-4930c7a"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260709-4930c7a"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260709-4930c7a"></script>
-<script src="/static/js/encrypts.js?v=20260709-4930c7a"></script>
-<script src="/static/js/utils.js?v=20260709-4930c7a"></script>
-<script src="/static/js/api.js?v=20260709-4930c7a"></script>
-<script src="/static/js/admin.js?v=20260709-4930c7b"></script>
-<script src="/static/js/admin_chat_rooms.js?v=20260709-4930c7a"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260716-4d8a18f"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260716-4d8a18f"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260716-4d8a18f"></script>
+<script src="/static/js/encrypts.js?v=20260716-4d8a18f"></script>
+<script src="/static/js/utils.js?v=20260716-4d8a18f"></script>
+<script src="/static/js/api.js?v=20260716-4d8a18f"></script>
+<script src="/static/js/admin.js?v=20260716-4d8a18f"></script>
+<script src="/static/js/admin_chat_rooms.js?v=20260716-4d8a18f"></script>
 <!-- 🔧 新增：数据统计和系统设置 JS -->
-<script src="/static/js/admin_statistics.js?v=20260709-4930c7a"></script>
-<script src="/static/js/admin_settings.js?v=20260709-4930c7a"></script>
+<script src="/static/js/admin_statistics.js?v=20260716-4d8a18f"></script>
+<script src="/static/js/admin_settings.js?v=20260716-4d8a18f"></script>
+<script src="/static/js/notifications.js?v=20260716-4d8a18f"></script>
 
 
 <script>

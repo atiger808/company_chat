@@ -1552,12 +1552,18 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
         if isinstance(file_obj, str):
             # 文件路径
             with open(file_obj, 'rb') as f:
-                while chunk := f.read(chunk_size):
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
                     md5.update(chunk)
         else:
             # 文件对象/内存流
             file_obj.seek(0)
-            while chunk := file_obj.read(chunk_size):
+            while True:
+                chunk = file_obj.read(chunk_size)
+                if not chunk:
+                    break
                 md5.update(chunk)
             file_obj.seek(0)
         return md5.hexdigest()
@@ -2228,6 +2234,30 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                 'created': created,
             }
         )
+
+        # 发送协作工作通知
+        try:
+            from oa.views import send_work_notification
+            permission_display = {'read': '只读', 'write': '可编辑', 'admin': '管理员'}.get(permission, permission)
+            editor_url = f'{settings.BASE_URL.rstrip("/")}/cloud/editor/?id={file_obj.id}'
+            inviter_name = getattr(request.user, 'real_name', request.user.username)
+            send_work_notification(
+                user_id=collaborator.id,
+                title='协作邀请',
+                content=f'{inviter_name} 邀请你协作编辑文件 "{file_obj.name}"（权限：{permission_display}）',
+                notification_type='collab',
+                related_url=editor_url,
+                extra_data={
+                    'file_id': str(file_obj.id),
+                    'file_name': file_obj.name,
+                    'inviter_id': request.user.id,
+                    'inviter_name': inviter_name,
+                    'permission': permission,
+                    'action': 'invite',
+                },
+            )
+        except Exception as notify_err:
+            logger.error(f'CloudFileViewSet 发送协作通知失败: {notify_err}')
 
         return Response({
             'message': '协作者添加成功',
@@ -6449,6 +6479,30 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                 }
             )
 
+            # 发送权限变更通知
+            try:
+                from oa.views import send_work_notification
+                inviter_name = getattr(request.user, 'real_name', request.user.username)
+                permission_display = {'read': '只读', 'write': '可编辑', 'admin': '管理员'}.get(permission or collab.permission, permission or collab.permission)
+                editor_url = f'{settings.BASE_URL.rstrip("/")}/cloud/editor/?id={file_obj.id}'
+                send_work_notification(
+                    user_id=collab.user.id,
+                    title='协作权限已变更',
+                    content=f'{inviter_name} 修改了你对文件 "{file_obj.name}" 的协作权限为：{permission_display}',
+                    notification_type='collab',
+                    related_url=editor_url,
+                    extra_data={
+                        'file_id': str(file_obj.id),
+                        'file_name': file_obj.name,
+                        'inviter_id': request.user.id,
+                        'inviter_name': inviter_name,
+                        'permission': permission or collab.permission,
+                        'action': 'permission_update',
+                    },
+                )
+            except Exception as notify_err:
+                logger.error(f'发送权限变更通知失败: {notify_err}')
+
             return Response({
                 'message': '协作者权限更新成功',
                 'collaborator': {
@@ -6511,6 +6565,7 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                 return Response({'error': '协作者关系不存在'}, status=404)
 
             collaborator_username = collab.user.username
+            collaborator_user_id = collab.user.id
             collab.delete()
 
             # 记录操作日志
@@ -6526,6 +6581,27 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                     'collaborator_username': collaborator_username,
                 }
             )
+
+            # 发送移除通知
+            try:
+                from oa.views import send_work_notification
+                inviter_name = getattr(request.user, 'real_name', request.user.username)
+                send_work_notification(
+                    user_id=collaborator_user_id,
+                    title='协作已取消',
+                    content=f'{inviter_name} 移除了你对文件 "{file_obj.name}" 的协作权限',
+                    notification_type='collab',
+                    related_url='',
+                    extra_data={
+                        'file_id': str(file_obj.id),
+                        'file_name': file_obj.name,
+                        'inviter_id': request.user.id,
+                        'inviter_name': inviter_name,
+                        'action': 'remove',
+                    },
+                )
+            except Exception as notify_err:
+                logger.error(f'发送移除协作通知失败: {notify_err}')
 
             return Response({'message': '协作者已移除'})
 
@@ -6820,6 +6896,27 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                 notification_data
             )
             logger.info(f'[通知] 协作邀请已发送（WebSocket 通知）：{inviter.username} → {collaborator.username}（{file_obj.name}，权限：{permission}）')
+
+            # 3. 创建工作通知记录（持久化到数据库）
+            try:
+                from oa.views import send_work_notification
+                send_work_notification(
+                    user_id=collaborator.id,
+                    title='协作邀请',
+                    content=f'{inviter_name} 邀请你协作编辑文件 "{file_obj.name}"（权限：{permission_display}）',
+                    notification_type='collab',
+                    related_url=editor_url,
+                    extra_data={
+                        'file_id': str(file_obj.id),
+                        'file_name': file_obj.name,
+                        'inviter_id': inviter.id,
+                        'inviter_name': inviter_name,
+                        'permission': permission,
+                        'action': 'invite',
+                    },
+                )
+            except Exception as notify_err:
+                logger.error(f'创建工作通知记录失败: {notify_err}')
 
             # 2. 以私聊形式发送协作邀请消息
             try:

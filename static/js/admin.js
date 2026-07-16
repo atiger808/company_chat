@@ -272,8 +272,8 @@ class AdminConsole {
      * 🔧 切换标签页（支持权限控制）
      */
     async switchTab(tabName) {
-        // 🔧 权限检查：普通管理员只能访问用户管理和操作日志
-        if (!this.isSuperAdmin && tabName !== 'users' && tabName !== 'operation-logs') {
+        // 🔧 权限检查：普通管理员只能访问用户管理、操作日志和OA
+        if (!this.isSuperAdmin && tabName !== 'users' && tabName !== 'operation-logs' && tabName !== 'oa-attendance' && tabName !== 'oa-approval') {
             this.showError('权限不足', '您无权访问此功能');
             // 强制切回用户管理
             tabName = 'users';
@@ -300,7 +300,11 @@ class AdminConsole {
             'users': '用户管理',
             'stats': '数据统计',
             'rooms': '聊天室管理',
-            'settings': '系统设置'
+            'settings': '系统设置',
+            'login-logs': '登录日志',
+            'operation-logs': '操作日志',
+            'oa-attendance': '考勤打卡',
+            'oa-approval': 'OA审批',
         };
         document.getElementById('pageTitle').textContent = titles[tabName] || '管理控制台';
 
@@ -340,6 +344,10 @@ class AdminConsole {
             case 'operation-logs':
                 this.loadOperationLogs();
                 break;
+            case 'oa-attendance':
+            case 'oa-approval':
+                // iframe 自动加载，无需额外操作
+                break;
         }
     }
 
@@ -350,14 +358,14 @@ class AdminConsole {
      * 🔧 根据权限设置界面显示
      */
     setupPermissionUI() {
-        // 🔧 隐藏/显示超级管理员专属菜单项
-        const superAdminItems = document.querySelectorAll('.nav-item[data-tab]:not([data-tab="users"])');
+        // 🔧 隐藏/显示超级管理员专属菜单项（OA对所有管理员开放）
+        const superAdminItems = document.querySelectorAll('.nav-item[data-tab]:not([data-tab="users"]):not([data-tab="oa-attendance"]):not([data-tab="oa-approval"])');
         superAdminItems.forEach(item => {
             item.style.display = this.isSuperAdmin ? '' : 'none';
         });
 
-        // 🔧 隐藏/显示超级管理员专属内容区域（但操作日志对所有管理员可见）
-        const superAdminTabs = document.querySelectorAll('.admin-tab:not(#usersTab):not(#operation-logsTab)');
+        // 🔧 隐藏/显示超级管理员专属内容区域（操作日志+OA对所有管理员可见）
+        const superAdminTabs = document.querySelectorAll('.admin-tab:not(#usersTab):not(#operation-logsTab):not(#oa-attendanceTab):not(#oa-approvalTab)');
         superAdminTabs.forEach(tab => {
             tab.style.display = this.isSuperAdmin ? '' : 'none';
         });
@@ -367,6 +375,16 @@ class AdminConsole {
         if (opLogNav) opLogNav.style.display = '';
         const opLogTab = document.getElementById('operation-logsTab');
         if (opLogTab) opLogTab.style.display = '';
+
+        // 🔧 OA办公对所有管理员开放
+        const attNav = document.querySelector('[data-tab="oa-attendance"]');
+        if (attNav) attNav.style.display = '';
+        const appNav = document.querySelector('[data-tab="oa-approval"]');
+        if (appNav) appNav.style.display = '';
+        const attTab = document.getElementById('oa-attendanceTab');
+        if (attTab) attTab.style.display = '';
+        const appTab = document.getElementById('oa-approvalTab');
+        if (appTab) appTab.style.display = '';
 
         // 🔧 如果普通管理员，确保只显示用户管理
         if (!this.isSuperAdmin) {
@@ -1874,12 +1892,14 @@ class AdminConsole {
                     case 'operation-logs':
                         this.loadOperationLogs();
                         break;
+                    case 'oa-attendance':
+                    case 'oa-approval':
+                        // iframe 自动加载，无需额外操作
+                        break;
+
                 }
-
-
             });
-        });
-
+        })
 
         // 🔧 重置密码模态框关闭
         const resetPasswordModal = document.getElementById('resetPasswordModal');
