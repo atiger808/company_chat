@@ -8,6 +8,7 @@ class AttendanceApp {
         this.pageSize = 20;
         this.searchKeyword = '';
         this._initTimer = null;
+        this.chat_login_url = '/login/';
 
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', () => this.init());
@@ -20,7 +21,7 @@ class AttendanceApp {
         const token = localStorage.getItem('access_token');
         if (!token) {
             localStorage.setItem('redirect_url', window.location.href);
-            window.location.href = '/login/';
+            window.location.href = this.chat_login_url;
             return;
         }
         this.updateClock();
@@ -48,9 +49,26 @@ class AttendanceApp {
         }
     }
 
+    handleAuthError() {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('user_id');
+        localStorage.removeItem('user_type');
+        localStorage.removeItem('current_user');
+        localStorage.setItem('redirect_url', window.location.href);
+        window.location.href = this.chat_login_url;
+    }
+
     async apiGet(url) {
         const resp = await fetch(url, { headers: TokenManager.getHeaders() });
-        if (!resp.ok) throw new Error('请求失败');
+        if (!resp.ok) {
+            if (resp.status === 401) {
+                this.showToast('登录已过期，请重新登录', true)
+                this.handleAuthError();
+                return
+            }
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.error || '请求失败');
+        };
         const raw = await resp.json();
         return raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
     }
@@ -62,6 +80,10 @@ class AttendanceApp {
             body: JSON.stringify(data || {})
         });
         if (!resp.ok) {
+            if (resp.status === 401) {
+                this.showToast('登录已过期，请重新登录', true)
+                this.handleAuthError();
+            }
             const err = await resp.json().catch(() => ({}));
             throw new Error(err.error || '请求失败');
         }
@@ -75,7 +97,6 @@ class AttendanceApp {
             const statusEl = document.getElementById('todayStatus');
             const clockInBtn = document.getElementById('clockInBtn');
             const clockOutBtn = document.getElementById('clockOutBtn');
-            console.log('today:::', data);
             if (data.has_clock_in) {
                 clockInBtn.disabled = true;
                 clockInBtn.classList.add('clocked');
@@ -115,12 +136,13 @@ class AttendanceApp {
     async loadStats() {
         try {
             const data = await this.apiGet(OA_API_URL + '/attendance/statistics/');
-            console.log('statistics:::', data);
             document.getElementById('statTotalDays').textContent = data.total_days || 0;
             document.getElementById('statClockIn').textContent = data.clock_in_count || 0;
             document.getElementById('statClockOut').textContent = data.clock_out_count || 0;
             document.getElementById('statLate').textContent = data.late_count || 0;
+            document.getElementById('statLate').style.color = (data.late_count || 0) > 0 ? '#f56c6c' : '';
             document.getElementById('statEarlyLeave').textContent = data.early_leave_count || 0;
+            document.getElementById('statEarlyLeave').style.color = (data.early_leave_count || 0) > 0 ? '#e6a23c' : '';
         } catch (e) {
             console.error('加载统计失败:', e);
         }
@@ -136,7 +158,6 @@ class AttendanceApp {
             let url = OA_API_URL + '/attendance/?page=' + page + '&page_size=' + this.pageSize;
             if (this.searchKeyword) url += '&search=' + encodeURIComponent(this.searchKeyword);
             const data = await this.apiGet(url);
-            console.log('records:::', data);
             this._renderRecords(data, tbody);
             this._renderPagination(data, pagination);
         } catch (e) {
@@ -170,7 +191,7 @@ class AttendanceApp {
         tbody.innerHTML = rows.map(function(r) {
             const st = r.status || 'normal';
             const avatar = r.avatar_url || defaultAvatar;
-            return '<tr style="cursor:pointer;" onclick="attendanceApp.showDetail(' + r.id + ')">'
+            return '<tr style="cursor:pointer;">'
                 + '<td><div style="display:flex;align-items:center;gap:8px;"><img src="' + avatar + '" alt="" style="width:32px;height:32px;border-radius:50%;object-fit:cover;">'
                 + '<span>' + attendanceApp._escape(r.user_name || '') + '</span></div></td>'
                 + '<td>' + attendanceApp._escape(r.department_name || '-') + '</td>'
@@ -178,7 +199,7 @@ class AttendanceApp {
                 + '<td><span class="badge badge-info">' + (r.clock_type_display || r.clock_type) + '</span></td>'
                 + '<td>' + attendanceApp._formatTime(r.clock_time) + '</td>'
                 + '<td><span class="status-badge ' + st + '">' + (statusMap[st] || st) + '</span></td>'
-                + '<td>' + (r.location || '-') + '</td>'
+                + '<td onclick="event.stopPropagation();attendanceApp.showDetail(' + r.id + ')">' + (r.location || '-') + (r.bd09_latitude ? ' <i class="fas fa-map-marker-alt" style="color:#f56c6c;font-size:11px;" title="已标记地图位置"></i>' : '') + '</td>'
                 + '<td>' + (r.device || '-') + '</td>'
                 + '<td><button class="action-btn" onclick="event.stopPropagation();attendanceApp.showDetail(' + r.id + ')" title="详情"><i class="fas fa-eye"></i></button></td></tr>';
         }).join('');
@@ -214,24 +235,110 @@ class AttendanceApp {
             const d = await this.apiGet(OA_API_URL + '/attendance/' + id + '/');
             const statusMap = { 'normal': '正常', 'late': '迟到', 'early_leave': '早退' };
             const avatar = d.avatar_url || '/static/images/default-avatar.png';
-            const html = '<div class="detail-grid">'
+            let html = '<div class="detail-grid">'
                 + '<div class="detail-item" style="grid-column:1/-1;"><label>用户</label><span style="display:flex;align-items:center;gap:8px;"><img src="' + avatar + '" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">' + this._escape(d.user_name || '') + '</span></div>'
                 + '<div class="detail-item"><label>部门</label><span>' + this._escape(d.department_name || '-') + '</span></div>'
                 + '<div class="detail-item"><label>日期</label><span>' + (d.date || '-') + '</span></div>'
                 + '<div class="detail-item"><label>类型</label><span>' + (d.clock_type_display || '-') + '</span></div>'
                 + '<div class="detail-item"><label>时间</label><span>' + this._formatTime(d.clock_time) + '</span></div>'
                 + '<div class="detail-item"><label>状态</label><span class="status-badge ' + (d.status || 'normal') + '">' + (statusMap[d.status] || d.status || '-') + '</span></div>'
-                + '<div class="detail-item" style="grid-column:1/-1;"><label>位置</label><span>' + (d.location || '-') + '</span></div>'
+                + '<div class="detail-item"><label>位置</label><span>' + (d.location || '-') + '</span></div>'
                 + '<div class="detail-item"><label>经度</label><span>' + (d.longitude || '-') + '</span></div>'
                 + '<div class="detail-item"><label>纬度</label><span>' + (d.latitude || '-') + '</span></div>'
                 + '<div class="detail-item"><label>设备</label><span>' + (d.device || '-') + '</span></div>'
-                + '<div class="detail-item" style="grid-column:1/-1;"><label>备注</label><span>' + (d.remark || '-') + '</span></div></div>';
+                + '<div class="detail-item"><label>IP地址</label><span>' + (d.ip_address || '-') + '</span></div>'
+                + '</div>'
+                + '<div class="detail-item"><label>User-Agent</label><span style="font-size:11px;word-break:break-all;">' + (d.user_agent || '-') + '</span></div>';
+
             const modal = document.getElementById('attendanceDetailModal');
             document.getElementById('attendanceDetailBody').innerHTML = html;
+
+            // 尝试加载百度地图
+            if (d.latitude && d.longitude) {
+                var bdLat = d.bd09_latitude;
+                var bdLng = d.bd09_longitude;
+                var status = '状态：' + (statusMap[d.status] || d.status || '-')
+                var clock_time = ' 打卡时间：' + this._formatTime(d.clock_time)
+                if (bdLat && bdLng) {
+                    this._showBaiduMap(bdLat, bdLng, status, clock_time);
+                } else {
+                    // 坐标未转换，调用后端转换接口
+                    this._convertAndShowMap(id, status, clock_time);
+                }
+            }
+
             modal.style.display = 'flex';
             setTimeout(function() { modal.classList.add('show'); }, 10);
         } catch (e) {
             console.error('加载详情失败:', e);
+        }
+    }
+
+    async _convertAndShowMap(id, status, clock_time) {
+        try {
+            var resp = await fetch(OA_API_URL + '/attendance/' + id + '/convert-coords/', {
+                headers: TokenManager.getHeaders()
+            });
+            if (resp.ok) {
+                var data = await resp.json();
+                if (data.bd09_latitude && data.bd09_longitude) {
+                    this._showBaiduMap(data.bd09_latitude, data.bd09_longitude, status, clock_time);
+                }
+            }
+        } catch (e) {
+            console.warn('坐标转换失败:', e);
+        }
+    }
+
+    _showBaiduMap(bdLat, bdLng, status, clock_time) {
+        var body = document.getElementById('attendanceDetailBody');
+        if (!body) return;
+        var iframeUrl = 'https://api.map.baidu.com/marker?location=' + bdLat + ',' + bdLng + '&title=考勤打卡点&content=' + status + clock_time +'&output=html&coord_type=bd09ll';
+        var mapId = 'bdmap_' + Date.now();
+        var mapDiv = document.createElement('div');
+        mapDiv.style.cssText = 'margin-top:16px;border-radius:8px;overflow:hidden;border:1px solid var(--border-color,#dcdfe6);';
+        mapDiv.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;font-size:13px;font-weight:500;padding:8px 12px;background:var(--bg-secondary,#f5f7fa);color:var(--text-secondary,#606266);border-bottom:1px solid var(--border-color,#ebeef5);">'
+            + '<span><i class="fas fa-map-marker-alt" style="color:#f56c6c;"></i> 打卡位置地图</span>'
+            + '<span onclick="attendanceApp._toggleMapFullscreen(\'' + mapId + '\')" style="cursor:pointer;padding:2px 8px;border-radius:4px;color:var(--primary-color,#409eff);font-size:12px;" title="全屏查看"><i class="fas fa-expand"></i></span></div>'
+            + '<div id="' + mapId + '" style="position:relative;"><iframe src="' + iframeUrl + '" width="100%" height="320px" frameborder="0" style="display:block;" scrolling="no"></iframe></div>';
+        body.appendChild(mapDiv);
+    }
+
+    _toggleMapFullscreen(mapId) {
+        var container = document.getElementById(mapId);
+        if (!container) return;
+        var isFull = container.classList.contains('map-fullscreen');
+        if (isFull) {
+            container.classList.remove('map-fullscreen');
+            container.querySelector('iframe').style.height = '320px';
+            container.style.position = 'relative';
+            container.style.zIndex = '';
+            container.style.background = '';
+            container.style.top = '';
+            container.style.left = '';
+            container.style.width = '';
+            container.style.height = '';
+            if (container._fsBtn) {
+                container._fsBtn.remove();
+                container._fsBtn = null;
+            }
+        } else {
+            container.classList.add('map-fullscreen');
+            var iframe = container.querySelector('iframe');
+            iframe.style.height = window.innerHeight + 'px';
+            container.style.position = 'fixed';
+            container.style.zIndex = '9999';
+            container.style.background = '#fff';
+            container.style.top = '0';
+            container.style.left = '0';
+            container.style.width = '100%';
+            container.style.height = '100%';
+            var btn = document.createElement('div');
+            btn.innerHTML = '<i class="fas fa-compress"></i> 退出全屏';
+            btn.style.cssText = 'position:fixed;top:12px;right:12px;z-index:10000;padding:8px 16px;background:rgba(0,0,0,0.6);color:#fff;border-radius:6px;font-size:14px;cursor:pointer;';
+            btn.onclick = function(e) { e.stopPropagation(); attendanceApp._toggleMapFullscreen(mapId); };
+            document.body.appendChild(btn);
+            container._fsBtn = btn;
         }
     }
 
@@ -269,6 +376,12 @@ class AttendanceApp {
         return { latitude: lat, longitude: lng, location: location, reverse_geocoding: reverseGeocoding };
     }
 
+    _getClientInfo() {
+        var ip = '';
+        var ua = navigator.userAgent || '';
+        return { ip: ip, userAgent: ua };
+    }
+
     async clockIn() {
         const btn = document.getElementById('clockInBtn');
         if (btn.disabled) return;
@@ -276,7 +389,8 @@ class AttendanceApp {
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 打卡中...';
         try {
             var loc = await this._fetchLocation();
-            var data = { device: this._getDeviceInfo() };
+            var info = this._getClientInfo();
+            var data = { device: this._getDeviceInfo(), user_agent: info.userAgent };
             if (loc.latitude) data.latitude = loc.latitude;
             if (loc.longitude) data.longitude = loc.longitude;
             if (loc.location) data.location = loc.location;
@@ -299,7 +413,8 @@ class AttendanceApp {
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 打卡中...';
         try {
             var loc = await this._fetchLocation();
-            var data = { device: this._getDeviceInfo() };
+            var info = this._getClientInfo();
+            var data = { device: this._getDeviceInfo(), user_agent: info.userAgent };
             if (loc.latitude) data.latitude = loc.latitude;
             if (loc.longitude) data.longitude = loc.longitude;
             if (loc.location) data.location = loc.location;

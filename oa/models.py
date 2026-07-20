@@ -42,6 +42,11 @@ class AttendanceRecord(models.Model):
         verbose_name='打卡状态'
     )
     remark = models.TextField(blank=True, default='', verbose_name='备注')
+    # BD09坐标（百度地图）
+    bd09_latitude = models.FloatField(null=True, blank=True, verbose_name='BD09纬度')
+    bd09_longitude = models.FloatField(null=True, blank=True, verbose_name='BD09经度')
+    ip_address = models.CharField(max_length=50, blank=True, default='', verbose_name='IP地址')
+    user_agent = models.TextField(blank=True, default='', verbose_name='User-Agent')
 
     class Meta:
         ordering = ['-clock_time']
@@ -68,6 +73,7 @@ class ApprovalRequest(models.Model):
         ('other', '其他'),
     ]
     STATUS_CHOICES = [
+        ('draft', '草稿'),
         ('pending', '待审批'),
         ('approved', '已通过'),
         ('rejected', '已驳回'),
@@ -168,6 +174,8 @@ class ApprovalLog(models.Model):
     ACTION_CHOICES = [
         ('approve', '通过'),
         ('reject', '驳回'),
+        ('resubmit', '重新提交'),
+        ('cancel', '撤回'),
     ]
 
     request = models.ForeignKey(
@@ -191,7 +199,7 @@ class ApprovalLog(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='操作时间')
 
     class Meta:
-        ordering = ['created_at']
+        ordering = ['-created_at']
         verbose_name = '审批日志'
         verbose_name_plural = '审批日志'
 

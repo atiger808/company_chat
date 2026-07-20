@@ -11,7 +11,7 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('accounts', '0002_auto_20260716_1224'),
+        ('accounts', '0003_consultationrequest'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

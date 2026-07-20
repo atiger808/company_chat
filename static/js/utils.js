@@ -28,7 +28,7 @@ class Utils {
         });
     }
 
-// 检查文件是否已存在（基于文件名和大小的简单去重）
+    // 检查文件是否已存在（基于文件名和大小的简单去重）
     static isFileDuplicate(file, existingFiles = []) {
         const fileKey = `${file.name}-${file.size}-${file.type}`;
         return existingFiles.some(existingFile =>
@@ -630,6 +630,21 @@ class Utils {
             // 发送文件（使用 Transferable 优化性能）
             worker.postMessage({file}, [file]);
         });
+    }
+
+
+    _showTip(msg) {
+        var tip = document.getElementById('_showTip');
+        if (!tip) {
+            tip = document.createElement('div');
+            tip.id = '_showTip';
+            tip.style.cssText = 'position:fixed;top:30px;left:50%;transform:translateX(-50%);z-index:10002;color:#fff;font-size:14px;background:rgba(0,0,0,0.6);padding:8px 20px;border-radius:20px;pointer-events:none;transition:opacity 0.3s;';
+            document.body.appendChild(tip);
+        }
+        tip.textContent = msg;
+        tip.style.opacity = '1';
+        clearTimeout(tip._t);
+        tip._t = setTimeout(function() { tip.style.opacity = '0'; }, 1500);
     }
 
 }

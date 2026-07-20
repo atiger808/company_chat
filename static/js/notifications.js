@@ -4,6 +4,7 @@
     'use strict';
 
     const OA_API_URL = '/api/oa';
+    let chat_login_url = '/login/';
     let ws = null;
     let unreadCount = 0;
     let wsReconnectTimer = null;
@@ -20,7 +21,7 @@
         css += '.notif-dropdown { position:fixed; width:360px; max-height:480px; background:#fff; border-radius:10px; box-shadow:0 6px 24px rgba(0,0,0,0.15); z-index:9999; overflow:hidden; display:none; }';
         css += '.notif-dropdown.show { display:block; }';
         css += '.notif-dropdown-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--border-color,#ebeef5); }';
-        css += '.notif-dropdown-header h3 { font-size:15px; font-weight:600; margin:0; }';
+        css += '.notif-dropdown-header h3 { font-size:15px; font-weight:600; margin:0; color:var(--text-primary,#303133);}';
         css += '.notif-dropdown-header .btn-text { font-size:12px; color:var(--primary-color,#409eff); cursor:pointer; background:none; border:none; }';
         css += '.notif-dropdown-header .btn-text:hover { text-decoration:underline; }';
         css += '.notif-list { overflow-y:auto; max-height:400px; }';
@@ -49,13 +50,33 @@
         document.head.appendChild(style);
     }
 
+    // 通知筛选和详情按钮样式
+    (function(){var c='.notif-filter-bar{display:flex;gap:0;padding:8px 16px;border-bottom:1px solid var(--border-color,#ebeef5);}';c+='.notif-filter-btn{padding:4px 14px;border:1px solid var(--border-color,#dcdfe6);background:#fff;font-size:12px;cursor:pointer;color:var(--text-secondary,#606266);transition:all 0.15s;}';c+='.notif-filter-btn:first-child{border-radius:14px 0 0 14px;}';c+='.notif-filter-btn:last-child{border-radius:0 14px 14px 0;}';c+='.notif-filter-btn:not(:last-child){border-right:none;}';c+='.notif-filter-btn:hover{color:var(--primary-color,#409eff);}';c+='.notif-filter-btn.active{background:var(--primary-color,#409eff);border-color:var(--primary-color,#409eff);color:#fff;}';c+='.notif-detail-btn{display:inline-block;margin-top:6px;padding:2px 10px;font-size:11px;color:var(--primary-color,#409eff);background:#ecf5ff;border-radius:4px;text-decoration:none;cursor:pointer;}';c+='.notif-detail-btn:hover{background:#d9ecff;}';c+='[data-theme="dark"] .notif-filter-btn{background:#2d2d2d;border-color:#444;color:var(--text-secondary);}';c+='[data-theme="dark"] .notif-filter-btn.active{background:var(--primary-color,#409eff);border-color:var(--primary-color,#409eff);color:#fff;}';c+='[data-theme="dark"] .notif-detail-btn{background:#1a2740;color:#5ab0ff;}';c+='[data-theme="dark"] .notif-detail-btn:hover{background:#1f3050;}';var s=document.createElement('style');s.textContent=c;document.head.appendChild(s);})();
+
     function getAccessToken() {
         return localStorage.getItem('access_token') || '';
     }
 
+    function handleAuthError() {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('user_id');
+        localStorage.removeItem('user_type');
+        localStorage.removeItem('current_user');
+        localStorage.setItem('redirect_url', window.location.href);
+        window.location.href = chat_login_url;
+    }
+
     async function apiGet(url) {
         var resp = await fetch(url, { headers: { 'Authorization': 'Bearer ' + getAccessToken(), 'Content-Type': 'application/json' } });
-        if (!resp.ok) throw new Error('Failed');
+        if (!resp.ok) {
+            if (resp.status === 401) {
+                console.log('登录已过期，请重新登录');
+                handleAuthError();
+                return
+            }
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed');
+        };
         var raw = await resp.json();
         if (raw.encrypt && window.EncryptUtils) return window.EncryptUtils.decryptPacket(raw);
         return raw;
@@ -67,7 +88,15 @@
             headers: { 'Authorization': 'Bearer ' + getAccessToken(), 'Content-Type': 'application/json' },
             body: JSON.stringify(data || {})
         });
-        if (!resp.ok) throw new Error('Failed');
+        if (!resp.ok) {
+            if (resp.status === 401) {
+                console.log('登录已过期，请重新登录');
+                handleAuthError();
+                return
+            }
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed');
+        };
         var raw = await resp.json();
         if (raw.encrypt && window.EncryptUtils) return window.EncryptUtils.decryptPacket(raw);
         return raw;
@@ -134,7 +163,8 @@
     }
 
     window.WorkNotif = {
-        // 显示通知列表
+        _nFilter: '',
+
         async toggle() {
             var dd = document.getElementById('notifDropdown');
             if (!dd) return;
@@ -143,10 +173,8 @@
                 dd.classList.remove('show');
                 return;
             }
-            // 关闭其它下拉
             document.querySelectorAll('.notif-dropdown').forEach(function(d) { d.classList.remove('show'); });
 
-            // 定位到铃铛下方
             var bell = document.getElementById('notifBellWrap');
             if (bell) {
                 var rect = bell.getBoundingClientRect();
@@ -158,39 +186,59 @@
             await this.loadList();
         },
 
+        async setFilter(v) {
+            this._nFilter = v;
+            document.querySelectorAll('.notif-filter-btn').forEach(function(b) {
+                b.classList.toggle('active', b.dataset.filter === v);
+            });
+            await this.loadList();
+        },
+
         async loadList() {
             var list = document.getElementById('notifList');
             if (!list) return;
             try {
-                var data = await apiGet(OA_API_URL + '/notifications/?page=1&page_size=20');
+                var url = OA_API_URL + '/notifications/?page=1&page_size=50';
+                if (this._nFilter) url += '&read_filter=' + this._nFilter;
+                var data = await apiGet(url);
                 var rows = data.results || [];
+                var filterHtml = '<div class="notif-filter-bar">'
+                    + '<button class="notif-filter-btn' + (this._nFilter === '' ? ' active' : '') + '" data-filter="" onclick="event.stopPropagation();WorkNotif.setFilter(\'\')">全部</button>'
+                    + '<button class="notif-filter-btn' + (this._nFilter === 'unread' ? ' active' : '') + '" data-filter="unread" onclick="event.stopPropagation();WorkNotif.setFilter(\'unread\')">未读</button>'
+                    + '<button class="notif-filter-btn' + (this._nFilter === 'read' ? ' active' : '') + '" data-filter="read" onclick="event.stopPropagation();WorkNotif.setFilter(\'read\')">已读</button>'
+                    + '</div>';
                 if (!rows.length) {
-                    list.innerHTML = '<div class="notif-empty"><i class="fas fa-bell-slash"></i><p>暂无通知</p></div>';
+                    list.innerHTML = filterHtml + '<div class="notif-empty"><i class="fas fa-bell-slash"></i><p>暂无通知</p></div>';
                     return;
                 }
-                list.innerHTML = rows.map(function(n) {
+                list.innerHTML = filterHtml + rows.map(function(n) {
                     var icon = typeIcon(n.type);
                     var color = typeColor(n.type);
                     var cls = n.is_read ? '' : 'unread';
-                    return '<div class="notif-item ' + cls + '" onclick="WorkNotif.click(' + n.id + ',\'' + (n.related_url || '') + '\')">'
+                    var dotHtml = n.is_read ? '' : '<span style="position:absolute;top:20px;right:12px;width:8px;height:8px;border-radius:50%;background:#409eff;"></span>';
+                    var u = n.related_url || '';
+                    var detailBtn = u ? '<span class="notif-detail-btn" onclick="event.stopPropagation();WorkNotif.goDetail(' + n.id + ',\'' + u + '\')">查看详情 <i class="fas fa-arrow-right" style="font-size:10px;"></i></span>' : '';
+                    return '<div class="notif-item ' + cls + '" onclick="event.stopPropagation();WorkNotif.markRead(' + n.id + ')" style="position:relative">'
                         + '<div class="notif-item-icon ' + n.type + '" style="background:' + color + ';"><i class="' + icon + '"></i></div>'
                         + '<div class="notif-item-body">'
-                        + '<div class="notif-item-title">' + escapeHtml(n.title) + '</div>'
+                        + '<div class="notif-item-title" style="font-weight:' + (n.is_read ? '400' : '600') + '">' + escapeHtml(n.title) + '</div>'
                         + '<div class="notif-item-content">' + escapeHtml(n.content) + '</div>'
-                        + '<div class="notif-item-time">' + formatTime(n.created_at) + '</div></div></div>';
+                        + '<div class="notif-item-time">' + formatTime(n.created_at) + '</div>' + detailBtn + '</div>' + dotHtml + '</div>';
                 }).join('');
             } catch(e) {
                 list.innerHTML = '<div class="notif-empty"><i class="fas fa-exclamation-circle"></i><p>加载失败</p></div>';
             }
         },
 
-        async click(id, url) {
-            // 标记已读
+        async markRead(id) {
             try { await apiPost(OA_API_URL + '/notifications/' + id + '/mark-read/', {}); } catch(e) {}
             fetchUnreadCount();
-            if (url) {
-                window.location.href = url;
-            }
+        },
+
+        async goDetail(id, url) {
+            try { await apiPost(OA_API_URL + '/notifications/' + id + '/mark-read/', {}); } catch(e) {}
+            fetchUnreadCount();
+            if (url) window.location.href = url;
         },
 
         async markAllRead() {
@@ -203,7 +251,6 @@
             } catch(e) {}
         },
 
-        // 供外部调用的刷新方法
         refreshCount: fetchUnreadCount,
     };
 

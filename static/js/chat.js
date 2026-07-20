@@ -10,6 +10,7 @@ class VersionManager {
         this.lastCheckTime = 0;
         this.isChecking = false;
         this.updateBanner = null;
+        this.updateBannerTimeout = 2 * 60 * 1000 // 2分钟后自动关闭
     }
 
     // 获取存储的版本信息
@@ -250,7 +251,7 @@ class VersionManager {
                 if (this.updateBanner && this.updateBanner.parentNode) {
                     this.dismissUpdatePrompt(true);
                 }
-            }, 30000); // 30秒后自动隐藏
+            }, this.updateBannerTimeout); // 30秒后自动隐藏
         }
 
         // 强制更新：5秒后自动刷新
@@ -5422,55 +5423,75 @@ class ChatClient {
         this._loadNotificationList();
     }
 
-    async _loadNotificationList() {
+    async _loadNotificationList(filter) {
+        if (filter === undefined) filter = this._notifFilter || '';
+        this._notifFilter = filter;
         var container = document.getElementById('notificationMessages');
         if (!container) return;
         try {
-            var resp = await fetch('/api/oa/notifications/?page=1&page_size=50', { headers: TokenManager.getHeaders() });
+            var url = '/api/oa/notifications/?page=1&page_size=50';
+            if (filter) url += '&read_filter=' + filter;
+            var resp = await fetch(url, { headers: TokenManager.getHeaders() });
             var raw = await resp.json();
             var data = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
             var rows = data.results || [];
-            if (!rows.length) {
-                container.innerHTML = '<div style="text-align:center;padding:60px 20px;color:var(--text-light);"><i class="fas fa-bell-slash" style="font-size:48px;opacity:0.4;"></i><p style="margin-top:12px;">暂无工作通知</p></div>';
-                return;
-            }
 
-            var typeIcon = function(t) {
+            var typeIcon2 = function(t) {
                 var map = { 'approval': 'fa-check-double', 'attendance': 'fa-clock', 'task': 'fa-tasks', 'collab': 'fa-users', 'system': 'fa-bell' };
                 return map[t] || 'fa-bell';
             };
-
-            var typeColor = function(t) {
+            var typeColor2 = function(t) {
                 var map = { 'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'system': '#909399' };
                 return map[t] || '#909399';
             };
-
-            var formatTime = function(iso) {
+            var formatTime2 = function(iso) {
                 if (!iso) return '';
                 var d = new Date(iso);
                 var pad = function(n) { return String(n).padStart(2, '0'); };
                 return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
             };
-
-            var escapeHtml = function(text) {
+            var escapeHtml2 = function(text) {
                 if (!text) return '';
                 return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
             };
 
+            var filterBar = '<div style="display:flex;gap:0;padding:8px 16px;border-bottom:1px solid var(--border-color,#ebeef5);">'
+                + '<button style="padding:4px 14px;border:1px solid var(--border-color,#dcdfe6);background:' + (filter === '' ? 'var(--primary-color,#409eff)' : '#fff') + ';color:' + (filter === '' ? '#fff' : 'var(--text-secondary,#606266)') + ';font-size:12px;cursor:pointer;border-radius:14px 0 0 14px;border-right:none;" onclick="chatClient._loadNotificationList(\'\')">全部</button>'
+                + '<button style="padding:4px 14px;border:1px solid var(--border-color,#dcdfe6);background:' + (filter === 'unread' ? 'var(--primary-color,#409eff)' : '#fff') + ';color:' + (filter === 'unread' ? '#fff' : 'var(--text-secondary,#606266)') + ';font-size:12px;cursor:pointer;border-right:none;" onclick="chatClient._loadNotificationList(\'unread\')">未读</button>'
+                + '<button style="padding:4px 14px;border:1px solid var(--border-color,#dcdfe6);background:' + (filter === 'read' ? 'var(--primary-color,#409eff)' : '#fff') + ';color:' + (filter === 'read' ? '#fff' : 'var(--text-secondary,#606266)') + ';font-size:12px;cursor:pointer;border-radius:0 14px 14px 0;" onclick="chatClient._loadNotificationList(\'read\')">已读</button>'
+                + '</div>';
+
+            if (!rows.length) {
+                container.innerHTML = filterBar + '<div style="text-align:center;padding:60px 20px;color:var(--text-light);"><i class="fas fa-bell-slash" style="font-size:48px;opacity:0.4;"></i><p style="margin-top:12px;">暂无工作通知</p></div>';
+                return;
+            }
+
             var self = this;
-            container.innerHTML = rows.map(function(n) {
-                var icon = typeIcon(n.type);
-                var color = typeColor(n.type);
+            container.innerHTML = filterBar + rows.map(function(n) {
+                var icon = typeIcon2(n.type);
+                var color = typeColor2(n.type);
                 var cls = n.is_read ? '' : 'notif-item-unread';
-                return '<div class="notif-chat-item ' + cls + '" onclick="chatClient._clickNotification(' + n.id + ',\'' + (n.related_url || '') + '\',' + (n.is_read ? 'true' : 'false') + ')" style="display:flex;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border-color,#f0f0f0);cursor:pointer;transition:background 0.15s;">'
+                var dotHtml = n.is_read ? '' : '<span style="position:absolute;top:20px;right:2px;width:8px;height:8px;border-radius:50%;background:#409eff;"></span>';
+                var u = (n.related_url || '');
+                var detailBtn = u ? '<span onclick="event.stopPropagation();chatClient._clickNotification(' + n.id + ',\'' + u + '\',' + (n.is_read ? 'true' : 'false') + ')" style="display:inline-block;margin-top:6px;padding:2px 10px;font-size:11px;color:var(--primary-color,#409eff);background:#ecf5ff;border-radius:4px;cursor:pointer;">查看详情 <i class="fas fa-arrow-right" style="font-size:10px;"></i></span>' : '';
+                return '<div class="notif-chat-item ' + cls + '" onclick="chatClient._markNotifRead(' + n.id + ')" style="position:relative;display:flex;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border-color,#f0f0f0);cursor:pointer;transition:background 0.15s;">'
                     + '<div style="width:40px;height:40px;border-radius:50%;background:' + color + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff;font-size:16px;"><i class="fas ' + icon + '"></i></div>'
                     + '<div style="flex:1;min-width:0;">'
-                    + '<div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:14px;font-weight:' + (n.is_read ? '400' : '600') + ';color:var(--text-primary,#303133);">' + escapeHtml(n.title) + '</span>'
-                    + '<span style="font-size:11px;color:var(--text-light,#909399);flex-shrink:0;margin-left:8px;">' + formatTime(n.created_at) + '</span></div>'
-                    + '<div style="font-size:13px;color:var(--text-secondary,#606266);margin-top:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">' + escapeHtml(n.content) + '</div></div></div>';
+                    + '<div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:14px;font-weight:' + (n.is_read ? '400' : '600') + ';color:var(--text-primary,#303133);">' + escapeHtml2(n.title) + '</span>'
+                    + '<span style="font-size:11px;color:var(--text-light,#909399);flex-shrink:0;margin-left:8px;">' + formatTime2(n.created_at) + '</span></div>'
+                    + '<div style="font-size:13px;color:var(--text-secondary,#606266);margin-top:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">' + escapeHtml2(n.content) + '</div>' + detailBtn + '</div>' + dotHtml + '</div>';
             }).join('');
         } catch(e) {
             container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-light);"><i class="fas fa-exclamation-circle" style="font-size:36px;"></i><p style="margin-top:8px;">加载失败</p></div>';
+        }
+    }
+
+    async _markNotifRead(id) {
+        try {
+            await fetch('/api/oa/notifications/' + id + '/mark-read/', { method: 'POST', headers: TokenManager.getHeaders() });
+        } catch(e) {}
+        if (window.WorkNotif && window.WorkNotif.refreshCount) {
+            window.WorkNotif.refreshCount();
         }
     }
 
@@ -5481,7 +5502,6 @@ class ChatClient {
                     method: 'POST', headers: TokenManager.getHeaders()
                 });
             } catch(e) {}
-            // 刷新未读计数
             if (window.WorkNotif && window.WorkNotif.refreshCount) {
                 window.WorkNotif.refreshCount();
             }
@@ -7339,124 +7359,76 @@ class ChatClient {
         return images;
     }
 
-    // 预览图片（大图查看）
+    // 预览图片（大图查看，左右箭头导航）
     previewImage(imageUrl) {
         if (!imageUrl) return;
-
-        const imageList = this._collectImageList();
-        let currentIndex = imageList.findIndex(item => item.url === imageUrl);
-        if (currentIndex === -1) currentIndex = 0;
-
-        const showImage = (index) => {
-            const item = imageList[index];
-            const img = modal.querySelector('.preview-image');
-            img.src = item.url;
-            img.alt = item.name;
-            currentIndex = index;
-
-            // 更新计数显示
-            const counter = modal.querySelector('.image-nav-counter');
-            if (counter) {
-                counter.textContent = `${index + 1} / ${imageList.length}`;
-            }
-
-            // 控制左右按钮显示
-            const prevBtn = modal.querySelector('.image-nav-prev');
-            const nextBtn = modal.querySelector('.image-nav-next');
-            if (prevBtn) prevBtn.style.visibility = index <= 0 ? 'hidden' : 'visible';
-            if (nextBtn) nextBtn.style.visibility = index >= imageList.length - 1 ? 'hidden' : 'visible';
-
-            // 更新下载/新窗口打开按钮的链接
-            const downloadBtn = modal.querySelector('.image-preview-actions .btn-secondary');
-            const openBtn = modal.querySelector('.image-preview-actions .btn-primary');
-            if (downloadBtn) downloadBtn.onclick = () => this.downloadImage(item.url);
-            if (openBtn) openBtn.onclick = () => window.open(item.url, '_blank');
+        var list = this._collectImageList();
+        if (!list.length) return;
+        var idx = list.findIndex(function(i) { return i.url === imageUrl; });
+        if (idx < 0) idx = 0;
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;z-index:10000;background:rgba(0,0,0,0.85);';
+        var pd = list.length <= 1 ? 'opacity:0.2;cursor:default;pointer-events:none;' : '';
+        overlay.innerHTML = '<span onclick="chatClient._chatPreviewClose()" style="position:fixed;top:20px;right:30px;color:#fff;font-size:32px;cursor:pointer;z-index:10001;"><i class="fas fa-times"></i></span>'
+            + '<span onclick="chatClient._chatPreviewDir(-1)" id="chatPrev" style="position:fixed;left:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + pd + '"><i class="fas fa-chevron-left"></i></span>'
+            + '<span onclick="chatClient._chatPreviewDir(1)" id="chatNext" style="position:fixed;right:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + pd + '"><i class="fas fa-chevron-right"></i></span>'
+            + '<img id="chatMainImg" src="' + list[idx].url + '" style="max-width:90vw;max-height:90vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);transition:opacity 0.15s;">'
+            + '<div id="chatPageCounter" style="position:fixed;bottom:30px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,0.7);font-size:14px;z-index:10001;">' + (idx + 1) + ' / ' + list.length + '</div>';
+        document.body.appendChild(overlay);
+        this._chatPreviewList = list;
+        this._chatPreviewIdx = idx;
+        this._chatOverlay = overlay;
+        if (idx <= 0) { var p = document.getElementById('chatPrev'); if (p) p.style.opacity = '0.2'; }
+        if (idx >= list.length - 1) { var n = document.getElementById('chatNext'); if (n) n.style.opacity = '0.2'; }
+        var self = this;
+        var kh = function(e) {
+            if (e.key === 'ArrowLeft') { self._chatPreviewDir(-1); e.preventDefault(); }
+            else if (e.key === 'ArrowRight') { self._chatPreviewDir(1); e.preventDefault(); }
+            else if (e.key === 'Escape') { self._chatPreviewClose(); e.preventDefault(); }
         };
-
-        // 创建图片预览模态框
-        const modal = document.createElement('div');
-        modal.className = 'image-preview-modal';
-        const showNav = imageList.length > 1;
-        modal.innerHTML = `
-            <div class="image-preview-content">
-                <div class="image-preview-header">
-                    ${showNav ? `<span class="image-nav-counter">${currentIndex + 1} / ${imageList.length}</span>` : ''}
-                    <button class="close-btn" title="关闭">&times;</button>
-                </div>
-                <div class="image-preview-body">
-                    <img src="${imageUrl}" alt="${imageList[currentIndex]?.name || '图片预览'}" class="preview-image">
-                    <div class="image-preview-actions">
-                        <button class="btn btn-secondary">
-                            <i class="fas fa-download"></i> 下载
-                        </button>
-                        <button class="btn btn-primary">
-                            <i class="fas fa-external-link-alt"></i> 在新窗口打开
-                        </button>
-                    </div>
-                </div>
-                ${showNav ? `
-                <button class="image-nav-btn image-nav-prev" title="上一张">
-                    <i class="fas fa-chevron-left"></i>
-                </button>
-                <button class="image-nav-btn image-nav-next" title="下一张">
-                    <i class="fas fa-chevron-right"></i>
-                </button>` : ''}
-            </div>
-        `;
-
-        document.body.appendChild(modal);
-
-        // 初始按钮状态
-        if (showNav) {
-            const prevBtn = modal.querySelector('.image-nav-prev');
-            const nextBtn = modal.querySelector('.image-nav-next');
-            if (prevBtn) prevBtn.style.visibility = currentIndex <= 0 ? 'hidden' : 'visible';
-            if (nextBtn) nextBtn.style.visibility = currentIndex >= imageList.length - 1 ? 'hidden' : 'visible';
-        }
-
-        // 绑定导航按钮事件
-        modal.querySelector('.image-nav-prev')?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (currentIndex > 0) showImage(currentIndex - 1);
-        });
-        modal.querySelector('.image-nav-next')?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (currentIndex < imageList.length - 1) showImage(currentIndex + 1);
-        });
-
-        // 绑定关闭事件
-        const closeBtn = modal.querySelector('.close-btn');
-        closeBtn.addEventListener('click', () => modal.remove());
-
-        // 点击外部关闭
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) modal.remove();
-        });
-
-        // 键盘快捷键
-        const keyHandler = (e) => {
-            if (!modal.isConnected) {
-                document.removeEventListener('keydown', keyHandler);
-                return;
-            }
-            if (e.key === 'Escape') {
-                modal.remove();
-            } else if (e.key === 'ArrowLeft' && currentIndex > 0) {
-                e.preventDefault();
-                showImage(currentIndex - 1);
-            } else if (e.key === 'ArrowRight' && currentIndex < imageList.length - 1) {
-                e.preventDefault();
-                showImage(currentIndex + 1);
-            }
-        };
-        document.addEventListener('keydown', keyHandler);
-
-        // 初始下载/打开按钮绑定
-        const downloadBtn = modal.querySelector('.image-preview-actions .btn-secondary');
-        const openBtn = modal.querySelector('.image-preview-actions .btn-primary');
-        if (downloadBtn) downloadBtn.onclick = () => this.downloadImage(imageUrl);
-        if (openBtn) openBtn.onclick = () => window.open(imageUrl, '_blank');
+        this._chatKeyHandler = kh;
+        document.addEventListener('keydown', kh);
+        overlay.addEventListener('click', function(e) { if (e.target === overlay) self._chatPreviewClose(); });
     }
+
+    _chatPreviewDir(dir) {
+        if (!this._chatPreviewList || !this._chatPreviewList.length) return;
+        var len = this._chatPreviewList.length;
+        if (dir < 0 && this._chatPreviewIdx <= 0) { this._chatShowTip('已是第一张'); return; }
+        if (dir > 0 && this._chatPreviewIdx >= len - 1) { this._chatShowTip('已是最后一张'); return; }
+        this._chatPreviewIdx += dir;
+        var img = document.getElementById('chatMainImg');
+        var item = this._chatPreviewList[this._chatPreviewIdx];
+        if (img) { img.style.opacity = '0'; var self = this; setTimeout(function() { img.src = item.url; img.style.opacity = '1'; }, 100); }
+        var ct = document.getElementById('chatPageCounter');
+        if (ct) ct.textContent = (this._chatPreviewIdx + 1) + ' / ' + this._chatPreviewList.length;
+        var p = document.getElementById('chatPrev');
+        var n = document.getElementById('chatNext');
+        if (p) { p.style.opacity = this._chatPreviewIdx <= 0 ? '0.2' : '1'; p.style.cursor = this._chatPreviewIdx <= 0 ? 'default' : 'pointer'; }
+        if (n) { n.style.opacity = this._chatPreviewIdx >= this._chatPreviewList.length - 1 ? '0.2' : '1'; n.style.cursor = this._chatPreviewIdx >= this._chatPreviewList.length - 1 ? 'default' : 'pointer'; }
+    }
+
+    _chatPreviewClose() {
+        if (this._chatKeyHandler) { document.removeEventListener('keydown', this._chatKeyHandler); this._chatKeyHandler = null; }
+        if (this._chatOverlay) { this._chatOverlay.remove(); this._chatOverlay = null; }
+        this._chatPreviewList = null;
+    }
+
+    _chatShowTip(msg) {
+        var tip = document.getElementById('chatImgTip');
+        if (!tip) {
+            tip = document.createElement('div');
+            tip.id = 'chatImgTip';
+            tip.style.cssText = 'position:fixed;top:30px;left:50%;transform:translateX(-50%);z-index:10002;color:#fff;font-size:14px;background:rgba(0,0,0,0.6);padding:8px 20px;border-radius:20px;pointer-events:none;transition:opacity 0.3s;';
+            document.body.appendChild(tip);
+        }
+        tip.textContent = msg;
+        tip.style.opacity = '1';
+        clearTimeout(tip._t);
+        tip._t = setTimeout(function() { tip.style.opacity = '0'; }, 1500);
+    }
+
+
 
     // 下载图片
     downloadImage(imageUrl) {

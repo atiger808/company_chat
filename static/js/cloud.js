@@ -935,6 +935,9 @@ class CloudApp {
                 document.getElementById('operationLogView').classList.add('active');
                 await this.loadOperationLogs();
                 break;
+            case 'chat':
+                document.getElementById('chatView').classList.add('active');
+                break;
         }
 
 
@@ -2067,11 +2070,11 @@ class CloudApp {
     }
 
     /**
-     * 预览文件
+     * 预览文件（图片使用暗色覆盖层+左右导航）
      */
     async previewFile(fileId) {
         try {
-            const response = await fetch(`/api/cloud/files/${fileId}/`, {
+            const response = await fetch('/api/cloud/files/' + fileId + '/', {
                 headers: TokenManager.getHeaders()
             });
             this.statusCode = response.status;
@@ -2079,7 +2082,13 @@ class CloudApp {
 
             const file = await response.json();
 
-            if (file.is_image || file.is_video || file.is_document) {
+            if (file.is_image) {
+                var list = this._cloudImageList();
+                var idx = list.findIndex(function(i) { return i.id === fileId; });
+                if (idx < 0) { idx = 0; list = [{id: fileId, url: file.file_url, name: file.name}]; }
+                if (!list.length) return;
+                this._cloudShowImage(idx, list);
+            } else if (file.is_video || file.is_document) {
                 window.open(file.file_url, '_blank');
             } else {
                 this.downloadFile(fileId);
@@ -2088,6 +2097,90 @@ class CloudApp {
             console.error('预览失败:', error);
             this.showError('预览失败', error.message);
         }
+    }
+
+    _cloudImageList() {
+        var items = [];
+        var viewItems = this.lastLoadedFiles || [];
+        for (var i = 0; i < viewItems.length; i++) {
+            var f = viewItems[i];
+            if (f.is_image && f.id && f.file_url) {
+                items.push({id: f.id, url: f.file_url, name: f.name || '图片'});
+            }
+        }
+        if ((!items.length || this.currentView === 'shared-folders') && this.sharedFolderItems) {
+            for (var j = 0; j < this.sharedFolderItems.length; j++) {
+                var s = this.sharedFolderItems[j];
+                if (s.is_image && s.id && s.file_url) {
+                    items.push({id: s.id, url: s.file_url, name: s.name || '图片'});
+                }
+            }
+        }
+        return items;
+    }
+
+    _cloudShowImage(startIdx, list) {
+        if (!list || !list.length) return;
+        this._cloudImgList = list;
+        this._cloudImgIdx = startIdx;
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;z-index:10000;background:rgba(0,0,0,0.85);';
+        var pd = list.length <= 1 ? 'opacity:0.2;cursor:default;pointer-events:none;' : '';
+        overlay.innerHTML = '<span onclick="cloudApp._cloudImgClose()" style="position:fixed;top:20px;right:30px;color:#fff;font-size:32px;cursor:pointer;z-index:10001;"><i class="fas fa-times"></i></span>'
+            + '<span onclick="cloudApp._cloudImgNav(-1)" id="cloudImgPrev" style="position:fixed;left:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + pd + '"><i class="fas fa-chevron-left"></i></span>'
+            + '<span onclick="cloudApp._cloudImgNav(1)" id="cloudImgNext" style="position:fixed;right:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + pd + '"><i class="fas fa-chevron-right"></i></span>'
+            + '<img id="cloudImgMain" src="' + list[startIdx].url + '" style="max-width:90vw;max-height:90vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);">'
+            + '<div id="cloudImgCounter" style="position:fixed;bottom:30px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,0.7);font-size:14px;z-index:10001;">' + (startIdx + 1) + ' / ' + list.length + '</div>';
+        document.body.appendChild(overlay);
+        this._cloudOverlay = overlay;
+        if (startIdx <= 0) { var p = document.getElementById('cloudImgPrev'); if (p) p.style.opacity = '0.2'; }
+        if (startIdx >= list.length - 1) { var n = document.getElementById('cloudImgNext'); if (n) n.style.opacity = '0.2'; }
+        var self = this;
+        var kh = function(e) {
+            if (e.key === 'ArrowLeft') { self._cloudImgNav(-1); e.preventDefault(); }
+            else if (e.key === 'ArrowRight') { self._cloudImgNav(1); e.preventDefault(); }
+            else if (e.key === 'Escape') { self._cloudImgClose(); e.preventDefault(); }
+        };
+        this._cloudKeyHandler = kh;
+        document.addEventListener('keydown', kh);
+        overlay.addEventListener('click', function(e) { if (e.target === overlay) self._cloudImgClose(); });
+    }
+
+    _cloudImgNav(dir) {
+        if (!this._cloudImgList || !this._cloudImgList.length) return;
+        var len = this._cloudImgList.length;
+        if (dir < 0 && this._cloudImgIdx <= 0) { cloudApp._cloudShowTip('已是第一张'); return; }
+        if (dir > 0 && this._cloudImgIdx >= len - 1) { cloudApp._cloudShowTip('已是最后一张'); return; }
+        this._cloudImgIdx += dir;
+        var img = document.getElementById('cloudImgMain');
+        var item = this._cloudImgList[this._cloudImgIdx];
+        if (img) { img.style.opacity = '0'; var self = this; setTimeout(function() { img.src = item.url; img.style.opacity = '1'; }, 100); }
+        var ct = document.getElementById('cloudImgCounter');
+        if (ct) ct.textContent = (this._cloudImgIdx + 1) + ' / ' + this._cloudImgList.length;
+        var p = document.getElementById('cloudImgPrev');
+        var n = document.getElementById('cloudImgNext');
+        if (p) { p.style.opacity = this._cloudImgIdx <= 0 ? '0.2' : '1'; p.style.cursor = this._cloudImgIdx <= 0 ? 'default' : 'pointer'; }
+        if (n) { n.style.opacity = this._cloudImgIdx >= this._cloudImgList.length - 1 ? '0.2' : '1'; n.style.cursor = this._cloudImgIdx >= this._cloudImgList.length - 1 ? 'default' : 'pointer'; }
+    }
+
+    _cloudImgClose() {
+        if (this._cloudKeyHandler) { document.removeEventListener('keydown', this._cloudKeyHandler); this._cloudKeyHandler = null; }
+        if (this._cloudOverlay) { this._cloudOverlay.remove(); this._cloudOverlay = null; }
+        this._cloudImgList = null;
+    }
+
+    _cloudShowTip(msg) {
+        var tip = document.getElementById('cloudImgTip');
+        if (!tip) {
+            tip = document.createElement('div');
+            tip.id = 'cloudImgTip';
+            tip.style.cssText = 'position:fixed;top:30px;left:50%;transform:translateX(-50%);z-index:10002;color:#fff;font-size:14px;background:rgba(0,0,0,0.6);padding:8px 20px;border-radius:20px;pointer-events:none;transition:opacity 0.3s;';
+            document.body.appendChild(tip);
+        }
+        tip.textContent = msg;
+        tip.style.opacity = '1';
+        clearTimeout(tip._t);
+        tip._t = setTimeout(function() { tip.style.opacity = '0'; }, 1500);
     }
 
     /**

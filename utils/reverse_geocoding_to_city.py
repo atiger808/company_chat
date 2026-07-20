@@ -60,3 +60,38 @@ def baidu_geocoding(latitude, longitude, ak, coordtype='gcj02ll'):
         return None
 
 
+
+def baidu_convert_WGS84ToBD09(lng, lat, ak):
+    """
+    百度坐标转换接口(WGS84 转 BD09 坐标 (通过百度 API))
+    :param lng:
+    :param lat:
+    :return:
+    """
+    url = "http://api.map.baidu.com/geoconv/v1/"
+    params = {
+        "ak": f"{ak}",
+        "output": "json",
+        "coords": f"{lng},{lat}",
+        "from": 1,
+        "to": 5,
+    }
+    try:
+        response = requests.get(url=url, params=params)
+        logger.info(f"url: {response.url}")
+        if response.status_code == 200:
+            data = response.json()
+            return data
+        else:
+            return None
+    except Exception as e:
+        logger.error(f"百度坐标转换接口异常: {e}")
+        return None
+
+
+# http://api.map.baidu.com/marker?location=29.312114603189254,120.00984774792425&title=考勤打卡点&content=正常打卡&output=html&coord_type=bd09ll
+# https://api.map.baidu.com/marker?location=29.31575589061768,120.02093746264583&title=考勤打卡点&content=正常打卡&output=html&coord_type=bd09ll
+
+# http://api.map.baidu.com/marker?location=29.312114603189254,120.00984774792425&title=考勤打卡点&content=正常打卡&output=html&coord_type=gcj02ll
+
+

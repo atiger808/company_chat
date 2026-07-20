@@ -16,6 +16,7 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
             'clock_type', 'clock_type_display',
             'clock_time', 'date', 'latitude', 'longitude', 'location',
             'device', 'status', 'status_display', 'remark', 'reverse_geocoding',
+            'bd09_latitude', 'bd09_longitude', 'ip_address', 'user_agent',
         ]
         read_only_fields = ['user', 'clock_time']
 
@@ -42,6 +43,8 @@ class AttendanceClockSerializer(serializers.Serializer):
     device = serializers.CharField(required=False, allow_blank=True, max_length=255)
     remark = serializers.CharField(required=False, allow_blank=True, max_length=500)
     reverse_geocoding = serializers.JSONField(required=False, allow_null=True)
+    ip_address = serializers.CharField(required=False, allow_blank=True, max_length=50)
+    user_agent = serializers.CharField(required=False, allow_blank=True)
 
 
 class ApprovalAssigneeSerializer(serializers.ModelSerializer):
@@ -151,12 +154,49 @@ class ApprovalRequestSerializer(serializers.ModelSerializer):
         return obj.get_approval_mode_display()
 
     def get_logs(self, obj):
-        logs = obj.logs.select_related('operator').all()
-        return ApprovalLogSerializer(logs, many=True).data
+        logs = list(obj.logs.select_related('operator').all())
+        serialized = ApprovalLogSerializer(logs, many=True).data
+        # 将发起人作为第一条记录
+        applicant = obj.applicant
+        serialized.append({
+            'id': 0,
+            'operator': applicant.id,
+            'operator_name': applicant.real_name or applicant.username,
+            'action': 'submit',
+            'action_display': '提交审批',
+            'comment': '发起审批申请',
+            'created_at': obj.created_at.isoformat() if obj.created_at else '',
+        })
+        # 按操作时间正序排列（时间线顺序）
+        serialized.sort(key=lambda x: x.get('created_at', ''))
+        return serialized
 
     def get_approval_nodes(self, obj):
-        nodes = obj.approval_nodes.prefetch_related('assignees__user').all()
-        return ApprovalNodeSerializer(nodes, many=True).data
+        nodes = list(obj.approval_nodes.prefetch_related('assignees__user').all())
+        serialized = ApprovalNodeSerializer(nodes, many=True).data
+        # 将发起人作为第一个节点
+        applicant = obj.applicant
+        serialized.insert(0, {
+            'id': 0,
+            'node_type': 'initiator',
+            'node_type_display': '发起人',
+            'user': applicant.id,
+            'user_name': applicant.real_name or applicant.username,
+            'department': None,
+            'department_name': '',
+            'order': -1,
+            'assignees': [{
+                'id': 0,
+                'user': applicant.id,
+                'user_name': applicant.real_name or applicant.username,
+                'user_avatar': applicant.get_avatar_url() if hasattr(applicant, 'get_avatar_url') else '',
+                'status': 'approved',
+                'status_display': '已发起',
+                'comment': '',
+                'operated_at': obj.created_at.isoformat() if obj.created_at else None,
+            }]
+        })
+        return serialized
 
 
 class ApprovalListSerializer(serializers.ModelSerializer):
@@ -218,7 +258,7 @@ class ApprovalCreateSerializer(serializers.Serializer):
     amount = serializers.DecimalField(required=False, allow_null=True, max_digits=12, decimal_places=2)
     expense_type = serializers.ChoiceField(choices=ApprovalRequest.EXPENSE_TYPE_CHOICES, required=False, allow_blank=True)
     expense_date = serializers.DateField(required=False, allow_null=True)
-    attachments = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    attachments = serializers.JSONField(required=False, default=list)
     sign_type = serializers.ChoiceField(choices=[('countersign', '会签'), ('orsign', '或签')], required=False, default='orsign')
     approval_mode = serializers.ChoiceField(choices=[('sequential', '顺序审批'), ('parallel', '并行审批')], required=False, default='parallel')
     approver_nodes = serializers.ListField(child=serializers.DictField(), required=False, default=[])
@@ -226,3 +266,21 @@ class ApprovalCreateSerializer(serializers.Serializer):
 
 class ApprovalActionSerializer(serializers.Serializer):
     comment = serializers.CharField(required=False, allow_blank=True, max_length=500)
+
+
+class ApprovalDraftSerializer(serializers.Serializer):
+    """存草稿/重新编辑 序列化器"""
+    approval_type = serializers.ChoiceField(choices=ApprovalRequest.APPROVAL_TYPE_CHOICES, required=False)
+    title = serializers.CharField(max_length=200, required=False)
+    content = serializers.CharField(required=False, allow_blank=True)
+    department_id = serializers.IntegerField(required=False, allow_null=True)
+    start_date = serializers.DateField(required=False, allow_null=True)
+    end_date = serializers.DateField(required=False, allow_null=True)
+    duration = serializers.FloatField(required=False, allow_null=True)
+    amount = serializers.DecimalField(required=False, allow_null=True, max_digits=12, decimal_places=2)
+    expense_type = serializers.ChoiceField(choices=ApprovalRequest.EXPENSE_TYPE_CHOICES, required=False, allow_blank=True)
+    expense_date = serializers.DateField(required=False, allow_null=True)
+    attachments = serializers.JSONField(required=False, default=list)
+    sign_type = serializers.ChoiceField(choices=[('countersign', '会签'), ('orsign', '或签')], required=False, default='orsign')
+    approval_mode = serializers.ChoiceField(choices=[('sequential', '顺序审批'), ('parallel', '并行审批')], required=False, default='parallel')
+    approver_nodes = serializers.ListField(child=serializers.DictField(), required=False, default=[])

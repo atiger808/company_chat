@@ -9,6 +9,7 @@ urlpatterns = [
     path('attendance/statistics/', AttendanceViewSet.as_view({'get': 'statistics'}), name='attendance-statistics'),
     path('attendance/', AttendanceViewSet.as_view({'get': 'list'}), name='attendance-list'),
     path('attendance/<int:pk>/', AttendanceViewSet.as_view({'get': 'retrieve'}), name='attendance-detail'),
+    path('attendance/<int:pk>/convert-coords/', AttendanceViewSet.as_view({'get': 'convert_coords'}), name='attendance-convert-coords'),
 
     # OA审批
     path('approval/geocode/', ApprovalViewSet.as_view({'get': 'geocode'}), name='approval-geocode'),
@@ -17,10 +18,16 @@ urlpatterns = [
     path('approval/all-departments/', ApprovalViewSet.as_view({'get': 'all_departments'}), name='approval-all-departments'),
     path('approval/upload-attachment/', ApprovalViewSet.as_view({'post': 'upload_attachment'}), name='approval-upload'),
     path('approval/my-pending/', ApprovalViewSet.as_view({'get': 'my_pending'}), name='approval-my-pending'),
+    path('approval/draft/', ApprovalViewSet.as_view({'post': 'draft'}), name='approval-draft'),
+    path('approval/drafts/', ApprovalViewSet.as_view({'get': 'drafts'}), name='approval-drafts'),
     path('approval/', ApprovalViewSet.as_view({'get': 'list', 'post': 'create'}), name='approval-list'),
     path('approval/<int:pk>/', ApprovalViewSet.as_view({'get': 'retrieve'}), name='approval-detail'),
     path('approval/<int:pk>/approve/', ApprovalViewSet.as_view({'post': 'approve'}), name='approval-approve'),
     path('approval/<int:pk>/reject/', ApprovalViewSet.as_view({'post': 'reject'}), name='approval-reject'),
+    path('approval/<int:pk>/cancel/', ApprovalViewSet.as_view({'post': 'cancel'}), name='approval-cancel'),
+    path('approval/<int:pk>/re-edit/', ApprovalViewSet.as_view({'post': 're_edit'}), name='approval-re-edit'),
+    path('approval/<int:pk>/delete-draft/', ApprovalViewSet.as_view({'delete': 'delete_draft'}), name='approval-delete-draft'),
+    path('approval/<int:pk>/update-draft/', ApprovalViewSet.as_view({'post': 'update_draft'}), name='approval-update-draft'),
 
     # 工作通知
     path('notifications/', WorkNotificationViewSet.as_view({'get': 'list'}), name='notification-list'),

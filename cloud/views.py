@@ -134,12 +134,15 @@ class UtilsTools(object):
             is_active=True
         ).exists()
 
-    def _can_access_with_ancestors(self, folder, user):
+    def _can_access_with_ancestors(self, folder, user, file_obj=None):
         """
         🔧 检查用户是否可以访问文件夹（包括祖先文件夹的权限）
         用于钻取场景：子文件夹继承父共享文件夹的权限
         """
         if not folder:
+            # 根目录文件：检查是否为文件所有者
+            if file_obj and file_obj.owner == user:
+                return True
             return False
 
         # 如果是共享文件夹本身，直接检查
@@ -2426,7 +2429,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
         logger.info(f"{request.user} Retrieving file pk: {pk}")
         try:
             file_obj = CloudFile.objects.get(id=pk)
-            if not self._can_access_with_ancestors(file_obj.folder, request.user):
+            if not self._can_access_with_ancestors(file_obj.folder, request.user, file_obj=file_obj):
                 return Response({'error': '无操作权限'}, status=403)
             serializer = self.get_serializer(file_obj)
             return Response(serializer.data)

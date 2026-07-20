@@ -78,7 +78,7 @@ class VersionView(APIView):
         update_msg_file = os.path.join(settings.BASE_DIR, 'VERSION_MESSAGE.txt')
         if os.path.exists(update_msg_file):
             with open(update_msg_file, 'r', encoding='utf-8') as f:
-                update_message = f.read().strip()
+                update_message = '<br>'.join([i for i in f.readlines() if i.strip()])
 
         # 更新版本日志
         info = {

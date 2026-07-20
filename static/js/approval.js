@@ -12,6 +12,12 @@ class ApprovalApp {
         this._rejectId = null;
         this._attachmentFiles = [];
         this._approverNodes = [];
+        this._isReEdit = false;
+        this._reEditId = null;
+        this._previewUrls = [];
+        this._previewImgs = [];
+        this._previewCurrent = 0;
+        this.chat_login_url = '/login/';
 
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', () => this.init());
@@ -24,15 +30,32 @@ class ApprovalApp {
         const token = localStorage.getItem('access_token');
         if (!token) {
             localStorage.setItem('redirect_url', window.location.href);
-            window.location.href = '/login/';
+            window.location.href = this.chat_login_url;
             return;
         }
         await this.loadList();
     }
 
+    handleAuthError() {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('user_id');
+        localStorage.removeItem('user_type');
+        localStorage.removeItem('current_user');
+        localStorage.setItem('redirect_url', window.location.href);
+        window.location.href = this.chat_login_url;
+    }
+
     async apiGet(url) {
         const resp = await fetch(url, {headers: TokenManager.getHeaders()});
-        if (!resp.ok) throw new Error('请求失败');
+        if (!resp.ok) {
+            if (resp.status === 401) {
+                this.showToast('登录已过期，请重新登录', true)
+                this.handleAuthError();
+                return
+            }
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.error || '请求失败');
+        };
         const raw = await resp.json();
         return raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
     }
@@ -44,6 +67,10 @@ class ApprovalApp {
             body: JSON.stringify(data || {})
         });
         if (!resp.ok) {
+            if (resp.status === 401) {
+                this.showToast('登录已过期，请重新登录', true)
+                this.handleAuthError();
+            }
             const err = await resp.json().catch(() => ({}));
             throw new Error(err.error || '请求失败');
         }
@@ -79,8 +106,8 @@ class ApprovalApp {
             container.innerHTML = '<div class="empty-state"><i class="fas fa-inbox"></i><p>暂无审批记录</p></div>';
             return;
         }
-        const statusMap = {'pending': '待审批', 'approved': '已通过', 'rejected': '已驳回', 'cancelled': '已撤回'};
-        const scMap = {'pending': 'badge-info', 'approved': 'status-badge normal', 'rejected': 'status-badge late'};
+        const statusMap = {'draft': '草稿', 'pending': '待审批', 'approved': '已通过', 'rejected': '已驳回', 'cancelled': '已撤回'};
+        const scMap = {'draft': 'badge-default', 'pending': 'badge-info', 'approved': 'status-badge normal', 'rejected': 'status-badge late', 'cancelled': 'badge-default'};
         const tMap = {
             'leave': '请假',
             'overtime': '加班',
@@ -100,7 +127,7 @@ class ApprovalApp {
                 + '<div><div class="approval-item-title">' + self._escape(r.title) + '</div>'
                 + '<div class="approval-item-meta">'
                 + '<span><i class="fas fa-user"></i> ' + self._escape(r.applicant_name || '') + '</span>'
-                + '<span><i class="fas fa-tag"></i> ' + (tMap[r.approval_type] || r.approval_type) + '</span>'
+                + '<span><i class="fas fa-tag"></i> <span class="type-icon-badge type-' + r.approval_type + '"><i class="fas ' + self._typeIcon(r.approval_type) + '"></i> ' + (tMap[r.approval_type] || r.approval_type) + '</span></span>'
                 + '<span><i class="fas fa-clock"></i> ' + self._formatTime(r.created_at) + '</span>'
                 + (r.department_name ? '<span><i class="fas fa-building"></i> ' + self._escape(r.department_name) + '</span>' : '')
                 + (amt || '') + '</div></div></div></div>'
@@ -169,25 +196,83 @@ class ApprovalApp {
         this.loadList(p);
     }
 
+    selectType(type) {
+        // 更新隐藏字段
+        document.getElementById('newApprovalType').value = type;
+        // 更新选中状态
+        document.querySelectorAll('.type-card').forEach(function(c) {
+            c.classList.toggle('selected', c.dataset.type === type);
+        });
+        this.onTypeChange();
+    }
+
     onTypeChange() {
         const type = document.getElementById('newApprovalType').value;
         const isExpense = type === 'expense';
+        const hasDateFields = ['leave', 'overtime', 'trip'].includes(type);
+        // 日期行：请假/加班/出差显示
+        const dateRow = document.getElementById('dateRow');
+        if (dateRow) dateRow.style.display = hasDateFields ? 'grid' : 'none';
+        // 费用行：报销显示
         document.getElementById('expenseRow').style.display = isExpense ? 'grid' : 'none';
         document.getElementById('expenseTypeGroup').style.display = isExpense ? '' : 'none';
         document.getElementById('expenseDateGroup').style.display = isExpense ? '' : 'none';
+        // 金额行：报销/采购显示
+        var amountGroup = document.getElementById('amountGroup');
+        if (amountGroup) amountGroup.style.display = (isExpense || type === 'purchase') ? '' : 'none';
+    }
+
+    _typeIcon(type) {
+        var m = {'leave':'fa-plane-departure','overtime':'fa-clock','expense':'fa-file-invoice-dollar','trip':'fa-suitcase-rolling','purchase':'fa-shopping-cart','other':'fa-file'};
+        return m[type] || 'fa-file';
+    }
+    _statusIcon(st) {
+        var m = {'draft':'fa-pen','pending':'fa-hourglass-half','approved':'fa-check-circle','rejected':'fa-times-circle','cancelled':'fa-undo'};
+        return m[st] || 'fa-circle';
+    }
+
+    filterByTypeBtn(el, type) {
+        document.querySelectorAll('.type-filter-card').forEach(function(b) { b.classList.remove('active'); });
+        el.classList.add('active');
+        this.typeFilter = type;
+        this.loadList(1);
+    }
+
+    calcDays() {
+        var startVal = document.getElementById('newStartDate').value;
+        var endVal = document.getElementById('newEndDate').value;
+        if (startVal && endVal) {
+            var start = new Date(startVal);
+            var end = new Date(endVal);
+            if (end >= start) {
+                var diff = Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1;
+                document.getElementById('newDuration').value = diff;
+            }
+        }
     }
 
     // ==================== 新建审批 - 审批人配置 ====================
 
     async openCreateModal() {
         document.getElementById('createApprovalForm').reset();
+        document.querySelectorAll('.type-card').forEach(function(c) { c.classList.remove('selected'); });
         document.getElementById('expenseTypeGroup').style.display = 'none';
         document.getElementById('expenseDateGroup').style.display = 'none';
         document.getElementById('expenseRow').style.display = 'none';
+        var ar = document.getElementById('amountGroup');
+        if (ar) ar.style.display = 'none';
+        var dr = document.getElementById('dateRow');
+        if (dr) dr.style.display = 'none';
         document.getElementById('attachmentPreview').innerHTML = '';
         document.getElementById('attachmentPreview').style.display = 'none';
         this._attachmentFiles = [];
         this._approverNodes = [];
+        this._isReEdit = false;
+        this._reEditId = null;
+        var sdB = document.getElementById('saveDraftBtn');
+        if (sdB) sdB.textContent = '存草稿';
+        var sab = document.getElementById('submitApprovalBtn');
+        if (sab) sab.innerHTML = '<i class="fas fa-paper-plane"></i> 提交审批';
 
         // 加载审批人下拉
         try {
@@ -405,10 +490,16 @@ class ApprovalApp {
         if (amount) data.amount = parseFloat(amount);
         if (expenseType) data.expense_type = expenseType;
         if (expenseDate) data.expense_date = expenseDate;
-        if (this._attachmentFiles.length) data.attachments = this._attachmentFiles.map(function (f) { return f.url; });
+        if (this._attachmentFiles.length) data.attachments = this._attachmentFiles.map(function (f) { return {url: f.url, name: f.name}; });
 
         try {
-            await this.apiPost(OA_API_URL + '/approval/', data);
+            if (this._isReEdit && this._reEditId) {
+                await this.apiPost(OA_API_URL + '/approval/' + this._reEditId + '/re-edit/', data);
+                this._isReEdit = false;
+                this._reEditId = null;
+            } else {
+                await this.apiPost(OA_API_URL + '/approval/', data);
+            }
             this.closeModal('createApprovalModal');
             this.showToast('审批提交成功', false);
             this.loadList(1);
@@ -417,13 +508,173 @@ class ApprovalApp {
         }
     }
 
+    _gatherFormData() {
+        return {
+            approval_type: document.getElementById('newApprovalType').value,
+            title: document.getElementById('newApprovalTitle').value.trim(),
+            content: document.getElementById('newApprovalContent').value.trim(),
+            department_id: parseInt(document.getElementById('newDepartmentSelect').value),
+            start_date: document.getElementById('newStartDate').value,
+            end_date: document.getElementById('newEndDate').value,
+            duration: document.getElementById('newDuration').value,
+            amount: document.getElementById('newAmount').value,
+            expense_type: document.getElementById('newExpenseType').value,
+            expense_date: document.getElementById('newExpenseDate').value,
+            sign_type: document.getElementById('newSignType').value,
+            approval_mode: document.getElementById('newApprovalMode').value,
+        };
+    }
+
+    async saveDraft() {
+        var f = this._gatherFormData();
+        if (!f.title && !f.approval_type) {
+            var confirmed = await this.showConfirmDialog('存草稿', '标题和审批类型为空，确定要保存为草稿吗？', 'confirm');
+            if (!confirmed) return;
+        }
+        var data = {
+            approval_type: f.approval_type || 'other',
+            title: f.title || '未命名草稿',
+            content: f.content,
+            department_id: f.department_id || null,
+            sign_type: f.sign_type,
+            approval_mode: f.approval_mode,
+            approver_nodes: this._approverNodes,
+        };
+        if (f.start_date) data.start_date = f.start_date;
+        if (f.end_date) data.end_date = f.end_date;
+        if (f.duration) data.duration = parseFloat(f.duration);
+        if (f.amount) data.amount = parseFloat(f.amount);
+        if (f.expense_type) data.expense_type = f.expense_type;
+        if (f.expense_date) data.expense_date = f.expense_date;
+        if (this._attachmentFiles.length) data.attachments = this._attachmentFiles.map(function (x) { return {url: x.url, name: x.name}; });
+        try {
+            if (this._isReEdit && this._reEditId) {
+                await this.apiPost(OA_API_URL + '/approval/' + this._reEditId + '/update-draft/', data);
+            } else {
+                await this.apiPost(OA_API_URL + '/approval/draft/', data);
+            }
+            this.closeModal('createApprovalModal');
+            this.showToast('草稿已保存', false);
+            this.statusFilter = 'draft';
+            document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.toggle('active', b.dataset.status === 'draft'); });
+            this.loadList(1);
+        } catch (e) {
+            this.showAlert('保存失败', e.message);
+        }
+    }
+
+    async cancelApproval(id) {
+        var confirmed = await this.showConfirmDialog('撤销审批', '确定要撤销此审批申请吗？撤销后可以重新编辑。', 'danger');
+        if (!confirmed) return;
+        try {
+            await this.apiPost(OA_API_URL + '/approval/' + id + '/cancel/', {});
+            this.closeModal('approvalDetailModal');
+            this.showToast('已撤销', false);
+            this.loadList(this.currentPage);
+        } catch (e) {
+            this.showToast('撤销失败: ' + e.message, true);
+        }
+    }
+
+    async deleteDraft(id) {
+        var confirmed = await this.showConfirmDialog('删除草稿', '确定要删除此草稿吗？删除后无法恢复。', 'danger');
+        if (!confirmed) return;
+        try {
+            var resp = await fetch(OA_API_URL + '/approval/' + id + '/delete-draft/', {
+                method: 'DELETE',
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) throw new Error((await resp.json()).error || '删除失败');
+            this.closeModal('approvalDetailModal');
+            this.showToast('草稿已删除', false);
+            this.loadList(this.currentPage);
+        } catch (e) {
+            this.showToast('删除失败: ' + e.message, true);
+        }
+    }
+
+    async reEdit(id) {
+        try {
+            var d = await this.apiGet(OA_API_URL + '/approval/' + id + '/');
+            // 填充表单
+            document.getElementById('newApprovalType').value = d.approval_type || '';
+            document.getElementById('newApprovalTitle').value = d.title || '';
+            document.getElementById('newApprovalContent').value = d.content || '';
+            if (d.start_date) document.getElementById('newStartDate').value = d.start_date;
+            if (d.end_date) document.getElementById('newEndDate').value = d.end_date;
+            if (d.duration) document.getElementById('newDuration').value = d.duration;
+            if (d.amount) document.getElementById('newAmount').value = d.amount;
+            if (d.expense_type) document.getElementById('newExpenseType').value = d.expense_type;
+            if (d.expense_date) document.getElementById('newExpenseDate').value = d.expense_date;
+            document.getElementById('newSignType').value = d.sign_type || 'orsign';
+            document.getElementById('newApprovalMode').value = d.approval_mode || 'parallel';
+            if (d.attachments && d.attachments.length) {
+                this._attachmentFiles = d.attachments.map(function(u) {
+                    if (typeof u === 'object' && u !== null) {
+                        return {url: u.url || u, name: u.name || (u.url ? u.url.split('/').pop() : '附件')};
+                    }
+                    return {url: u, name: u.split('/').pop() || '附件'};
+                });
+                this._renderAttachments();
+            }
+            // 加载部门
+            try {
+                var deptResp = await fetch(OA_API_URL + '/approval/all-departments/', { headers: TokenManager.getHeaders() });
+                var deptData = await deptResp.json();
+                var deptOpts = deptData.results || [];
+                var deptSel = document.getElementById('newDepartmentSelect');
+                deptSel.innerHTML = '<option value="">请选择部门</option>';
+                deptOpts.forEach(function(d2) {
+                    deptSel.innerHTML += '<option value="' + d2.id + '" ' + (d.department === d2.id ? 'selected' : '') + '>' + d2.name + '</option>';
+                });
+            } catch(e) {}
+            // 加载审批人
+            try {
+                var admins = await this.apiGet(OA_API_URL + '/approval/admins/');
+                var depts = await this.apiGet(OA_API_URL + '/approval/departments/');
+                var sel = document.getElementById('approverUserSelect');
+                sel.innerHTML = '<option value="">选择审批人或部门</option>';
+                (admins.results || []).forEach(function(a) { sel.innerHTML += '<option value="user_' + a.id + '" data-type="user" data-id="' + a.id + '">' + a.name + '</option>'; });
+                (depts.results || []).forEach(function(d2) { sel.innerHTML += '<option value="dept_' + d2.id + '" data-type="department" data-id="' + d2.id + '">' + d2.name + '（部门）</option>'; });
+            } catch(e) {}
+            // 填充已选审批人节点
+            this._approverNodes = [];
+            if (d.approval_nodes) {
+                d.approval_nodes.forEach(function(n) {
+                    if (n.node_type === 'user' && n.user) {
+                        this._approverNodes.push({type: 'user', id: n.user, label: n.user_name || '用户'});
+                    } else if (n.node_type === 'department' && n.department) {
+                        this._approverNodes.push({type: 'department', id: n.department, label: n.department_name || '部门'});
+                    }
+                }, this);
+            }
+            this._renderApproverNodes();
+            this._isReEdit = true;
+            this._reEditId = id;
+            // 选中审批类型卡片
+            if (d.approval_type) this.selectType(d.approval_type);
+            // 显示费用行
+            if (d.approval_type === 'expense') {
+                document.getElementById('expenseRow').style.display = 'grid';
+                document.getElementById('expenseTypeGroup').style.display = '';
+                document.getElementById('expenseDateGroup').style.display = '';
+            }
+            document.getElementById('saveDraftBtn').textContent = '重新保存';
+            document.getElementById('submitApprovalBtn').innerHTML = '<i class="fas fa-paper-plane"></i> 重新提交';
+            document.getElementById('createApprovalModal').style.display = 'flex';
+            setTimeout(function() { document.getElementById('createApprovalModal').classList.add('show'); }, 10);
+        } catch (e) {
+            this.showAlert('加载失败', e.message);
+        }
+    }
+
     // ==================== 详情 ====================
 
     async showDetail(id) {
         try {
             const d = await this.apiGet(OA_API_URL + '/approval/' + id + '/');
-            const statusMap = {'pending': '待审批', 'approved': '已通过', 'rejected': '已驳回', 'cancelled': '已撤回'};
-            const scMap = {'pending': 'badge-info', 'approved': 'status-badge normal', 'rejected': 'status-badge late'};
+            const statusMap = {'draft': '草稿', 'pending': '待审批', 'approved': '已通过', 'rejected': '已驳回', 'cancelled': '已撤回'};
+            const scMap = {'draft': 'badge-default', 'pending': 'badge-info', 'approved': 'status-badge normal', 'rejected': 'status-badge late', 'cancelled': 'badge-default'};
             const tMap = {
                 'leave': '请假',
                 'overtime': '加班',
@@ -433,6 +684,7 @@ class ApprovalApp {
                 'other': '其他'
             };
             const defAv = '/static/images/default-avatar.png';
+            var currentUserId = parseInt(localStorage.getItem('user_id'));
 
             var modeLabel = '';
             if (d.sign_type === 'countersign') modeLabel = '会签';
@@ -441,57 +693,70 @@ class ApprovalApp {
             else modeLabel += ' · 并行审批';
 
             let html = '<div class="detail-grid">'
-                + '<div class="detail-item" style="grid-column:1/-1;"><label>申请人</label><span style="display:flex;align-items:center;gap:8px;"><img src="' + (d.applicant_avatar || defAv) + '" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">' + this._escape(d.applicant_name || '') + '</span></div>'
-                + '<div class="detail-item"><label>审批标题</label><span>' + this._escape(d.title) + '</span></div>'
-                + '<div class="detail-item"><label>审批类型</label><span>' + (tMap[d.approval_type] || d.approval_type) + '</span></div>'
-                + '<div class="detail-item"><label>所属部门</label><span>' + this._escape(d.department_name || '-') + '</span></div>'
-                + '<div class="detail-item"><label>审批方式</label><span>' + modeLabel + '</span></div>'
-                + '<div class="detail-item"><label>状态</label><span class="' + (scMap[d.status] || '') + '">' + (statusMap[d.status] || d.status) + '</span></div>'
-                + '<div class="detail-item"><label>创建时间</label><span>' + this._formatTime(d.created_at) + '</span></div>'
-                + '<div class="detail-item"><label>更新时间</label><span>' + this._formatTime(d.updated_at) + '</span></div>';
+                + '<div class="detail-item" style="grid-column:1/-1;"><label><i class="fas fa-user-circle" style="color:var(--primary-color,#409eff);"></i> 申请人</label><span style="display:flex;align-items:center;gap:8px;"><img src="' + (d.applicant_avatar || defAv) + '" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">' + (d.applicant === currentUserId ? '我' : this._escape(d.applicant_name || '')) + '</span></div>'
+                + '<div class="detail-item"><label><i class="fas fa-tag" style="color:#409eff;"></i> 审批标题</label><span>' + this._escape(d.title) + '</span></div>'
+                + '<div class="detail-item"><label><i class="fas fa-list" style="color:#67c23a;"></i> 审批类型</label><span><span class="type-icon-badge type-' + d.approval_type + '"><i class="fas ' + this._typeIcon(d.approval_type) + '"></i> ' + (tMap[d.approval_type] || d.approval_type) + '</span></span></div>'
+                + '<div class="detail-item"><label><i class="fas fa-building" style="color:#e6a23c;"></i> 所属部门</label><span>' + this._escape(d.department_name || '-') + '</span></div>'
+                + '<div class="detail-item"><label><i class="fas fa-sitemap" style="color:#9b59b6;"></i> 审批方式</label><span>' + modeLabel + '</span></div>'
+                + '<div class="detail-item"><label><i class="fas fa-info-circle" style="color:#909399;"></i> 状态</label><span class="' + (scMap[d.status] || '') + '"><i class="fas ' + this._statusIcon(d.status) + '" style="margin-right:4px;"></i>' + (statusMap[d.status] || d.status) + '</span></div>'
+                + '<div class="detail-item"><label><i class="fas fa-clock" style="color:#909399;"></i> 创建时间</label><span>' + this._formatTime(d.created_at) + '</span></div>'
+                + '<div class="detail-item"><label><i class="fas fa-sync" style="color:#909399;"></i> 更新时间</label><span>' + this._formatTime(d.updated_at) + '</span></div>';
 
-            if (d.start_date) html += '<div class="detail-item"><label>开始日期</label><span>' + d.start_date + '</span></div>';
-            if (d.end_date) html += '<div class="detail-item"><label>结束日期</label><span>' + d.end_date + '</span></div>';
-            if (d.duration) html += '<div class="detail-item"><label>天数</label><span>' + d.duration + '</span></div>';
-            if (d.amount) html += '<div class="detail-item"><label>金额</label><span>¥' + parseFloat(d.amount).toFixed(2) + '</span></div>';
-            if (d.expense_type) html += '<div class="detail-item"><label>费用类型</label><span>' + (d.expense_type_display || d.expense_type) + '</span></div>';
-            if (d.expense_date) html += '<div class="detail-item"><label>费用日期</label><span>' + d.expense_date + '</span></div>';
-            if (d.approver_comment) html += '<div class="detail-item" style="grid-column:1/-1;"><label>审批意见</label><span>' + this._escape(d.approver_comment) + '</span></div>';
+            if (d.start_date) html += '<div class="detail-item"><label><i class="fas fa-calendar-alt" style="color:var(--primary-color,#409eff);"></i> 开始日期</label><span>' + d.start_date + '</span></div>';
+            if (d.end_date) html += '<div class="detail-item"><label><i class="fas fa-calendar-check" style="color:#67c23a;"></i> 结束日期</label><span>' + d.end_date + '</span></div>';
+            if (d.duration) html += '<div class="detail-item"><label><i class="fas fa-clock" style="color:#e6a23c;"></i> 天数</label><span>' + d.duration + '</span></div>';
+            if (d.amount) html += '<div class="detail-item"><label><i class="fas fa-money-bill-wave" style="color:#67c23a;"></i> 金额</label><span>¥' + parseFloat(d.amount).toFixed(2) + '</span></div>';
+            if (d.expense_type) html += '<div class="detail-item"><label><i class="fas fa-tags" style="color:#e6a23c;"></i> 费用类型</label><span>' + (d.expense_type_display || d.expense_type) + '</span></div>';
+            if (d.expense_date) html += '<div class="detail-item"><label><i class="fas fa-calendar-day" style="color:#409eff;"></i> 费用日期</label><span>' + d.expense_date + '</span></div>';
+            if (d.approver_comment) html += '<div class="detail-item" style="grid-column:1/-1;"><label><i class="fas fa-comment-dots" style="color:#e6a23c;"></i> 审批意见</label><span>' + this._escape(d.approver_comment) + '</span></div>';
 
             // 附件预览
             if (d.attachments && d.attachments.length) {
-                html += '<div class="detail-item full-width"><label>附件</label><div style="display:flex;flex-wrap:wrap;gap:8px;">';
-                d.attachments.forEach(function (url) {
-                    var name = url.split('/').pop() || '附件';
+                var attachUrls = d.attachments;
+                html += '<div class="detail-item full-width"><label><i class="fas fa-paperclip" style="color:#909399;"></i> 附件</label><div style="display:flex;flex-wrap:wrap;gap:8px;">';
+                attachUrls.forEach(function (url, idx) {
+                    var name = url;
+                    var origName = '';
+                    if (typeof url === 'object' && url !== null) {
+                        name = url.name || '附件';
+                        origName = url.name || '';
+                        url = url.url || url;
+                    } else {
+                        name = (url || '').split('/').pop() || '附件';
+                        origName = name;
+                    }
                     var isImg = name.match(/\.(jpg|jpeg|png|gif|webp)$/i);
                     if (isImg) {
-                        html += '<a href="' + url + '" target="_blank" style="display:inline-block;"><img src="' + url + '" style="width:80px;height:80px;border-radius:6px;object-fit:cover;border:1px solid var(--border-color,#dcdfe6);" title="' + name + '"></a>';
+                        html += '<a href="javascript:void(0)" onclick="approvalApp._previewImage(' + idx + ')" style="display:inline-block;" title="' + approvalApp._escape(origName) + '"><img src="' + url + '" style="width:80px;height:80px;border-radius:6px;object-fit:cover;border:1px solid var(--border-color,#dcdfe6);cursor:pointer;" title="' + approvalApp._escape(origName) + '"></a>';
                     } else {
-                        html += '<a href="' + url + '" target="_blank" style="display:inline-flex;align-items:center;gap:4px;padding:6px 10px;background:var(--bg-secondary,#f5f7fa);border-radius:6px;text-decoration:none;color:var(--text-primary);font-size:12px;"><i class="fas fa-paperclip" style="color:var(--primary-color,#409eff);"></i>' + name + '</a>';
+                        html += '<a href="' + url + '" target="_blank" style="display:inline-flex;align-items:center;gap:4px;padding:6px 10px;background:var(--bg-secondary,#f5f7fa);border-radius:6px;text-decoration:none;color:var(--text-primary);font-size:12px;max-width:200px;" title="' + approvalApp._escape(origName) + '"><i class="fas fa-paperclip" style="color:var(--primary-color,#409eff);flex-shrink:0;"></i><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + approvalApp._escape(origName) + '</span></a>';
                     }
                 });
                 html += '</div></div>';
+                // 保存附件URL列表供预览使用
+                this._previewUrls = attachUrls;
             }
 
-            if (d.content) html += '<div class="detail-item full-width"><label>审批内容</label><span>' + this._escape(d.content) + '</span></div>';
+            if (d.content) html += '<div class="detail-item full-width"><label><i class="fas fa-align-left" style="color:#606266;"></i> 审批内容</label><span>' + this._escape(d.content) + '</span></div>';
             html += '</div>';
 
             // 审批节点进度
             if (d.approval_nodes && d.approval_nodes.length) {
                 html += '<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-color,#ebeef5);">'
-                    + '<h4 style="font-size:15px;margin:0 0 12px 0;"><i class="fas fa-users"></i> 审批节点</h4>';
+                    + '<h4 style="font-size:15px;margin:0 0 12px 0;"><i class="fas fa-users" style="color:var(--primary-color,#409eff);margin-right:6px;"></i>审批节点</h4>';
                 d.approval_nodes.forEach(function (node, ni) {
-                    var icon = node.node_type === 'department' ? 'fa-building' : 'fa-user';
+                    var icon = node.node_type === 'department' ? 'fa-building' : (node.node_type === 'initiator' ? 'fa-play-circle' : 'fa-user');
                     var label = node.user_name || node.department_name || ('节点' + (ni + 1));
+                    var typeLabel = node.node_type === 'department' ? '部门审批' : (node.node_type === 'initiator' ? '发起人' : '用户审批');
                     html += '<div style="margin-bottom:12px;padding:10px 14px;background:var(--bg-secondary,#f5f7fa);border-radius:8px;border-left:3px solid var(--primary-color,#409eff);">'
-                        + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><i class="fas ' + icon + '" style="color:var(--primary-color,#409eff);font-size:13px;"></i><span style="font-weight:600;font-size:14px;">' + label + '</span><span style="font-size:11px;color:var(--text-light,#909399);background:#fff;padding:1px 8px;border-radius:4px;">' + (node.node_type === 'department' ? '部门审批' : '用户审批') + '</span></div>';
+                        + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><i class="fas ' + icon + '" style="color:var(--primary-color,#409eff);font-size:13px;"></i><span style="font-weight:600;font-size:14px;">' + label + '</span><span style="font-size:11px;color:var(--text-light,#909399);background:#fff;padding:1px 8px;border-radius:4px;">' + typeLabel + '</span></div>';
                     (node.assignees || []).forEach(function (as) {
                         var stCls = as.status === 'approved' ? 'status-badge normal' : as.status === 'rejected' ? 'status-badge late' : 'badge-info';
-                        var stTxt = as.status === 'approved' ? '已通过' : as.status === 'rejected' ? '已驳回' : '待审批';
+                        var stTxt = as.status_display || (as.status === 'approved' ? '已通过' : as.status === 'rejected' ? '已驳回' : '待审批');
                         var av = as.user_avatar || defAv;
                         html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#fff;border-radius:6px;margin-bottom:4px;">'
                             + '<img src="' + av + '" style="width:28px;height:28px;border-radius:50%;object-fit:cover;">'
-                            + '<span style="flex:1;font-size:13px;">' + (as.user_name || '') + '</span>'
+                            + '<span style="flex:1;font-size:13px;">' + (as.user === currentUserId ? '我' : (as.user_name || '')) + '</span>'
                             + '<span class="' + stCls + '" style="font-size:11px;">' + stTxt + '</span>'
                             + (as.comment ? '<span style="font-size:12px;color:var(--text-light);">: ' + as.comment + '</span>' : '')
                             + '</div>';
@@ -504,12 +769,13 @@ class ApprovalApp {
             // 审批日志时间线
             if (d.logs && d.logs.length) {
                 html += '<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-color,#ebeef5);">'
-                    + '<h4 style="font-size:15px;margin:0 0 12px 0;"><i class="fas fa-history"></i> 审批记录</h4>'
+                    + '<h4 style="font-size:15px;margin:0 0 12px 0;"><i class="fas fa-history" style="color:#9b59b6;margin-right:6px;"></i>审批记录</h4>'
                     + '<div class="approval-timeline">';
                 d.logs.forEach(function (log) {
-                    var actionText = log.action === 'approve' ? '通过' : '驳回';
+                    var actionText = log.action_display || (log.action === 'approve' ? '通过' : log.action === 'reject' ? '驳回' : log.action === 'resubmit' ? '重新提交' : log.action === 'cancel' ? '撤回' : '驳回');
+                    var operatorName = (log.operator === currentUserId) ? '我' : (log.operator_name || '系统');
                     html += '<div class="timeline-item ' + log.action + '">'
-                        + '<div class="timeline-header">' + (log.operator_name || '系统') + ' ' + actionText + '</div>'
+                        + '<div class="timeline-header">' + operatorName + ' ' + actionText + '</div>'
                         + '<div class="timeline-time">' + (log.created_at ? new Date(log.created_at).toLocaleString() : '') + '</div>'
                         + (log.comment ? '<div class="timeline-comment">' + log.comment + '</div>' : '') + '</div>';
                 });
@@ -518,16 +784,69 @@ class ApprovalApp {
 
             document.getElementById('approvalDetailBody').innerHTML = html;
 
-            // 底部按钮
-            const footer = document.getElementById('approvalDetailFooter');
-            const isAdmin = localStorage.getItem('user_type') === 'super_admin' || localStorage.getItem('user_type') === 'admin';
-            if (d.status === 'pending') {
-                footer.innerHTML = '<button class="btn btn-primary" onclick="approvalApp.approve(' + d.id + ')"><i class="fas fa-check"></i> 通过</button>'
-                    + ' <button class="btn btn-danger" onclick="approvalApp.openRejectModal(' + d.id + ')"><i class="fas fa-times"></i> 驳回</button>'
-                    + ' <button class="btn btn-secondary" onclick="approvalApp.closeModal(\'approvalDetailModal\')">关闭</button>';
-            } else {
-                footer.innerHTML = '<button class="btn btn-secondary" onclick="approvalApp.closeModal(\'approvalDetailModal\')">关闭</button>';
+            // 设置副标题（截取过长标题）
+            var subEl = document.getElementById('approvalDetailSubtitle');
+            if (subEl) {
+                var titleText = d.title || '';
+                subEl.textContent = titleText.length > 30 ? titleText.substring(0, 27) + '...' : titleText;
             }
+
+            // 权限判断
+            var userType = localStorage.getItem('user_type');
+            var isApplicant = d.applicant === currentUserId;
+            var isSuperAdmin = userType === 'super_admin';
+            var isApprover = false;
+            var isActiveApprover = false;
+            if (d.approval_nodes) {
+                for (var ni = 0; ni < d.approval_nodes.length; ni++) {
+                    var node = d.approval_nodes[ni];
+                    if (node.node_type === 'initiator') continue;
+                    // 判断此节点是否已到达（顺序审批仅当前节点，并行审批全部节点）
+                    var isNodeActive = (d.approval_mode !== 'sequential') || (node.order === d.current_node_order);
+                    if (node.assignees) {
+                        for (var ai = 0; ai < node.assignees.length; ai++) {
+                            if (node.assignees[ai].user === currentUserId) {
+                                isApprover = true;
+                                if (isNodeActive) isActiveApprover = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 底部按钮 — 根据角色显示
+            const footer = document.getElementById('approvalDetailFooter');
+            if (d.status === 'pending') {
+                var btns = '';
+                if (isActiveApprover || isSuperAdmin) {
+                    btns += '<button class="btn btn-primary" onclick="approvalApp.approve(' + d.id + ')"><i class="fas fa-check"></i> 通过</button>'
+                        + ' <button class="btn btn-danger" onclick="approvalApp.openRejectModal(' + d.id + ')"><i class="fas fa-times"></i> 驳回</button>';
+                }
+                if (isApplicant) {
+                    btns += ' <button class="btn btn-secondary" onclick="approvalApp.cancelApproval(' + d.id + ')"><i class="fas fa-undo"></i> 撤销</button>';
+                }
+                btns += ' <button class="btn btn-secondary" onclick="approvalApp.closeModal(\'approvalDetailModal\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
+                footer.innerHTML = btns;
+            } else if (d.status === 'cancelled' || d.status === 'rejected') {
+                var btns = '';
+                if (isApplicant) {
+                    btns += '<button class="btn btn-primary" onclick="approvalApp.closeModal(\'approvalDetailModal\');setTimeout(function(){approvalApp.reEdit(' + d.id + ')},200)"><i class="fas fa-edit"></i> 重新编辑</button>';
+                }
+                btns += ' <button class="btn btn-secondary" onclick="approvalApp.closeModal(\'approvalDetailModal\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
+                footer.innerHTML = btns;
+            } else if (d.status === 'draft') {
+                var btns = '';
+                if (isApplicant) {
+                    btns += '<button class="btn btn-primary" onclick="approvalApp.closeModal(\'approvalDetailModal\');setTimeout(function(){approvalApp.reEdit(' + d.id + ')},200)"><i class="fas fa-edit"></i> 继续编辑</button>'
+                        + ' <button class="btn btn-danger" onclick="approvalApp.deleteDraft(' + d.id + ')"><i class="fas fa-trash"></i> 删除</button>';
+                }
+                btns += ' <button class="btn btn-secondary" onclick="approvalApp.closeModal(\'approvalDetailModal\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
+                footer.innerHTML = btns;
+            } else {
+                footer.innerHTML = '<button class="btn btn-secondary" onclick="approvalApp.closeModal(\'approvalDetailModal\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
+            }
+
 
             document.getElementById('approvalDetailModal').style.display = 'flex';
             setTimeout(function () {
@@ -536,6 +855,137 @@ class ApprovalApp {
         } catch (e) {
             console.error('加载详情失败:', e);
         }
+    }
+
+    // ==================== 图片预览 ====================
+
+    _previewImage(idx) {
+        var urls = this._previewUrls || [];
+        var _getUrl = function(u) { return (typeof u === 'object' && u !== null) ? (u.url || u) : u; };
+        var _getName = function(u) { return (typeof u === 'object' && u !== null) ? (u.name || '') : ''; };
+        var imgs = urls.filter(function(u) {
+            var fn = _getName(u) || _getUrl(u).split('/').pop() || '';
+            return fn.match(/\.(jpg|jpeg|png|gif|webp)$/i);
+        });
+        if (!imgs.length) return;
+        var currentIdx = 0;
+        for (var i = 0; i < imgs.length; i++) {
+            if (urls.indexOf(imgs[i]) >= idx && urls.indexOf(imgs[i]) <= idx) {
+                currentIdx = i;
+                break;
+            }
+        }
+        var overlay = document.createElement('div');
+        overlay.id = 'approvalPreviewOverlay';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;z-index:10000;background:rgba(0,0,0,0.85);';
+        var prevDisplay = imgs.length <= 1 ? 'opacity:0.2;cursor:default;pointer-events:none;' : '';
+        overlay.innerHTML = '<span onclick="approvalApp._closePreview()" style="position:fixed;top:20px;right:30px;color:#fff;font-size:32px;cursor:pointer;z-index:10001;"><i class="fas fa-times"></i></span>'
+            + '<span onclick="approvalApp._previewNav(-1)" id="approvalPrevBtn" style="position:fixed;left:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + prevDisplay + '"><i class="fas fa-chevron-left"></i></span>'
+            + '<span onclick="approvalApp._previewNav(1)" id="approvalNextBtn" style="position:fixed;right:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + prevDisplay + '"><i class="fas fa-chevron-right"></i></span>'
+            + '<img id="previewMainImg" src="' + _getUrl(imgs[currentIdx]) + '" style="max-width:90vw;max-height:90vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);">'
+            + '<div id="previewCounter" style="position:fixed;bottom:30px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,0.7);font-size:14px;z-index:10001;">' + (currentIdx + 1) + ' / ' + imgs.length + '</div>';
+        document.body.appendChild(overlay);
+        this._previewImgs = imgs;
+        this._previewCurrent = currentIdx;
+        this._previewOverlay = overlay;
+        var self = this;
+        var keyHandler = function(e) {
+            if (e.key === 'ArrowLeft') { self._previewNav(-1); e.preventDefault(); }
+            else if (e.key === 'ArrowRight') { self._previewNav(1); e.preventDefault(); }
+            else if (e.key === 'Escape') { self._closePreview(); e.preventDefault(); }
+        };
+        this._previewKeyHandler = keyHandler;
+        document.addEventListener('keydown', keyHandler);
+        overlay.addEventListener('click', function(e) {
+            if (e.target === overlay) self._closePreview();
+        });
+    }
+
+    _closePreview() {
+        if (this._previewOverlay) {
+            this._previewOverlay.remove();
+            this._previewOverlay = null;
+        }
+        if (this._previewKeyHandler) {
+            document.removeEventListener('keydown', this._previewKeyHandler);
+            this._previewKeyHandler = null;
+        }
+    }
+
+    _previewNav(dir) {
+        if (!this._previewImgs || !this._previewImgs.length) return;
+        var len = this._previewImgs.length;
+        if (dir < 0 && this._previewCurrent <= 0) { this._approvalShowTip('已是第一张'); return; }
+        if (dir > 0 && this._previewCurrent >= len - 1) { this._approvalShowTip('已是最后一张'); return; }
+        this._previewCurrent += dir;
+        var img = document.getElementById('previewMainImg');
+        var item = this._previewImgs[this._previewCurrent];
+        var src = (typeof item === 'object' && item !== null) ? (item.url || item) : item;
+        if (img) img.src = src;
+        var counter = document.getElementById('previewCounter');
+        if (counter) counter.textContent = (this._previewCurrent + 1) + ' / ' + this._previewImgs.length;
+        var p = document.getElementById('approvalPrevBtn');
+        var n = document.getElementById('approvalNextBtn');
+        if (p) { p.style.opacity = this._previewCurrent <= 0 ? '0.2' : '1'; p.style.cursor = this._previewCurrent <= 0 ? 'default' : 'pointer'; }
+        if (n) { n.style.opacity = this._previewCurrent >= this._previewImgs.length - 1 ? '0.2' : '1'; n.style.cursor = this._previewCurrent >= this._previewImgs.length - 1 ? 'default' : 'pointer'; }
+    }
+
+    _approvalShowTip(msg) {
+        var tip = document.getElementById('approvalShowTip');
+        if (!tip) {
+            tip = document.createElement('div');
+            tip.id = 'approvalShowTip';
+            tip.style.cssText = 'position:fixed;top:30px;left:50%;transform:translateX(-50%);z-index:10002;color:#fff;font-size:14px;background:rgba(0,0,0,0.6);padding:8px 20px;border-radius:20px;pointer-events:none;transition:opacity 0.3s;';
+            document.body.appendChild(tip);
+        }
+        tip.textContent = msg;
+        tip.style.opacity = '1';
+        clearTimeout(tip._t);
+        tip._t = setTimeout(function() { tip.style.opacity = '0'; }, 1500);
+    }
+
+    // ==================== 打印 ====================
+    _printDetail() {
+        if (!this._printStyle) {
+            this._printStyle = document.createElement('style');
+            this._printStyle.textContent = '@media print{'
+                + '@page{margin:12mm 15mm;}'
+                + 'body{font-family:"Microsoft YaHei","PingFang SC","Helvetica Neue",Arial,sans-serif;color:#333;background:#fff;font-size:14px;line-height:1.6;}'
+                + '.oa-container,#createApprovalModal,#rejectModal{display:none!important;}'
+                + '#approvalDetailModal{position:static!important;display:block!important;background:none!important;backdrop-filter:none!important;opacity:1!important;}'
+                + '.modal-content{box-shadow:none!important;max-width:100%!important;border-radius:0!important;padding:0;border:none!important;overflow:visible!important;}'
+                + '.modal-header,.modal-footer{display:none!important;}'
+                + '.modal-body{padding:0!important;}'
+                + '.detail-grid{display:block!important;}'
+                + '.detail-item{display:flex;padding:6px 0;border-bottom:1px solid #eee;page-break-inside:avoid;}'
+                + '.detail-item label{width:100px;min-width:100px;font-size:12px;color:#888;font-weight:600;padding-right:12px;flex-shrink:0;}'
+                + '.detail-item span{flex:1;font-size:14px;color:#333;}'
+                + '.detail-item.full-width{display:block;}'
+                + '.detail-item.full-width label{display:block;width:auto;margin-bottom:4px;}'
+                + '.detail-item.full-width span{display:block;}'
+                + '.approval-timeline{margin-top:16px;page-break-inside:avoid;}'
+                + '.timeline-item{padding:6px 0 6px 20px;border-left:2px solid #ddd;margin-left:4px;page-break-inside:avoid;}'
+                + '.timeline-item::before{left:-6px;top:10px;width:10px;height:10px;}'
+                + '.timeline-header{font-size:13px;font-weight:600;color:#333;}'
+                + '.timeline-time{font-size:11px;color:#999;}'
+                + '.timeline-comment{font-size:12px;color:#666;padding:6px 10px;background:#f8f8f8;border-radius:4px;margin-top:4px;}'
+                + 'h4{font-size:15px;margin:20px 0 12px!important;padding-top:16px;border-top:2px solid #333;}'
+                + 'h4 i{display:none;}'
+                + '.status-badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:12px;}'
+                + '.status-badge.normal{background:#f0f9eb;color:#67c23a;}'
+                + '.status-badge.late{background:#fef0f0;color:#f56c6c;}'
+                + '.badge-info{background:#e3f2fd;color:#1976d2;}'
+                + '.badge-default{background:#f5f5f5;color:#999;}'
+                + 'img[onclick]{max-width:120px!important;max-height:120px!important;}'
+                + 'a[href]{color:#409eff!important;text-decoration:underline!important;}'
+                + '.btn{display:none!important;}'
+                + '.detail-item a[target="_blank"]{display:inline-flex!important;align-items:center;padding:4px 8px;background:#f5f7fa;border-radius:4px;font-size:11px;color:#666!important;text-decoration:none!important;max-width:180px;}'
+                + '.detail-item a[target="_blank"] i{color:#409eff!important;margin-right:4px;}'
+                + '.detail-item a[target="_blank"] span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
+                + '}';
+            document.head.appendChild(this._printStyle);
+        }
+        setTimeout(function(){ window.print(); }, 300);
     }
 
     // ==================== 审批操作 ====================

@@ -1543,115 +1543,69 @@ class AdminChatRoomsClient {
 
     previewImage(imageUrl) {
         if (!imageUrl) return;
-
         const imageList = this._collectImageList();
         let currentIndex = imageList.findIndex(item => item.url === imageUrl);
         if (currentIndex === -1) currentIndex = 0;
-
-        console.log('当前图片索引:', currentIndex);
-        console.log('图片列表:', imageList);
-
-        // 检查是否已有预览模态框
-        const existingModal = document.querySelector('.image-preview-modal');
-        if (existingModal) existingModal.remove();
-
-        const showNav = imageList.length > 1;
-
-        const showImage = (index) => {
-            const item = imageList[index];
-            const img = modal.querySelector('.preview-image-content');
-            // 淡出切换
-            img.style.opacity = '0';
-            setTimeout(() => {
-                img.src = item.url;
-                img.alt = item.name;
-                img.style.opacity = '1';
-            }, 100);
-            currentIndex = index;
-
-            // 更新计数显示
-            const counter = modal.querySelector('.image-nav-counter');
-            if (counter) {
-                counter.textContent = `${index + 1} / ${imageList.length}`;
-            }
-
-            // 控制左右按钮显示
-            const prevBtn = modal.querySelector('.image-nav-prev');
-            const nextBtn = modal.querySelector('.image-nav-next');
-            if (prevBtn) prevBtn.style.visibility = index <= 0 ? 'hidden' : 'visible';
-            if (nextBtn) nextBtn.style.visibility = index >= imageList.length - 1 ? 'hidden' : 'visible';
+        if (!imageList.length) return;
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;z-index:10000;background:rgba(0,0,0,0.85);';
+        var prevDisplay = imageList.length <= 1 ? 'opacity:0.2;cursor:default;pointer-events:none;' : '';
+        overlay.innerHTML = '<span onclick="this.parentNode.remove()" style="position:fixed;top:20px;right:30px;color:#fff;font-size:32px;cursor:pointer;z-index:10001;"><i class="fas fa-times"></i></span>'
+            + '<span onclick="adminChatRoomsClient._adminPreviewNav(-1)" id="adminPrevBtn" style="position:fixed;left:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + prevDisplay + '"><i class="fas fa-chevron-left"></i></span>'
+            + '<span onclick="adminChatRoomsClient._adminPreviewNav(1)" id="adminNextBtn" style="position:fixed;right:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + prevDisplay + '"><i class="fas fa-chevron-right"></i></span>'
+            + '<img id="adminPreviewMainImg" src="' + imageList[currentIndex].url + '" style="max-width:90vw;max-height:90vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);">'
+            + '<div id="adminPreviewCounter" style="position:fixed;bottom:30px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,0.7);font-size:14px;z-index:10001;">' + (currentIndex + 1) + ' / ' + imageList.length + '</div>';
+        document.body.appendChild(overlay);
+        this._adminPreviewImgs = imageList;
+        this._adminPreviewCurrent = currentIndex;
+        this._adminPreviewOverlay = overlay;
+        var self = this;
+        this._adminPreviewKeyHandler = function(e) {
+            if (e.key === 'ArrowLeft') { self._adminPreviewNav(-1); e.preventDefault(); }
+            else if (e.key === 'ArrowRight') { self._adminPreviewNav(1); e.preventDefault(); }
+            else if (e.key === 'Escape') { self._adminPreviewCleanup(); e.preventDefault(); }
         };
-
-        const modal = document.createElement('div');
-        modal.className = 'image-preview-modal';
-        modal.innerHTML = `
-            <div class="image-preview-content">
-                <span class="close-preview">&times;</span>
-                ${showNav ? `<span class="image-nav-counter">${currentIndex + 1} / ${imageList.length}</span>` : ''}
-                <img class="preview-image-content" src="${imageUrl}" alt="${imageList[currentIndex]?.name || '图片预览'}">
-                ${showNav ? `
-                <button class="image-nav-btn image-nav-prev" title="上一张">
-                    <i class="fas fa-chevron-left"></i>
-                </button>
-                <button class="image-nav-btn image-nav-next" title="下一张">
-                    <i class="fas fa-chevron-right"></i>
-                </button>` : ''}
-            </div>
-        `;
-        document.body.appendChild(modal);
-
-        const closeModal = () => {
-            modal.style.opacity = '0';
-            setTimeout(() => modal.remove(), 300);
-        };
-
-        // 绑定关闭事件
-        const closeBtn = modal.querySelector('.close-preview');
-        closeBtn.onclick = closeModal;
-        modal.onclick = (e) => {
-            if (e.target === modal) closeModal();
-        };
-
-        // 初始按钮状态
-        if (showNav) {
-            const prevBtn = modal.querySelector('.image-nav-prev');
-            const nextBtn = modal.querySelector('.image-nav-next');
-            if (prevBtn) prevBtn.style.visibility = currentIndex <= 0 ? 'hidden' : 'visible';
-            if (nextBtn) nextBtn.style.visibility = currentIndex >= imageList.length - 1 ? 'hidden' : 'visible';
-        }
-
-        // 绑定导航按钮事件
-        modal.querySelector('.image-nav-prev')?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (currentIndex > 0) showImage(currentIndex - 1);
+        document.addEventListener('keydown', this._adminPreviewKeyHandler);
+        overlay.addEventListener('click', function(e) {
+            if (e.target === overlay) self._adminPreviewCleanup();
         });
-        modal.querySelector('.image-nav-next')?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (currentIndex < imageList.length - 1) showImage(currentIndex + 1);
-        });
-
-        // 显示动画
-        setTimeout(() => modal.style.opacity = '1', 10);
-
-        // 键盘快捷键
-        const keyHandler = (e) => {
-            if (!modal.isConnected) {
-                document.removeEventListener('keydown', keyHandler);
-                return;
-            }
-            if (e.key === 'Escape') {
-                closeModal();
-            } else if (e.key === 'ArrowLeft' && currentIndex > 0) {
-                e.preventDefault();
-                showImage(currentIndex - 1);
-            } else if (e.key === 'ArrowRight' && currentIndex < imageList.length - 1) {
-                e.preventDefault();
-                showImage(currentIndex + 1);
-            }
-        };
-        document.addEventListener('keydown', keyHandler);
     }
 
+    _adminPreviewNav(dir) {
+        if (!this._adminPreviewImgs || !this._adminPreviewImgs.length) return;
+        var len = this._adminPreviewImgs.length;
+        if (dir < 0 && this._adminPreviewCurrent <= 0) { this._adminShowTip('已是第一张'); return; }
+        if (dir > 0 && this._adminPreviewCurrent >= len - 1) { this._adminShowTip('已是最后一张'); return; }
+        this._adminPreviewCurrent += dir;
+        var img = document.getElementById('adminPreviewMainImg');
+        var item = this._adminPreviewImgs[this._adminPreviewCurrent];
+        if (img) img.src = item.url || item;
+        var counter = document.getElementById('adminPreviewCounter');
+        if (counter) counter.textContent = (this._adminPreviewCurrent + 1) + ' / ' + this._adminPreviewImgs.length;
+        var p = document.getElementById('adminPrevBtn');
+        var n = document.getElementById('adminNextBtn');
+        if (p) { p.style.opacity = this._adminPreviewCurrent <= 0 ? '0.2' : '1'; p.style.cursor = this._adminPreviewCurrent <= 0 ? 'default' : 'pointer'; }
+        if (n) { n.style.opacity = this._adminPreviewCurrent >= this._adminPreviewImgs.length - 1 ? '0.2' : '1'; n.style.cursor = this._adminPreviewCurrent >= this._adminPreviewImgs.length - 1 ? 'default' : 'pointer'; }
+    }
+
+    _adminPreviewCleanup() {
+        if (this._adminPreviewOverlay) { this._adminPreviewOverlay.remove(); this._adminPreviewOverlay = null; }
+        if (this._adminPreviewKeyHandler) { document.removeEventListener('keydown', this._adminPreviewKeyHandler); this._adminPreviewKeyHandler = null; }
+    }
+
+    _adminShowTip(msg) {
+        var tip = document.getElementById('adminShowTip');
+        if (!tip) {
+            tip = document.createElement('div');
+            tip.id = 'adminShowTip';
+            tip.style.cssText = 'position:fixed;top:30px;left:50%;transform:translateX(-50%);z-index:10002;color:#fff;font-size:14px;background:rgba(0,0,0,0.6);padding:8px 20px;border-radius:20px;pointer-events:none;transition:opacity 0.3s;';
+            document.body.appendChild(tip);
+        }
+        tip.textContent = msg;
+        tip.style.opacity = '1';
+        clearTimeout(tip._t);
+        tip._t = setTimeout(function() { tip.style.opacity = '0'; }, 1500);
+    }
 
     // 返回聊天室列表
     backToRooms() {

@@ -21,9 +21,11 @@ from .serializers import (
     ApprovalListSerializer,
     ApprovalCreateSerializer,
     ApprovalActionSerializer,
+    ApprovalDraftSerializer,
     ApprovalLogSerializer,
 )
 from utils.encrypt_aes import encrypt_data
+from utils.request_util import get_request_ip
 
 
 def send_work_notification(user_id, title, content, notification_type='system', related_url='', extra_data=None):
@@ -52,12 +54,17 @@ def send_work_notification(user_id, title, content, notification_type='system', 
                     'title': title,
                     'content': content,
                     'related_url': related_url,
+                    'avatar_url': user.get_avatar_url() if hasattr(user, 'get_avatar_url') else '',
                     'created_at': note.created_at.isoformat() if note.created_at else '',
                 }
             }
         )
         return note
     except CustomUser.DoesNotExist:
+        logger.error(f'用户{user_id}不存在')
+        return None
+    except Exception as e:
+        logger.error(f'创建工作通知失败: {e}')
         return None
 
 
@@ -136,6 +143,8 @@ class AttendanceViewSet(viewsets.ViewSet):
             device=serializer.validated_data.get('device', ''),
             status=status_val, remark=serializer.validated_data.get('remark', ''),
             reverse_geocoding=serializer.validated_data.get('reverse_geocoding'),
+            ip_address=serializer.validated_data.get('ip_address', '') or get_request_ip(request),
+            user_agent=serializer.validated_data.get('user_agent', '') or request.META.get('HTTP_USER_AGENT', ''),
         )
         location_text = serializer.validated_data.get('location', '')
         logger.info(f'{request.user} 上班打卡 {today} status={status_val}')
@@ -154,7 +163,7 @@ class AttendanceViewSet(viewsets.ViewSet):
         if status_val == 'late':
             from accounts.models import CustomUser
             admins = CustomUser.objects.filter(
-                Q(user_type='super_admin') | Q(user_type='admin')
+                Q(user_type='super_admin')
             ).exclude(id=request.user.id)
             for admin in admins:
                 send_work_notification(
@@ -192,6 +201,8 @@ class AttendanceViewSet(viewsets.ViewSet):
             device=serializer.validated_data.get('device', ''),
             status=status_val, remark=serializer.validated_data.get('remark', ''),
             reverse_geocoding=serializer.validated_data.get('reverse_geocoding'),
+            ip_address=serializer.validated_data.get('ip_address', '') or get_request_ip(request),
+            user_agent=serializer.validated_data.get('user_agent', '') or request.META.get('HTTP_USER_AGENT', ''),
         )
         logger.info(f'{request.user} 下班打卡 {today} status={status_val}')
         location_text = serializer.validated_data.get('location', '')
@@ -222,6 +233,52 @@ class AttendanceViewSet(viewsets.ViewSet):
             'has_clock_out': clock_out is not None,
         })})
 
+    @action(detail=True, methods=['get'])
+    def convert_coords(self, request, pk=None):
+        """获取打卡记录的BD09坐标（用于百度地图），如需转换则调用百度坐标转换接口"""
+        try:
+            record = AttendanceRecord.objects.get(id=pk)
+            if request.user.user_type not in ['super_admin', 'admin'] and record.user != request.user:
+                return Response({'error': '无权查看'}, status=403)
+
+            # 如果已有BD09坐标，直接返回
+            if record.bd09_latitude is not None and record.bd09_longitude is not None:
+                return Response({
+                    'bd09_latitude': record.bd09_latitude,
+                    'bd09_longitude': record.bd09_longitude,
+                    'source': 'cache',
+                })
+
+            # 没有GPS坐标则无法转换
+            if record.latitude is None or record.longitude is None:
+                return Response({'error': '无位置信息'}, status=400)
+
+            from utils.reverse_geocoding_to_city import baidu_convert_WGS84ToBD09
+            ak = getattr(settings, 'BAIDU_MAP_SERVER_AK', '')
+            if not ak:
+                return Response({'error': '百度地图AK未配置'}, status=500)
+
+            result = baidu_convert_WGS84ToBD09(record.longitude, record.latitude, ak)
+            if result and result.get('status') == 0:
+                coords = result['result'][0]
+                bd09_lng = coords['x']
+                bd09_lat = coords['y']
+                # 保存到记录
+                record.bd09_longitude = bd09_lng
+                record.bd09_latitude = bd09_lat
+                record.save(update_fields=['bd09_longitude', 'bd09_latitude'])
+                return Response({
+                    'bd09_latitude': bd09_lat,
+                    'bd09_longitude': bd09_lng,
+                    'source': 'converted',
+                })
+            return Response({'error': '坐标转换失败'}, status=502)
+        except AttendanceRecord.DoesNotExist:
+            return Response({'error': '记录不存在'}, status=404)
+        except Exception as e:
+            logger.error(f'坐标转换异常: {e}')
+            return Response({'error': str(e)}, status=500)
+
     @action(detail=False, methods=['get'])
     def statistics(self, request):
         now = timezone.now()
@@ -250,10 +307,26 @@ class ApprovalViewSet(viewsets.ViewSet):
         status_filter = request.query_params.get('status', '').strip()
         type_filter = request.query_params.get('type', '').strip()
 
-        if user.user_type in ['super_admin', 'admin']:
+        if user.user_type == 'super_admin':
             qs = ApprovalRequest.objects.select_related('applicant', 'department').all()
         else:
-            qs = ApprovalRequest.objects.select_related('applicant', 'department').filter(applicant=user)
+            # 申请人自己的审批
+            my_approval_ids = ApprovalRequest.objects.filter(applicant=user).values_list('id', flat=True)
+            # 审批节点已到达的审批人对应的审批（并行审批全部节点，顺序审批仅当前节点）
+            active_assignee_ids = ApprovalAssignee.objects.filter(
+                user=user
+            ).exclude(
+                node__request__applicant=user
+            ).filter(
+                Q(node__request__approval_mode='parallel') |
+                Q(
+                    node__request__approval_mode='sequential',
+                    node__order=models.F('node__request__current_node_order')
+                )
+            ).values_list('node__request_id', flat=True).distinct()
+            qs = ApprovalRequest.objects.select_related('applicant', 'department').filter(
+                Q(id__in=my_approval_ids) | Q(id__in=active_assignee_ids)
+            )
 
         if status_filter:
             qs = qs.filter(status=status_filter)
@@ -283,7 +356,13 @@ class ApprovalViewSet(viewsets.ViewSet):
             approval = ApprovalRequest.objects.select_related(
                 'applicant', 'approver', 'department'
             ).prefetch_related('logs__operator', 'approval_nodes__assignees__user').get(id=pk)
-            if request.user.user_type not in ['super_admin', 'admin'] and approval.applicant != request.user:
+            # 允许：超级管理员、申请人、当前审批节点到达的审批人查看
+            can_view = (
+                request.user.user_type == 'super_admin'
+                or approval.applicant == request.user
+                or self._check_user_can_view(approval, request.user)
+            )
+            if not can_view:
                 return Response({'error': '无权查看'}, status=403)
             data = ApprovalRequestSerializer(approval, context={'request': request}).data
             return Response({'encrypt': True, 'data': encrypt_data(data)})
@@ -379,12 +458,13 @@ class ApprovalViewSet(viewsets.ViewSet):
                 approval.current_node_order = 0
                 approval.save()
 
-        # 通知审批人
+        # 通知审批人（顺序审批仅通知第一个节点）
         from accounts.models import CustomUser
-        assignees = ApprovalAssignee.objects.filter(
-            node__request=approval, status='pending'
-        ).select_related('user')
-        for asgn in assignees:
+        assignee_qs = ApprovalAssignee.objects.filter(node__request=approval, status='pending')
+        if approval.approval_mode == 'sequential':
+            first_node = approval.approval_nodes.filter(order=0).first()
+            assignee_qs = assignee_qs.filter(node=first_node) if first_node else assignee_qs.none()
+        for asgn in assignee_qs.select_related('user'):
             send_work_notification(
                 user_id=asgn.user.id,
                 title='审批待处理',
@@ -399,13 +479,23 @@ class ApprovalViewSet(viewsets.ViewSet):
         return Response({'encrypt': True, 'data': encrypt_data(data)}, status=201)
 
     def _check_user_can_approve(self, approval, user):
-        """检查用户是否有权限审批当前节点"""
+        """检查用户是否有权限审批当前节点（仅限待审批状态）"""
         if approval.approval_mode == 'sequential':
             nodes = approval.approval_nodes.filter(order=approval.current_node_order)
         else:
             nodes = approval.approval_nodes.all()
         return ApprovalAssignee.objects.filter(
             node__in=nodes, user=user, status='pending'
+        ).exists()
+
+    def _check_user_can_view(self, approval, user):
+        """检查用户是否有权限查看审批（不限制审批状态）"""
+        if approval.approval_mode == 'sequential':
+            nodes = approval.approval_nodes.filter(order=approval.current_node_order)
+        else:
+            nodes = approval.approval_nodes.all()
+        return ApprovalAssignee.objects.filter(
+            node__in=nodes, user=user
         ).exists()
 
     def _process_node_approval(self, approval, node, action, user, comment):
@@ -436,6 +526,10 @@ class ApprovalViewSet(viewsets.ViewSet):
         total = node.assignees.count()
         approved = node.assignees.filter(status='approved').count()
         rejected = node.assignees.filter(status='rejected').count()
+
+        # 如果没有审批人（如部门无管理员），自动跳过该节点
+        if total == 0:
+            return True, 'approved'
 
         if node.request.sign_type == 'orsign':
             # 或签：任一通过=节点通过，任一驳回=整体驳回
@@ -491,7 +585,8 @@ class ApprovalViewSet(viewsets.ViewSet):
         if approval.status != 'pending':
             return Response({'error': '该审批已处理'}, status=400)
 
-        if not self._check_user_can_approve(approval, request.user):
+        can_approve = self._check_user_can_approve(approval, request.user)
+        if not can_approve:
             return Response({'error': '您不在当前审批节点中'}, status=403)
 
         serializer = ApprovalActionSerializer(data=request.data)
@@ -573,7 +668,8 @@ class ApprovalViewSet(viewsets.ViewSet):
         if approval.status != 'pending':
             return Response({'error': '该审批已处理'}, status=400)
 
-        if not self._check_user_can_approve(approval, request.user):
+        can_approve = request.user.user_type == 'super_admin' or self._check_user_can_approve(approval, request.user)
+        if not can_approve:
             return Response({'error': '您不在当前审批节点中'}, status=403)
 
         serializer = ApprovalActionSerializer(data=request.data)
@@ -611,6 +707,301 @@ class ApprovalViewSet(viewsets.ViewSet):
         )
 
         logger.info(f'{request.user} 驳回审批 {approval.title}')
+        data = ApprovalRequestSerializer(approval, context={'request': request}).data
+        return Response({'encrypt': True, 'data': encrypt_data(data)})
+
+    @action(detail=False, methods=['post'])
+    def draft(self, request):
+        """保存审批草稿"""
+        serializer = ApprovalDraftSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        from accounts.models import Department
+        department_id = serializer.validated_data.get('department_id')
+        department = None
+        if department_id:
+            try:
+                department = Department.objects.get(id=department_id)
+            except Department.DoesNotExist:
+                department = request.user.department
+        else:
+            department = request.user.department
+        approval = ApprovalRequest.objects.create(
+            applicant=request.user,
+            status='draft',
+            department=department,
+            approval_type=serializer.validated_data.get('approval_type', 'other'),
+            title=serializer.validated_data.get('title', '未命名草稿'),
+            content=serializer.validated_data.get('content', ''),
+            start_date=serializer.validated_data.get('start_date'),
+            end_date=serializer.validated_data.get('end_date'),
+            duration=serializer.validated_data.get('duration'),
+            amount=serializer.validated_data.get('amount'),
+            expense_type=serializer.validated_data.get('expense_type', ''),
+            expense_date=serializer.validated_data.get('expense_date'),
+            attachments=serializer.validated_data.get('attachments', []),
+            sign_type=serializer.validated_data.get('sign_type', 'orsign'),
+            approval_mode=serializer.validated_data.get('approval_mode', 'parallel'),
+        )
+        # 保存审批人节点（草稿也保留配置）
+        approver_nodes = serializer.validated_data.get('approver_nodes', [])
+        from accounts.models import CustomUser, Department
+        for idx, node_data in enumerate(approver_nodes):
+            node_type = node_data.get('type', 'user')
+            node = ApprovalNode.objects.create(
+                request=approval, node_type=node_type, order=idx,
+            )
+            if node_type == 'user':
+                user_id = node_data.get('id')
+                try:
+                    u = CustomUser.objects.get(id=user_id)
+                    node.user = u
+                    node.save()
+                    ApprovalAssignee.objects.create(node=node, user=u)
+                except CustomUser.DoesNotExist:
+                    pass
+            elif node_type == 'department':
+                dept_id = node_data.get('id')
+                try:
+                    dept = Department.objects.get(id=dept_id)
+                    node.department = dept
+                    node.save()
+                    dept_admins = CustomUser.objects.filter(
+                        department=dept,
+                        user_type__in=['super_admin', 'admin']
+                    ).exclude(id=request.user.id)
+                    for au in dept_admins:
+                        ApprovalAssignee.objects.create(node=node, user=au)
+                except Department.DoesNotExist:
+                    pass
+        logger.info(f'{request.user} 保存审批草稿 {approval.id}')
+        data = ApprovalRequestSerializer(approval, context={'request': request}).data
+        return Response({'encrypt': True, 'data': encrypt_data(data)}, status=201)
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """撤销待审批的申请"""
+        try:
+            approval = ApprovalRequest.objects.get(id=pk)
+        except ApprovalRequest.DoesNotExist:
+            return Response({'error': '审批不存在'}, status=404)
+        if approval.status != 'pending':
+            return Response({'error': '仅待审批的申请可以撤销'}, status=400)
+        if approval.applicant != request.user:
+            return Response({'error': '只能撤销自己的申请'}, status=403)
+        approval.status = 'cancelled'
+        approval.save(update_fields=['status'])
+        logger.info(f'{request.user} 撤销审批 {approval.title}')
+        # 记录撤销日志
+        ApprovalLog.objects.create(
+            request=approval,
+            operator=request.user,
+            action='cancel',
+            comment='已撤回审批申请',
+        )
+        # 通知审批人
+        assignees = ApprovalAssignee.objects.filter(
+            node__request=approval, status='pending'
+        ).select_related('user')
+        for asgn in assignees:
+            send_work_notification(
+                user_id=asgn.user.id,
+                title='审批已撤销',
+                content=f'{request.user.real_name or request.user.username} 撤销了审批申请“{approval.title}”',
+                notification_type='approval',
+                related_url='/oa/approval/',
+                extra_data={'approval_id': approval.id, 'action': 'cancelled'},
+            )
+        data = ApprovalRequestSerializer(approval, context={'request': request}).data
+        return Response({'encrypt': True, 'data': encrypt_data(data)})
+
+    @action(detail=True, methods=['post'])
+    def re_edit(self, request, pk=None):
+        """重新编辑已撤回或已驳回的审批"""
+        try:
+            approval = ApprovalRequest.objects.get(id=pk)
+        except ApprovalRequest.DoesNotExist:
+            return Response({'error': '审批不存在'}, status=404)
+        if approval.status not in ('cancelled', 'rejected', 'draft'):
+            return Response({'error': '仅草稿、已撤回或已驳回的审批可以重新编辑'}, status=400)
+        if approval.applicant != request.user:
+            return Response({'error': '只能编辑自己的审批'}, status=403)
+        serializer = ApprovalDraftSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        # 更新字段
+        from accounts.models import Department
+        department_id = serializer.validated_data.get('department_id')
+        if department_id:
+            try:
+                approval.department = Department.objects.get(id=department_id)
+            except Department.DoesNotExist:
+                pass
+        for field in ['approval_type', 'title', 'content', 'start_date', 'end_date',
+                      'duration', 'amount', 'expense_type', 'expense_date',
+                      'sign_type', 'approval_mode']:
+            val = serializer.validated_data.get(field)
+            if val is not None:
+                setattr(approval, field, val)
+        if serializer.validated_data.get('attachments') is not None:
+            approval.attachments = serializer.validated_data['attachments']
+        approval.status = 'pending'
+        approval.save()
+        # 重建审批人节点
+        approver_nodes = serializer.validated_data.get('approver_nodes', [])
+        if approver_nodes:
+            approval.approval_nodes.all().delete()
+            from accounts.models import CustomUser
+            for idx, node_data in enumerate(approver_nodes):
+                node_type = node_data.get('type', 'user')
+                node = ApprovalNode.objects.create(
+                    request=approval, node_type=node_type, order=idx,
+                )
+                if node_type == 'user':
+                    user_id = node_data.get('id')
+                    try:
+                        u = CustomUser.objects.get(id=user_id)
+                        node.user = u
+                        node.save()
+                        ApprovalAssignee.objects.create(node=node, user=u)
+                    except CustomUser.DoesNotExist:
+                        pass
+                elif node_type == 'department':
+                    dept_id = node_data.get('id')
+                    try:
+                        dept = Department.objects.get(id=dept_id)
+                        node.department = dept
+                        node.save()
+                        dept_admins = CustomUser.objects.filter(
+                            department=dept,
+                            user_type__in=['super_admin', 'admin']
+                        ).exclude(id=request.user.id)
+                        for au in dept_admins:
+                            ApprovalAssignee.objects.create(node=node, user=au)
+                    except Department.DoesNotExist:
+                        pass
+            # 顺序审批重置到第一个节点
+            if approval.approval_mode == 'sequential':
+                approval.current_node_order = 0
+                approval.save()
+
+        # 记录重新提交的审批日志
+        ApprovalLog.objects.create(
+            request=approval,
+            operator=request.user,
+            action='resubmit',
+            comment='重新提交审批申请',
+        )
+
+        # 通知审批人（顺序审批仅通知第一个节点）
+        from accounts.models import CustomUser, Department
+        assignee_qs = ApprovalAssignee.objects.filter(node__request=approval, status='pending')
+        if approval.approval_mode == 'sequential':
+            first_node = approval.approval_nodes.filter(order=0).first()
+            assignee_qs = assignee_qs.filter(node=first_node) if first_node else assignee_qs.none()
+        for asgn in assignee_qs.select_related('user'):
+            send_work_notification(
+                user_id=asgn.user.id,
+                title='审批待处理',
+                content=f'{request.user.real_name or request.user.username} 提交了{approval.get_approval_type_display()}申请：“{approval.title}”',
+                notification_type='approval',
+                related_url='/oa/approval/',
+                extra_data={'approval_id': approval.id, 'action': 'pending'},
+            )
+        logger.info(f'{request.user} 重新编辑审批 {approval.title}')
+        data = ApprovalRequestSerializer(approval, context={'request': request}).data
+        return Response({'encrypt': True, 'data': encrypt_data(data)})
+
+    @action(detail=False, methods=['get'])
+    def drafts(self, request):
+        """获取当前用户的草稿列表"""
+        qs = ApprovalRequest.objects.filter(applicant=request.user, status='draft').order_by('-created_at')
+        results = ApprovalListSerializer(qs, many=True, context={'request': request}).data
+        return Response({'results': results})
+
+    @action(detail=True, methods=['delete'])
+    def delete_draft(self, request, pk=None):
+        """删除草稿"""
+        try:
+            approval = ApprovalRequest.objects.get(id=pk)
+        except ApprovalRequest.DoesNotExist:
+            return Response({'error': '审批不存在'}, status=404)
+        if approval.status != 'draft':
+            return Response({'error': '仅草稿可以删除'}, status=400)
+        if approval.applicant != request.user:
+            return Response({'error': '只能删除自己的草稿'}, status=403)
+        approval.delete()
+        logger.info(f'{request.user} 删除草稿 {pk}')
+        return Response({'message': 'ok'})
+
+    @action(detail=True, methods=['post'])
+    def update_draft(self, request, pk=None):
+        """更新已有草稿（保持ID不变）"""
+        try:
+            approval = ApprovalRequest.objects.get(id=pk)
+        except ApprovalRequest.DoesNotExist:
+            return Response({'error': '草稿不存在'}, status=404)
+        if approval.status not in ('draft', 'cancelled', 'rejected'):
+            return Response({'error': '仅草稿、已撤回或已驳回的审批可以更新'}, status=400)
+        if approval.applicant != request.user:
+            return Response({'error': '只能更新自己的草稿'}, status=403)
+        serializer = ApprovalDraftSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        from accounts.models import Department, CustomUser
+        department_id = serializer.validated_data.get('department_id')
+        if department_id:
+            try:
+                approval.department = Department.objects.get(id=department_id)
+            except Department.DoesNotExist:
+                pass
+        else:
+            approval.department = request.user.department
+        for field in ['approval_type', 'title', 'content', 'start_date', 'end_date',
+                      'duration', 'amount', 'expense_type', 'expense_date',
+                      'sign_type', 'approval_mode']:
+            val = serializer.validated_data.get(field)
+            if val is not None:
+                setattr(approval, field, val)
+        if serializer.validated_data.get('attachments') is not None:
+            approval.attachments = serializer.validated_data['attachments']
+        # 重新编辑时保存为草稿
+        if approval.status in ('cancelled', 'rejected'):
+            approval.status = 'draft'
+        approval.save()
+        approver_nodes = serializer.validated_data.get('approver_nodes', [])
+        if approver_nodes:
+            approval.approval_nodes.all().delete()
+            for idx, node_data in enumerate(approver_nodes):
+                node_type = node_data.get('type', 'user')
+                node = ApprovalNode.objects.create(
+                    request=approval, node_type=node_type, order=idx,
+                )
+                if node_type == 'user':
+                    user_id = node_data.get('id')
+                    try:
+                        u = CustomUser.objects.get(id=user_id)
+                        node.user = u
+                        node.save()
+                        ApprovalAssignee.objects.create(node=node, user=u)
+                    except CustomUser.DoesNotExist:
+                        pass
+                elif node_type == 'department':
+                    dept_id = node_data.get('id')
+                    try:
+                        dept = Department.objects.get(id=dept_id)
+                        node.department = dept
+                        node.save()
+                        dept_admins = CustomUser.objects.filter(
+                            department=dept,
+                            user_type__in=['super_admin', 'admin']
+                        ).exclude(id=request.user.id)
+                        for au in dept_admins:
+                            ApprovalAssignee.objects.create(node=node, user=au)
+                    except Department.DoesNotExist:
+                        pass
+            # 顺序审批重置到第一个节点
+            if approval.approval_mode == 'sequential':
+                approval.current_node_order = 0
+                approval.save()
+        logger.info(f'{request.user} 更新草稿 {approval.id}')
         data = ApprovalRequestSerializer(approval, context={'request': request}).data
         return Response({'encrypt': True, 'data': encrypt_data(data)})
 
@@ -726,7 +1117,12 @@ class WorkNotificationViewSet(viewsets.ViewSet):
         """通知列表（分页）"""
         page = int(request.query_params.get('page', 1))
         page_size = int(request.query_params.get('page_size', 20))
+        read_filter = request.query_params.get('read_filter', '').strip()
         qs = WorkNotification.objects.filter(recipient=request.user)
+        if read_filter == 'unread':
+            qs = qs.filter(is_read=False)
+        elif read_filter == 'read':
+            qs = qs.filter(is_read=True)
         total = qs.count()
         total_pages = max(1, (total + page_size - 1) // page_size)
         start = (page - 1) * page_size
