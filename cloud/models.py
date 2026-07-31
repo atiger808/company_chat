@@ -16,6 +16,9 @@ class Folder(models.Model):
     """文件夹模型"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255, verbose_name='文件夹名称')
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                                null=True, blank=True, related_name='folders',
+                                verbose_name='所属企业')
 
     # 父子关系
     parent = models.ForeignKey(
@@ -127,6 +130,9 @@ class Folder(models.Model):
 class CloudFile(models.Model):
     """云文件模型"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                                null=True, blank=True, related_name='cloud_files',
+                                verbose_name='所属企业')
     folder = models.ForeignKey(
         Folder,
         on_delete=models.CASCADE,
@@ -411,6 +417,9 @@ class FileShare(models.Model):
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                                null=True, blank=True, related_name='file_shares',
+                                verbose_name='所属企业')
     file = models.ForeignKey(
         CloudFile,
         on_delete=models.CASCADE,
@@ -464,6 +473,7 @@ class FileShare(models.Model):
     class Meta:
         verbose_name = '文件分享'
         verbose_name_plural = verbose_name
+        indexes = [models.Index(fields=['tenant'])]
         ordering = ['-created_at']
 
     def __str__(self):
@@ -519,6 +529,9 @@ class FileComment(models.Model):
 
 class FileOperationLog(models.Model):
     """文件操作日志模型"""
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                                null=True, blank=True, related_name='file_operation_logs',
+                                verbose_name='所属企业')
     OPERATION_CHOICES = [
         ('create', '创建'),
         ('update', '更新'),
@@ -1147,7 +1160,10 @@ class CloudSystemConfig(models.Model):
         ('password', '密码'),
     ]
 
-    key = models.CharField(max_length=100, unique=True, db_index=True,
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                                null=True, blank=True, related_name='cloud_configs',
+                                verbose_name='所属企业')
+    key = models.CharField(max_length=100, db_index=True,
                            verbose_name='配置键')
     name = models.CharField(max_length=200, verbose_name='配置名称')
     value = models.TextField(verbose_name='配置值')
@@ -1306,6 +1322,7 @@ class CloudSystemConfig(models.Model):
         verbose_name = '企业网盘系统配置'
         verbose_name_plural = '企业网盘系统配置'
         ordering = ['category', 'key']
+        unique_together = ('tenant', 'key')
         indexes = [
             models.Index(fields=['category']),
             models.Index(fields=['key']),

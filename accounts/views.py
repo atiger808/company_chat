@@ -8,6 +8,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import serializers
+from rest_framework.pagination import PageNumberPagination
 
 from email.utils import formataddr  # 👈 1. 引入标准库
 from email.header import Header  # 👈 1. 引入 Header
@@ -57,22 +58,37 @@ class AdminDashboardViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def statistics(self, request):
-        """获取统计数据"""
+        """获取统计数据（含多企业）"""
         total_users = CustomUser.objects.count()
         online_users = CustomUser.objects.filter(is_online=True).count()
         total_chat_rooms = ChatRoom.objects.count()
         active_chat_rooms = ChatRoom.objects.filter(
             messages__timestamp__gte=timezone.now() - timezone.timedelta(days=7)
         ).distinct().count()
-
+        # 多企业统计
+        from accounts.models import Tenant
+        from org.models import UserDepartment as OrgUserDepartment, ReportRelation
+        total_tenants = Tenant.objects.filter(is_active=True).count()
+        tenant_stats = []
+        for t in Tenant.objects.filter(is_active=True).prefetch_related('memberships'):
+            member_count = t.memberships.filter(is_active=True).count()
+            dept_count = t.departments.filter(is_active=True).count()
+            tenant_stats.append({
+                'id': t.id, 'name': t.short_name or t.name,
+                'tenant_type': t.tenant_type,
+                'member_count': member_count,
+                'department_count': dept_count,
+            })
         return Response({
-            'total_users': total_users,
-            'online_users': online_users,
+            'total_users': total_users, 'online_users': online_users,
             'total_chat_rooms': total_chat_rooms,
             'active_chat_rooms': active_chat_rooms,
             'new_users_today': CustomUser.objects.filter(
                 date_joined__date=timezone.now().date()
             ).count(),
+            'total_tenants': total_tenants, 'tenant_stats': tenant_stats,
+            'total_departments': OrgUserDepartment.objects.values('department').distinct().count(),
+            'total_report_relations': ReportRelation.objects.count(),
         })
 
     @action(detail=False, methods=['get'])
@@ -94,19 +110,32 @@ class AdminDashboardViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def online_users(self, request):
-        """获取在线用户列表"""
+        """获取在线用户列表（含组织架构部门和企业信息）"""
+        from org.models import UserDepartment as OrgUserDepartment
         users = CustomUser.objects.filter(is_online=True).select_related('department')
-
-        data = [{
-            'id': user.id,
-            'username': user.username,
-            'real_name': user.real_name,
-            'avatar_url': user.get_avatar_url(),
-            'department': user.department.name if user.department else None,
-            'position': user.position,
-            'last_seen': user.last_seen.isoformat() if user.last_seen else None,
-        } for user in users]
-
+        user_ids = [u.id for u in users]
+        dept_map = {}
+        if user_ids:
+            for ud in OrgUserDepartment.objects.filter(user_id__in=user_ids, is_primary=True).select_related('department', 'department__tenant'):
+                dept_map[ud.user_id] = {
+                    'name': ud.department.name,
+                    'tenant_name': (ud.department.tenant.short_name or ud.department.tenant.name) if ud.department.tenant else '',
+                }
+        data = []
+        for user in users:
+            dept_info = dept_map.get(user.id)
+            if not dept_info and user.department:
+                dept_info = {'name': user.department.name, 'tenant_name': ''}
+            data.append({
+                'id': user.id,
+                'username': user.username,
+                'real_name': user.real_name,
+                'avatar_url': user.get_avatar_url(),
+                'department': dept_info['name'] if dept_info else None,
+                'tenant_name': dept_info['tenant_name'] if dept_info else '',
+                'position': user.position,
+                'last_seen': user.last_seen.isoformat() if user.last_seen else None,
+            })
         return Response(data)
 
 
@@ -227,10 +256,28 @@ class AdminStatsViewSet(viewsets.ViewSet):
         })
 
 
+class AdminUserPagination(PageNumberPagination):
+    """管理员用户列表分页 - 支持 page_size 查询参数"""
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+    def get_paginated_response(self, data):
+        return Response({
+            'count': self.page.paginator.count,
+            'page': self.page.number,
+            'total_pages': self.page.paginator.num_pages,
+            'next': self.get_next_link(),
+            'previous': self.get_previous_link(),
+            'results': data,
+        })
+
+
 class UserAdminViewSet(viewsets.ModelViewSet):
     """用户管理视图集（管理员专用）"""
     queryset = CustomUser.objects.all()
     permission_classes = [permissions.IsAuthenticated, IsAdminUserManagement]
+    pagination_class = AdminUserPagination
 
     def handle_exception(self, exc):
         """统一异常处理"""
@@ -278,6 +325,17 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(
                 user_type__in=['user', 'normal', 'admin']
             )
+            # 企业隔离：普通管理员只能查看和管理当前所属企业的用户
+            active_tenant = None
+            try:
+                active_tenant = user.get_active_tenant()
+            except Exception:
+                pass
+            if active_tenant:
+                queryset = queryset.filter(
+                    tenant_memberships__tenant=active_tenant,
+                    tenant_memberships__is_active=True
+                )
             # 无部门的管理员只能管理无部门的普通用户
             # if user.department:
             #     queryset = queryset.filter(
@@ -312,12 +370,27 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             if user_type:
                 queryset = queryset.filter(user_type=user_type)
 
-            # 按部门过滤（仅超级管理员可用）
+            # 按旧版部门过滤（仅超级管理员可用）
             department = self.request.query_params.get('department', '')
             if department:
                 queryset = queryset.filter(department_id=department)
 
-        return queryset.order_by('-date_joined')
+        # 按企业过滤（所有管理员可用）
+        tenant_id = self.request.query_params.get('tenant_id', '')
+        if tenant_id:
+            queryset = queryset.filter(
+                tenant_memberships__tenant_id=tenant_id,
+                tenant_memberships__is_active=True
+            )
+
+        # 按组织架构部门过滤（所有管理员可用）
+        org_dept_id = self.request.query_params.get('org_dept_id', '')
+        if org_dept_id:
+            queryset = queryset.filter(
+                department_relations__department_id=org_dept_id
+            )
+
+        return queryset.order_by('-date_joined').distinct()
 
     def create(self, request, *args, **kwargs):
         """
@@ -667,14 +740,19 @@ class DepartmentListViewSet(viewsets.ViewSet):
     def list(self, request):
         """获取部门列表"""
         user = request.user
+        queryset = Department.objects.all()
+
+        # 过滤无所属企业的部门
+        tenant_isnull = request.query_params.get('tenant_isnull', '')
+        if tenant_isnull == 'true':
+            queryset = queryset.filter(tenant__isnull=True)
 
         if user.is_superuser:
-            # 超级管理员查看所有部门
-            departments = Department.objects.all().order_by('name')
+            departments = queryset.order_by('name')
         else:
             # 普通管理员只查看自己的部门
             if user.department:
-                departments = Department.objects.filter(id=user.department.id)
+                departments = queryset.filter(id=user.department.id)
             else:
                 departments = Department.objects.none()
 
@@ -896,7 +974,7 @@ class UserViewSet(viewsets.ModelViewSet):
     def get_user_profile(self, request, pk=None):
         """获取指定用户的详细信息"""
         try:
-            user = self.get_object()
+            user = CustomUser.objects.get(pk=pk)
             # 普通用户只能查看基本信息，管理员可以查看完整信息
             if request.user.user_type in ['admin', 'super_admin'] or request.user.id == user.id:
                 serializer = UserDetailSerializer(user, context={'request': request})
@@ -923,6 +1001,9 @@ class UserViewSet(viewsets.ModelViewSet):
             return Response(serializer.data)
         except CustomUser.DoesNotExist:
             return Response({'error': '用户不存在'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f'获取用户信息错误：{e}', exc_info=True)
+            return Response({'error': '获取用户信息错误'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=['put', 'patch'])
     def update_profile(self, request):
@@ -957,26 +1038,40 @@ class UserViewSet(viewsets.ModelViewSet):
     def list_users(self, request):
         """
         通讯录用户列表（优化版）
-        - 返回所有活跃用户（排除自己）
-        - 按部门分组
-        - 支持分页
+        - 管理员显示所有用户
+        - 普通用户显示同企业成员
         """
-        # 🔧 关键修复2: 优化通讯录用户列表
-        # 管理员显示所有用户，普通用户只显示好友
-        if request.user.user_type in ['admin', 'super_admin']:
+        user = request.user
+        if user.user_type in ['admin', 'super_admin']:
             # 管理员可以看到所有用户
             queryset = CustomUser.objects.filter(
                 is_active=True
             ).exclude(
-                id=request.user.id
+                id=user.id
             ).select_related('department').prefetch_related(
-                'friends'  # 🔧 预加载好友关系
+                'friends'
             )
         else:
-            # 普通用户只能看到分配的好友
-            queryset = request.user.friends.filter(
-                is_active=True
-            ).select_related('department')
+            # 普通用户：返回其直属部门内的所有成员（通过 UserDepartment 关联）
+            try:
+                from org.models import UserDepartment
+                user_dept_ids = UserDepartment.objects.filter(
+                    user=user
+                ).values_list('department_id', flat=True)
+                if user_dept_ids:
+                    dept_user_ids = UserDepartment.objects.filter(
+                        department_id__in=list(user_dept_ids)
+                    ).values_list('user_id', flat=True).distinct()
+                    queryset = CustomUser.objects.filter(
+                        is_active=True,
+                        id__in=list(dept_user_ids)
+                    ).exclude(
+                        id=user.id
+                    ).select_related('department')
+                else:
+                    queryset = user.friends.filter(is_active=True).select_related('department')
+            except ImportError:
+                queryset = user.friends.filter(is_active=True).select_related('department')
 
         # 支持搜索
         search_query = request.query_params.get('search', '')

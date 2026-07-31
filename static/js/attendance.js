@@ -1,4 +1,4 @@
-// static/js/attendance.js - 考勤打卡
+﻿// static/js/attendance.js - 考勤打卡
 
 const OA_API_URL = '/api/oa';
 
@@ -29,6 +29,28 @@ class AttendanceApp {
         await this.loadToday();
         await this.loadStats();
         await this.loadRecords();
+
+        // 显示管理员的过滤组件
+        var userType = localStorage.getItem('user_type');
+        if (userType === 'admin' || userType === 'super_admin') {
+            var tenantFilter = document.getElementById('attendanceFilterTenant');
+            var deptFilter = document.getElementById('attendanceFilterDepartment');
+            var exportBtn = document.getElementById('attendanceExportBtn');
+            var printBtn = document.getElementById('attendancePrintBtn');
+            var configBtn = document.getElementById('attendanceConfigBtn');
+            if (tenantFilter) tenantFilter.style.display = '';
+            if (deptFilter) deptFilter.style.display = '';
+            if (exportBtn) { exportBtn.style.display = ''; exportBtn.style.opacity = '0.4'; }
+            if (printBtn) { printBtn.style.display = ''; printBtn.style.opacity = '0.4'; }
+            if (configBtn) configBtn.style.display = 'inline-flex';
+            this._loadFilterTenants();
+            // Bind dept filter change
+            if (deptFilter) {
+                deptFilter.addEventListener('change', function() {
+                    attendanceApp.loadRecords(1);
+                });
+            }
+        }
     }
 
     updateClock() {
@@ -83,6 +105,7 @@ class AttendanceApp {
             if (resp.status === 401) {
                 this.showToast('登录已过期，请重新登录', true)
                 this.handleAuthError();
+                return
             }
             const err = await resp.json().catch(() => ({}));
             throw new Error(err.error || '请求失败');
@@ -157,7 +180,12 @@ class AttendanceApp {
         try {
             let url = OA_API_URL + '/attendance/?page=' + page + '&page_size=' + this.pageSize;
             if (this.searchKeyword) url += '&search=' + encodeURIComponent(this.searchKeyword);
+            var tenantId = document.getElementById('attendanceFilterTenant') ? document.getElementById('attendanceFilterTenant').value : '';
+            var deptId = document.getElementById('attendanceFilterDepartment') ? document.getElementById('attendanceFilterDepartment').value : '';
+            if (tenantId) url += '&tenant_id=' + tenantId;
+            if (deptId) url += '&org_dept_id=' + deptId;
             const data = await this.apiGet(url);
+            console.log(data);
             this._renderRecords(data, tbody);
             this._renderPagination(data, pagination);
         } catch (e) {
@@ -181,9 +209,12 @@ class AttendanceApp {
     }
 
     _renderRecords(data, tbody) {
+        // Clear selection on page change
+        if (this._selectedRecordIds) this._selectedRecordIds.clear();
         const rows = data.results || [];
         if (!rows.length) {
-            tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:40px;color:#909399;">暂无打卡记录</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:40px;color:#909399;">暂无打卡记录</td></tr>';
+            this._updateExportPrintButtons();
             return;
         }
         const statusMap = { 'normal': '正常', 'late': '迟到', 'early_leave': '早退' };
@@ -191,7 +222,9 @@ class AttendanceApp {
         tbody.innerHTML = rows.map(function(r) {
             const st = r.status || 'normal';
             const avatar = r.avatar_url || defaultAvatar;
+            var checked = attendanceApp._selectedRecordIds && attendanceApp._selectedRecordIds.has(r.id) ? 'checked' : '';
             return '<tr style="cursor:pointer;">'
+                + '<td><input type="checkbox" class="record-cb" data-id="' + r.id + '" ' + checked + ' onchange="event.stopPropagation();attendanceApp._toggleRecord(' + r.id + ', this.checked)"></td>'
                 + '<td><div style="display:flex;align-items:center;gap:8px;"><img src="' + avatar + '" alt="" style="width:32px;height:32px;border-radius:50%;object-fit:cover;">'
                 + '<span>' + attendanceApp._escape(r.user_name || '') + '</span></div></td>'
                 + '<td>' + attendanceApp._escape(r.department_name || '-') + '</td>'
@@ -395,7 +428,13 @@ class AttendanceApp {
             if (loc.longitude) data.longitude = loc.longitude;
             if (loc.location) data.location = loc.location;
             if (loc.reverse_geocoding) data.reverse_geocoding = loc.reverse_geocoding;
-            await this.apiPost(OA_API_URL + '/attendance/clock-in/', data);
+            var result = await this.apiPost(OA_API_URL + '/attendance/clock-in/', data);
+            if (result && result.skip) {
+                this.showToast(result.error || '该时段无需打卡', false);
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-check-circle"></i> 无需打卡';
+                return;
+            }
             await this.loadToday();
             await this.loadStats();
             await this.loadRecords(1);
@@ -419,7 +458,13 @@ class AttendanceApp {
             if (loc.longitude) data.longitude = loc.longitude;
             if (loc.location) data.location = loc.location;
             if (loc.reverse_geocoding) data.reverse_geocoding = loc.reverse_geocoding;
-            await this.apiPost(OA_API_URL + '/attendance/clock-out/', data);
+            var result = await this.apiPost(OA_API_URL + '/attendance/clock-out/', data);
+            if (result && result.skip) {
+                this.showToast(result.error || '该时段无需打卡', false);
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-check-circle"></i> 无需打卡';
+                return;
+            }
             await this.loadToday();
             await this.loadStats();
             await this.loadRecords(1);
@@ -436,6 +481,248 @@ class AttendanceApp {
         this.loadRecords(1);
     }
 
+    _selectedRecordIds = null
+
+    _getSelectedIds() {
+        if (!this._selectedRecordIds) this._selectedRecordIds = new Set();
+        return this._selectedRecordIds;
+    }
+
+    _toggleRecord(id, checked) {
+        var set = this._getSelectedIds();
+        if (checked) set.add(id); else set.delete(id);
+        var selectAll = document.getElementById('attendanceSelectAll');
+        if (selectAll) {
+            var total = document.querySelectorAll('.record-cb').length;
+            var checkedCount = document.querySelectorAll('.record-cb:checked').length;
+            selectAll.checked = total > 0 && checkedCount === total;
+            selectAll.indeterminate = checkedCount > 0 && checkedCount < total;
+        }
+        this._updateExportPrintButtons();
+    }
+
+    _updateExportPrintButtons() {
+        var count = this._selectedRecordIds ? this._selectedRecordIds.size : 0;
+        var exportBtn = document.getElementById('attendanceExportBtn');
+        var printBtn = document.getElementById('attendancePrintBtn');
+        if (exportBtn) exportBtn.style.opacity = count > 0 ? '' : '0.4';
+        if (printBtn) printBtn.style.opacity = count > 0 ? '' : '0.4';
+    }
+
+    _toggleSelectAll(checked) {
+        document.querySelectorAll('.record-cb').forEach(function(cb) { cb.checked = checked; });
+        var set = this._getSelectedIds();
+        set.clear();
+        if (checked) {
+            document.querySelectorAll('.record-cb').forEach(function(cb) {
+                var id = parseInt(cb.dataset.id);
+                if (id) set.add(id);
+            });
+        }
+        this._updateExportPrintButtons();
+    }
+
+    _loadFilterTenants() {
+        var sel = document.getElementById('attendanceFilterTenant');
+        if (!sel) return;
+        fetch('/api/org/tenants/', { headers: TokenManager.getHeaders() }).then(function(resp) {
+            return resp.ok ? resp.json() : {results: []};
+        }).then(function(data) {
+            var tenants = data.results || data || [];
+            sel.innerHTML = '<option value="">全部企业</option>';
+            tenants.forEach(function(t) {
+                var opt = document.createElement('option');
+                opt.value = t.id;
+                opt.textContent = t.short_name || t.name;
+                sel.appendChild(opt);
+            });
+        }).catch(function(e) { console.error(e); });
+    }
+
+    _loadFilterDepartments(tenantId) {
+        var sel = document.getElementById('attendanceFilterDepartment');
+        if (!sel) return;
+        sel.innerHTML = '<option value="">全部部门</option>';
+        if (!tenantId) return;
+        fetch('/api/org/departments/?tenant_id=' + tenantId, { headers: TokenManager.getHeaders() }).then(function(resp) {
+            return resp.ok ? resp.json() : {results: []};
+        }).then(function(data) {
+            var depts = data.results || data || [];
+            var byParent = {};
+            depts.forEach(function(d) {
+                var pid = d.parent || 'root';
+                if (!byParent[pid]) byParent[pid] = [];
+                byParent[pid].push(d);
+            });
+            function renderChildren(parentId, depth) {
+                var children = byParent[parentId] || [];
+                children.forEach(function(d) {
+                    var opt = document.createElement('option');
+                    opt.value = d.id;
+                    var prefix = '';
+                    for (var k = 0; k < depth; k++) prefix += '— ';
+                    opt.textContent = (depth > 0 ? prefix : '') + d.name;
+                    sel.appendChild(opt);
+                    renderChildren(d.id, depth + 1);
+                });
+            }
+            renderChildren('root', 0);
+        }).catch(function(e) { console.error(e); });
+    }
+
+    onFilterTenantChange() {
+        var tenantId = document.getElementById('attendanceFilterTenant') ? document.getElementById('attendanceFilterTenant').value : '';
+        this._loadFilterDepartments(tenantId);
+        this.loadRecords(1);
+    }
+
+    exportRecords() {
+        this._showExportPrintModal('export');
+    }
+
+    printRecords() {
+        this._showExportPrintModal('print');
+    }
+
+    _showExportPrintModal(mode) {
+        var self = this;
+        var totalSelected = this._selectedRecordIds ? this._selectedRecordIds.size : 0;
+        if (!totalSelected) {
+            this.showAlert('提示', '请先选择要导出的打卡记录');
+            return;
+        }
+        var fields = [
+            {key:'user_name', label:'用户'},
+            {key:'department_name', label:'部门'},
+            {key:'date', label:'日期'},
+            {key:'clock_type_display', label:'类型'},
+            {key:'clock_time', label:'时间'},
+            {key:'status', label:'状态'},
+            {key:'location', label:'位置'},
+            {key:'device', label:'设备'},
+        ];
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
+        var fieldHtml = fields.map(function(f, i) {
+            return '<label style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--bg-secondary,#f5f7fa);border-radius:6px;cursor:pointer;"><input type="checkbox" class="ef-field-cb" data-key="' + f.key + '" checked> ' + f.label + '</label>';
+        }).join('');
+        overlay.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:500px;width:90%;box-shadow:0 12px 48px rgba(0,0,0,0.18);">'
+            + '<div style="padding:16px 20px;border-bottom:1px solid #ebeef5;"><h3 style="margin:0;font-size:16px;"><i class="fas fa-' + (mode==='print'?'print':'download') + '"></i> ' + (mode==='print'?'打印':'导出') + ' 考勤记录</h3></div>'
+            + '<div style="padding:16px 20px;"><p style="margin:0 0 12px;font-size:14px;color:#606266;">选择表格字段：</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">' + fieldHtml + '</div></div>'
+            + '<div style="padding:12px 20px;border-top:1px solid #ebeef5;display:flex;gap:10px;justify-content:flex-end;">'
+            + '<button class="ef-cancel" style="padding:8px 20px;border:1px solid #dcdfe6;border-radius:6px;background:#fff;cursor:pointer;font-size:14px;">取消</button>'
+            + '<button class="ef-confirm" style="padding:8px 20px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;">' + (mode==='print'?'打印':'导出') + '</button></div></div>';
+        document.body.appendChild(overlay);
+        overlay.querySelector('.ef-cancel').onclick = function() { overlay.remove(); };
+        overlay.querySelector('.ef-confirm').onclick = function() {
+            var checked = overlay.querySelectorAll('.ef-field-cb:checked');
+            var selectedFields = Array.from(checked).map(function(cb) { return cb.dataset.key; });
+            overlay.remove();
+            if (!selectedFields.length) { self.showAlert('提示', '请至少选择一个字段'); return; }
+            if (mode === 'print') self._doPrintRecords(selectedFields);
+            else self._doExportRecords(selectedFields);
+        };
+    }
+
+    _doPrintRecords(selectedFields) {
+        var self = this;
+        var tbody = document.getElementById('attendanceTableBody');
+        if (!tbody) return;
+        var trs = Array.from(tbody.querySelectorAll('tr')).filter(function(tr) { return tr.querySelector('.record-cb:checked'); });
+        if (!trs.length) return;
+        var now = new Date();
+        var dateStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0')
+            + ' ' + String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+        var fields = [
+            {key:'user_name', label:'用户'},{key:'department_name', label:'部门'},{key:'date', label:'日期'},
+            {key:'clock_type_display', label:'类型'},{key:'clock_time', label:'时间'},{key:'status', label:'状态'},
+            {key:'location', label:'位置'},{key:'device', label:'设备'},
+        ];
+        var fieldLabels = {};
+        fieldLabels['user_name'] = '用户'; fieldLabels['department_name'] = '部门';
+        fieldLabels['date'] = '日期'; fieldLabels['clock_type_display'] = '类型';
+        fieldLabels['clock_time'] = '时间'; fieldLabels['status'] = '状态';
+        fieldLabels['location'] = '位置'; fieldLabels['device'] = '设备';
+        var selSet = {}; selectedFields.forEach(function(k){selSet[k]=true;});
+        var win = window.open('', '_blank', 'width=1000,height=800');
+        if (!win) return;
+        var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>考勤打卡记录</title>'
+            + '<style>body{font-family:"Microsoft YaHei",sans-serif;padding:20px;color:#333;}'
+            + '.print-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;}'
+            + '.print-title{font-size:20px;font-weight:600;color:#409eff;}'
+            + '.print-date{font-size:13px;color:#909399;}'
+            + 'h2{text-align:center;margin-bottom:20px;color:#409eff;}'
+            + 'table{width:100%;border-collapse:collapse;font-size:13px;}'
+            + 'th,td{border:1px solid #ddd;padding:8px 10px;text-align:left;}'
+            + 'th{background:#f5f7fa;font-weight:600;}'
+            + 'tr:nth-child(even){background:#fafafa;}'
+            + '.normal{color:#67c23a;}.late{color:#f56c6c;}.early_leave{color:#e6a23c;}'
+            + '@media print{body{padding:10px;}button{display:none;}}'
+            + '</style></head><body>'
+            + '<div class="print-header"><div class="print-title">考勤打卡记录</div><div class="print-date">打印时间：' + dateStr + '</div></div>'
+            + '<table><thead><tr>';
+        var statusMap = {'normal':'正常','late':'迟到','early_leave':'早退'};
+        // Header
+        fields.forEach(function(f) {
+            if (selSet[f.key]) html += '<th>' + f.label + '</th>';
+        });
+        html += '</tr></thead><tbody>';
+        trs.forEach(function(tr) {
+            var tds = tr.querySelectorAll('td');
+            if (tds.length < 10) return;
+            html += '<tr>';
+            fields.forEach(function(f) {
+                if (!selSet[f.key]) return;
+                if (f.key === 'status') {
+                    var stText = tds[6].textContent || '';
+                    var stKey = stText.toLowerCase().replace(/\s/g,'');
+                    html += '<td class="' + stKey + '">' + (statusMap[stKey] || stText) + '</td>';
+                } else {
+                    var idx = {'user_name':1,'department_name':2,'date':3,'clock_type_display':4,'clock_time':5,'location':7,'device':8}[f.key];
+                    html += '<td>' + (tds[idx] ? (tds[idx].textContent || '') : '') + '</td>';
+                }
+            });
+            html += '</tr>';
+        });
+        html += '</tbody></table><div style="text-align:center;margin-top:20px;"><button onclick="window.print()" style="padding:8px 24px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;">打印</button></div></body></html>';
+        win.document.write(html);
+        win.document.close();
+    }
+
+    _doExportRecords(selectedFields) {
+        var self = this;
+        var token = localStorage.getItem('access_token');
+        if (!token) { this.showAlert('提示', '登录已过期，请重新登录'); return; }
+        var url = OA_API_URL + '/attendance/export/?';
+        var params = [];
+        var ids = Array.from(this._getSelectedIds());
+        if (ids.length) params.push('record_ids=' + ids.join(','));
+        if (selectedFields && selectedFields.length) params.push('fields=' + selectedFields.join(','));
+        url += params.join('&');
+        // Generate filename with current datetime
+        var now = new Date();
+        var dateStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+        var timeStr = String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
+        var filename = '考勤记录_' + dateStr + '_' + timeStr + '.csv';
+        fetch(url, {
+            headers: { 'Authorization': 'Bearer ' + token }
+        }).then(function(resp) {
+            if (!resp.ok) { throw new Error('导出失败 ' + resp.status); }
+            return resp.blob();
+        }).then(function(blob) {
+            var link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(link.href);
+        }).catch(function(err) {
+            self.showAlert('错误', '导出失败：' + err.message);
+        });
+    }
+
+    // ==================== 优雅的提示对话框 ====================
 
     // ==================== 优雅的提示对话框 ====================
     showAlert(title, message) {
@@ -503,8 +790,12 @@ class AttendanceApp {
     }
 
     showToast(message, isError) {
-        const toast = document.getElementById('toast');
-        if (!toast) return;
+        let toast = document.getElementById('toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'toast';
+            document.body.appendChild(toast);
+        }
         const icon = isError ? 'fa-exclamation-circle' : 'fa-check-circle';
         const title = isError ? '错误' : '成功';
         const color = isError ? '#f56c6c' : '#67c23a';
@@ -513,7 +804,7 @@ class AttendanceApp {
             + '<div><div class="toast-title">' + title + '</div>'
             + '<div class="toast-text">' + this._escape(message) + '</div></div></div>';
         toast.classList.remove('show');
-        void toast.offsetWidth;
+        void toast.offsetHeight;
         toast.classList.add('show');
         clearTimeout(toast._timer);
         toast._timer = setTimeout(() => toast.classList.remove('show'), 3000);
@@ -544,4 +835,573 @@ class AttendanceApp {
         return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
             + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
     }
+
+    // ──────── 考勤配置 ────────
+
+    resetFilters() {
+        var searchEl = document.getElementById('attendanceSearch');
+        if (searchEl) searchEl.value = '';
+        this.searchKeyword = '';
+        var tenantFilter = document.getElementById('attendanceFilterTenant');
+        if (tenantFilter) tenantFilter.value = '';
+        var deptFilter = document.getElementById('attendanceFilterDepartment');
+        if (deptFilter) deptFilter.value = '';
+        this.loadRecords(1);
+    }
+
+    async openConfigModal() {
+        this._configEditKey = null;
+        this._configDeleteId = null;
+        this._configAttType = 'global';
+        document.getElementById('attConfigType').value = 'global';
+        // 重置类型卡片状态
+        document.querySelectorAll('.config-type-card[data-att-type]').forEach(function(c) {
+            c.classList.remove('active');
+            c.style.borderColor = '';
+            c.style.background = '';
+        });
+        var gc = document.querySelector('.config-type-card[data-att-type="global"]');
+        if (gc) { gc.classList.add('active'); gc.style.borderColor = '#409eff'; gc.style.background = '#ecf5ff'; }
+        document.getElementById('attendanceConfigForm').style.display = 'none';
+        document.getElementById('attendanceConfigFooter').style.display = 'none';
+        document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
+        document.getElementById('attendanceConfigEmpty').style.display = 'block';
+        document.getElementById('attConfigSubTenantRow').style.display = 'none';
+        document.getElementById('attConfigDeptRow').style.display = 'none';
+        var rightSel = document.getElementById('attConfigSubTenantSelect');
+        if (rightSel) rightSel.innerHTML = '<option value="">请选择子公司</option>';
+        await this._loadAttSubTenants();
+        await this._loadAttConfigList();
+        await this._loadAttDepts();
+        document.getElementById('attendanceConfigModal').style.display = 'flex';
+        setTimeout(function () {
+            document.getElementById('attendanceConfigModal').classList.add('show');
+        }, 10);
+    }
+
+    _selectAttConfigType(type) {
+        this._configAttType = type;
+        this._configEditKey = null;
+        this._configDeleteId = null;
+        document.getElementById('attConfigType').value = type;
+        document.querySelectorAll('.config-type-card[data-att-type]').forEach(function(c) { c.classList.remove('active'); c.style.borderColor = ''; c.style.background = ''; });
+        var card = document.querySelector('.config-type-card[data-att-type="' + type + '"]');
+        if (card) { card.classList.add('active'); card.style.borderColor = '#409eff'; card.style.background = '#ecf5ff'; }
+        document.getElementById('attConfigSubTenantRow').style.display = type === 'sub_tenant' ? 'block' : 'none';
+        document.getElementById('attConfigDeptRow').style.display = type === 'department' ? 'block' : 'none';
+        document.getElementById('attendanceClockInEnabled').checked = true;
+        document.getElementById('attendanceClockInTime').value = '09:00';
+        document.getElementById('attendanceClockOutEnabled').checked = true;
+        document.getElementById('attendanceClockOutTime').value = '18:00';
+        document.getElementById('attendanceConfigForm').style.display = 'block';
+        document.getElementById('attendanceConfigFooter').style.display = 'flex';
+        document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
+        document.getElementById('attendanceConfigEmpty').style.display = 'none';
+        this._toggleClockIn();
+        this._toggleClockOut();
+        this._loadConfigForType(type);
+    }
+
+    async _loadConfigForType(type) {
+        try {
+            var resp = await fetch(OA_API_URL + '/attendance/attendance-configs/', {
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) return;
+            var json = await resp.json();
+            var configs = json.results || [];
+            var cfg = null;
+            // Match using the actual selected dropdown values
+            var selSubTenant = document.getElementById('attConfigSubTenantSelect').value;
+            var selDept = document.getElementById('attendanceConfigDept').value;
+            configs.forEach(function(c) {
+                var cSt = c.sub_tenant ? String(c.sub_tenant) : '';
+                var cDept = c.department ? String(c.department) : '';
+                if (type === 'global' && !c.sub_tenant && !c.department) { cfg = c; }
+                else if (type === 'sub_tenant' && c.sub_tenant && !c.department) {
+                    if (selSubTenant && cSt === selSubTenant) cfg = c;
+                }
+                else if (type === 'department' && c.department) {
+                    if (selDept && cDept === selDept) cfg = c;
+                }
+            });
+            if (cfg) {
+                this._configEditKey = cfg.id;
+                this._configDeleteId = cfg.id;
+                document.getElementById('attendanceConfigDeleteBtn').style.display = '';
+                var deptSel = document.getElementById('attendanceConfigDept');
+                if (deptSel) deptSel.value = cfg.department || '';
+                var stSel = document.getElementById('attConfigSubTenantSelect');
+                if (stSel) stSel.value = cfg.sub_tenant || '';
+                document.getElementById('attendanceClockInEnabled').checked = cfg.clock_in_enabled !== false;
+                document.getElementById('attendanceClockOutEnabled').checked = cfg.clock_out_enabled !== false;
+                if (cfg.clock_in_time) {
+                    document.getElementById('attendanceClockInTime').value = cfg.clock_in_time.substring(0, 5);
+                } else {
+                    document.getElementById('attendanceClockInTime').value = '09:00';
+                }
+                if (cfg.clock_out_time) {
+                    document.getElementById('attendanceClockOutTime').value = cfg.clock_out_time.substring(0, 5);
+                } else {
+                    document.getElementById('attendanceClockOutTime').value = '18:00';
+                }
+                this._toggleClockIn();
+                this._toggleClockOut();
+            }
+            this._loadAttConfigList();
+        } catch (e) {
+            console.warn('加载配置失败', e);
+        }
+    }
+
+    async _loadAttConfigSubTenantSelect() {
+        // 已合并到 _loadAttSubTenants 中
+    }
+
+    closeConfigModal() {
+        var modal = document.getElementById('attendanceConfigModal');
+        if (modal) {
+            modal.classList.remove('show');
+            setTimeout(function () { modal.style.display = 'none'; }, 200);
+        }
+    }
+
+    async _loadAttSubTenants() {
+        try {
+            var resp = await fetch(OA_API_URL + '/attendance/attendance-configs/', {
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) return;
+            var json = await resp.json();
+            var subTenants = json.sub_tenants || [];
+            // 右侧子公司选择器
+            var rightSel = document.getElementById('attConfigSubTenantSelect');
+            if (rightSel) {
+                rightSel.innerHTML = '<option value="">请选择子公司</option>';
+                subTenants.forEach(function (st) {
+                    var opt = document.createElement('option');
+                    opt.value = st.id;
+                    opt.textContent = (st.short_name || st.name) + '（' + (st.tenant_type || '公司') + '）';
+                    rightSel.appendChild(opt);
+                });
+            }
+        } catch (e) {
+            console.warn('加载子公司列表失败', e);
+        }
+    }
+
+    async _loadAttDepts() {
+        var sel = document.getElementById('attendanceConfigDept');
+        if (!sel) return;
+        try {
+            var resp = await fetch(OA_API_URL + '/approval/org_departments/', {
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) return;
+            var data = await resp.json();
+            var depts = data.results || [];
+            var tree = {};
+            depts.forEach(function (d) {
+                var pid = d.parent_id != null ? d.parent_id : 0;
+                if (!tree[pid]) tree[pid] = [];
+                tree[pid].push(d);
+            });
+            var html = '<option value="">集团默认配置</option>';
+            var walk = function (pid, depth) {
+                var children = tree[pid] || [];
+                children.forEach(function (d) {
+                    var prefix = '';
+                    for (var j = 0; j < depth; j++) prefix += '—— ';
+                    var companyIcon = d.department_type === 'company' ? ' ✈' : '';
+                    html += '<option value="' + d.id + '">' + prefix + attendanceApp._escape(d.name) + companyIcon + '</option>';
+                    walk(d.id, depth + 1);
+                });
+            };
+            walk(0, 0);
+            if (!tree[0] || !tree[0].length) {
+                var allIds = {};
+                depts.forEach(function (d) { allIds[d.id] = true; });
+                var roots = depts.filter(function (d) { return !allIds[d.parent_id]; });
+                if (roots.length) {
+                    html = '<option value="">集团默认配置</option>';
+                    var renderFlat = function (items, depth) {
+                        items.forEach(function (d) {
+                            var prefix = '';
+                            for (var j = 0; j < depth; j++) prefix += '—— ';
+                            var companyIcon = d.department_type === 'company' ? ' ✈' : '';
+                            html += '<option value="' + d.id + '">' + prefix + attendanceApp._escape(d.name) + companyIcon + '</option>';
+                            var kids = tree[d.id] || [];
+                            renderFlat(kids, depth + 1);
+                        });
+                    };
+                    renderFlat(roots, 0);
+                }
+            }
+            sel.innerHTML = html;
+        } catch (e) {
+            console.warn('加载部门列表失败', e);
+        }
+    }
+
+    async _loadAttConfigList() {
+        var container = document.getElementById('attendanceConfigList');
+        if (!container) return;
+        try {
+            var resp = await fetch(OA_API_URL + '/attendance/attendance-configs/', {
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) return;
+            var json = await resp.json();
+            var configs = json.results || [];
+            var self = this;
+            // 根据当前选中的类型过滤
+            var filterType = this._configAttType || 'global';
+            if (!configs.length) {
+                container.innerHTML = '<div style="color:var(--text-light,#909399);font-size:13px;padding:8px 0;">暂无配置</div>';
+                return;
+            }
+            container.innerHTML = configs.map(function (c) {
+                // 按类型过滤
+                if (filterType === 'global' && (c.sub_tenant || c.department)) return '';
+                if (filterType === 'sub_tenant' && (!c.sub_tenant || c.department)) return '';
+                if (filterType === 'department' && !c.department) return '';
+                var label = c.department_name || c.sub_tenant_name || '集团默认';
+                var typeTag = '';
+                if (c.department) typeTag = '<span style="font-size:10px;padding:1px 4px;border-radius:3px;background:#f0f9eb;color:#67c23a;margin-left:4px;">部门</span>';
+                else if (c.sub_tenant) typeTag = '<span style="font-size:10px;padding:1px 4px;border-radius:3px;background:#fef3e0;color:#e6a23c;margin-left:4px;">子公司</span>';
+                else typeTag = '<span style="font-size:10px;padding:1px 4px;border-radius:3px;background:#e3f2fd;color:#409eff;margin-left:4px;">集团</span>';
+                var sel = self._configEditKey && c.id === self._configEditKey ? ' style="background:#e8f4fd;font-weight:600;"' : '';
+                return '<div class="config-list-item"' + sel + ' onclick="attendanceApp._editAttConfig(' + c.id + ')" style="padding:8px 10px;border-radius:6px;cursor:pointer;margin-bottom:4px;font-size:13px;display:flex;align-items:center;justify-content:space-between;">'
+                    + '<span><i class="fas fa-clock" style="color:var(--primary-color,#409eff);margin-right:4px;"></i>' + self._escape(label) + typeTag + '</span></div>';
+            }).join('');
+        } catch (e) {
+            console.warn('加载考勤配置列表失败', e);
+        }
+    }
+
+    async _editAttConfig(configId) {
+        try {
+            var resp = await fetch(OA_API_URL + '/attendance/attendance-configs/', {
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) return;
+            var json = await resp.json();
+            var configs = json.results || [];
+            var cfg = null;
+            configs.forEach(function (c) { if (c.id === configId) cfg = c; });
+            if (!cfg) return;
+            this._configEditKey = configId;
+            this._configDeleteId = configId;
+            // 根据配置类型激活对应类型卡片
+            var cardType = 'global';
+            if (cfg.sub_tenant && !cfg.department) cardType = 'sub_tenant';
+            else if (cfg.department) cardType = 'department';
+            this._configAttType = cardType;
+            document.getElementById('attConfigType').value = cardType;
+            document.querySelectorAll('.config-type-card[data-att-type]').forEach(function(c) { c.classList.remove('active'); c.style.borderColor = ''; c.style.background = ''; });
+            var card = document.querySelector('.config-type-card[data-att-type="' + cardType + '"]');
+            if (card) { card.classList.add('active'); card.style.borderColor = '#409eff'; card.style.background = '#ecf5ff'; }
+            document.getElementById('attConfigSubTenantRow').style.display = cardType === 'sub_tenant' ? 'block' : 'none';
+            document.getElementById('attConfigDeptRow').style.display = cardType === 'department' ? 'block' : 'none';
+            document.getElementById('attendanceConfigEmpty').style.display = 'none';
+            document.getElementById('attendanceConfigForm').style.display = 'block';
+            document.getElementById('attendanceConfigFooter').style.display = 'flex';
+            document.getElementById('attendanceConfigDeleteBtn').style.display = '';
+            var deptSel = document.getElementById('attendanceConfigDept');
+            if (deptSel) deptSel.value = cfg.department || '';
+            var stSel = document.getElementById('attConfigSubTenantSelect');
+            if (stSel) stSel.value = cfg.sub_tenant || '';
+            document.getElementById('attendanceClockInEnabled').checked = cfg.clock_in_enabled !== false;
+            document.getElementById('attendanceClockOutEnabled').checked = cfg.clock_out_enabled !== false;
+            if (cfg.clock_in_time) {
+                document.getElementById('attendanceClockInTime').value = cfg.clock_in_time.substring(0, 5);
+            } else {
+                document.getElementById('attendanceClockInTime').value = '09:00';
+            }
+            if (cfg.clock_out_time) {
+                document.getElementById('attendanceClockOutTime').value = cfg.clock_out_time.substring(0, 5);
+            } else {
+                document.getElementById('attendanceClockOutTime').value = '18:00';
+            }
+            this._toggleClockIn();
+            this._toggleClockOut();
+            this._loadAttConfigList();
+        } catch (e) {
+            console.warn('加载考勤配置失败', e);
+        }
+    }
+
+    _onConfigSubTenantChange() {
+        this._loadAttConfigList();
+    }
+
+    _onAttConfigSubTenantChange() {
+        var val = document.getElementById('attConfigSubTenantSelect').value;
+        if (!val) return;
+        // Switch type card without resetting to existing config
+        this._configAttType = 'sub_tenant';
+        this._configEditKey = null;
+        this._configDeleteId = null;
+        document.getElementById('attConfigType').value = 'sub_tenant';
+        document.querySelectorAll('.config-type-card[data-att-type]').forEach(function(c) { c.classList.remove('active'); c.style.borderColor = ''; c.style.background = ''; });
+        var card = document.querySelector('.config-type-card[data-att-type="sub_tenant"]');
+        if (card) { card.classList.add('active'); card.style.borderColor = '#409eff'; card.style.background = '#ecf5ff'; }
+        document.getElementById('attConfigSubTenantRow').style.display = 'block';
+        document.getElementById('attConfigDeptRow').style.display = 'none';
+        document.getElementById('attendanceConfigForm').style.display = 'block';
+        document.getElementById('attendanceConfigFooter').style.display = 'flex';
+        document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
+        document.getElementById('attendanceConfigEmpty').style.display = 'none';
+        document.getElementById('attConfigSubTenantSelect').value = val;
+        document.getElementById('attendanceClockInEnabled').checked = true;
+        document.getElementById('attendanceClockInTime').value = '09:00';
+        document.getElementById('attendanceClockOutEnabled').checked = true;
+        document.getElementById('attendanceClockOutTime').value = '18:00';
+        this._toggleClockIn();
+        this._toggleClockOut();
+        this._loadConfigForType('sub_tenant');
+    }
+
+    _onAttConfigDeptChange() {
+        var val = document.getElementById('attendanceConfigDept').value;
+        if (!val) return;
+        this._configAttType = 'department';
+        this._configEditKey = null;
+        this._configDeleteId = null;
+        document.getElementById('attConfigType').value = 'department';
+        document.querySelectorAll('.config-type-card[data-att-type]').forEach(function(c) { c.classList.remove('active'); c.style.borderColor = ''; c.style.background = ''; });
+        var card = document.querySelector('.config-type-card[data-att-type="department"]');
+        if (card) { card.classList.add('active'); card.style.borderColor = '#409eff'; card.style.background = '#ecf5ff'; }
+        document.getElementById('attConfigSubTenantRow').style.display = 'none';
+        document.getElementById('attConfigDeptRow').style.display = 'block';
+        document.getElementById('attendanceConfigForm').style.display = 'block';
+        document.getElementById('attendanceConfigFooter').style.display = 'flex';
+        document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
+        document.getElementById('attendanceConfigEmpty').style.display = 'none';
+        document.getElementById('attendanceConfigDept').value = val;
+        document.getElementById('attendanceClockInEnabled').checked = true;
+        document.getElementById('attendanceClockInTime').value = '09:00';
+        document.getElementById('attendanceClockOutEnabled').checked = true;
+        document.getElementById('attendanceClockOutTime').value = '18:00';
+        this._toggleClockIn();
+        this._toggleClockOut();
+        this._loadConfigForType('department');
+    }
+
+    _toggleClockIn() {
+        var enabled = document.getElementById('attendanceClockInEnabled').checked;
+        var group = document.getElementById('attendanceClockInTimeGroup');
+        if (group) group.style.display = enabled ? 'block' : 'none';
+    }
+
+    _toggleClockOut() {
+        var enabled = document.getElementById('attendanceClockOutEnabled').checked;
+        var group = document.getElementById('attendanceClockOutTimeGroup');
+        if (group) group.style.display = enabled ? 'block' : 'none';
+    }
+
+    async _saveConfig() {
+        var attType = this._configAttType || document.getElementById('attConfigType').value || 'global';
+        var deptId = document.getElementById('attendanceConfigDept').value;
+        var subTenantId = document.getElementById('attConfigSubTenantSelect') ? document.getElementById('attConfigSubTenantSelect').value : '';
+        var clockInEnabled = document.getElementById('attendanceClockInEnabled').checked;
+        var clockOutEnabled = document.getElementById('attendanceClockOutEnabled').checked;
+        var clockInTime = document.getElementById('attendanceClockInTime').value;
+        var clockOutTime = document.getElementById('attendanceClockOutTime').value;
+        var data = {
+            clock_in_enabled: clockInEnabled,
+            clock_out_enabled: clockOutEnabled,
+        };
+        if (clockInEnabled && clockInTime) data.clock_in_time = clockInTime;
+        if (clockOutEnabled && clockOutTime) data.clock_out_time = clockOutTime;
+        if (attType === 'department' && deptId) data.department_id = parseInt(deptId);
+        if (attType === 'sub_tenant' && subTenantId) data.sub_tenant_id = parseInt(subTenantId);
+        try {
+            var resp = await fetch(OA_API_URL + '/attendance/save-attendance-config/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify(data)
+            });
+            if (!resp.ok) {
+                var err = await resp.json();
+                throw new Error(err.error || err.detail || '保存失败');
+            }
+            this.showToast('考勤配置保存成功', false);
+            this.closeConfigModal();
+        } catch (e) {
+            this.showAlert('保存失败', e.message || '请重试');
+        }
+    }
+
+    async _deleteConfig() {
+        if (!this._configDeleteId) { this.showAlert('提示', '未找到配置ID'); return; }
+        var confirmed = await this.showConfirmDialog('删除配置', '确定要删除当前考勤配置吗？删除后不可恢复。', 'danger');
+        if (!confirmed) return;
+        try {
+            var resp = await fetch(OA_API_URL + '/attendance/delete-attendance-config/' + this._configDeleteId + '/', {
+                method: 'DELETE',
+                headers: TokenManager.getHeaders(),
+            });
+            if (!resp.ok) throw new Error((await resp.json()).error || '删除失败');
+            this.showToast('配置已删除', false);
+            this._configDeleteId = null;
+            this._configEditKey = null;
+            document.getElementById('attendanceConfigForm').style.display = 'none';
+            document.getElementById('attendanceConfigFooter').style.display = 'none';
+            document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
+            document.getElementById('attendanceConfigEmpty').style.display = 'block';
+            await this._loadAttConfigList();
+        } catch (e) {
+            this.showAlert('删除失败', e.message || '请重试');
+        }
+    }
+
+    // ──────── 考勤日历 ────────
+
+    _openCalendar() {
+        this._calYear = new Date().getFullYear();
+        this._calMonth = new Date().getMonth() + 1;
+        this._renderCalendar();
+        document.getElementById('attendanceCalendarModal').style.display = 'flex';
+        setTimeout(function() {
+            document.getElementById('attendanceCalendarModal').classList.add('show');
+        }, 10);
+    }
+
+    _closeCalendar() {
+        var modal = document.getElementById('attendanceCalendarModal');
+        if (modal) {
+            modal.classList.remove('show');
+            setTimeout(function() { modal.style.display = 'none'; }, 200);
+        }
+    }
+
+    _calPrevMonth() {
+        this._calMonth--;
+        if (this._calMonth < 1) { this._calMonth = 12; this._calYear--; }
+        this._renderCalendar();
+    }
+
+    _calNextMonth() {
+        this._calMonth++;
+        if (this._calMonth > 12) { this._calMonth = 1; this._calYear++; }
+        this._renderCalendar();
+    }
+
+    async _renderCalendar() {
+        var year = this._calYear, month = this._calMonth;
+        document.getElementById('calYearMonth').textContent = year + '年' + month + '月';
+        var grid = document.getElementById('calGrid');
+        if (!grid) return;
+        grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:30px;"><i class="fas fa-spinner fa-spin"></i></div>';
+        try {
+            var data = await this.apiGet(OA_API_URL + '/attendance/calendar-stats/?year=' + year + '&month=' + month);
+            var days = data.days || [];
+            var summary = data.summary || {};
+            document.getElementById('calNormalCount').textContent = summary.normal || 0;
+            document.getElementById('calLateCount').textContent = summary.late || 0;
+            document.getElementById('calMissCount').textContent = summary.miss_clock || 0;
+            document.getElementById('calAbsentCount').textContent = summary.absent || 0;
+            var weekDays = ['日', '一', '二', '三', '四', '五', '六'];
+            var html = '';
+            weekDays.forEach(function(wd) {
+                html += '<div style="font-size:12px;font-weight:600;color:var(--text-light,#909399);padding:6px 0;">' + wd + '</div>';
+            });
+            var firstDay = new Date(year, month - 1, 1).getDay();
+            var dayMap = {};
+            days.forEach(function(d) { dayMap[d.date] = d; });
+            for (var e = 0; e < firstDay; e++) {
+                html += '<div style="min-height:70px;"></div>';
+            }
+            for (var d = 1; d <= (summary.total || 30); d++) {
+                var dateStr = year + '-' + String(month).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+                var info = dayMap[dateStr] || { day_status: 'none', day_label: '' };
+                var status = info.day_status || 'none';
+                var bgColor = '#fff';
+                var textColor = 'var(--text-primary)';
+                var dotColor = '';
+                if (status === 'normal') { bgColor = '#f0f9eb'; dotColor = '#67c23a'; }
+                else if (status === 'late') { bgColor = '#fdf6ec'; dotColor = '#e6a23c'; }
+                else if (status === 'miss_clock') { bgColor = '#fef0f0'; dotColor = '#f56c6c'; }
+                else if (status === 'absent') { bgColor = '#f5f5f5'; dotColor = '#909399'; textColor = '#bbb'; }
+                else if (status === 'future') { bgColor = '#fafafa'; textColor = '#ccc'; }
+                var tooltip = '';
+                if (info.clock_in && info.clock_out) {
+                    tooltip = '上班:' + (info.clock_in.time || '') + ' 下班:' + (info.clock_out.time || '');
+                } else if (info.clock_in) {
+                    tooltip = '上班:' + (info.clock_in.time || '') + ' 未下班打卡';
+                } else if (info.clock_out) {
+                    tooltip = '未上班打卡 下班:' + (info.clock_out.time || '');
+                }
+                var labelHtml = '<span style="font-weight:600;font-size:15px;">' + d + '</span>';
+                if (dotColor) {
+                    labelHtml += '<div style="width:6px;height:6px;border-radius:50%;background:' + dotColor + ';margin:2px auto 0;"></div>';
+                }
+                if (info.day_label) {
+                    labelHtml += '<div style="font-size:9px;color:' + textColor + ';margin-top:1px;">' + info.day_label + '</div>';
+                }
+                html += '<div class="cal-cell cal-' + status + '" onclick="attendanceApp._showCalDayDetail(\'' + dateStr + '\')" title="' + this._escape(tooltip || dateStr) + '" style="min-height:68px;background:' + bgColor + ';border-radius:6px;padding:4px;text-align:center;cursor:pointer;transition:all 0.15s;border:1px solid transparent;' + (status === 'none' ? 'opacity:0.3;' : '') + '">' + labelHtml + '</div>';
+            }
+            grid.innerHTML = html;
+        } catch (e) {
+            console.error('加载考勤日历失败:', e);
+            grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:30px;color:#f56c6c;">加载失败</div>';
+        }
+    }
+
+    async _showCalDayDetail(dateStr) {
+        try {
+            var data = await this.apiGet(OA_API_URL + '/attendance/calendar-day-detail/?date=' + dateStr);
+            if (!data) return;
+            var title = dateStr + ' 打卡详情';
+            var body = '<div style="padding:8px 0;">';
+            // Clock-in info
+            var ci = data.clock_in;
+            var co = data.clock_out;
+            var statusMap = {'normal': '正常', 'late': '迟到', 'early_leave': '早退'};
+            if (ci) {
+                body += '<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#f0f9eb;border-radius:8px;margin-bottom:8px;border-left:3px solid #67c23a;">'
+                    + '<i class="fas fa-sign-in-alt" style="color:#52c41a;font-size:18px;"></i>'
+                    + '<div><div style="font-weight:600;font-size:14px;">上班打卡</div>'
+                    + '<div style="font-size:13px;color:var(--text-secondary);">时间: ' + this._escape(ci.clock_time ? this._formatTime(ci.clock_time) : '') + '</div>'
+                    + '<div style="font-size:13px;color:var(--text-secondary);">状态: <span class="status-badge ' + (ci.status || 'normal') + '">' + (statusMap[ci.status] || ci.status || '正常') + '</span></div>'
+                    + (ci.location ? '<div style="font-size:12px;color:#909399;">位置: ' + this._escape(ci.location) + '</div>' : '')
+                    + '</div></div>';
+            } else {
+                body += '<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#f5f5f5;border-radius:8px;margin-bottom:8px;border-left:3px solid #909399;color:#909399;">'
+                    + '<i class="fas fa-sign-in-alt" style="color:#bbb;font-size:18px;"></i>'
+                    + '<div><div style="font-weight:600;font-size:14px;">上班打卡</div><div style="font-size:13px;">未打卡</div></div></div>';
+            }
+            if (co) {
+                body += '<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#fef3e0;border-radius:8px;margin-bottom:8px;border-left:3px solid #e6a23c;">'
+                    + '<i class="fas fa-sign-out-alt" style="color:#e6a23c;font-size:18px;"></i>'
+                    + '<div><div style="font-weight:600;font-size:14px;">下班打卡</div>'
+                    + '<div style="font-size:13px;color:var(--text-secondary);">时间: ' + this._escape(co.clock_time ? this._formatTime(co.clock_time) : '') + '</div>'
+                    + '<div style="font-size:13px;color:var(--text-secondary);">状态: <span class="status-badge ' + (co.status || 'normal') + '">' + (statusMap[co.status] || co.status || '正常') + '</span></div>'
+                    + (co.location ? '<div style="font-size:12px;color:#909399;">位置: ' + this._escape(co.location) + '</div>' : '')
+                    + '</div></div>';
+            } else {
+                body += '<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#f5f5f5;border-radius:8px;margin-bottom:8px;border-left:3px solid #909399;color:#909399;">'
+                    + '<i class="fas fa-sign-out-alt" style="color:#bbb;font-size:18px;"></i>'
+                    + '<div><div style="font-weight:600;font-size:14px;">下班打卡</div><div style="font-size:13px;">未打卡</div></div></div>';
+            }
+            // Overtime info
+            if (data.overtime) {
+                var ot = data.overtime;
+                body += '<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#f3e8ff;border-radius:8px;margin-bottom:8px;border-left:3px solid #9b59b6;">'
+                    + '<i class="fas fa-clock" style="color:#9b59b6;font-size:18px;"></i>'
+                    + '<div><div style="font-weight:600;font-size:14px;">加班</div>'
+                    + '<div style="font-size:13px;color:var(--text-secondary);">时数: ' + (ot.duration || 0) + ' 小时</div>'
+                    + (ot.content ? '<div style="font-size:12px;color:#606266;margin-top:2px;">内容: ' + this._escape(ot.content) + '</div>' : '')
+                    + (ot.title ? '<div style="font-size:12px;color:#909399;margin-top:2px;">审批: ' + this._escape(ot.title) + '</div>' : '')
+                    + '</div></div>';
+            }
+            body += '</div>';
+            // Show in a temporary dialog
+            this.showAlert(title, body);
+        } catch (e) {
+            console.error('加载日期详情失败:', e);
+        }
+    }
+
 }

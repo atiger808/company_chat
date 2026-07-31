@@ -64,6 +64,74 @@ body {
     opacity: 1;
 }
 
+/* ===== 侧边栏拖动分隔条 ===== */
+.cloud-layout .sidebar-splitter {
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+  transition: background 0.2s;
+}
+.cloud-layout .sidebar-splitter:hover,
+.cloud-layout .sidebar-splitter.active {
+  background: var(--primary-color, #409eff);
+  opacity: 0.4;
+}
+.cloud-layout .sidebar-splitter::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 3px;
+  height: 32px;
+  background: var(--border-color, #dcdfe6);
+  border-radius: 2px;
+  transition: background 0.2s;
+}
+.cloud-layout .sidebar-splitter:hover::after,
+.cloud-layout .sidebar-splitter.active::after {
+  background: var(--primary-color, #409eff);
+}
+
+/* ===== 侧边栏窄模式 ===== */
+.sidebar.sidebar-narrow {
+  width: 48px !important;
+  min-width: 48px;
+}
+.sidebar.sidebar-narrow .nav-menu .nav-item span,
+.sidebar.sidebar-narrow .sidebar-footer span {
+  display: none;
+}
+.sidebar.sidebar-narrow .nav-menu .nav-item {
+  justify-content: center;
+  padding: 12px 6px;
+}
+.sidebar.sidebar-narrow .nav-menu .nav-item i {
+  margin: 0;
+  font-size: 18px;
+}
+.sidebar.sidebar-narrow .sidebar-header .logo span {
+  display: none;
+}
+.sidebar.sidebar-narrow .sidebar-header .logo {
+  justify-content: center;
+}
+.sidebar.sidebar-narrow .sidebar-header .logo i {
+  margin: 0;
+}
+.sidebar.sidebar-narrow .sidebar-footer .btn-back-chat,
+.sidebar.sidebar-narrow .sidebar-footer .btn-logout {
+  justify-content: center;
+  padding: 10px 8px;
+}
+.sidebar.sidebar-narrow .sidebar-footer .btn-back-chat span,
+.sidebar.sidebar-narrow .sidebar-footer .btn-logout span {
+  display: none;
+}
+
 /* 侧边栏 */
 .sidebar {
     width: var(--sidebar-width);
@@ -269,8 +337,12 @@ body {
     flex: 1;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
     min-width: 0;
+}
+.cloud-content {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 
 .top-bar {
@@ -438,7 +510,8 @@ body {
 /* 内容区域 */
 .cloud-content {
     flex: 1;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     position: relative;
 }
 
@@ -862,6 +935,8 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 20px;
+    overflow-y: auto;
+    max-height: calc(100vh - 280px);
 }
 
 .stat-card {
@@ -1523,6 +1598,8 @@ body {
 
 /* 🔧 移动端适配 */
 @media (max-width: 768px) {
+    .cloud-layout .sidebar-splitter { display: none; }
+
     .cloud-layout {
         flex-direction: column;
     }
@@ -1926,14 +2003,21 @@ body {
 
 /* 🔧 移动端适配 */
 @media (max-width: 768px) {
-    /*.top-bar {*/
-    /*    padding: 10px 15px;*/
-    /*}*/
     .top-bar {
-        padding: 0 15px;
-        flex-wrap: wrap;
-        gap: 10px;
-        /*min-height: 100px;*/
+        padding: 0 10px;
+        flex-wrap: nowrap;
+        gap: 6px;
+        min-height: 48px;
+    }
+    .top-bar > div {
+        flex-shrink: 0;
+    }
+    .toolbar-actions {
+        flex-shrink: 0;
+        gap: 6px;
+    }
+    .admin-header-right {
+        flex-shrink: 0;
     }
 
     .breadcrumb-container {
@@ -3179,6 +3263,12 @@ body {
     background: #fef0f0;
 }
 
+.dropdown-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 4px 0;
+}
+
 /* cloud.css - 上传进度对话框样式 */
 .upload-progress-dialog {
     display: none;
@@ -4074,6 +4164,8 @@ body {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
     overflow: hidden;
     min-height: 200px;
+    max-height: calc(100vh - 280px);
+    overflow-y: auto;
 }
 
 .log-list {

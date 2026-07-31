@@ -36,6 +36,8 @@ urlpatterns = [
 
     # OA办公（考勤打卡+审批）
     path('api/oa/', include('oa.urls')),
+    path('api/org/', include('org.urls')),
+    path('org/', TemplateView.as_view(template_name='org/org.html'), name='org'),
 
     # 官网主页路由
     path('', TemplateView.as_view(template_name='index.html'), name='index'),
@@ -57,6 +59,8 @@ urlpatterns = [
     path('oa/attendance/', TemplateView.as_view(template_name='oa/attendance.html'), name='oa-attendance'),
     path('oa/approval/', TemplateView.as_view(template_name='oa/approval.html'), name='oa-approval'),
 
+    # 组织架构页面路由
+    path('org/', TemplateView.as_view(template_name='org/org.html'), name='org'),
 
     # 网盘相关路由
     # 🔧 1. 企业网盘主页 (SPA 入口)

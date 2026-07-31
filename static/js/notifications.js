@@ -281,7 +281,7 @@
         fetchUnreadCount();
 
         // 轮询
-        pollTimer = setInterval(fetchUnreadCount, 30000);
+        pollTimer = setInterval(fetchUnreadCount, 20000);
 
         // WebSocket 连接
         connectWs();

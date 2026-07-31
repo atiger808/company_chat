@@ -4,10 +4,11 @@
 # @Author :admin
 
 """
-日志 django中间件
+日志 django中间件 + 多租户中间件
 """
 import json
 import time
+import threading
 from django.db import close_old_connections
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
@@ -17,6 +18,50 @@ from loguru import logger
 from .models import OperationLog
 from utils.request_util import get_request_user, get_request_ip, get_request_data, get_request_path, get_os, \
     get_browser, get_verbose_name
+
+# 线程局部变量：存储当前请求的 tenant
+_thread_locals = threading.local()
+
+
+def get_current_tenant():
+    """获取当前线程的 tenant"""
+    return getattr(_thread_locals, 'tenant', None)
+
+
+def set_current_tenant(tenant):
+    """设置当前线程的 tenant"""
+    _thread_locals.tenant = tenant
+
+
+class TenantMiddleware(MiddlewareMixin):
+    """多租户中间件：自动识别并挂载当前企业"""
+
+    def process_request(self, request):
+        if not hasattr(request, 'user') or request.user.is_anonymous:
+            request.tenant = None
+            set_current_tenant(None)
+            return
+
+        tenant_id = request.headers.get('X-Tenant-Id')
+        if tenant_id:
+            try:
+                from .models import Tenant
+                tenant = Tenant.objects.get(id=tenant_id, is_active=True)
+                if request.user.tenant_memberships.filter(
+                    tenant=tenant, is_active=True
+                ).exists():
+                    request.tenant = tenant
+                    set_current_tenant(tenant)
+                    return
+            except Tenant.DoesNotExist:
+                pass
+
+        request.tenant = request.user.get_active_tenant()
+        set_current_tenant(request.tenant)
+
+    def process_response(self, request, response):
+        set_current_tenant(None)
+        return response
 
 
 class ApiLoggingMiddleware(MiddlewareMixin):
@@ -52,13 +97,17 @@ class ApiLoggingMiddleware(MiddlewareMixin):
             if body.get('password', ''):
                 body['password'] = '*' * min(len(body['password']), 6)
             if body.get('vpn_pwd', ''):
-                body['vpn_pwd'] = '*' * len(body['vpn_pwd'])
+                body['vpn_pwd'] = '*' * min(len(body['vpn_pwd']), 6)
             if body.get('old_password', ''):
-                body['old_password'] = '*' * len(body['old_password'])
+                body['old_password'] = '*' * min(len(body['old_password']), 6)
             if body.get('new_password', ''):
-                body['new_password'] = '*' * len(body['new_password'])
+                body['new_password'] = '*' * min(len(body['new_password']), 6)
             if body.get('confirm_password', ''):
-                body['confirm_password'] = '*' * len(body['confirm_password'])
+                body['confirm_password'] = '*' * min(len(body['confirm_password']), 6)
+            if body.get('new_password_confirm', ''):
+                body['new_password_confirm'] = '*' * min(len(body['new_password_confirm']), 6)
+            if body.get('password_confirm', ''):
+                body['password_confirm'] = '*' * min(len(body['password_confirm']), 6)
 
         if not hasattr(response, 'data') or not isinstance(response.data, dict):
             response.data = {}

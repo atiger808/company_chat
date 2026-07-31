@@ -5,12 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>企业网盘 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/cloud.css?v=20260718-8192c47">
+    <link rel="stylesheet" href="/static/css/cloud.css?v=20260731-09c0a6d">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
     <!-- 🔧 添加二维码库 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>-->
-    <script src="/static/js/dist/qrcode.min.js?v=20260718-8192c46"></script>
+    <script src="/static/js/dist/qrcode.min.js?v=20260731-09c0a6d"></script>
 </head>
 <body>
 <div class="cloud-layout">
@@ -73,6 +73,10 @@
             <a href="#" class="nav-item" data-view="chat">
                 <i class="fas fa-comments"></i> 聊天
             </a>
+            <a href="#" class="nav-item" data-view="org">
+                <i class="fas fa-sitemap"></i> 组织架构
+            </a>
+
         </nav>
 
         <div class="storage-status">
@@ -95,6 +99,9 @@
                 <i class="fas fa-cog"></i> 系统配置
             </a>
 
+            <a href="/org/" class="btn-back-chat">
+                <i class="fas fa-sitemap"></i> 组织架构
+            </a>
             <a href="/chat/" class="btn-back-chat">
                 <i class="fas fa-comments"></i> 进入聊天室
             </a>
@@ -103,6 +110,9 @@
             </a>
         </div>
     </aside>
+
+    <!-- 侧边栏拖动分隔条 -->
+    <div class="sidebar-splitter" id="cloudSplitter" title="拖动调整宽度"></div>
 
     <!-- 主内容区 -->
     <main class="main-content">
@@ -134,7 +144,7 @@
                 </div>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="cloudApp.toggleUserDropdown(event)">
                     <span id="adminUsername"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260718-8192c46" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260731-09c0a6d" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/attendance/'">
@@ -143,7 +153,28 @@
                         <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/approval/'">
                             <i class="fas fa-check-double"></i> OA审批
                         </div>
+
                         <div class="dropdown-divider"></div>
+
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/chat/'">
+                            <i class="fas fa-comments"></i> 聊天
+                        </div>
+
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/cloud/'">
+                            <i class="fas fa-cloud"></i> 网盘
+                        </div>
+
+                        <div class="dropdown-divider"></div>
+
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/tasks/'">
+                            <i class="fas fa-tasks"></i> 任务
+                        </div>
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/org/'">
+                            <i class="fas fa-sitemap"></i> 组织架构
+                        </div>
+
+                        <div class="dropdown-divider"></div>
+
                         <div class="dropdown-item text-danger" onclick="event.stopPropagation();cloudApp.logout()">
                             <i class="fas fa-sign-out-alt"></i> 退出登录
                         </div>
@@ -172,25 +203,28 @@
                     </div>
 
                     <div class="admin-header-right">
-                        <button class="btn btn-primary" id="uploadBtn">
+                        <button class="btn btn-primary" id="uploadBtn" title="上传文件">
                             <i class="fas fa-upload"></i> <span class="btn-text">上传</span>
                         </button>
 
-                        <button class="btn btn-secondary" id="newFolderBtn">
+                        <button class="btn btn-secondary" id="newFolderBtn" title="新建文件夹">
                             <i class="fas fa-folder-plus"></i> <span class="btn-text">新建文件夹</span>
                         </button>
 
                         <!-- 👇 新增：同步聊天室文档按钮 -->
                         <button class="btn btn-secondary" id="syncChatDocsBtn"
                                 title="将聊天室中未归档的文档自动同步到网盘">
-                            <i class="fas fa-cloud-upload-alt"></i> 同步聊天室文档
+                            <i class="fas fa-cloud-upload-alt"></i> <span class="btn-text">同步聊天室文档</span>
                         </button>
 
                         <!--                        <button class="btn btn-secondary" onclick="cloudApp.loadFiles(cloudApp.currentFolderId)">-->
                         <!--                            <i class="fas fa-sync"></i> <span class="btn-text">刷新</span>-->
                         <!--                        </button>-->
 
-                        <button class="btn btn-secondary" id="refreshBtn"><i class="fas fa-sync-alt"></i> 刷新</button>
+                        <button class="btn btn-secondary" id="refreshBtn" title="刷新">
+                            <i class="fas fa-sync-alt"></i> <span class="btn-text">刷新</span>
+
+                        </button>
 
                     </div>
 
@@ -274,8 +308,8 @@
                             <i class="fas fa-search"></i>
                             <input type="text" id="shareSearchInput" placeholder="搜索分享名称或提取码...">
                         </div>
-                        <button class="btn btn-secondary" onclick="cloudApp.loadMyShares()"><i class="fas fa-sync"></i>
-                            刷新
+                        <button class="btn btn-secondary" onclick="cloudApp.loadMyShares()">
+                            <i class="fas fa-sync"></i> <span class="btn-text">刷新</span>
                         </button>
                     </div>
 
@@ -293,7 +327,7 @@
                 <div class="view-header">
                     <h3><i class="fas fa-users"></i> 分享给我</h3>
                     <button class="btn btn-secondary" onclick="cloudApp.loadSharedWithMe()">
-                        <i class="fas fa-sync"></i> 刷新
+                        <i class="fas fa-sync"></i> <span class="btn-text">刷新</span>
                     </button>
                 </div>
                 <div class="share-list-container" id="sharedWithMeList">
@@ -384,12 +418,12 @@
                             </button>
                         </div>
 
-                        <button class="btn btn-primary" onclick="cloudApp.openModal('createSharedFolderModal')">
-                            <i class="fas fa-plus"></i> 新建共享文件夹
+                        <button class="btn btn-primary" onclick="cloudApp.openModal('createSharedFolderModal')" title="新建共享文件夹">
+                            <i class="fas fa-plus"></i> <span class="btn-text">新建共享文件夹</span>
                         </button>
                         <button class="btn btn-secondary"
-                                onclick="cloudApp.loadSharedFolders(cloudApp.currentFolderId)">
-                            <i class="fas fa-sync"></i> 刷新
+                                onclick="cloudApp.loadSharedFolders(cloudApp.currentFolderId)" title="刷新">
+                            <i class="fas fa-sync"></i> <span class="btn-text">刷新</span>
                         </button>
                     </div>
                 </div>
@@ -441,13 +475,13 @@
                     <h3><i class="fas fa-trash"></i> 回收站</h3>
                     <div class="trash-actions">
                         <!-- 🔧 新增：批量操作按钮 -->
-                        <button class="btn btn-secondary" id="batchRestoreBtn" style="display:none;">
+                        <button class="btn btn-secondary" id="batchRestoreBtn" style="display:none;" title="批量恢复">
                             <i class="fas fa-undo"></i> 批量恢复
                         </button>
-                        <button class="btn btn-danger" id="batchDeleteTrashBtn" style="display:none;">
-                            <i class="fas fa-trash-alt"></i> 批量清空
+                        <button class="btn btn-danger" id="batchDeleteTrashBtn" style="display:none;" title="批量删除">
+                            <i class="fas fa-trash-alt"></i> 批量删除
                         </button>
-                        <button class="btn btn-primary" onclick="cloudApp.emptyTrash()">
+                        <button class="btn btn-primary" onclick="cloudApp.emptyTrash()" title="清空回收站">
                             <i class="fas fa-trash-alt"></i> 清空回收站
                         </button>
                     </div>
@@ -486,8 +520,8 @@
             <div class="view-section" id="dashboardView">
                 <div class="view-header">
                     <h3><i class="fas fa-chart-pie"></i> 网盘统计</h3>
-                    <button class="btn btn-secondary" onclick="cloudApp.loadDashboardStats()">
-                        <i class="fas fa-sync"></i> 刷新
+                    <button class="btn btn-secondary" onclick="cloudApp.loadDashboardStats()" title="刷新">
+                        <i class="fas fa-sync"></i> <span class="btn-text">刷新</span>
                     </button>
                 </div>
                 <div class="dashboard-stats-container" id="dashboardStatsContent">
@@ -516,8 +550,8 @@
                             <option value="add_collaborator">添加协作者</option>
                             <option value="remove_collaborator">移除协作者</option>
                         </select>
-                        <button class="btn btn-secondary" onclick="cloudApp.loadOperationLogs()">
-                            <i class="fas fa-sync"></i> 刷新
+                        <button class="btn btn-secondary" onclick="cloudApp.loadOperationLogs()" title="刷新">
+                            <i class="fas fa-sync"></i> <span class="btn-text">刷新</span>
                         </button>
                     </div>
                 </div>
@@ -529,6 +563,12 @@
                 </div>
                 <div id="paginationContainerLogs" class="pagination-container" style="display:none;"></div>
             </div>
+
+            <!-- 🔧 9. 组织架构视图 -->
+            <div class="view-section" id="orgView" style="height:100%;">
+                <iframe src="/org/" style="width:100%;height:calc(100vh - 56px);border:none;border-radius:0;"></iframe>
+            </div>
+
         </div>
     </main>
 </div>
@@ -971,15 +1011,17 @@
 
 <!-- 脚本引入 -->
 <!--<script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>-->
-<script src="/static/js/dist/spark-md5.min.js?v=20260718-8192c46"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260718-8192c46"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260718-8192c46"></script>
-<script src="/static/js/encrypts.js?v=20260718-8192c46"></script>
-<script src="/static/js/utils.js?v=20260718-8192c46"></script>
-<script src="/static/js/frontend_cloud_config.js?v=20260718-8192c46"></script>
-<script src="/static/js/api.js?v=20260718-8192c46"></script>
-<script src="/static/js/cloud.js?v=20260718-8192c48"></script>
-<script src="/static/js/notifications.js?v=20260718-8192c46"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/encrypts.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/utils.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/frontend_cloud_config.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/api.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/tenant.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/org.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/cloud.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/notifications.js?v=20260731-09c0a6d"></script>
 
 <script>
     // 🔧 初始化侧边栏按钮显示状态
@@ -1045,8 +1087,43 @@
 
         requestAnimationFrame(observerLoop);
 
-
+        // 侧边栏拖动分隔条
+        initCloudSplitter();
     });
+
+    function initCloudSplitter() {
+        var splitter = document.getElementById('cloudSplitter');
+        var sidebar = document.getElementById('cloudSidebar');
+        if (!splitter || !sidebar) return;
+        var isDragging = false;
+
+        splitter.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            isDragging = true;
+            splitter.classList.add('active');
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+        });
+
+        document.addEventListener('mousemove', function(e) {
+            if (!isDragging) return;
+            var containerRect = document.querySelector('.cloud-layout').getBoundingClientRect();
+            var newWidth = e.clientX - containerRect.left;
+            newWidth = Math.max(48, Math.min(newWidth, containerRect.width * 0.4));
+            sidebar.style.width = newWidth + 'px';
+            sidebar.style.flex = 'none';
+            sidebar.classList.toggle('sidebar-narrow', newWidth < 80);
+        });
+
+        document.addEventListener('mouseup', function() {
+            if (isDragging) {
+                isDragging = false;
+                splitter.classList.remove('active');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            }
+        });
+    }
 </script>
 </body>
 </html>

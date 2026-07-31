@@ -5,7 +5,7 @@
 
 {% block extra_css %}
 <!--<link rel="stylesheet" href="{% static 'css/cloud_settings.css' %}">-->
-<link rel="stylesheet" href="/static/css/cloud_settings.css?v=20260718-8192c46">
+<link rel="stylesheet" href="/static/css/cloud_settings.css?v=20260731-09c0a6d">
 <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
 {% endblock %}
 
@@ -68,7 +68,7 @@
             </a>
             <div class="user-info-dropdown" id="userInfoDropdown" onclick="cloudSettings.toggleUserDropdown(event)">
                     <span id="adminUsername"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260718-8192c46" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260731-09c0a6d" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu show" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/attendance/'">
@@ -78,6 +78,24 @@
                             <i class="fas fa-check-double"></i> OA审批
                         </div>
                         <div class="dropdown-divider"></div>
+
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/chat/'">
+                            <i class="fas fa-comments"></i> 聊天
+                        </div>
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/cloud/'">
+                            <i class="fas fa-cloud"></i> 网盘
+                        </div>
+
+                        <div class="dropdown-divider"></div>
+
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/tasks/'">
+                            <i class="fas fa-tasks"></i> 任务
+                        </div>
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/org/'">
+                            <i class="fas fa-sitemap"></i> 组织架构
+                        </div>
+                        <div class="dropdown-divider"></div>
+
                         <div class="dropdown-item text-danger" onclick="event.stopPropagation();cloudSettings.logout()">
                             <i class="fas fa-sign-out-alt"></i> 退出登录
                         </div>
@@ -148,7 +166,7 @@
 
 {% block extra_js %}
 <!--<script src="{% static 'js/cloud_settings.js' %}"></script>-->
-<script src="/static/js/cloud_settings.js?v=20260718-8192c46"></script>
-<script src="/static/js/utils.js?v=20260718-8192c46"></script>
-<script src="/static/js/notifications.js?v=20260718-8192c46"></script>
+<script src="/static/js/cloud_settings.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/utils.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/notifications.js?v=20260731-09c0a6d"></script>
 {% endblock %}

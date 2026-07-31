@@ -15,7 +15,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="企业聊天室">
-    <link rel="apple-touch-icon" href="/static/icons/icon-128x128.png?v=20260718-8192c46">
+    <link rel="apple-touch-icon" href="/static/icons/icon-128x128.png?v=20260731-09c0a6d">
     <!-- Service Worker 注册（降级方案） -->
     <script>
         // Service Worker 降级注册（确保在 DOMContentLoaded 前注册）
@@ -33,8 +33,9 @@
     <meta name="msapplication-TileColor" content="#409EFF">
     <meta name="msapplication-TileImage" content="/static/icons/icon-144x144.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20260718-8192c46">-->
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260718-8192c46">
+    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20260731-09c0a6d">-->
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260731-09c0a6d">
+    <link rel="stylesheet" href="/static/css/org.css?v=20260731-09c0a6d">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
 
     <!-- 🔧 iOS 专用样式修复 -->
@@ -135,12 +136,23 @@
     <!-- 侧边栏 -->
     <div class="sidebar show">
         <div class="sidebar-header">
-            <a href="/" style="text-decoration: none; color: inherit;">
-                <div class="logo">
-                    <i class="fas fa-comments"></i>
-                    <span>企业聊天室</span>
+            <div class="logo" style="cursor:pointer;position:relative;">
+                <i class="fas fa-comments"></i>
+                <div class="tenant-switcher-trigger" id="globalTenantSwitcher" onclick="chatClient.toggleTenantDropdown(event)">
+                    <span class="tenant-switcher-name" id="globalTenantName">企业聊天室</span>
+                    <i class="fas fa-chevron-down tenant-switcher-arrow"></i>
                 </div>
-            </a>
+                <!-- 企业切换下拉菜单 -->
+                <div class="tenant-dropdown" id="globalTenantDropdown">
+                    <div class="tenant-dropdown-header">切换企业</div>
+                    <div class="tenant-dropdown-list" id="globalTenantList"></div>
+                    <div class="tenant-dropdown-footer">
+                        <button class="tenant-dropdown-create" onclick="tenantManager.openCreateTenantModal()">
+                            <i class="fas fa-plus-circle"></i> 创建新企业
+                        </button>
+                    </div>
+                </div>
+            </div>
             <div class="user-actions">
 
                 <a href="/" class="btn-icon" title="官网主页">
@@ -175,11 +187,6 @@
                         <span>我的云盘</span>
                     </div>
 
-                    <div class="dropdown-item" id="tasksBtn" style="display: none;">
-                        <i class="fas fa-tasks"></i>
-                        <span>我的任务</span>
-                    </div>
-
                     <div class="dropdown-divider"></div>
 
                     <div class="dropdown-item" id="attendanceBtn" style="display: none;">
@@ -189,6 +196,18 @@
                     <div class="dropdown-item" id="approvalBtn" style="display: none;">
                         <i class="fas fa-check-double"></i>
                         <span>OA审批</span>
+                    </div>
+
+                    <div class="dropdown-divider"></div>
+
+                    <div class="dropdown-item" id="tasksBtn" style="display: none;">
+                        <i class="fas fa-tasks"></i>
+                        <span>我的任务</span>
+                    </div>
+
+                    <div class="dropdown-item" id="orgBtn" style="display: none;">
+                        <i class="fas fa-sitemap"></i>
+                        <span>组织架构</span>
                     </div>
 
                     <div class="dropdown-divider"></div>
@@ -214,7 +233,7 @@
         </div>
 
         <div class="user-profile">
-            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260718-8192c46"
+            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260731-09c0a6d"
                  alt="头像" class="avatar">
             <div class="user-info">
                 <div class="username" id="currentUsername">加载中...</div>
@@ -263,17 +282,28 @@
             </div>
         </div>
 
-        <!-- 工作通知侧边栏项 -->
-        <div class="chat-list-item notif-sidebar-item" id="notifSidebarItem" onclick="chatClient.openNotifications()" style="display:none;">
-            <div class="group-avatar" style="background:var(--primary-color,#409eff);color:#fff;">
-                <i class="fas fa-bell"></i>
+        <!-- 侧边栏底部功能区 -->
+        <div class="sidebar-bottom-bar">
+            <div class="sidebar-bottom-item" id="notifSidebarItem" onclick="chatClient.openNotifications()" style="display:none;">
+                <div class="sb-icon" style="background:var(--primary-color,#409eff);">
+                    <i class="fas fa-bell"></i>
+                </div>
+                <div class="sb-text">
+                    <div class="sb-title">工作通知</div>
+                    <div class="sb-sub" id="notifSidebarSubtitle">查看通知</div>
+                </div>
+                <div class="sb-badge" id="notifSidebarBadge" style="display:none;">
+                    <span class="badge-num">0</span>
+                </div>
             </div>
-            <div class="group-info">
-                <div class="group-title">工作通知</div>
-                <div class="group-subtitle" id="notifSidebarSubtitle">查看工作通知</div>
-            </div>
-            <div class="notif-sidebar-badge" id="notifSidebarBadge" style="display:none;">
-                <span class="chat-item-unread-count">0</span>
+            <div class="sidebar-bottom-item" id="orgSidebarBtn" onclick="chatClient.openOrgView()">
+                <div class="sb-icon" style="background:linear-gradient(135deg,#e6a23c,#f0c78a);">
+                    <i class="fas fa-sitemap"></i>
+                </div>
+                <div class="sb-text">
+                    <div class="sb-title">组织架构</div>
+                    <div class="sb-sub">查看企业组织</div>
+                </div>
             </div>
         </div>
 
@@ -286,6 +316,9 @@
         </div>
     </div>
 
+    <!-- 侧边栏拖动分隔条 -->
+    <div class="sidebar-splitter" id="chatSplitter" title="拖动调整宽度"></div>
+
     <!-- 主聊天区域 -->
     <div class="chat-main">
         <div class="chat-header">
@@ -295,7 +328,7 @@
                 </button>
                 <div class="chat-info" onclick="chatClient.showProfile(chatClient.currentRoomId)">
                     <div class="chat-avatar">
-                        <img src="/static/images/default-avatar.png?v=20260718-8192c46"
+                        <img src="/static/images/default-avatar.png?v=20260731-09c0a6d"
                              alt="聊天对象" id="chatAvatar">
                     </div>
                     <div class="chat-details">
@@ -337,6 +370,19 @@
                 <!-- 消息列表将通过JS动态生成 -->
             </div>
 
+            <!-- 组织架构视图（主内容区域） -->
+            <div class="org-view-container hidden" id="orgViewContainer">
+                <div class="org-view-header">
+                    <div class="org-view-title"><i class="fas fa-sitemap" style="color:#e6a23c;"></i> 组织架构</div>
+                    <span class="org-view-tenant" id="orgViewTenantName"></span>
+                </div>
+                <div class="org-view-body" id="orgViewBody">
+                    <div class="empty-state">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
 
             <!-- 🔧 关键修复1: 按钮和徽章分离，徽章在按钮外部右上角 -->
             <div id="scrollToBottomContainer" class="scroll-to-bottom-container">
@@ -610,7 +656,7 @@
                 </div>
                 <div class="profile-avatar-section">
                     <div class="avatar-upload-container">
-                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20260718-8192c46"
+                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20260731-09c0a6d"
                              alt="头像">
                         <label class="upload-btn" for="avatarUpload">
                             <i class="fas fa-camera"></i>
@@ -834,21 +880,23 @@
 
 
 <!-- 🔧 关键修复：脚本资源直接带版本参数 -->
-<script src="/static/js/dist/spark-md5.min.js?v=20260718-8192c46"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260718-8192c46"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260718-8192c46"></script>
-<script src="/static/js/encrypts.js?v=20260718-8192c46"></script>
-<script src="/static/js/api.js?v=20260718-8192c46"></script>
-<script src="/static/js/utils.js?v=20260718-8192c46"></script>
-<script src="/static/js/chat.js?v=20260718-8192c46"></script>
-<script src="/static/js/notifications.js?v=20260718-8192c47"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/encrypts.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/api.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/utils.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/chat.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/tenant.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/org.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/notifications.js?v=20260731-09c0a6d"></script>
 
 
 <!-- templates/chat/index.html - 替换原有的版本检测脚本 -->
 
 <script>
     // 🔧 修复1: 从构建时注入的版本号（与后端保持一致）
-    const CURRENT_VERSION = '20260718-8192c46';
+    const CURRENT_VERSION = '20260731-09c0a6d';
 
     // 🔧 修复2: 首次访问时保存版本到 localStorage（不是 sessionStorage）
     const LAST_VERSION = localStorage.getItem('static_version');
@@ -889,6 +937,45 @@
         //         }
         //     }, 100);
         // }, 5000);
+    }
+
+    // 侧边栏拖动分隔条（等待 chatClient 就绪）
+    var _initChatSplitter = function() {
+        var splitter = document.getElementById('chatSplitter');
+        var sidebar = document.querySelector('.sidebar');
+        if (!splitter || !sidebar) return;
+        var isDragging = false;
+
+        splitter.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            isDragging = true;
+            splitter.classList.add('active');
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+        });
+
+        document.addEventListener('mousemove', function(e) {
+            if (!isDragging) return;
+            var containerRect = document.querySelector('.chat-container').getBoundingClientRect();
+            var newWidth = e.clientX - containerRect.left;
+            newWidth = Math.max(200, Math.min(newWidth, containerRect.width * 0.5));
+            sidebar.style.width = newWidth + 'px';
+            sidebar.style.flex = 'none';
+        });
+
+        document.addEventListener('mouseup', function() {
+            if (isDragging) {
+                isDragging = false;
+                splitter.classList.remove('active');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            }
+        });
+    };
+    if (document.readyState !== 'loading') {
+        _initChatSplitter();
+    } else {
+        document.addEventListener('DOMContentLoaded', _initChatSplitter);
     }
 </script>
 

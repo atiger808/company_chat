@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理控制台 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260718-8192c46">
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260718-8192c46">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260731-09c0a6d">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260731-09c0a6d">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260305-1">
     <!-- 🔧 新增：Chart.js 用于图表展示 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>-->
-    <script src="/static/js/dist/chart.min.js?v=20260718-8192c46"></script>
+    <script src="/static/js/dist/chart.min.js?v=20260731-09c0a6d"></script>
     <!-- 🔧 关键修复2: 添加 Chart.js 加载失败的回退方案 -->
     <script>
         // 检查 Chart.js 是否加载成功
@@ -80,6 +80,16 @@
                 <i class="fas fa-clipboard-list"></i> 操作日志
             </a>
 
+            <!-- 聊天 -->
+            <a href="#" class="nav-item" data-tab="chat">
+                <i class="fas fa-comments"></i> 聊天
+            </a>
+
+            <!-- 组织架构 -->
+            <a href="#" class="nav-item" data-tab="org">
+                <i class="fas fa-sitemap"></i> 组织架构
+            </a>
+
             <!-- OA办公 -->
             <a href="#" class="nav-item" data-tab="oa-attendance">
                 <i class="fas fa-clock"></i> 考勤打卡
@@ -100,6 +110,9 @@
             </a>
         </div>
     </aside>
+
+    <!-- 侧边栏拖动分隔条 -->
+    <div class="sidebar-splitter" id="adminSplitter" title="拖动调整宽度"></div>
 
     <!-- 主内容区 -->
     <main class="admin-main">
@@ -122,17 +135,38 @@
                     <span class="notif-badge hide" id="notifBadge">0</span>
                 </div>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="adminConsole.toggleUserDropdown(event)">
-                    <span id="adminUsername"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260718-8192c46" alt="头像">
+                    <span id="adminUsername" class="btn-text"></span>
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260731-09c0a6d" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu show" id="userDropdownMenu" style="display:none;">
-                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/attendance/'">
+                        <div class="dropdown-item"
+                             onclick="event.stopPropagation();window.location.href='/oa/attendance/'">
                             <i class="fas fa-clock"></i> 考勤打卡
                         </div>
-                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/approval/'">
+                        <div class="dropdown-item"
+                             onclick="event.stopPropagation();window.location.href='/oa/approval/'">
                             <i class="fas fa-check-double"></i> OA审批
                         </div>
+
                         <div class="dropdown-divider"></div>
+
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/chat/'">
+                            <i class="fas fa-comments"></i> 聊天
+                        </div>
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/cloud/'">
+                            <i class="fas fa-cloud"></i> 网盘
+                        </div>
+
+                        <div class="dropdown-divider"></div>
+
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/tasks/'">
+                            <i class="fas fa-tasks"></i> 任务
+                        </div>
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/org/'">
+                            <i class="fas fa-sitemap"></i> 组织架构
+                        </div>
+                        <div class="dropdown-divider"></div>
+
                         <div class="dropdown-item text-danger" onclick="event.stopPropagation();adminConsole.logout()">
                             <i class="fas fa-sign-out-alt"></i> 退出登录
                         </div>
@@ -279,57 +313,74 @@
             <!-- 🔧 用户管理标签页：所有管理员 -->
             <div id="usersTab" class="admin-tab active">
                 <div class="admin-toolbar">
-                    <div class="search-box">
-                        <i class="fas fa-search"></i>
-                        <input type="text" id="userSearch" placeholder="搜索用户...">
+                    <div class="admin-filter-row">
+                        <div class="search-box" style="flex:1;min-width:200px;">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="userSearch" placeholder="搜索用户..."
+                                   oninput="adminConsole.searchUsers(this.value)">
+                        </div>
+
+                        <select id="filterTenant" class="form-select filter-select"
+                                onchange="adminConsole.onFilterTenantChange()">
+                            <option value="">全部企业</option>
+                        </select>
+
+                        <select id="filterDepartment" class="form-select filter-select">
+                            <option value="">全部部门</option>
+                        </select>
                     </div>
 
-                    <!-- 🔧 新增：批量操作按钮组 -->
-                    <div class="batch-actions" id="batchActions" style="display:none;">
-                        <span class="selected-count" id="selectedCount">已选 0 项</span>
-                        <button class="btn btn-danger btn-sm" onclick="adminConsole.batchDeleteUsers()">
-                            <i class="fas fa-trash"></i> 批量删除
+                    <div class="admin-actions-row">
+
+                        <!-- 🔧 新增：批量操作按钮组 -->
+                        <div class="batch-actions" id="batchActions" style="display:none;">
+                            <span class="selected-count" id="selectedCount">已选 0 项</span>
+                            <button class="btn btn-danger btn-sm" onclick="adminConsole.batchDeleteUsers()">
+                                <i class="fas fa-trash"></i> 批量删除
+                            </button>
+                        </div>
+
+                        <button class="btn btn-primary" onclick="adminConsole.openCreateUserModal()">
+                            <i class="fas fa-plus"></i> 添加用户
                         </button>
+                        <button class="btn btn-secondary" onclick="adminConsole.refreshUsers()" title="刷新">
+                            <i class="fas fa-sync"></i> 刷新
+                        </button>
+
+                        <!--                    <input type="text" class="search-input" placeholder="搜索用户..."-->
+                        <!--                           oninput="adminConsole.searchUsers(this.value)">-->
                     </div>
 
-                    <button class="btn btn-primary" onclick="adminConsole.openCreateUserModal()">
-                        <i class="fas fa-plus"></i> 添加用户
-                    </button>
-                    <button class="btn btn-secondary" onclick="adminConsole.refreshUsers()" title="刷新">
-                        <i class="fas fa-sync"></i> 刷新
-                    </button>
+                    <div class="admin-table-container" id="usersTableContainer">
 
-                    <!--                    <input type="text" class="search-input" placeholder="搜索用户..."-->
-                    <!--                           oninput="adminConsole.searchUsers(this.value)">-->
+                        <div class="scroll-indicator" id="scrollIndicator">左右滑动</div>
+                        <table class="admin-table">
+                            <thead>
+                            <tr>
+                                <th>
+                                    <input type="checkbox" id="selectAll" class="user-checkbox">
+                                </th>
+                                <th>ID</th>
+                                <th>头像</th>
+                                <th>用户名</th>
+                                <th>真实姓名</th>
+                                <th>所属企业</th>
+                                <th>部门</th>
+                                <th>职位</th>
+                                <th>用户类型</th>
+                                <th>状态</th>
+                                <th>操作</th>
+                            </tr>
+                            </thead>
+                            <tbody id="usersTableBody">
+                            <!-- 动态生成 -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="userPagination" class="pagination-container" style="display:none;"></div>
                 </div>
 
-                <div class="admin-table-container" id="usersTableContainer">
-
-                    <div class="scroll-indicator" id="scrollIndicator">左右滑动</div>
-                    <table class="admin-table">
-                        <thead>
-                        <tr>
-                            <th>
-                                <input type="checkbox" id="selectAll" class="user-checkbox">
-                            </th>
-                            <th>ID</th>
-                            <th>头像</th>
-                            <th>用户名</th>
-                            <th>真实姓名</th>
-                            <th>部门</th>
-                            <th>职位</th>
-                            <th>用户类型</th>
-                            <th>状态</th>
-                            <th>操作</th>
-                        </tr>
-                        </thead>
-                        <tbody id="usersTableBody">
-                        <!-- 动态生成 -->
-                        </tbody>
-                    </table>
-                </div>
             </div>
-
 
             <!-- 🔧 聊天室管理标签页：仅超级管理员 -->
             <div id="roomsTab" class="admin-tab super-admin-only">
@@ -486,13 +537,27 @@
                 <div class="admin-toolbar">
                     <div class="search-box">
                         <i class="fas fa-search"></i>
-                        <input type="text" id="loginLogSearch" placeholder="搜索用户名、IP、浏览器..." oninput="adminConsole.searchLoginLogs(this.value)">
+                        <input type="text" id="loginLogSearch" placeholder="搜索用户名、IP、浏览器..."
+                               oninput="adminConsole.searchLoginLogs(this.value)">
                     </div>
-                    <button class="btn btn-secondary" onclick="adminConsole.loadLoginLogs()"><i class="fas fa-sync"></i> 刷新</button>
+                    <button class="btn btn-secondary" onclick="adminConsole.loadLoginLogs()"><i class="fas fa-sync"></i>
+                        刷新
+                    </button>
                 </div>
                 <div class="admin-table-container">
                     <table class="admin-table">
-                        <thead><tr><th>用户</th><th>IP</th><th>登录类型</th><th>浏览器</th><th>系统</th><th>位置</th><th>时间</th><th>操作</th></tr></thead>
+                        <thead>
+                        <tr>
+                            <th>用户</th>
+                            <th>IP</th>
+                            <th>登录类型</th>
+                            <th>浏览器</th>
+                            <th>系统</th>
+                            <th>位置</th>
+                            <th>时间</th>
+                            <th>操作</th>
+                        </tr>
+                        </thead>
                         <tbody id="loginLogsTableBody"></tbody>
                     </table>
                 </div>
@@ -504,13 +569,27 @@
                 <div class="admin-toolbar">
                     <div class="search-box">
                         <i class="fas fa-search"></i>
-                        <input type="text" id="operationLogSearch" placeholder="搜索用户名、路径、IP..." oninput="adminConsole.searchOperationLogs(this.value)">
+                        <input type="text" id="operationLogSearch" placeholder="搜索用户名、路径、IP..."
+                               oninput="adminConsole.searchOperationLogs(this.value)">
                     </div>
-                    <button class="btn btn-secondary" onclick="adminConsole.loadOperationLogs()"><i class="fas fa-sync"></i> 刷新</button>
+                    <button class="btn btn-secondary" onclick="adminConsole.loadOperationLogs()"><i
+                            class="fas fa-sync"></i> 刷新
+                    </button>
                 </div>
                 <div class="admin-table-container">
                     <table class="admin-table">
-                        <thead><tr><th>用户</th><th>模块</th><th>请求路由</th><th>方法</th><th>IP</th><th>状态</th><th>时间</th><th>操作</th></tr></thead>
+                        <thead>
+                        <tr>
+                            <th>用户</th>
+                            <th>模块</th>
+                            <th>请求路由</th>
+                            <th>方法</th>
+                            <th>IP</th>
+                            <th>状态</th>
+                            <th>时间</th>
+                            <th>操作</th>
+                        </tr>
+                        </thead>
                         <tbody id="operationLogsTableBody"></tbody>
                     </table>
                 </div>
@@ -519,12 +598,24 @@
 
             <!-- OA考勤打卡标签页 -->
             <div id="oa-attendanceTab" class="admin-tab" style="height:100%;">
-                <iframe src="/oa/attendance/" style="width:100%;height:calc(100vh - 60px);border:none;border-radius:0;"></iframe>
+                <iframe src="/oa/attendance/"
+                        style="width:100%;height:calc(100vh - 60px);border:none;border-radius:0;"></iframe>
             </div>
 
             <!-- OA审批标签页 -->
             <div id="oa-approvalTab" class="admin-tab" style="height:100%;">
-                <iframe src="/oa/approval/" style="width:100%;height:calc(100vh - 60px);border:none;border-radius:0;"></iframe>
+                <iframe src="/oa/approval/"
+                        style="width:100%;height:calc(100vh - 60px);border:none;border-radius:0;"></iframe>
+            </div>
+
+            <!-- 聊天标签页 -->
+            <div id="chatTab" class="admin-tab" style="height:100%;">
+                <iframe src="/chat/" style="width:100%;height:calc(100vh - 60px);border:none;border-radius:0;"></iframe>
+            </div>
+
+            <!-- 组织架构标签页 -->
+            <div id="orgTab" class="admin-tab" style="height:100%;">
+                <iframe src="/org/" style="width:100%;height:calc(100vh - 60px);border:none;border-radius:0;"></iframe>
             </div>
 
         </div>
@@ -642,7 +733,22 @@
                             <input type="text" id="newPosition">
                         </div>
                     </div>
-                    <!-- 🔧 关键修复：用户类型字段添加权限控制 -->
+
+                    <div class="form-group" id="createTenantGroup">
+                        <label>所属企业</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-building"></i>
+                            <select id="newTenant" class="form-select" onchange="adminConsole.onTenantChange('new')">
+                                <option value="">请选择企业</option>
+                                <!-- 动态加载 -->
+                            </select>
+                        </div>
+                        <small class="form-hint" id="createTenantHint" style="display:none;">
+                            <i class="fas fa-info-circle"></i> 选择企业后，用户将自动加入该企业
+                        </small>
+                    </div>
+                </div>
+                <div class="form-row">
                     <div class="form-group" id="createUserTypeGroup">
                         <label>用户类型 <span class="required">*</span></label>
 
@@ -769,6 +875,21 @@
                     <!--                        <input type="text" id="editDepartment">-->
                     <!--                    </div>-->
 
+                    <!-- 所属企业 -->
+                    <div class="form-group" id="editTenantGroup">
+                        <label>所属企业</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-building"></i>
+                            <select id="editTenant" class="form-select" onchange="adminConsole.onTenantChange('edit')">
+                                <option value="">请选择企业</option>
+                                <!-- 动态加载 -->
+                            </select>
+                        </div>
+                        <small class="form-hint" style="display:none;">
+                            <i class="fas fa-info-circle"></i> 选择企业后，用户将自动加入该企业
+                        </small>
+                    </div>
+
                     <!-- 🔧 关键修复：部门字段添加权限控制 -->
                     <div class="form-group" id="editDepartmentGroup">
                         <label>部门</label>
@@ -861,18 +982,18 @@
         <div class="spinner"></div>
     </div>
 </div>
-<script src="/static/js/dist/spark-md5.min.js?v=20260718-8192c46"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260718-8192c46"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260718-8192c46"></script>
-<script src="/static/js/encrypts.js?v=20260718-8192c46"></script>
-<script src="/static/js/utils.js?v=20260718-8192c46"></script>
-<script src="/static/js/api.js?v=20260718-8192c46"></script>
-<script src="/static/js/admin.js?v=20260718-8192c46"></script>
-<script src="/static/js/admin_chat_rooms.js?v=20260718-8192c46"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/encrypts.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/utils.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/api.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/admin.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/admin_chat_rooms.js?v=20260731-09c0a6d"></script>
 <!-- 🔧 新增：数据统计和系统设置 JS -->
-<script src="/static/js/admin_statistics.js?v=20260718-8192c46"></script>
-<script src="/static/js/admin_settings.js?v=20260718-8192c46"></script>
-<script src="/static/js/notifications.js?v=20260718-8192c46"></script>
+<script src="/static/js/admin_statistics.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/admin_settings.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/notifications.js?v=20260731-09c0a6d"></script>
 
 
 <script>
@@ -905,8 +1026,45 @@
             window.adminSettings = new AdminSettingsClient();
         }
 
+        // 侧边栏拖动分隔条
+        initAdminSplitter();
 
     });
+
+    function initAdminSplitter() {
+        var splitter = document.getElementById('adminSplitter');
+        var sidebar = document.querySelector('.admin-sidebar');
+        if (!splitter || !sidebar) return;
+        var isDragging = false;
+
+        splitter.addEventListener('mousedown', function (e) {
+            e.preventDefault();
+            isDragging = true;
+            splitter.classList.add('active');
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+        });
+
+        document.addEventListener('mousemove', function (e) {
+            if (!isDragging) return;
+            var containerRect = document.querySelector('.admin-container').getBoundingClientRect();
+            var newWidth = e.clientX - containerRect.left;
+            newWidth = Math.max(48, Math.min(newWidth, containerRect.width * 0.4));
+            sidebar.style.width = newWidth + 'px';
+            sidebar.style.flex = 'none';
+            // 宽度<80px时只显示图标
+            sidebar.classList.toggle('sidebar-narrow', newWidth < 80);
+        });
+
+        document.addEventListener('mouseup', function () {
+            if (isDragging) {
+                isDragging = false;
+                splitter.classList.remove('active');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            }
+        });
+    }
 </script>
 
 </body>

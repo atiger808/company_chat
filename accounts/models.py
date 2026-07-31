@@ -12,6 +12,9 @@ from django.conf import settings
 import secrets
 import hashlib
 
+# from .managers import TenantManager
+
+
 def get_request_ip(request):
     """
     获取请求IP
@@ -25,34 +28,298 @@ def get_request_ip(request):
     ip = request.META.get('REMOTE_ADDR', '') or getattr(request, 'request_ip', None)
     return ip or 'unknown'
 
-class Department(models.Model):
-    """部门模型"""
-    name = models.CharField(max_length=100, unique=True, verbose_name='部门名称')
-    # code = models.CharField(max_length=50, unique=True, blank=True, verbose_name='部门编码')
-    code = models.CharField(max_length=50, default='', blank=True, verbose_name='部门编码')
-    parent = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, verbose_name='上级部门')
 
-    # ✅ 修复：添加 related_name 避免与 CustomUser.department 冲突
-    manager = models.ForeignKey(
-        settings.AUTH_USER_MODEL,  # 或使用 settings.AUTH_USER_MODEL
+class Tenant(models.Model):
+    """企业/租户模型（多租户隔离的核心）"""
+
+    TENANT_TYPE_CHOICES = [
+        ('group', '集团'),
+        ('company', '公司'),
+        ('branch', '分公司'),
+        ('virtual', '虚拟组织'),
+    ]
+
+    name = models.CharField(max_length=200, verbose_name='企业名称')
+    short_name = models.CharField(max_length=50, blank=True, verbose_name='企业简称')
+    code = models.CharField(max_length=50, unique=True, verbose_name='企业编码')
+    logo = models.ImageField(upload_to='tenants/logos/', blank=True, verbose_name='企业Logo')
+
+    parent = models.ForeignKey('self', null=True, blank=True,
+                               on_delete=models.SET_NULL,
+                               related_name='sub_tenants',
+                               verbose_name='上级企业/集团')
+    tenant_type = models.CharField(max_length=20, choices=TENANT_TYPE_CHOICES,
+                                   default='company', verbose_name='企业类型')
+    level = models.IntegerField(default=1, verbose_name='层级')
+
+    industry = models.CharField(max_length=100, blank=True, verbose_name='所属行业')
+    scale = models.CharField(max_length=50, blank=True, verbose_name='企业规模')
+    address = models.CharField(max_length=500, blank=True, verbose_name='企业地址')
+    contact_phone = models.CharField(max_length=20, blank=True, verbose_name='联系电话')
+    website = models.URLField(blank=True, verbose_name='企业官网')
+    description = models.TextField(blank=True, verbose_name='企业简介')
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
-        blank=True,
-        verbose_name='部门负责人',
-        related_name='managed_departments'  # 🔑 关键修复
+        related_name='owned_tenants',
+        verbose_name='企业所有者'
     )
 
+    max_users = models.IntegerField(default=100, verbose_name='最大用户数')
+    max_storage_gb = models.IntegerField(default=10, verbose_name='最大存储空间(GB)')
+    features = models.JSONField(default=dict, blank=True, verbose_name='功能开关')
+    custom_domain = models.CharField(max_length=200, blank=True, verbose_name='自定义域名')
+
+    is_active = models.BooleanField(default=True, verbose_name='是否启用')
+    is_verified = models.BooleanField(default=False, verbose_name='是否已认证')
+
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '企业/租户'
+        verbose_name_plural = '企业/租户'
+        ordering = ['name']
+        indexes = [
+            models.Index(fields=['code']),
+            models.Index(fields=['parent', 'is_active']),
+            models.Index(fields=['tenant_type']),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if self.parent:
+            self.level = self.parent.level + 1
+        else:
+            self.level = 1
+        super().save(*args, **kwargs)
+
+    def get_all_sub_tenant_ids(self):
+        ids = [self.id]
+        for sub in self.sub_tenants.filter(is_active=True):
+            ids.extend(sub.get_all_sub_tenant_ids())
+        return ids
+
+    def get_root_tenant(self):
+        current = self
+        while current.parent:
+            current = current.parent
+        return current
+
+
+class TenantMembership(models.Model):
+    """用户-企业关联表（一个用户可属于多个企业）"""
+
+    ROLE_CHOICES = [
+        ('owner', '企业所有者'),
+        ('admin', '企业管理员'),
+        ('dept_admin', '部门管理员'),
+        ('member', '普通成员'),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='tenant_memberships',
+        verbose_name='用户'
+    )
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name='memberships',
+        verbose_name='企业'
+    )
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES,
+                            default='member', verbose_name='企业角色')
+
+    nickname = models.CharField(max_length=100, blank=True, verbose_name='企业内昵称')
+    employee_id = models.CharField(max_length=50, blank=True, verbose_name='工号')
+
+    is_active = models.BooleanField(default=True, verbose_name='是否激活')
+    is_default = models.BooleanField(default=False, verbose_name='是否默认企业')
+
+    joined_at = models.DateTimeField(auto_now_add=True, verbose_name='加入时间')
+    left_at = models.DateTimeField(null=True, blank=True, verbose_name='离开时间')
+
+    class Meta:
+        unique_together = ('user', 'tenant')
+        verbose_name = '用户企业关联'
+        verbose_name_plural = '用户企业关联'
+        ordering = ['-joined_at']
+        indexes = [
+            models.Index(fields=['user', 'is_active']),
+            models.Index(fields=['tenant', 'role']),
+        ]
+
+    def __str__(self):
+        return f'{self.user.username} @ {self.tenant.name} ({self.get_role_display()})'
+
+
+class Department(models.Model):
+    """部门模型（企业级增强版 - 多租户）"""
+
+    # ===== 多租户核心字段 =====
+    tenant = models.ForeignKey(
+        'Tenant',
+        on_delete=models.CASCADE,
+        related_name='departments',
+        verbose_name='所属企业',
+        null=True, blank=True,  # 兼容旧数据
+    )
+
+    name = models.CharField(max_length=100, verbose_name='部门名称')
+    code = models.CharField(max_length=50, default='', blank=True, verbose_name='部门编码')
+    parent = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True,
+        verbose_name='上级部门', related_name='children'
+    )
+    manager = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        verbose_name='部门负责人',
+        related_name='managed_departments'
+    )
+
+    # ===== 新增：层级与排序 =====
+    level = models.IntegerField(default=1, verbose_name='层级')
+    sort_order = models.IntegerField(default=0, verbose_name='排序号')
+    full_path = models.CharField(max_length=500, blank=True, verbose_name='完整路径',
+                                 help_text='如：公司/技术部/后端组')
+
+    # ===== 新增：部门属性 =====
+    description = models.TextField(blank=True, verbose_name='部门描述')
+    department_type = models.CharField(
+        max_length=20,
+        choices=[
+            ('company', '公司'),
+            ('department', '部门'),
+            ('group', '小组'),
+            ('virtual', '虚拟组织')
+        ],
+        default='department',
+        verbose_name='部门类型'
+    )
+
+    # ===== 新增：副负责人 =====
+    deputy_managers = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        related_name='deputy_managed_departments',
+        blank=True,
+        verbose_name='副负责人'
+    )
+
+    # ===== 新增：可见性控制 =====
+    visibility = models.CharField(
+        max_length=20,
+        choices=[
+            ('public', '全企业可见'),
+            ('department', '仅本部门及子部门可见'),
+            ('custom', '自定义可见范围'),
+            ('hidden', '隐藏部门')
+        ],
+        default='public',
+        verbose_name='可见范围'
+    )
+    visible_departments = models.ManyToManyField(
+        'self',
+        symmetrical=False,
+        related_name='visible_by',
+        blank=True,
+        verbose_name='可见部门列表'
+    )
+
+    # ===== 新增：部门群关联 =====
+    department_group = models.OneToOneField(
+        'chat.ChatRoom',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='department',
+        verbose_name='部门群聊'
+    )
+
+    # ===== 新增：自动同步 =====
+    auto_create_group = models.BooleanField(default=True, verbose_name='自动创建部门群')
+    auto_sync_members = models.BooleanField(default=True, verbose_name='自动同步成员到群')
+
+    # ===== 新增：标签 =====
+    tags = models.JSONField(default=list, blank=True, verbose_name='部门标签')
+
+    # ===== 部门转子公司 =====
+    converted_tenant = models.ForeignKey(
+        'Tenant', on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='converted_from_departments',
+        verbose_name='转换后的企业'
+    )
+
+    is_active = models.BooleanField(default=True, verbose_name='是否启用')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
-
 
     class Meta:
         verbose_name = '部门'
         verbose_name_plural = '部门'
-        ordering = ['name']
+        ordering = ['sort_order', 'name']
+        indexes = [
+            models.Index(fields=['tenant', 'parent', 'is_active']),
+            models.Index(fields=['tenant', 'code']),
+            models.Index(fields=['tenant', 'level']),
+        ]
+        unique_together = ('tenant', 'name', 'parent')
 
     def __str__(self):
+        if self.tenant:
+            return f'[{self.tenant.short_name or self.tenant.name}] {self.name}'
         return self.name
+
+    def save(self, *args, **kwargs):
+        # 自动计算层级和路径
+        if self.parent:
+            self.level = self.parent.level + 1
+            self.full_path = f'{self.parent.full_path}/{self.name}'
+        else:
+            self.level = 1
+            self.full_path = self.name
+        super().save(*args, **kwargs)
+
+    def get_all_members(self):
+        """获取部门所有成员（仅限本企业）"""
+        from org.models import UserDepartment
+        user_ids = UserDepartment.objects.filter(
+            department=self
+        ).values_list('user_id', flat=True)
+        from django.conf import settings
+        user_model = settings.AUTH_USER_MODEL
+        from django.apps import apps
+        return apps.get_model(settings.AUTH_USER_MODEL).objects.filter(id__in=user_ids)
+
+    def get_ancestor_ids(self):
+        """获取所有祖先部门ID"""
+        ids = []
+        current = self.parent
+        while current:
+            ids.append(current.id)
+            current = current.parent
+        return ids
+
+    def get_descendant_ids(self):
+        """获取所有子孙部门ID"""
+        ids = []
+        children = Department.objects.filter(parent=self)
+        for child in children:
+            ids.append(child.id)
+            ids.extend(child.get_descendant_ids())
+        return ids
+
+    def get_member_count(self):
+        """获取部门成员数量"""
+        from org.models import UserDepartment
+        return UserDepartment.objects.filter(department=self).count()
 
 
 class CustomUser(AbstractUser):
@@ -177,6 +444,16 @@ class CustomUser(AbstractUser):
         blank=True,
         related_name='friend_of',
         verbose_name='好友列表'
+    )
+
+    # ===== 多租户字段 =====
+    active_tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='active_users',
+        verbose_name='当前激活企业'
     )
 
     class Meta:
@@ -355,6 +632,82 @@ class CustomUser(AbstractUser):
         """是否可以管理用户"""
         return self.is_admin_or_higher()
 
+
+    # ==================== 多租户方法 ====================
+
+    def get_tenants(self):
+        """获取用户所属的所有企业"""
+        return Tenant.objects.filter(
+            memberships__user=self,
+            memberships__is_active=True
+        )
+
+    def get_active_tenant(self):
+        """获取当前激活的企业"""
+        if self.active_tenant:
+            return self.active_tenant
+        default_membership = self.tenant_memberships.filter(
+            is_active=True, is_default=True
+        ).first()
+        if default_membership:
+            return default_membership.tenant
+        first_membership = self.tenant_memberships.filter(is_active=True).first()
+        return first_membership.tenant if first_membership else None
+
+    def get_tenant_role(self, tenant=None):
+        """获取在指定企业中的角色"""
+        tenant = tenant or self.get_active_tenant()
+        if not tenant:
+            return None
+        membership = self.tenant_memberships.filter(tenant=tenant).first()
+        return membership.role if membership else None
+
+    def is_tenant_admin(self, tenant=None):
+        """检查是否是企业管理员"""
+        role = self.get_tenant_role(tenant)
+        return role in ['owner', 'admin']
+
+    def is_tenant_owner(self, tenant=None):
+        """检查是否是企业所有者"""
+        return self.get_tenant_role(tenant) == 'owner'
+
+    def get_primary_department(self, tenant=None):
+        """获取在指定企业中的主部门"""
+        tenant = tenant or self.get_active_tenant()
+        try:
+            from org.models import UserDepartment
+            primary_rel = UserDepartment.objects.filter(
+                user=self,
+                is_primary=True,
+                department__tenant=tenant
+            ).first()
+            if primary_rel:
+                return primary_rel.department
+        except Exception:
+            pass
+        return self.department
+
+    def get_all_departments(self, tenant=None):
+        """获取在指定企业中的所有部门"""
+        tenant = tenant or self.get_active_tenant()
+        try:
+            from org.models import UserDepartment
+            dept_ids = UserDepartment.objects.filter(
+                user=self,
+                department__tenant=tenant
+            ).values_list('department_id', flat=True)
+            return Department.objects.filter(id__in=dept_ids)
+        except Exception:
+            return Department.objects.none()
+
+    def switch_tenant(self, tenant_id):
+        """切换激活企业"""
+        tenant = Tenant.objects.get(id=tenant_id)
+        if not self.tenant_memberships.filter(tenant=tenant, is_active=True).exists():
+            raise PermissionError('您不属于该企业')
+        self.active_tenant = tenant
+        self.save(update_fields=['active_tenant'])
+        return tenant
 
     # ==================== 工具方法 ====================
 

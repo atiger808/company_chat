@@ -36,6 +36,9 @@ class ChatRoom(models.Model):
 
     name = models.CharField(max_length=100, blank=True, null=True, verbose_name='群聊名称')
     room_type = models.CharField(max_length=20, choices=ROOM_TYPE_CHOICES, default='private', verbose_name='聊天类型')
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                                null=True, blank=True, related_name='chat_rooms',
+                                verbose_name='所属企业')
     members = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name='chat_rooms', verbose_name='成员')
     creator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='created_rooms',
                                 verbose_name='创建者')
@@ -84,6 +87,10 @@ class ChatRoom(models.Model):
         为序列化器提供通用显示名称（需在序列化器中传入user context）
         """
         # 注意：此属性需要在序列化器中通过context传递user
+        if self.room_type == 'private':
+            if self.members:
+                return ' - '.join([m.real_name or m.username for m in self.members.all()])
+
         return self.name or '未命名聊天'
 
 

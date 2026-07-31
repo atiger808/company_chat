@@ -421,7 +421,7 @@ class AdminStatisticsClient {
             }
 
             this.renderHorizontalBarChart(data, 'departmentChart', {
-                labels: data.departments.map(d => d.name),
+                labels: data.departments.map(d => d.tenant_name ? `[${d.tenant_name}] ${d.name}` : d.name),
                 datasets: [
                     {
                         label: '总用户数',
@@ -719,7 +719,7 @@ class AdminStatisticsClient {
                 ? (item.real_name || item.username)
                 : (item.name || item.display_name);
             const desc = type === 'user'
-                ? (item.department || '无部门')
+                ? (item.tenant_name ? `[${item.tenant_name}] ${item.department || '无部门'}` : (item.department || '无部门'))
                 : `${item.room_type === 'private' ? '私聊' : '群聊'} · ${item.member_count}人`;
 
             html += `

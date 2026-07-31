@@ -2269,33 +2269,35 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def department_stats(self, request):
-        """🏢 部门统计 - 单次聚合查询"""
+        """🏢 部门统计 - 覆盖集团/企业下的组织架构部门"""
         from django.db.models import Count, Q
+        from org.models import UserDepartment as OrgUserDepartment
 
-        # 🔧 优化：单次查询获取所有部门统计
-        dept_stats = Department.objects.annotate(
-            user_count=Count('customuser', filter=Q(customuser__is_active=True)),
-            active_users=Count('customuser', filter=Q(
-                customuser__is_active=True,
-                customuser__is_online=True
-            )),
-            message_count=Count('customuser__sent_messages', filter=Q(
-                customuser__sent_messages__is_deleted=False
-            ))
-        ).order_by('-id').only('id', 'name')
+        # 基于组织架构部门关联（UserDepartment）统计，覆盖企业集团下所有部门
+        dept_qs = OrgUserDepartment.objects.values('department').annotate(
+            user_count=Count('user', distinct=True)
+        )
+        dept_map = {d['department']: d['user_count'] for d in dept_qs}
 
-        stats = [{
-            'id': dept.id,
-            'name': dept.name,
-            'user_count': dept.user_count or 0,
-            'active_users': dept.active_users or 0,
-            'message_count': dept.message_count or 0,
-            'activity_rate': round(
-                (dept.active_users / max(dept.user_count, 1)) * 100, 2
-            )
-        } for dept in dept_stats]
-
-        # 🔧 缓存部门统计 2 分钟
+        depts = Department.objects.filter(is_active=True).select_related('tenant')
+        stats = []
+        for dept in depts:
+            user_count = dept_map.get(dept.id, 0)
+            tenant_name = ''
+            if dept.tenant:
+                tenant_name = dept.tenant.short_name or dept.tenant.name
+            stats.append({
+                'id': dept.id,
+                'name': dept.name,
+                'tenant_id': dept.tenant_id,
+                'tenant_name': tenant_name,
+                'user_count': user_count,
+                'active_users': 0,
+                'message_count': 0,
+                'activity_rate': 0,
+            })
+        # 按用户数降序
+        stats.sort(key=lambda x: x['user_count'], reverse=True)
         cache.set('department_stats', stats, 120)
         return Response({'departments': stats})
 
@@ -2319,14 +2321,28 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
         ).order_by('-message_count')[:limit]
 
         ranking = []
+        from org.models import UserDepartment as OrgUserDepartment
+        user_ids = [u.id for u in users]
+        # 批量获取用户的主部门（组织架构）
+        dept_map = {}
+        if user_ids:
+            for ud in OrgUserDepartment.objects.filter(user_id__in=user_ids, is_primary=True).select_related('department', 'department__tenant'):
+                dept_map[ud.user_id] = {
+                    'name': ud.department.name,
+                    'tenant_name': (ud.department.tenant.short_name or ud.department.tenant.name) if ud.department.tenant else '',
+                }
         for user in users:
+            dept_info = dept_map.get(user.id)
+            if not dept_info and user.department:
+                dept_info = {'name': user.department.name, 'tenant_name': ''}
             ranking.append({
                 'id': user.id,
                 'username': user.username,
                 'real_name': user.real_name,
                 'avatar_url': user.get_avatar_url() if hasattr(user, 'get_avatar_url') else (
                     user.avatar.url if user.avatar else None),
-                'department': user.department.name if user.department else None,
+                'department': dept_info['name'] if dept_info else None,
+                'tenant_name': dept_info['tenant_name'] if dept_info else '',
                 'message_count': user.message_count,
                 'chat_room_count': user.chat_room_count,
                 'last_active': user.last_login.isoformat() if user.last_login else None
@@ -2355,7 +2371,7 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
         for room in rooms:
             ranking.append({
                 'id': room.id,
-                'name': room.display_name,
+                'name': room.name or room.display_name,
                 'room_type': room.room_type,
                 'message_count': room.message_count,
                 'member_count': room.member_count,

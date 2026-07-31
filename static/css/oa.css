@@ -53,7 +53,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .close-btn { background: none; border: none; font-size: 24px; color: var(--text-light, #909399); cursor: pointer; padding: 0 4px; line-height: 1; }
 .close-btn:hover { color: var(--text-primary, #303133); }
 .modal-body { padding: 20px; }
-.modal-footer { display: flex; gap: 10px; justify-content: flex-end; padding: 16px 20px; border-top: 1px solid var(--border-color, #ebeef5); }
+.modal-footer { display: flex; gap: 10px; justify-content: center; padding: 16px 20px; border-top: 1px solid var(--border-color, #ebeef5); flex-wrap: wrap; }
+@media (max-width: 768px) {
+  .modal-footer { padding: 12px 14px; gap: 6px; }
+  .modal-footer .btn { font-size: 12px; padding: 6px 10px; gap: 4px; }
+  .modal-footer .btn i { font-size: 12px; }
+}
 
 /* 表单 */
 .form-group { margin-bottom: 16px; }
@@ -86,35 +91,227 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 }
 
 /* 页面头部 */
-.oa-header {
+/* ===== 全局顶栏（类组织架构风格） ===== */
+.oa-top-bar {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 24px;
-    background: #fff;
-    border-bottom: 1px solid var(--border-color, #e4e7ed);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
-    z-index: 100;
+    height: 56px;
+    padding: 0 20px;
+    background: var(--primary-color, #409eff);
+    color: #fff;
     flex-shrink: 0;
+    position: relative;
+    z-index: 100;
 }
 
-.oa-header-left {
+.oa-top-bar .top-right .btn-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 6px;
+        border: none;
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 15px;
+        transition: background 0.2s;
+    }
+
+.oa-top-bar .top-right .btn-icon:hover {
+    background: rgba(255, 255, 255, 0.25);
+}
+
+.oa-top-bar .user-avatar-wrap {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    overflow: hidden;
+    cursor: pointer;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    flex-shrink: 0;
+    position: relative;
+}
+
+.oa-top-bar .user-avatar-wrap img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+/* 用户头像 */
+.user-avatar-wrap {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    overflow: hidden;
+    cursor: pointer;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    flex-shrink: 0;
+    position: relative;
+}
+.user-avatar-wrap img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+/* 用户下拉菜单 */
+.oa-user-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    width: 200px;
+    background: var(--bg-primary, #fff);
+    border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+    z-index: 1001;
+    overflow: hidden;
+    margin-top: 4px;
+    animation: slideUp 0.2s ease;
+}
+.oa-user-dropdown.show {
+    display: block;
+}
+.oa-user-dropdown .dd-item {
     display: flex;
     align-items: center;
-    gap: 12px;
-}
-
-.oa-header-left h1 {
-    font-size: 20px;
-    font-weight: 600;
+    gap: 10px;
+    padding: 11px 16px;
+    cursor: pointer;
+    font-size: 13px;
     color: var(--text-primary, #303133);
-    margin: 0;
+    transition: background 0.15s;
+}
+.oa-user-dropdown .dd-item:hover {
+    background: var(--bg-secondary, #f5f7fa);
+}
+.oa-user-dropdown .dd-item i {
+    width: 18px;
+    font-size: 14px;
+    color: var(--text-secondary, #606266);
+}
+.oa-user-dropdown .dd-item.danger {
+    color: #f56c6c;
+}
+.oa-user-dropdown .dd-item.danger i {
+    color: #f56c6c;
+}
+.oa-user-dropdown .dd-divider {
+    height: 1px;
+    background: var(--border-color, #ebeef5);
+    margin: 4px 0;
 }
 
-.oa-header-right {
+@keyframes slideUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+[data-theme="dark"] .oa-user-dropdown {
+    background: #1e1e1e;
+}
+[data-theme="dark"] .oa-user-dropdown .dd-item:hover {
+    background: #2d2d2d;
+}
+
+/* ===== 审批配置模态框布局 ===== */
+.config-modal-layout {
+    display: flex;
+    gap: 16px;
+}
+.config-sidebar {
+    flex: 0 0 180px;
+    border-right: 1px solid var(--border-color, #dcdfe6);
+    padding-right: 12px;
+}
+.config-main {
+    flex: 1;
+    min-width: 0;
+}
+@media (max-width: 768px) {
+    .config-modal-layout {
+        flex-direction: column;
+        gap: 12px;
+    }
+    .config-sidebar {
+        flex: none;
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid var(--border-color, #dcdfe6);
+        padding-right: 0;
+        padding-bottom: 8px;
+    }
+    .config-sidebar #configList {
+        max-height: 160px !important;
+    }
+}
+
+.oa-top-bar .top-left,
+.oa-top-bar .top-right {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 6px;
+}
+
+.oa-top-bar .top-center {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.top-bar-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    border: none;
+    background: rgba(255,255,255,0.12);
+    color: #fff;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    text-decoration: none;
+    transition: background 0.2s;
+    white-space: nowrap;
+}
+.top-bar-btn:hover {
+    background: rgba(255,255,255,0.22);
+}
+.top-bar-btn-primary {
+    background: rgba(255,255,255,0.25);
+    font-weight: 600;
+}
+.top-bar-btn-primary:hover {
+    background: rgba(255,255,255,0.35);
+}
+.top-bar-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-left: 8px;
+}
+
+/* 移动端隐藏文字，只保留图标 */
+@media (max-width: 768px) {
+    .oa-top-bar .top-bar-text {
+        display: none !important;
+    }
+    .oa-top-bar .top-bar-btn {
+        font-size: 0;
+        padding: 6px 10px;
+    }
+    .oa-top-bar .top-bar-btn i {
+        font-size: 16px;
+    }
+    .oa-top-bar .top-left .top-bar-title {
+        font-size: 0;
+    }
+    .oa-top-bar .top-left .top-bar-title i {
+        font-size: 18px;
+    }
 }
 
 /* 内容区 */
@@ -320,6 +517,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .status-badge.early_leave {
     background: #fdf6ec;
     color: #e6a23c;
+}
+
+.status-badge.deferred {
+    background: #fdf6ec;
+    color: #e6a23c;
+}
+
+.status-badge.processing {
+    background: #f3e8ff;
+    color: #9b59b6;
 }
 
 /* 空状态 */
@@ -1057,6 +1264,7 @@ input[type="date"].date-styled::-webkit-calendar-picker-indicator:hover {
 .type-icon-badge.type-expense { background:#f0f9eb; color:#67c23a; }
 .type-icon-badge.type-trip { background:#e8f4fd; color:#409eff; }
 .type-icon-badge.type-purchase { background:#f3e8ff; color:#9b59b6; }
+.type-icon-badge.type-recruit { background:#fef3e0; color:#e67e22; }
 .type-icon-badge.type-other { background:#f5f5f5; color:#909399; }
 
 /* ==================== 审批类型选择器 ==================== */
@@ -1089,6 +1297,51 @@ input[type="date"].date-styled::-webkit-calendar-picker-indicator:hover {
     background: #ecf5ff;
     box-shadow: 0 2px 8px rgba(64,158,255,0.2);
 }
+/* 配置模态框审批类型卡片选择器 */
+.config-type-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-top: 4px;
+}
+.config-type-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--border-color,#dcdfe6);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: #fff;
+  user-select: none;
+  font-size: 12px;
+}
+.config-type-card:hover {
+  border-color: var(--primary-color,#409eff);
+  background: #f0f7ff;
+}
+.config-type-card.active {
+  border-color: var(--primary-color,#409eff);
+  background: #ecf5ff;
+  box-shadow: 0 1px 4px rgba(64,158,255,0.15);
+}
+.config-type-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+@media (max-width: 480px) {
+  .config-type-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
 .type-card-icon {
     width: 40px;
     height: 40px;
@@ -1119,4 +1372,180 @@ input[type="date"].date-styled::-webkit-calendar-picker-indicator:hover {
     .type-selector-grid {
         grid-template-columns: repeat(3, 1fr);
     }
+}
+
+.attendance-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
+.attendance-filter-row .filter-select {
+  width: auto;
+  min-width: 140px;
+  max-width: 220px;
+}
+@media (max-width: 768px) {
+  .attendance-filter-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .attendance-filter-row .filter-select {
+    max-width: 100%;
+  }
+}
+
+/* ==================== 手写签名全屏 ==================== */
+#actionSignatureBox {
+    transition: all 0.2s ease;
+}
+#actionSignatureBox.sig-fullscreen {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    max-width: none !important;
+    z-index: 10005;
+    border-radius: 0 !important;
+    background: #f5f7fa !important;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.25);
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 24px;
+    box-sizing: border-box;
+}
+/* 全屏时画布保持 2.5:1 内部长宽比，居中显示不拉伸，横向屏幕下尽可能大 */
+#actionSignatureBox.sig-fullscreen canvas {
+    width: auto !important;
+    height: auto !important;
+    max-width: 92%;
+    max-height: 82%;
+    aspect-ratio: 2.5 / 1;
+    background: #fff;
+    border-radius: 6px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+    flex-shrink: 0;
+}
+#actionSignatureBox.sig-fullscreen #actionSignaturePlaceholder {
+    font-size: 18px;
+    top: 50% !important;
+    bottom: auto !important;
+    left: 50% !important;
+    right: auto !important;
+    transform: translate(-50%, -50%);
+    height: auto;
+    padding: 0 20px;
+    text-align: center;
+    pointer-events: none;
+}
+#actionSignatureBox.sig-fullscreen #actionSignatureExitFullscreen {
+    position: absolute !important;
+    top: 16px !important;
+    right: 16px !important;
+    left: auto !important;
+    bottom: auto !important;
+    z-index: 11;
+}
+#actionSignatureBox.sig-fullscreen #actionSignatureFullActions {
+    position: absolute !important;
+    bottom: 16px !important;
+    left: 50% !important;
+    right: auto !important;
+    top: auto !important;
+    transform: translateX(-50%);
+    z-index: 11;
+}
+
+/* ==================== 审批抄送 ==================== */
+.cc-user-item:hover {
+  background: #e8f4fd !important;
+}
+.cc-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: #f3e8ff;
+  border-radius: 14px;
+  font-size: 12px;
+  margin: 2px;
+  transition: all 0.2s;
+}
+.cc-tag i:hover {
+  color: #f56c6c !important;
+}
+#ccUserSearch:focus {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+.cc-tab.active {
+  background: var(--primary-color, #409eff) !important;
+  color: #fff !important;
+}
+
+/* 审批配置模态框 */
+#configApproverTags span,
+#configCcDeptTags span,
+#configCcUserTags span {
+  transition: all 0.2s;
+}
+#configApproverTags span i.fa-times:hover,
+#configCcDeptTags span i.fa-times:hover,
+#configCcUserTags span i.fa-times:hover {
+  color: #f56c6c !important;
+}
+#configApproverDropdown div:hover,
+#configCcDeptDropdown div:hover,
+#configCcUserDropdown div:hover {
+  background: #e8f4fd;
+}
+
+/* ==================== 审批模态框最大化 ==================== */
+.maximize-btn {
+  width: 32px; height: 32px;
+  border: none; background: transparent;
+  color: var(--text-light,#909399);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  font-size: 14px;
+  transition: all 0.2s;
+  margin-right: 4px;
+}
+.maximize-btn:hover {
+  background: var(--bg-secondary,#f0f2f5);
+  color: var(--text-primary,#303133);
+}
+.modal-content.maximized {
+  position: fixed !important;
+  top: 20px !important;
+  left: 20px !important;
+  right: 20px !important;
+  bottom: 20px !important;
+  max-width: none !important;
+  width: auto !important;
+  max-height: none !important;
+  height: auto !important;
+  margin: 0 !important;
+  transform: none !important;
+  border-radius: 12px !important;
+  z-index: 2001;
+}
+.modal-content.maximized .modal-body {
+  max-height: calc(100vh - 140px) !important;
+  overflow-y: auto !important;
+}
+.config-list-item:hover {
+  background: #f0f2f5;
+}
+.config-list-item[style*="background:#e8f4fd"]:hover {
+  background: #d1e8ff !important;
 }

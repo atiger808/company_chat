@@ -118,6 +118,7 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+    flex-shrink: 0;
 }
 
 /* ================= 右侧内容区 ================= */
@@ -781,7 +782,11 @@
     background: #fef0f0;
 }
 
-
+.dropdown-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 4px 0;
+}
 
 /* ==================== 暗色主题 ==================== */
 [data-theme="dark"] .settings-layout {

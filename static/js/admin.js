@@ -1,4 +1,4 @@
-// @File   :admin.js
+﻿// @File   :admin.js
 // @Time   :2026/2/13 10:38
 // @Author :dayue
 // @Email  :ole211@qq.com
@@ -102,6 +102,22 @@ class AdminConsole {
             this.setupSidebar();
             this.initTableScroll();
             this._setupGlobalClickHandler();
+
+            // 加载用户管理过滤下拉
+            this._loadFilterTenants();
+
+            // 非超级管理员，自动选中当前企业并禁用企业下拉
+            if (!this.isSuperAdmin && this.currentUser) {
+                var activeTenant = this.currentUser.tenant_info || null;
+                if (activeTenant && activeTenant.id) {
+                    var filterTenant = document.getElementById('filterTenant');
+                    if (filterTenant) {
+                        filterTenant.value = activeTenant.id;
+                        filterTenant.disabled = true;
+                    }
+                    this._loadFilterDepartments(activeTenant.id);
+                }
+            }
 
             // 添加跳转到聊天室按钮事件
             const gotoChatBtn = document.getElementById('gotoChatBtn');
@@ -273,7 +289,7 @@ class AdminConsole {
      */
     async switchTab(tabName) {
         // 🔧 权限检查：普通管理员只能访问用户管理、操作日志和OA
-        if (!this.isSuperAdmin && tabName !== 'users' && tabName !== 'operation-logs' && tabName !== 'oa-attendance' && tabName !== 'oa-approval') {
+        if (!this.isSuperAdmin && tabName !== 'users' && tabName !== 'operation-logs' && tabName !== 'oa-attendance' && tabName !== 'oa-approval' && tabName !== 'chat' && tabName !== 'org') {
             this.showError('权限不足', '您无权访问此功能');
             // 强制切回用户管理
             tabName = 'users';
@@ -305,6 +321,8 @@ class AdminConsole {
             'operation-logs': '操作日志',
             'oa-attendance': '考勤打卡',
             'oa-approval': 'OA审批',
+            'org': '组织架构',
+            'chat': '聊天',
         };
         document.getElementById('pageTitle').textContent = titles[tabName] || '管理控制台';
 
@@ -358,14 +376,14 @@ class AdminConsole {
      * 🔧 根据权限设置界面显示
      */
     setupPermissionUI() {
-        // 🔧 隐藏/显示超级管理员专属菜单项（OA对所有管理员开放）
-        const superAdminItems = document.querySelectorAll('.nav-item[data-tab]:not([data-tab="users"]):not([data-tab="oa-attendance"]):not([data-tab="oa-approval"])');
+        // 🔧 隐藏/显示超级管理员专属菜单项（OA+组织架构+聊天对所有管理员开放）
+        const superAdminItems = document.querySelectorAll('.nav-item[data-tab]:not([data-tab="users"]):not([data-tab="org"]):not([data-tab="chat"]):not([data-tab="oa-attendance"]):not([data-tab="oa-approval"])');
         superAdminItems.forEach(item => {
             item.style.display = this.isSuperAdmin ? '' : 'none';
         });
 
-        // 🔧 隐藏/显示超级管理员专属内容区域（操作日志+OA对所有管理员可见）
-        const superAdminTabs = document.querySelectorAll('.admin-tab:not(#usersTab):not(#operation-logsTab):not(#oa-attendanceTab):not(#oa-approvalTab)');
+        // 🔧 隐藏/显示超级管理员专属内容区域（操作日志+OA+聊天+组织架构对所有管理员可见）
+        const superAdminTabs = document.querySelectorAll('.admin-tab:not(#usersTab):not(#operation-logsTab):not(#oa-attendanceTab):not(#oa-approvalTab):not(#chatTab):not(#orgTab)');
         superAdminTabs.forEach(tab => {
             tab.style.display = this.isSuperAdmin ? '' : 'none';
         });
@@ -375,6 +393,18 @@ class AdminConsole {
         if (opLogNav) opLogNav.style.display = '';
         const opLogTab = document.getElementById('operation-logsTab');
         if (opLogTab) opLogTab.style.display = '';
+
+        // 🔧 组织架构对所有管理员开放
+        const orgNav = document.querySelector('[data-tab="org"]');
+        if (orgNav) orgNav.style.display = '';
+        const orgTab = document.getElementById('orgTab');
+        if (orgTab) orgTab.style.display = '';
+
+        // 🔧 聊天对所有管理员开放
+        const chatNav = document.querySelector('[data-tab="chat"]');
+        if (chatNav) chatNav.style.display = '';
+        const chatTab = document.getElementById('chatTab');
+        if (chatTab) chatTab.style.display = '';
 
         // 🔧 OA办公对所有管理员开放
         const attNav = document.querySelector('[data-tab="oa-attendance"]');
@@ -498,55 +528,92 @@ class AdminConsole {
     // ==================== 部门加载 ====================
 
     /**
-     * 🔧 关键修复：加载部门列表（根据权限）
+     * 🔧 加载部门列表
+     * @param {string} selectId - select element ID
+     * @param {number|null} selectedId - selected department ID
+     * @param {number|null} tenantId - filter by tenant ID, null for non-org departments only
      */
-    async loadDepartments(selectId, selectedId = null) {
+    async loadDepartments(selectId, selectedId = null, tenantId = null) {
         try {
-            const response = await fetch(`${API_ADMIN_URL}/admin/departments/`, {
-                headers: TokenManager.getHeaders()
-            });
-
-
-            if (!response.ok) {
-                console.warn('加载部门列表失败');
-                return;
-            }
-
-            const departments = await response.json();
             const select = document.getElementById(selectId);
-
             if (!select) return;
 
-            // 保留第一个选项（请选择部门）
-            const firstOption = select.querySelector('option[value=""]');
-            select.innerHTML = '';
-            if (firstOption) {
-                select.appendChild(firstOption);
-            }
+            // 清除之前的提示
+            var parent = select.parentNode;
+            var oldHint = parent.querySelector('.tenant-dept-hint');
+            if (oldHint) oldHint.remove();
 
-            // 🔧 普通管理员只能看到自己的部门
-            if (!this.isSuperAdmin && this.currentUser?.department_info) {
-                // 只添加当前管理员的部门
-                const option = document.createElement('option');
-                option.value = this.currentUser.department_info.name;
-                option.setAttribute('data-id', this.currentUser.department_info.id)
-                option.textContent = this.currentUser.department_info.name;
-                if (selectedId === this.currentUser.department_info.id) {
-                    option.selected = true;
-                }
-                select.appendChild(option);
-            } else {
-                // 🔧 超级管理员可以看到所有部门
-                departments.forEach(dept => {
-                    const option = document.createElement('option');
-                    option.value = dept.name;
-                    option.setAttribute('data-id', dept.id)
-                    option.textContent = dept.name;
-                    if (selectedId === dept.id) {
-                        option.selected = true;
+            // 填充部门下拉
+            select.innerHTML = '';
+            var firstOpt = document.createElement('option');
+            firstOpt.value = '';
+            firstOpt.textContent = '请选择部门';
+            select.appendChild(firstOpt);
+
+            if (tenantId) {
+                // 选择了企业 → 加载该企业的组织架构部门
+                var tenantName = '';
+                var tenantSelect = document.getElementById(selectId === 'newDepartment' ? 'newTenant' : 'editTenant');
+                if (tenantSelect && tenantSelect._tenantData) {
+                    for (var ti = 0; ti < tenantSelect._tenantData.length; ti++) {
+                        if (tenantSelect._tenantData[ti].id == tenantId) {
+                            tenantName = tenantSelect._tenantData[ti].short_name || tenantSelect._tenantData[ti].name;
+                            break;
+                        }
                     }
-                    select.appendChild(option);
-                });
+                }
+                try {
+                    var orgResp = await fetch('/api/org/departments/?tenant_id=' + tenantId, {
+                        headers: TokenManager.getHeaders()
+                    });
+                    if (orgResp.ok) {
+                        var orgData = await orgResp.json();
+                        var orgDepts = orgData.results || orgData || [];
+                        // Build tree: group by parent
+                        var byParent = {};
+                        orgDepts.forEach(function(d) {
+                            var pid = d.parent || 'root';
+                            if (!byParent[pid]) byParent[pid] = [];
+                            byParent[pid].push(d);
+                        });
+                        function appendChildren(parentId, depth) {
+                            var children = byParent[parentId] || [];
+                            children.forEach(function(d) {
+                                var opt = document.createElement('option');
+                                opt.value = 'org:' + d.id;
+                                opt.setAttribute('data-dept-id', d.id);
+                                var prefix = '';
+                                for (var k = 0; k < depth; k++) prefix += '— ';
+                                opt.textContent = (depth > 0 ? prefix : '') + d.name;
+                                select.appendChild(opt);
+                                appendChildren(d.id, depth + 1);
+                            });
+                        }
+                        appendChildren('root', 0);
+                    }
+                } catch (e) { console.error('加载组织部门失败:', e); }
+
+                var hint = document.createElement('div');
+                hint.className = 'tenant-dept-hint';
+                hint.style.cssText = 'font-size:12px;color:var(--text-light,#909399);padding:4px 0 0;';
+                hint.textContent = '已选择企业「' + tenantName + '」，用户将自动加入该企业';
+                parent.appendChild(hint);
+            } else {
+                // 未选择企业 → 只加载没有所属企业的部门
+                try {
+                    var adminResp = await fetch('/api/auth/admin/departments/?tenant_isnull=true', { headers: TokenManager.getHeaders() });
+                    if (adminResp.ok) {
+                        var departments = await adminResp.json();
+                        var deptList = Array.isArray(departments) ? departments : (departments.results || []);
+                        deptList.forEach(function(dept) {
+                            var opt = document.createElement('option');
+                            opt.value = dept.name;
+                            opt.textContent = dept.name;
+                            if (selectedId === dept.id) opt.selected = true;
+                            select.appendChild(opt);
+                        });
+                    }
+                } catch (e) { console.error('加载部门失败:', e); }
             }
 
         } catch (error) {
@@ -777,11 +844,20 @@ class AdminConsole {
         }
     }
 
-    async loadUsers() {
+    async loadUsers(page) {
+        if (page === undefined) page = this.currentPage || 1;
         try {
             this.showLoading();
+            var tenantId = document.getElementById('filterTenant') ? document.getElementById('filterTenant').value : '';
+            var deptId = document.getElementById('filterDepartment') ? document.getElementById('filterDepartment').value : '';
+            var searchVal = document.getElementById('userSearch') ? document.getElementById('userSearch').value.trim() : '';
 
-            const response = await fetch(`${API_ADMIN_URL}/admin/users/`, {
+            var url = API_ADMIN_URL + '/admin/users/?page=' + page + '&page_size=20';
+            if (tenantId) url += '&tenant_id=' + tenantId;
+            if (deptId) url += '&org_dept_id=' + deptId;
+            if (searchVal) url += '&search=' + encodeURIComponent(searchVal);
+
+            const response = await fetch(url, {
                 headers: TokenManager.getHeaders()
             });
             this.statusCode = response.status;
@@ -791,7 +867,13 @@ class AdminConsole {
             }
 
             const data = await response.json();
-            this.users = Array.isArray(data) ? data : (data.results || []);
+            if (data.results) {
+                this.users = data.results;
+                this.currentPage = data.page || page;
+                this._renderUserPagination(data);
+            } else {
+                this.users = Array.isArray(data) ? data : [];
+            }
             this.renderUsersTable();
 
         } catch (error) {
@@ -803,6 +885,86 @@ class AdminConsole {
         } finally {
             this.hideLoading();
         }
+    }
+
+    _renderUserPagination(data) {
+        var container = document.getElementById('userPagination');
+        if (!container) return;
+        if (!data.total_pages || data.total_pages <= 1) {
+            container.style.display = 'none';
+            return;
+        }
+        container.style.display = 'flex';
+        var p = data.page, t = data.total_pages;
+        var html = '<div class="user-pagination-bar">'
+            + '<span class="user-pagination-total">共 ' + data.count + ' 条</span>'
+            + '<div class="user-pagination-btns">';
+        html += '<button class="pagination-btn" onclick="adminConsole.loadUsers(' + (p - 1) + ')" ' + (p <= 1 ? 'disabled' : '') + '><i class="fas fa-chevron-left"></i></button>';
+        for (var i = Math.max(1, p - 2); i <= Math.min(t, p + 2); i++) {
+            html += '<button class="pagination-btn ' + (i === p ? 'active' : '') + '" onclick="adminConsole.loadUsers(' + i + ')">' + i + '</button>';
+        }
+        html += '<button class="pagination-btn" onclick="adminConsole.loadUsers(' + (p + 1) + ')" ' + (p >= t ? 'disabled' : '') + '><i class="fas fa-chevron-right"></i></button></div></div>';
+        container.innerHTML = html;
+    }
+
+    _loadFilterTenants() {
+        var sel = document.getElementById('filterTenant');
+        if (!sel) return;
+        fetch('/api/org/tenants/', { headers: TokenManager.getHeaders() }).then(function(resp) {
+            return resp.ok ? resp.json() : {results: []};
+        }).then(function(data) {
+            var tenants = data.results || data || [];
+            sel.innerHTML = '<option value="">全部企业</option>';
+            tenants.forEach(function(t) {
+                var opt = document.createElement('option');
+                opt.value = t.id;
+                opt.textContent = t.short_name || t.name;
+                sel.appendChild(opt);
+            });
+        }).catch(function(e) { console.error('加载企业列表失败:', e); });
+    }
+
+    _loadFilterDepartments(tenantId) {
+        var sel = document.getElementById('filterDepartment');
+        if (!sel) return;
+        sel.innerHTML = '<option value="">全部部门</option>';
+        if (!tenantId) return;
+        fetch('/api/org/departments/?tenant_id=' + tenantId, { headers: TokenManager.getHeaders() }).then(function(resp) {
+            return resp.ok ? resp.json() : {results: []};
+        }).then(function(data) {
+            var depts = data.results || data || [];
+            // Build tree structure: group by parent
+            var byParent = {};
+            depts.forEach(function(d) {
+                var pid = d.parent || 'root';
+                if (!byParent[pid]) byParent[pid] = [];
+                byParent[pid].push(d);
+            });
+            // Render with depth prefix
+            function renderChildren(parentId, depth) {
+                var children = byParent[parentId] || [];
+                children.forEach(function(d) {
+                    var prefix = '';
+                    for (var k = 0; k < depth; k++) prefix += '— ';
+                    var opt = document.createElement('option');
+                    opt.value = d.id;
+                    opt.textContent = (depth > 0 ? prefix : '') + d.name;
+                    sel.appendChild(opt);
+                    renderChildren(d.id, depth + 1);
+                });
+            }
+            renderChildren('root', 0);
+        }).catch(function(e) { console.error('加载部门列表失败:', e); });
+    }
+
+    onFilterTenantChange() {
+        var tenantId = document.getElementById('filterTenant') ? document.getElementById('filterTenant').value : '';
+        this._loadFilterDepartments(tenantId);
+        this.loadUsers(1);
+    }
+
+    loadFilteredUsers() {
+        this.loadUsers(1);
     }
 
 
@@ -842,6 +1004,7 @@ class AdminConsole {
                     <td><img src="${user.avatar_url || '/static/images/default-avatar.png'}" alt="头像"></td>
                     <td>${user.username}</td>
                     <td>${user.real_name || '-'}</td>
+                    <td>${user.tenant_info?.name || user.tenant_name || '-'}</td>
                     <td>${user.department_info?.name || user.department || '-'}</td>
                     <td>${user.position || '-'}</td>
                     <td><span class="user-type-badge user-type-${user.user_type}">${this.getUserTypeText(user.user_type)}</span></td>
@@ -1007,18 +1170,26 @@ class AdminConsole {
                 await this.loadDepartments('newDepartment');
             } else {
                 deptSelect.disabled = true;
-                // 默认设置为当前管理员的部门
-                if (this.currentUser?.department_info?.id) {
-                    deptSelect.value = this.currentUser.department_info.id;
-                }
                 await this.loadDepartments('newDepartment');
+                // 默认设置为当前管理员的部门（用名称匹配）
+                if (this.currentUser?.department_info?.name) {
+                    deptSelect.value = this.currentUser.department_info.name;
+                }
             }
         }
 
 
+        // 加载企业列表
+        var tenantSelect = document.getElementById('newTenant');
+        if (tenantSelect) {
+            tenantSelect.innerHTML = '<option value="">请选择企业</option>';
+            await this._loadTenantsSelect(tenantSelect);
+            var tenantGroup = document.getElementById('createTenantGroup');
+            if (tenantGroup) tenantGroup.style.display = this.isSuperAdmin ? '' : 'none';
+        }
+
         // 加载所有用户用于好友分配
         await this.loadAllUsersForFriends();
-        // console.log('allUsersForFriends:', this.allUsersForFriends)
 
         // 渲染好友选择界面（初始无好友）
         this.renderFriendSelection_create('friendGridCreate', [], 'friendSearchCreate');
@@ -1098,13 +1269,19 @@ class AdminConsole {
                 user_type: this.isSuperAdmin ? userType : 'normal'
             };
 
-            // 🔧 关键修复：处理部门
+            // 🔧 处理部门（支持旧版和组织架构部门）
             if (this.isSuperAdmin) {
                 // 超级管理员可以设置任意部门
                 if (departmentName) {
-                    let departmentId = await this.getOrCreateDepartment(departmentName);
-                    if (departmentId) {
-                        requestData.department = departmentId;
+                    if (departmentName.startsWith('org:')) {
+                        // 组织架构部门 - 创建用户后再通过 org API 分配
+                        var orgDeptId = parseInt(departmentName.replace('org:', ''));
+                        requestData._org_dept_id = orgDeptId;
+                    } else {
+                        let departmentId = await this.getOrCreateDepartment(departmentName);
+                        if (departmentId) {
+                            requestData.department = departmentId;
+                        }
                     }
                 }
             } else {
@@ -1113,6 +1290,13 @@ class AdminConsole {
                     requestData.department = this.currentUser.department_info.id;
                 }
             }
+
+            // 移除内部字段
+            var orgDeptId = requestData._org_dept_id;
+            delete requestData._org_dept_id;
+
+            // 获取选择的所属企业
+            var tenantIdVal = document.getElementById('newTenant') ? document.getElementById('newTenant').value : '';
 
             // 创建用户
             const response = await fetch(`${API_ADMIN_URL}/admin/users/`, {
@@ -1128,6 +1312,32 @@ class AdminConsole {
 
             const newUser = await response.json();
             console.log('创建用户成功:', newUser);
+
+            // 自动加入所选企业（invite会自动设置为默认企业）
+            if (tenantIdVal) {
+                try {
+                    await fetch('/api/org/tenants/' + tenantIdVal + '/invite/', {
+                        method: 'POST',
+                        headers: TokenManager.getHeaders(),
+                        body: JSON.stringify({ user_id: newUser.id, role: 'member' })
+                    });
+                } catch (e) { console.error('加入企业失败:', e); }
+            }
+
+            // 分配到组织架构部门（如果选择了）
+            if (orgDeptId) {
+                try {
+                    var addUrl = '/api/org/departments/' + orgDeptId + '/add_members/';
+                    if (tenantIdVal) addUrl += '?tenant_id=' + tenantIdVal;
+                    await fetch(addUrl, {
+                        method: 'POST',
+                        headers: TokenManager.getHeaders(),
+                        body: JSON.stringify({ user_ids: [newUser.id] })
+                    });
+                } catch (e) {
+                    console.error('分配组织部门失败:', e);
+                }
+            }
 
             // 保存好友关系
             const selectedFriends = Array.from(document.querySelectorAll('#friendGridCreate .member-grid-item.selected'))
@@ -1180,13 +1390,20 @@ class AdminConsole {
             if (password) requestData.password = password;
 
 
-            // 🔧 关键修复：处理部门
+            // 🔧 处理部门（支持旧版和组织架构部门）
             if (this.isSuperAdmin) {
                 // 超级管理员可以修改部门
                 if (departmentName) {
-                    let departmentId = await this.getOrCreateDepartment(departmentName);
-                    if (departmentId) {
-                        requestData.department = departmentId;
+                    if (departmentName.startsWith('org:')) {
+                        // 组织架构部门
+                        var orgDeptId = parseInt(departmentName.replace('org:', ''));
+                        requestData._org_dept_id = orgDeptId;
+                        // 不设置旧版部门
+                    } else {
+                        let departmentId = await this.getOrCreateDepartment(departmentName);
+                        if (departmentId) {
+                            requestData.department = departmentId;
+                        }
                     }
                 } else {
                     requestData.department = null;
@@ -1198,6 +1415,11 @@ class AdminConsole {
                     requestData.department = user.department_info.id;
                 }
             }
+
+            // 移除内部字段
+            var orgDeptId = requestData._org_dept_id;
+            delete requestData._org_dept_id;
+            var editTenantVal = document.getElementById('editTenant') ? document.getElementById('editTenant').value : '';
 
             const response = await fetch(`${API_ADMIN_URL}/admin/users/${userId}/`, {
                 method: 'PUT',
@@ -1215,6 +1437,32 @@ class AdminConsole {
                 .map(item => parseInt(item.dataset.userId));
 
             await this.assignFriends(userId, selectedFriends)
+
+            // 分配到组织架构部门（如果选择了）
+            if (orgDeptId) {
+                try {
+                    var addUrl = '/api/org/departments/' + orgDeptId + '/add_members/';
+                    if (editTenantVal) addUrl += '?tenant_id=' + editTenantVal;
+                    await fetch(addUrl, {
+                        method: 'POST',
+                        headers: TokenManager.getHeaders(),
+                        body: JSON.stringify({ user_ids: [userId] })
+                    });
+                } catch (e) {
+                    console.error('分配组织部门失败:', e);
+                }
+            }
+
+            // 处理所属企业变更（invite自动设置为默认企业）
+            if (editTenantVal) {
+                try {
+                    await fetch('/api/org/tenants/' + editTenantVal + '/invite/', {
+                        method: 'POST',
+                        headers: TokenManager.getHeaders(),
+                        body: JSON.stringify({ user_id: userId, role: 'member' })
+                    });
+                } catch (e) { console.error('加入企业失败:', e); }
+            }
 
             this.showSuccess('更新成功', '用户信息更新成功');
             this.closeModal('editUserModal');
@@ -1492,13 +1740,27 @@ class AdminConsole {
             document.getElementById('editGender').value = user.gender || '';
             document.getElementById('editEmail').value = user.email || '';
             document.getElementById('editPhone').value = user.phone || '';
-            document.getElementById('editDepartment').value = user.department_info?.name || user.department || '';
             document.getElementById('editPosition').value = user.position || '';
             document.getElementById('editUserType').value = user.user_type;
 
             // 🔧 关键修复：根据权限设置字段状态
             const userTypeSelect = document.getElementById('editUserType');
             const deptSelect = document.getElementById('editDepartment');
+
+            // 加载企业列表（先于部门加载）
+            var editTenantId = null;
+            var editTenantSelect = document.getElementById('editTenant');
+            if (editTenantSelect) {
+                editTenantSelect.innerHTML = '<option value="">请选择企业</option>';
+                await this._loadTenantsSelect(editTenantSelect);
+                // 如果用户有 tenant_info，默认选中
+                if (user.tenant_info) {
+                    editTenantSelect.value = user.tenant_info.id || user.tenant_info.tenant_id;
+                    editTenantId = editTenantSelect.value;
+                }
+                var editTenantGroup = document.getElementById('editTenantGroup');
+                if (editTenantGroup) editTenantGroup.style.display = this.isSuperAdmin ? '' : 'none';
+            }
 
             if (!this.isSuperAdmin) {
                 // 普通管理员：用户类型和部门不可编辑
@@ -1509,8 +1771,23 @@ class AdminConsole {
                 if (userTypeSelect) userTypeSelect.disabled = false;
                 if (deptSelect) {
                     deptSelect.disabled = false;
-                    await this.loadDepartments('editDepartment', user.department_info?.id);
+                    await this.loadDepartments('editDepartment', null, editTenantId);
                 }
+            }
+
+            // 部门列表加载完成后，设置当前选中值
+            var deptVal = '';
+            if (user.department_info) {
+                if (user.department_info.type === 'org' && user.department_info.id) {
+                    deptVal = 'org:' + user.department_info.id;
+                } else if (user.department_info.name) {
+                    deptVal = user.department_info.name;
+                }
+            } else if (user.department) {
+                deptVal = user.department;
+            }
+            if (deptSelect && deptVal) {
+                deptSelect.value = deptVal;
             }
 
             // 加载所有用户用于好友分配
@@ -1732,24 +2009,20 @@ class AdminConsole {
         filteredUsers.forEach(user => {
             html += `
             <tr class="${!user.is_active ? 'user-disabled-row' : ''}">
+                <td></td>
                 <td>${user.id}</td>
                 <td><img src="${user.avatar_url || '/static/images/default-avatar.png'}" alt="头像"></td>
                 <td>${user.username}</td>
                 <td>${user.real_name || '-'}</td>
+                <td>${user.tenant_info?.name || user.tenant_name || '-'}</td>
                 <td>${user.department_info?.name || user.department || '-'}</td>
                 <td>${user.position || '-'}</td>
                 <td><span class="user-type-badge user-type-${user.user_type}">${this.getUserTypeText(user.user_type)}</span></td>
                 <td>
-                    <span class="user-status ${user.is_online ? 'online' : 'offline'}">
-                        <i class="fas fa-${user.is_online ? 'circle' : 'circle'}"></i>
-                        ${user.is_online ? '在线' : '离线'}
-                    </span>
-                </td>
-                <td>
                     <div class="toggle-btn-container" onclick="event.stopPropagation()">
                         <label class="toggle-switch">
-                            <input type="checkbox" 
-                                   onchange="adminConsole.toggleUserStatus(${user.id}, this.checked, '${user.username}')" 
+                            <input type="checkbox"
+                                   onchange="adminConsole.toggleUserStatus(${user.id}, this.checked, '${user.username}')"
                                    ${user.is_active ? 'checked' : ''}>
                             <span class="toggle-slider"></span>
                         </label>
@@ -1770,7 +2043,7 @@ class AdminConsole {
             `;
         });
 
-        tbody.innerHTML = html || '<tr><td colspan="10" style="text-align: center; padding: 40px;">未找到相关用户</td></tr>';
+        tbody.innerHTML = html || '<tr><td colspan="11" style="text-align: center; padding: 40px;">未找到相关用户</td></tr>';
     }
 
 
@@ -1781,20 +2054,28 @@ class AdminConsole {
      */
     searchUsers(keyword) {
         if (!keyword.trim()) {
-            this.loadUsers();
+            this.loadUsers(1);
             return;
         }
+        // For search with keyword, use the backend search with filters
         this.searchUsersFromBackend(keyword);
     }
 
     /**
-     * 🔧 从后端搜索用户
+     * 🔧 从后端搜索用户（支持分页和企业/部门过滤）
      */
     async searchUsersFromBackend(keyword) {
         try {
             this.showLoading();
 
-            const response = await fetch(`${API_ADMIN_URL}/admin/users/?search=${encodeURIComponent(keyword)}`, {
+            var tenantId = document.getElementById('filterTenant') ? document.getElementById('filterTenant').value : '';
+            var deptId = document.getElementById('filterDepartment') ? document.getElementById('filterDepartment').value : '';
+
+            var url = API_ADMIN_URL + '/admin/users/?search=' + encodeURIComponent(keyword) + '&page=1&page_size=20';
+            if (tenantId) url += '&tenant_id=' + tenantId;
+            if (deptId) url += '&org_dept_id=' + deptId;
+
+            const response = await fetch(url, {
                 headers: TokenManager.getHeaders()
             });
 
@@ -1804,9 +2085,14 @@ class AdminConsole {
             }
 
             const data = await response.json();
-            const users = Array.isArray(data) ? data : (data.results || []);
-
-            this.renderUsersTable(users);
+            if (data.results) {
+                this.users = data.results;
+                this.currentPage = data.page || 1;
+                this._renderUserPagination(data);
+            } else {
+                this.users = Array.isArray(data) ? data : [];
+            }
+            this.renderUsersTable();
 
         } catch (error) {
             console.error('搜索用户失败:', error);
@@ -1859,7 +2145,7 @@ class AdminConsole {
                 // 🔧 加载对应模块数据
                 switch (tabName) {
                     case 'users':
-                        this.loadUsers();
+                        this.loadUsers(1);
                         break;
                     case 'stats':
                         if (this.isSuperAdmin && window.adminStatistics) {
@@ -1915,11 +2201,14 @@ class AdminConsole {
         }
 
 
-        // 搜索框
-        const userSearch = document.getElementById('userSearch');
-        if (userSearch) {
-            userSearch.addEventListener('input', (e) => {
-                this.searchUsers(e.target.value);
+        // 搜索框 — already bound via oninput in template, use debounce to avoid double
+        /* Already handled by oninput in template */
+
+        // 部门过滤下拉变化 → 重新加载用户列表
+        var filterDept = document.getElementById('filterDepartment');
+        if (filterDept) {
+            filterDept.addEventListener('change', function() {
+                adminConsole.loadUsers(1);
             });
         }
 
@@ -2316,6 +2605,31 @@ class AdminConsole {
     }
 
 
+    // ==================== 企业加载 ====================
+
+    async _loadTenantsSelect(selectEl) {
+        try {
+            var resp = await fetch('/api/org/tenants/', { headers: TokenManager.getHeaders() });
+            if (resp.ok) {
+                var data = await resp.json();
+                var tenants = data.results || data || [];
+                selectEl._tenantData = tenants;
+                tenants.forEach(function(t) {
+                    var opt = document.createElement('option');
+                    opt.value = t.id;
+                    opt.textContent = t.short_name || t.name;
+                    selectEl.appendChild(opt);
+                });
+            }
+        } catch (e) { console.error('加载企业列表失败:', e); }
+    }
+
+    onTenantChange(prefix) {
+        var tenantId = document.getElementById(prefix + 'Tenant').value;
+        var deptSelectId = prefix === 'new' ? 'newDepartment' : 'editDepartment';
+        this.loadDepartments(deptSelectId, null, tenantId || null);
+    }
+
     escapeHtml(text) {
         if (!text) return '';
         return String(text)
@@ -2491,6 +2805,15 @@ class AdminConsole {
         if (!iso) return '-';
         const d = new Date(iso);
         return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
+
+    _debounce(fn, delay) {
+        var timer = null;
+        return function() {
+            var args = arguments, ctx = this;
+            clearTimeout(timer);
+            timer = setTimeout(function() { fn.apply(ctx, args); }, delay);
+        };
     }
 
 }

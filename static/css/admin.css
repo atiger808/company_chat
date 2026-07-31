@@ -1,5 +1,113 @@
 /* 聊天室管理专用样式 */
 
+/* ===== 管理控制台布局覆盖（覆盖 chat.css 中的旧规则） ===== */
+.admin-sidebar {
+  position: relative !important;
+  left: auto !important;
+  top: auto !important;
+  bottom: auto !important;
+  width: 240px;
+  flex-shrink: 0;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  box-shadow: none !important;
+  z-index: auto !important;
+  transition: none !important;
+}
+
+/* 窄模式 */
+.admin-sidebar.sidebar-narrow {
+  width: 48px !important;
+  min-width: 48px;
+}
+.admin-sidebar.sidebar-narrow .admin-nav .nav-item span,
+.admin-sidebar.sidebar-narrow .sidebar-footer span {
+  display: none;
+}
+.admin-sidebar.sidebar-narrow .admin-nav .nav-item {
+  justify-content: center;
+  padding: 12px 6px;
+}
+.admin-sidebar.sidebar-narrow .admin-nav .nav-item i {
+  margin: 0;
+  font-size: 18px;
+}
+.admin-sidebar.sidebar-narrow .sidebar-header .logo span {
+  display: none;
+}
+.admin-sidebar.sidebar-narrow .sidebar-header .logo {
+  justify-content: center;
+}
+.admin-sidebar.sidebar-narrow .sidebar-header .logo i {
+  margin: 0;
+}
+.admin-sidebar.sidebar-narrow .sidebar-footer .btn-back-chat,
+.admin-sidebar.sidebar-narrow .sidebar-footer .btn-logout {
+  justify-content: center;
+  padding: 10px 8px;
+}
+.admin-sidebar.sidebar-narrow .sidebar-footer .btn-back-chat span,
+.admin-sidebar.sidebar-narrow .sidebar-footer .btn-logout span {
+  display: none;
+}
+
+/* 移动端覆盖 mobile overlay */
+@media (max-width: 768px) {
+  .admin-sidebar {
+    position: fixed !important;
+    left: -100% !important;
+    top: 0 !important;
+    height: 100vh !important;
+    width: 280px !important;
+    z-index: 999 !important;
+    box-shadow: 2px 0 10px rgba(0,0,0,0.1) !important;
+    transition: left 0.3s ease !important;
+    display: flex !important;
+  }
+  .admin-sidebar.open {
+    left: 0 !important;
+  }
+  .sidebar-overlay.show {
+    display: block !important;
+  }
+}
+
+/* ===== 侧边栏拖动分隔条 ===== */
+.sidebar-splitter {
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+  transition: background 0.2s;
+}
+.sidebar-splitter:hover,
+.sidebar-splitter.active {
+  background: var(--primary-color, #409eff);
+  opacity: 0.4;
+}
+.sidebar-splitter::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 3px;
+  height: 32px;
+  background: var(--border-color, #dcdfe6);
+  border-radius: 2px;
+  transition: background 0.2s;
+}
+.sidebar-splitter:hover::after,
+.sidebar-splitter.active::after {
+  background: var(--primary-color, #409eff);
+}
+@media (max-width: 768px) {
+  .sidebar-splitter { display: none; }
+}
+
 .admin-toolbar {
     /*display: flex;*/
     justify-content: space-between;
@@ -1652,6 +1760,54 @@ input:checked + .slider:before {
 
 /* admin.css - 添加重置密码模态框样式 */
 
+.admin-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
+.admin-filter-row .filter-select {
+  width: auto;
+  min-width: 140px;
+  max-width: 220px;
+}
+.admin-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.user-pagination-bar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 18px 0;
+  flex-wrap: wrap;
+}
+.user-pagination-total {
+  font-size: 13px;
+  color: var(--text-light, #909399);
+  white-space: nowrap;
+}
+.user-pagination-btns {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+@media (max-width: 768px) {
+  .admin-filter-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .admin-filter-row .filter-select {
+    max-width: 100%;
+  }
+}
+
 .modal-sm .modal-content {
     max-width: 400px;
 }
@@ -2021,6 +2177,10 @@ input:checked + .slider:before {
 
 /* ==================== 移动端优化 ==================== */
 @media (max-width: 768px) {
+    .btn-text {
+        display: none;
+    }
+
     .admin-table-container {
         border-radius: 0;
         box-shadow: none;
@@ -2066,6 +2226,10 @@ input:checked + .slider:before {
 }
 
 @media (max-width: 480px) {
+    .btn-text {
+        display: none;
+    }
+
     .admin-table {
         min-width: 600px;
     }

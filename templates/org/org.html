@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>组织架构 - 企联云</title>
+    <link rel="stylesheet" href="/static/css/org.css?v=20260731-09c0a6d">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
+    <style>
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: var(--bg-primary, #f0f2f5);
+            color: var(--text-primary, #303133);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        /* ===== 全局顶栏 ===== */
+        .org-top-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 56px;
+            padding: 0 20px;
+            background: var(--primary-color, #409eff);
+            color: #fff;
+            flex-shrink: 0;
+            position: relative;
+            z-index: 100;
+        }
+
+        .org-top-bar .top-left {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .org-top-bar .top-left .logo-icon {
+            font-size: 20px;
+        }
+
+        .org-top-bar .tenant-trigger {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+            padding: 4px 8px 4px 4px;
+            border-radius: 6px;
+            transition: background 0.2s;
+            font-size: 15px;
+            font-weight: 600;
+            max-width: 180px;
+        }
+
+        .org-top-bar .tenant-trigger:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .org-top-bar .tenant-trigger .arrow {
+            font-size: 10px;
+            color: rgba(255, 255, 255, 0.7);
+            transition: transform 0.2s;
+        }
+
+        .org-top-bar .tenant-trigger .arrow.open {
+            transform: rotate(180deg);
+        }
+
+        .org-top-bar .top-center {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .org-top-bar .top-center a {
+            color: rgba(255, 255, 255, 0.75);
+            text-decoration: none;
+            padding: 6px 14px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .org-top-bar .top-center a:hover {
+            background: rgba(255, 255, 255, 0.12);
+            color: #fff;
+        }
+
+        .org-top-bar .top-center a.active {
+            background: rgba(255, 255, 255, 0.18);
+            color: #fff;
+        }
+
+        .org-top-bar .top-center a i {
+            font-size: 14px;
+        }
+
+        .org-top-bar .top-right {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .org-top-bar .top-right .btn-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            border: none;
+            background: rgba(255, 255, 255, 0.12);
+            color: #fff;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 15px;
+            transition: background 0.2s;
+        }
+
+        .org-top-bar .top-right .btn-icon:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+
+        .org-top-bar .user-avatar-wrap {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            overflow: hidden;
+            cursor: pointer;
+            border: 2px solid rgba(255, 255, 255, 0.4);
+            flex-shrink: 0;
+            position: relative;
+        }
+
+        .org-top-bar .user-avatar-wrap img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        /* 企业切换下拉菜单 */
+        .tenant-dropdown {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 10px;
+            width: 280px;
+            background: var(--bg-primary, #fff);
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+            z-index: 1001;
+            overflow: hidden;
+            margin-top: 4px;
+            animation: slideUp 0.2s ease;
+        }
+
+        .tenant-dropdown.show {
+            display: block;
+        }
+
+        .tenant-dropdown-header {
+            padding: 14px 18px 10px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-light, #909399);
+            border-bottom: 1px solid var(--border-color, #ebeef5);
+        }
+
+        .tenant-dropdown-list {
+            max-height: 280px;
+            overflow-y: auto;
+            padding: 6px 8px;
+        }
+
+        .tenant-dropdown-list::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .tenant-dropdown-list::-webkit-scrollbar-thumb {
+            background: #ddd;
+            border-radius: 4px;
+        }
+
+        .tenant-dropdown-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.15s;
+            margin-bottom: 2px;
+        }
+
+        .tenant-dropdown-item:hover {
+            background: var(--bg-secondary, #f5f7fa);
+        }
+
+        .tenant-dropdown-item.active {
+            background: #ecf5ff;
+        }
+
+        .tenant-dropdown-item .td-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, var(--primary-color, #409eff), #337ecc);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+
+        .tenant-dropdown-item .td-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .tenant-dropdown-item .td-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary, #303133);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .tenant-dropdown-item .td-role {
+            font-size: 11px;
+            color: var(--text-light, #909399);
+            margin-top: 1px;
+        }
+
+        .tenant-dropdown-item .td-check {
+            color: var(--primary-color, #409eff);
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+
+        .tenant-dropdown-item .td-switch-btn {
+            font-size: 11px;
+            color: var(--primary-color, #409eff);
+            padding: 3px 10px;
+            border-radius: 4px;
+            background: #ecf5ff;
+            cursor: pointer;
+            border: none;
+            font-weight: 500;
+            flex-shrink: 0;
+        }
+
+        .tenant-dropdown-item .td-switch-btn:hover {
+            background: #d9ecff;
+        }
+
+        .tenant-dropdown-footer {
+            padding: 8px 18px 14px;
+            border-top: 1px solid var(--border-color, #ebeef5);
+        }
+
+        .tenant-dropdown-create {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            width: 100%;
+            padding: 9px;
+            border: 1px dashed var(--border-color, #dcdfe6);
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-secondary, #606266);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .tenant-dropdown-create:hover {
+            border-color: var(--primary-color, #409eff);
+            color: var(--primary-color, #409eff);
+            background: #ecf5ff;
+        }
+
+        [data-theme="dark"] .tenant-dropdown {
+            background: #1e1e1e;
+        }
+
+        [data-theme="dark"] .tenant-dropdown-item:hover {
+            background: #2d2d2d;
+        }
+
+        [data-theme="dark"] .tenant-dropdown-item.active {
+            background: #1a2740;
+        }
+
+        /* 用户下拉菜单 */
+        .org-user-dropdown {
+            display: none;
+            position: absolute;
+            top: 100%;
+            right: 0;
+            width: 200px;
+            background: var(--bg-primary, #fff);
+            border-radius: 10px;
+            box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+            z-index: 1001;
+            overflow: hidden;
+            margin-top: 4px;
+            animation: slideUp 0.2s ease;
+        }
+
+        .org-user-dropdown.show {
+            display: block;
+        }
+
+        .org-user-dropdown .dd-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 11px 16px;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-primary, #303133);
+            transition: background 0.15s;
+        }
+
+        .org-user-dropdown .dd-item:hover {
+            background: var(--bg-secondary, #f5f7fa);
+        }
+
+        .org-user-dropdown .dd-item i {
+            width: 18px;
+            font-size: 14px;
+            color: var(--text-secondary, #606266);
+        }
+
+        .org-user-dropdown .dd-item.danger {
+            color: #f56c6c;
+        }
+
+        .org-user-dropdown .dd-item.danger i {
+            color: #f56c6c;
+        }
+
+        .org-user-dropdown .dd-divider {
+            height: 1px;
+            background: var(--border-color, #ebeef5);
+            margin: 4px 0;
+        }
+
+        [data-theme="dark"] .org-user-dropdown {
+            background: #1e1e1e;
+        }
+
+        [data-theme="dark"] .org-user-dropdown .dd-item:hover {
+            background: #2d2d2d;
+        }
+
+        /* 调整原有布局以适应顶栏 */
+        .org-layout {
+            height: calc(100vh - 56px);
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .top-right .btn-icon {
+            position: relative;
+        }
+
+        .notif-bell-wrap {
+            position: relative;
+        }
+
+        /* 移动端隐藏导航文字，只保留图标 */
+        @media (max-width: 768px) {
+            .org-top-bar .top-center a { font-size: 0; padding: 6px 10px; }
+            .org-top-bar .top-center a i { font-size: 16px; }
+        }
+    </style>
+</head>
+<body>
+<!-- ========== 全局顶栏 ========== -->
+<div class="org-top-bar">
+    <div class="top-left">
+        <i class="fas fa-sitemap logo-icon"></i>
+        <div class="tenant-trigger" id="orgTopTenantTrigger" onclick="toggleOrgTenantDropdown(event)">
+            <span id="orgTopTenantName" class="btn-text">选择企业</span>
+            <i class="fas fa-chevron-down arrow" id="orgTopTenantArrow"></i>
+        </div>
+        <!-- 企业切换下拉 -->
+        <div class="tenant-dropdown" id="orgTopTenantDropdown">
+            <div class="tenant-dropdown-header">切换企业</div>
+            <div class="tenant-dropdown-list" id="orgTopTenantList"></div>
+            <div class="tenant-dropdown-footer">
+                <button class="tenant-dropdown-create" onclick="tenantManager.openCreateTenantModal()">
+                    <i class="fas fa-plus-circle"></i> 创建新企业
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="top-center">
+        <a href="/"><i class="fas fa-home"></i> 主页</a>
+        <a href="/chat/"><i class="fas fa-comments"></i> 聊天</a>
+        <a href="/cloud/"><i class="fas fa-cloud"></i> 网盘</a>
+<!--        <a href="/tasks/"><i class="fas fa-tasks"></i> 任务</a>-->
+    </div>
+
+    <div class="top-right">
+        <div class="notif-bell-wrap btn-icon" id="notifBellWrap" title="工作通知" style="position:relative;">
+            <i class="fas fa-bell"></i>
+            <span class="notif-badge hide" id="notifBadge">0</span>
+        </div>
+        <button class="btn-icon" id="orgThemeToggle" title="切换主题" onclick="toggleOrgTheme()">
+            <i class="fas fa-moon"></i>
+        </button>
+        <div style="position:relative;display:flex;align-items:center;gap:4px;">
+            <div class="user-avatar-wrap" id="orgUserAvatarWrap" onclick="toggleOrgUserMenu(event)">
+                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260731-09c0a6d" alt="头像">
+            </div>
+            <i class="fas fa-chevron-down" style="font-size:10px;color:rgba(255,255,255,0.7);cursor:pointer;" onclick="toggleOrgUserMenu(event)"></i>
+            <!-- 用户下拉菜单 -->
+            <div class="org-user-dropdown" id="orgUserDropdown">
+                <div class="dd-item" onclick="event.stopPropagation();window.location.href='/oa/attendance/'">
+                    <i class="fas fa-clock"></i> 考勤打卡
+                </div>
+                <div class="dd-item" onclick="event.stopPropagation();window.location.href='/oa/approval/'">
+                    <i class="fas fa-check-double"></i> OA审批
+                </div>
+                <div class="dd-divider"></div>
+
+                <div class="dd-item" onclick="event.stopPropagation();window.location.href='/chat/'">
+                    <i class="fas fa-comments"></i> 聊天
+                </div>
+                <div class="dd-item" onclick="event.stopPropagation();window.location.href='/cloud/'">
+                    <i class="fas fa-cloud"></i> 网盘
+                </div>
+
+                <div class="dd-divider"></div>
+
+                <div class="dd-item" onclick="event.stopPropagation();window.location.href='/tasks/'">
+                    <i class="fas fa-tasks"></i> 任务
+                </div>
+
+                <div class="dd-item" onclick="event.stopPropagation();window.location.href='/org/'">
+                    <i class="fas fa-sitemap"></i> 组织架构
+                </div>
+
+                <div class="dd-divider"></div>
+
+                <div class="dd-item danger" onclick="event.stopPropagation();orgApp.logout()">
+                    <i class="fas fa-sign-out-alt"></i> 退出登录
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ========== 原有组织架构布局 ========== -->
+<div class="org-layout">
+
+    <!-- 左侧部门树 -->
+    <aside class="org-sidebar">
+        <div class="org-sidebar-header">
+            <h3><i class="fas fa-sitemap"></i> 组织架构</h3>
+            <div style="display:flex;gap:4px;">
+                <button class="btn-icon" onclick="orgApp.showEnterpriseMembers()" title="企业成员管理">
+                    <i class="fas fa-users-cog"></i>
+                </button>
+                <button class="btn-icon" onclick="orgApp.showOrgChart()" title="架构图">
+                    <i class="fas fa-project-diagram"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- 企业切换条 -->
+        <div class="org-tenant-bar" id="orgTenantBar" onclick="tenantManager.showSwitchModal()">
+            <div class="tenant-avatar" id="orgTenantAvatar">
+                <i class="fas fa-building"></i>
+            </div>
+            <div class="tenant-info">
+                <div class="tenant-name" id="orgTenantName">选择企业</div>
+                <div class="tenant-role" id="orgTenantRole">点击切换</div>
+            </div>
+            <i class="fas fa-chevron-down tenant-arrow"></i>
+        </div>
+
+        <div class="org-sidebar-search">
+            <i class="fas fa-search search-icon"></i>
+            <input type="text" id="orgSearchInput" placeholder="搜索部门...">
+        </div>
+
+        <div class="dept-tree-container" id="deptTreeContainer">
+            <div class="skeleton">
+                <div class="skeleton-item"></div>
+                <div class="skeleton-item"></div>
+                <div class="skeleton-item"></div>
+                <div class="skeleton-item"></div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- 可拖动分隔条 -->
+    <div class="org-splitter" id="orgSplitter" title="拖动调整宽度"></div>
+
+    <!-- 右侧主内容 -->
+    <main class="org-main">
+        <header class="org-main-header">
+            <div class="org-breadcrumb" id="orgBreadcrumb">
+                <span class="crumb-item" onclick="orgApp.selectDepartment(null)">
+                    <i class="fas fa-home"></i> 组织架构
+                </span>
+            </div>
+            <div class="org-main-actions">
+                <button class="btn" onclick="orgApp.refresh()" title="刷新">
+                    <i class="fas fa-sync-alt"></i> 刷新
+                </button>
+                <button class="btn btn-primary" onclick="orgApp.showCreateDeptModal()" id="createDeptBtn">
+                    <i class="fas fa-plus"></i> 新建部门
+                </button>
+                <button class="btn" onclick="orgApp.showCreateSubTenantModal()" id="createSubTenantBtn" style="display:none;border-color:#e6a23c;color:#e67e22;">
+                    <i class="fas fa-building"></i> 新增子公司
+                </button>
+            </div>
+        </header>
+
+        <div class="org-content">
+            <!-- 部门详情 -->
+            <div id="deptDetailContainer">
+                <div class="empty-state">
+                    <i class="fas fa-sitemap"></i>
+                    <p>请从左侧选择一个部门</p>
+                    <div class="sub-text">点击部门名称查看详情和成员</div>
+                </div>
+            </div>
+
+            <!-- 成员列表 -->
+            <div id="membersContainer"></div>
+        </div>
+    </main>
+</div>
+
+<script src="/static/js/dist/spark-md5.min.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/encrypts.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/utils.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/api.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/tenant.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/notifications.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/org.js?v=20260731-09c0a6d"></script>
+<script>
+    // ────────── 顶栏逻辑 ──────────
+
+    /** 切换企业下拉 */
+    function toggleOrgTenantDropdown(e) {
+        e.stopPropagation();
+        var dd = document.getElementById('orgTopTenantDropdown');
+        var arrow = document.getElementById('orgTopTenantArrow');
+        if (!dd) return;
+        var isOpen = dd.classList.contains('show');
+        dd.classList.toggle('show');
+        if (arrow) arrow.classList.toggle('open');
+        if (!isOpen) renderOrgTenantList();
+    }
+
+    function renderOrgTenantList() {
+        var list = document.getElementById('orgTopTenantList');
+        if (!list || !window.tenantManager) return;
+        var roleMap = {'owner': '企业所有者', 'admin': '管理员', 'dept_admin': '部门管理员', 'member': '成员'};
+        list.innerHTML = tenantManager.tenants.map(function (t) {
+            var isActive = tenantManager.activeTenant && t.id === tenantManager.activeTenant.id;
+            var roleText = roleMap[t.role] || t.tenant_type || '';
+            return '<div class="tenant-dropdown-item' + (isActive ? ' active' : '') + '" onclick="switchOrgTenant(' + t.id + ')">'
+                + '<div class="td-icon"><i class="fas fa-building"></i></div>'
+                + '<div class="td-info"><div class="td-name">' + (t.short_name || t.name) + '</div>'
+                + '<div class="td-role">' + roleText + '</div></div>'
+                + (isActive ? '<i class="fas fa-check-circle td-check"></i>' : '<button class="td-switch-btn">切换</button>')
+                + '</div>';
+        }).join('');
+        if (!tenantManager.tenants.length) {
+            list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-light);font-size:13px;">暂未加入企业</div>';
+        }
+    }
+
+    async function switchOrgTenant(tenantId) {
+        document.getElementById('orgTopTenantDropdown').classList.remove('show');
+        var arrow = document.getElementById('orgTopTenantArrow');
+        if (arrow) arrow.classList.remove('open');
+        await tenantManager.switchTenant(tenantId);
+    }
+
+    /** 更新顶栏企业名称 */
+    function updateOrgTopBarTenant() {
+        var nameEl = document.getElementById('orgTopTenantName');
+        if (nameEl && window.tenantManager && tenantManager.activeTenant) {
+            nameEl.textContent = tenantManager.activeTenant.short_name || tenantManager.activeTenant.name;
+        } else if (nameEl) {
+            nameEl.textContent = '选择企业';
+        }
+    }
+
+    /** 切换用户菜单 */
+    function toggleOrgUserMenu(e) {
+        e.stopPropagation();
+        var dd = document.getElementById('orgUserDropdown');
+        if (dd) dd.classList.toggle('show');
+    }
+
+    /** 切换主题 */
+    function toggleOrgTheme() {
+        var html = document.documentElement;
+        var isDark = html.getAttribute('data-theme') === 'dark';
+        html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+        localStorage.setItem('theme', isDark ? 'light' : 'dark');
+        var icon = document.querySelector('#orgThemeToggle i');
+        if (icon) icon.className = isDark ? 'fas fa-moon' : 'fas fa-sun';
+    }
+
+    // 点击页面关闭所有下拉
+    document.addEventListener('click', function (e) {
+        if (!e.target.closest('.tenant-dropdown') && !e.target.closest('.tenant-trigger')) {
+            document.querySelectorAll('.tenant-dropdown').forEach(function (d) {
+                d.classList.remove('show');
+            });
+            document.querySelectorAll('.tenant-trigger .arrow').forEach(function (a) {
+                a.classList.remove('open');
+            });
+        }
+        if (!e.target.closest('.org-user-dropdown') && !e.target.closest('.user-avatar-wrap')) {
+            var ud = document.getElementById('orgUserDropdown');
+            if (ud) ud.classList.remove('show');
+        }
+    });
+
+    // ────────── 可拖动分隔条 ──────────
+    function initSplitter() {
+        var splitter = document.getElementById('orgSplitter');
+        var sidebar = document.querySelector('.org-sidebar');
+        if (!splitter || !sidebar) return;
+        var isDragging = false;
+
+        splitter.addEventListener('mousedown', function (e) {
+            e.preventDefault();
+            isDragging = true;
+            splitter.classList.add('active');
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+        });
+
+        document.addEventListener('mousemove', function (e) {
+            if (!isDragging) return;
+            var layout = document.querySelector('.org-layout');
+            if (!layout) return;
+            var rect = layout.getBoundingClientRect();
+            var newWidth = e.clientX - rect.left;
+            // 限制最小200px，最大50%
+            newWidth = Math.max(200, Math.min(newWidth, rect.width * 0.5));
+            sidebar.style.width = newWidth + 'px';
+            sidebar.style.flex = 'none';
+        });
+
+        document.addEventListener('mouseup', function () {
+            if (isDragging) {
+                isDragging = false;
+                splitter.classList.remove('active');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            }
+        });
+    }
+
+    // DOMContentLoaded 初始化
+    document.addEventListener('DOMContentLoaded', function () {
+        orgApp.init();
+        initSplitter();
+
+        // 初始化主题
+        var savedTheme = localStorage.getItem('theme') || 'light';
+        if (savedTheme === 'dark') {
+            document.documentElement.setAttribute('data-theme', 'dark');
+            var icon = document.querySelector('#orgThemeToggle i');
+            if (icon) icon.className = 'fas fa-sun';
+        }
+
+        // 更新顶栏企业名称
+        updateOrgTopBarTenant();
+        // 监听 tenantManager 变化
+        var origUpdate = tenantManager.updateTenantUI;
+        tenantManager.updateTenantUI = function () {
+            origUpdate.call(tenantManager);
+            updateOrgTopBarTenant();
+        };
+
+    });
+</script>
+</body>
+</html>

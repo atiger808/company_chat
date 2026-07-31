@@ -55,7 +55,8 @@ class UserSerializer(serializers.ModelSerializer):
             'is_online',
             'last_seen',
             'date_joined',
-            'last_login'
+            'last_login',
+            'active_tenant'
         ]
         read_only_fields = ['id', 'date_joined', 'last_login', 'is_online', 'last_seen']
         extra_kwargs = {
@@ -545,6 +546,10 @@ class UserDetailSerializer(serializers.ModelSerializer):
     department_info = serializers.SerializerMethodField()
     avatar_url = serializers.SerializerMethodField()
     online_status = serializers.SerializerMethodField()
+    tenant_info = serializers.SerializerMethodField()
+
+    org_departments = serializers.SerializerMethodField()
+    supervisor = serializers.SerializerMethodField()
 
     class Meta:
         model = CustomUser
@@ -552,6 +557,7 @@ class UserDetailSerializer(serializers.ModelSerializer):
             'id', 'username', 'email', 'phone', 'real_name', 'department', 'department_info',
             'position', 'avatar', 'avatar_url', 'gender', 'bio', 'user_type',
             'is_online', 'last_seen', 'date_joined', 'last_login', 'online_status', 'is_active',
+            'tenant_info', 'org_departments', 'supervisor',
         ]
         read_only_fields = ['id', 'date_joined', 'last_login', 'user_type', 'username']  # 添加 username 为只读
 
@@ -568,11 +574,95 @@ class UserDetailSerializer(serializers.ModelSerializer):
         }
 
     def get_department_info(self, obj):
+        """获取用户部门信息（优先组织架构部门，降级为旧版 department）"""
+        # 降级：返回组织架构主部门
+        try:
+            from org.models import UserDepartment
+            primary = UserDepartment.objects.filter(
+                user=obj, is_primary=True
+            ).select_related('department').first()
+            if primary:
+                return {
+                    'id': primary.department.id,
+                    'name': primary.department.name,
+                    'type': 'org',
+                    'position': primary.position,
+                }
+        except Exception:
+            pass
+
         if obj.department:
             return {
                 'id': obj.department.id,
-                'name': obj.department.name
+                'name': obj.department.name,
+                'type': 'legacy',
             }
+
+        return None
+
+
+    def get_org_departments(self, obj):
+        """获取用户在组织架构中的部门信息"""
+        try:
+            from org.models import UserDepartment
+            rels = UserDepartment.objects.filter(user=obj).select_related('department')
+            return [{
+                'id': r.department.id,
+                'name': r.department.name,
+                'full_path': r.department.full_path or r.department.name,
+                'position': r.position,
+                'is_primary': r.is_primary,
+            } for r in rels if r.department.is_active]
+        except Exception:
+            return []
+
+    def get_supervisor(self, obj):
+        """获取用户的直属主管信息"""
+        try:
+            from org.models import ReportRelation
+            rel = ReportRelation.objects.filter(
+                user=obj, is_direct=True
+            ).select_related('supervisor').first()
+            if rel and rel.supervisor:
+                return {
+                    'id': rel.supervisor.id,
+                    'username': rel.supervisor.username,
+                    'real_name': rel.supervisor.real_name or '',
+                    'avatar': rel.supervisor.get_avatar_url(),
+                    'position': rel.supervisor.position or '',
+                }
+        except Exception:
+            pass
+        return None
+
+    def get_tenant_info(self, obj):
+        try:
+            from accounts.models import TenantMembership
+            # 优先使用 active_tenant
+            if obj.active_tenant_id:
+                membership = TenantMembership.objects.filter(
+                    user=obj, tenant_id=obj.active_tenant_id, is_active=True
+                ).select_related('tenant').first()
+                if membership:
+                    return {
+                        'id': membership.tenant.id,
+                        'name': membership.tenant.name,
+                        'short_name': membership.tenant.short_name or '',
+                        'role': membership.role,
+                    }
+            # 降级：返回第一个激活的成员关系
+            membership = TenantMembership.objects.filter(
+                user=obj, is_active=True
+            ).select_related('tenant').first()
+            if membership:
+                return {
+                    'id': membership.tenant.id,
+                    'name': membership.tenant.name,
+                    'short_name': membership.tenant.short_name or '',
+                    'role': membership.role,
+                }
+        except Exception:
+            pass
         return None
 
 

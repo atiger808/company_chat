@@ -785,6 +785,15 @@ class ChatClient {
                 });
             }
 
+            const orgBtn = document.getElementById('orgBtn');
+            if (orgBtn) {
+                orgBtn.style.display = 'flex';
+                orgBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    window.location.href = '/org/';
+                });
+            }
+
             // 连接全局 WebSocket
             this.connectGlobalWebSocket();
 
@@ -806,6 +815,20 @@ class ChatClient {
 
             // 初始化用户下拉菜单
             this.initUserDropdown()
+
+            // 更新全局顶栏企业名称
+            var self = this;
+            setTimeout(function() {
+                self.updateGlobalTenantUI();
+            }, 200);
+
+            // 点击页面空白处关闭企业切换下拉
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest('.tenant-switcher-trigger') && !e.target.closest('.tenant-dropdown')) {
+                    document.querySelectorAll('.tenant-dropdown').forEach(function(d) { d.classList.remove('show'); });
+                    document.querySelectorAll('.tenant-switcher-arrow').forEach(function(a) { a.classList.remove('open'); });
+                }
+            });
 
             // 请求通知权限
             if ('Notification' in window) {
@@ -3663,8 +3686,8 @@ class ChatClient {
 
         // 设置表单中的用户信息
         document.getElementById('settingsUsernameDisplay').value = this.currentUser.username;
-        document.getElementById('settingsDepartment').value = this.currentUser.department_name || this.currentUser.department_info?.name || '';
-        document.getElementById('settingsPosition').value = this.currentUser.position || '';
+        var sp2 = document.getElementById('settingsPosition');
+        if (sp2) sp2.value = this.currentUser.position || '';
         document.getElementById('settingsRealName').value = this.currentUser.real_name || '';
         document.getElementById('settingsEmail').value = this.currentUser.email || '';
         document.getElementById('settingsPhone').value = this.currentUser.phone || '';
@@ -5252,12 +5275,20 @@ class ChatClient {
                             <span>${userData.phone || '未设置'}</span>
                         </div>
                         <div class="profile-info-item">
+                            <label>所属企业:</label>
+                            <span>${userData.tenant_info?.name || '-'}</span>
+                        </div>
+                        <div class="profile-info-item">
                             <label>部门:</label>
-                            <span>${userData.department_info?.name || userData.department || '未设置'}</span>
+                            <span>${userData.org_departments && userData.org_departments.length ? userData.org_departments.map(function(d){return '<i class="fas fa-sitemap" style="color:#e6a23c;font-size:11px;margin-right:4px;"></i>' + chatClient._escape(d.full_path || d.name)}).join('<br>') : (userData.department_info?.name ? (userData.department_info.name + (userData.department_info.type === 'legacy' ? '' : '')) : '未设置')}</span>
                         </div>
                         <div class="profile-info-item">
                             <label>职位:</label>
-                            <span>${userData.position || '未设置'}</span>
+                            <span>${userData.position || (userData.org_departments && userData.org_departments.length ? userData.org_departments[0].position : '') || '未设置'}</span>
+                        </div>
+                        <div class="profile-info-item">
+                            <label>直属主管:</label>
+                            <span>${userData.supervisor ? (userData.supervisor.real_name || userData.supervisor.username) : '未设置'}</span>
                         </div>
                     </div>
                 </div>
@@ -5404,10 +5435,14 @@ class ChatClient {
         document.getElementById('chatTitle').textContent = '工作通知';
         document.getElementById('chatStatus').textContent = '';
         document.getElementById('chatAvatar').src = '/media/avatars/work-notify.png';
+        // 隐藏聊天输入区和头部操作按钮
+        this._setChatControlsVisible(false);
 
-        // 隐藏消息列表，显示通知容器
+        // 隐藏消息列表和组织架构视图，显示通知容器
         document.getElementById('messagesList').style.display = 'none';
         document.getElementById('messagesEmpty').style.display = 'none';
+        var ov = document.getElementById('orgViewContainer');
+        if (ov) ov.classList.add('hidden');
         var notifContainer = document.getElementById('notificationMessages');
         if (!notifContainer) {
             notifContainer = document.createElement('div');
@@ -5749,6 +5784,331 @@ class ChatClient {
         groupsList.innerHTML = html;
     }
 
+    // ────────── 组织架构侧边栏 ──────────
+
+    /** 打开组织架构视图（主内容区域） */
+    openOrgView() {
+        // 隐藏消息区域，显示组织架构视图
+        this.currentRoomId = null;
+        document.querySelectorAll('.chat-item.cursor-pointer').forEach(function(el) { el.classList.remove('active'); });
+        if (window.innerWidth <= 768) {
+            var sidebar = document.querySelector('.sidebar');
+            if (sidebar) sidebar.classList.remove('show');
+        }
+        var msgList = document.getElementById('messagesList');
+        if (msgList) msgList.style.display = 'none';
+        var msgEmpty = document.getElementById('messagesEmpty');
+        if (msgEmpty) msgEmpty.style.display = 'none';
+        var notif = document.getElementById('notificationMessages');
+        if (notif) notif.style.display = 'none';
+        var orgView = document.getElementById('orgViewContainer');
+        if (orgView) orgView.classList.remove('hidden');
+
+        // 更新企业名称
+        var nameEl = document.getElementById('orgViewTenantName');
+        if (nameEl && window.tenantManager && tenantManager.activeTenant) {
+            nameEl.textContent = tenantManager.activeTenant.short_name || tenantManager.activeTenant.name;
+        } else if (nameEl) {
+            nameEl.textContent = '';
+        }
+
+        // 更新聊天头
+        document.getElementById('chatTitle').textContent = '组织架构';
+        document.getElementById('chatStatus').textContent = '';
+        document.getElementById('chatAvatar').src = '/static/images/org-avatar-0.png';
+        // 隐藏聊天输入区和头部通话按钮
+        this._setChatControlsVisible(false);
+
+        this._loadOrgTree();
+    }
+
+    /** 控制聊天输入区域和头部操作按钮的显隐 */
+    _setChatControlsVisible(visible, limit=3) {
+        var inputArea = document.querySelector('.chat-input-area');
+        if (inputArea) inputArea.style.display = visible ? '' : 'none';
+        // 隐藏/显示通话和更多操作按钮
+        var headerRight = document.querySelector('.header-right');
+        if (headerRight) {
+            var btns = headerRight.querySelectorAll('.btn-icon');
+            btns.forEach(function(b, key) { if (key<limit) {b.style.display = visible ? '' : 'none'; }});
+        }
+    }
+
+    /** 加载并渲染完整组织架构树（可折叠，成员内联显示） */
+    async _loadOrgTree() {
+        var body = document.getElementById('orgViewBody');
+        if (!body) return;
+        body.innerHTML = '<div class="empty-state" style="padding:40px;"><i class="fas fa-spinner fa-spin"></i><p>加载中...</p></div>';
+        try {
+            var resp = await fetch('/api/org/org-chart/', {
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) { body.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>加载失败</p></div>'; return; }
+            var data = await resp.json();
+            var chartData = data.org_chart || [];
+            if (!chartData.length) {
+                body.innerHTML = '<div class="empty-state"><i class="fas fa-folder-open"></i><p>暂无部门</p></div>';
+                return;
+            }
+            this._orgMembersCache = {};
+            if (!this._orgViewHandler) {
+                this._orgViewHandler = function(e) {
+                    var toggle = e.target.closest('.toggle-icon');
+                    if (toggle) {
+                        e.stopPropagation();
+                        var content = toggle.closest('.dept-tree-node-content');
+                        if (content) {
+                            var node = content.closest('.dept-tree-node');
+                            if (node) {
+                                var kids = node.children;
+                                for (var ki = 0; ki < kids.length; ki++) {
+                                    if (kids[ki].classList.contains('dept-tree-children')) {
+                                        kids[ki].classList.toggle('collapsed');
+                                        var icon = toggle.querySelector('i');
+                                        if (icon) icon.className = 'fas fa-chevron-' + (kids[ki].classList.contains('collapsed') ? 'right' : 'down');
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        return;
+                    }
+                    var content = e.target.closest('.dept-tree-node-content');
+                    if (content) {
+                        var deptId = parseInt(content.getAttribute('data-dept-id'));
+                        if (deptId) chatClient._loadDeptMembersInline(deptId, content);
+                    }
+                };
+                body.addEventListener('click', this._orgViewHandler);
+            }
+            body.innerHTML = '<div style="display:flex;align-items:center;justify-content:flex-end;padding:6px 12px;border-bottom:1px solid var(--border-color,#ebeef5);background:#fff;">'
+                + '<button id="orgViewFoldBtn" style="padding:4px 10px;font-size:12px;border:1px solid var(--border-color,#dcdfe6);background:#fff;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:4px;"><i id="orgViewFoldIcon" class="fas fa-compress-alt" style="font-size:11px;"></i> <span id="orgViewFoldText">折叠</span></button>'
+                + '</div>'
+                + '<div class="dept-tree-children">' + this._buildOrgTreeHTML(chartData, 0) + '</div>';
+            // 绑定折叠/展开按钮
+            var foldBtn = document.getElementById('orgViewFoldBtn');
+            this._orgIsFolded = false;
+            if (foldBtn) {
+                foldBtn.onclick = function() {
+                    chatClient._orgIsFolded = !chatClient._orgIsFolded;
+                    var expanded = !chatClient._orgIsFolded;
+                    var bodyEl = document.getElementById('orgViewBody');
+                    if (bodyEl) {
+                        bodyEl.querySelectorAll('.dept-tree-node > .dept-tree-children').forEach(function(el) {
+                            el.classList.toggle('collapsed', !expanded);
+                        });
+                        bodyEl.querySelectorAll('.toggle-icon i').forEach(function(icon) {
+                            var node = icon.closest('.dept-tree-node');
+                            if (node) {
+                                var kids = node.children;
+                                for (var ki = 0; ki < kids.length; ki++) {
+                                    if (kids[ki].classList.contains('dept-tree-children')) {
+                                        icon.className = 'fas fa-chevron-' + (expanded ? 'down' : 'right');
+                                        break;
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    var fi = document.getElementById('orgViewFoldIcon');
+                    var ft = document.getElementById('orgViewFoldText');
+                    if (fi) fi.className = 'fas fa-' + (expanded ? 'compress-alt' : 'expand-alt');
+                    if (ft) ft.textContent = expanded ? '折叠' : '展开';
+                    foldBtn.title = expanded ? '全部折叠' : '全部展开';
+                };
+            }
+        } catch (e) {
+            body.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>加载失败</p></div>';
+        }
+    }
+
+    /** 递归构建树形 HTML（可折叠） */
+    _buildOrgTreeHTML(nodes, depth) {
+        if (!nodes || !nodes.length) return '';
+        var self = this;
+        var html = '';
+        for (var i = 0; i < nodes.length; i++) {
+            var n = nodes[i];
+            var hasChildren = n.children && n.children.length;
+            var enterpriseBadge = n.department_type === 'company' ? '<span class="converted-badge" title="企业部门"><i class="fas fa-building"></i></span>' : '';
+            html += '<div class="dept-tree-node" data-dept-id="' + n.id + '">'
+                + '<div class="dept-tree-node-content" data-dept-id="' + n.id + '">'
+                + '<span class="toggle-icon">' + (hasChildren ? '<i class="fas fa-chevron-right"></i>' : '') + '</span>'
+                + '<span class="dept-icon"><i class="fas ' + (hasChildren ? 'fa-folder-open' : 'fa-building') + '"></i></span>'
+                + '<span class="dept-name">' + self._escape(n.name) + enterpriseBadge + '</span>'
+                + '<span class="member-badge">' + (n.member_count || 0) + '</span>'
+                + '</div>'
+                + (hasChildren ? '<div class="dept-tree-children">' + self._buildOrgTreeHTML(n.children, depth + 1) + '</div>' : '')
+                + '<div class="org-dept-members" id="orgDeptMembers_' + n.id + '" style="display:none;"></div>'
+                + '</div>';
+        }
+        return html;
+    }
+
+    /** 点击部门节点加载成员列表（内联显示） */
+    async _loadDeptMembersInline(deptId, nodeEl) {
+        var container = document.getElementById('orgDeptMembers_' + deptId);
+        if (!container) return;
+        // 高亮当前行
+        document.querySelectorAll('#orgViewBody .dept-tree-node').forEach(function(r) { r.classList.remove('active'); });
+        var deptNode = nodeEl.closest('.dept-tree-node');
+        if (deptNode) deptNode.classList.add('active');
+
+        // 如果已加载，切换显示
+        if (container.dataset.loaded === '1') {
+            container.style.display = container.style.display === 'none' ? 'block' : 'none';
+            return;
+        }
+        container.style.display = 'block';
+        container.innerHTML = '<div style="text-align:center;padding:16px;"><i class="fas fa-spinner fa-spin" style="color:var(--primary-color,#409eff);"></i></div>';
+        try {
+            var resp = await fetch('/api/org/departments/' + deptId + '/members/?page_size=100', {
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) { container.innerHTML = '<div class="empty-state" style="padding:16px;"><p>加载失败</p></div>'; return; }
+            var data = await resp.json();
+            var members = data.results || [];
+            var self = this;
+            var currentUserId = this.currentUser.id;
+            var currentUserType = this.currentUser.user_type;
+            var canChat = currentUserType === 'admin' || currentUserType === 'super_admin';
+            var html = '<div style="padding:4px 12px 8px 44px;">';
+            members.forEach(function(m) {
+                var isOwner = currentUserId === m.id;
+                html += '<div class="org-member-item" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:default;">';
+                if (m.avatar) {
+                    html += '<img class="member-avatar" src="' + self._escape(m.avatar) + '" style="width:32px;height:32px;border-radius:50%;object-fit:cover;">';
+                } else {
+                    var initial = (m.real_name || m.username || '?')[0].toUpperCase();
+                    html += '<div class="member-avatar-placeholder" style="width:32px;height:32px;border-radius:50%;background:var(--primary-color,#409eff);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;">' + initial + '</div>';
+                }
+                html += '<div style="flex:1;min-width:0;">'
+                    + '<div style="font-size:13px;font-weight:500;">' + (isOwner ? '我' : self._escape(m.real_name || m.username))
+                    + (m.is_manager ? ' <span style="font-size:10px;padding:0 5px;border-radius:3px;background:#fff3e0;color:#e6a23c;">负责人</span>' : '')
+                    + (m.is_deputy ? ' <span style="font-size:10px;padding:0 5px;border-radius:3px;background:#ecf5ff;color:#409eff;">副负责人</span>' : '')
+                    + '</div>'
+                    + '<div style="font-size:11px;color:var(--text-light,#909399);">' + self._escape(m.position || m.department_name || '-') + '</div>'
+                    + '</div>'
+                    + (isOwner || !canChat ? '' : '<button class="chat-btn" style="padding:4px 10px;font-size:12px;border:none;border-radius:6px;background:var(--primary-color,#409eff);color:#fff;cursor:pointer;flex-shrink:0;" onclick="event.stopPropagation();chatClient._startOrgChat(' + m.id + ', \'' + self._escape(m.real_name || m.username) + '\')">发消息</button>');
+                html += '</div>';
+            });
+            if (!members.length) html += '<div style="text-align:center;padding:16px;color:var(--text-light,#909399);font-size:13px;">暂无成员</div>';
+            html += '</div>';
+            container.innerHTML = html;
+            container.dataset.loaded = '1';
+        } catch (e) {
+            container.innerHTML = '<div class="empty-state" style="padding:16px;"><p>加载失败</p></div>';
+        }
+    }
+
+    async _startOrgChat(userId, userName) {
+
+        this.selectUserForChat(userId)
+        return
+
+        try {
+            var resp = await fetch('/api/chat/rooms/?user_id=' + userId, {
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) { this.showError('启动聊天失败'); return; }
+            var data = await resp.json();
+            var rooms = data.results || data || [];
+            if (rooms.length) {
+                this.selectChatRoom(rooms[0].id);
+            } else {
+                // 创建新私聊
+                var createResp = await fetch('/api/chat/rooms/', {
+                    method: 'POST',
+                    headers: TokenManager.getHeaders(),
+                    body: JSON.stringify({ room_type: 'private', member_ids: [userId] })
+                });
+                if (createResp.ok) {
+                    var newRoom = await createResp.json();
+                    if (newRoom.id) {
+                        await this.loadChatRooms();
+                        this.selectChatRoom(newRoom.id);
+                    } else if (newRoom.room_id) {
+                        await this.loadChatRooms();
+                        this.selectChatRoom(newRoom.room_id);
+                    }
+                } else {
+                    this.showError('创建聊天失败');
+                }
+            }
+        } catch (e) {
+            console.error('启动聊天失败:', e);
+            this.showError('启动聊天失败');
+        }
+    }
+
+    _escape(text) {
+        if (!text) return '';
+        return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // ────────── 全局企业切换（顶栏） ──────────
+
+    toggleTenantDropdown(event) {
+        if (event) event.stopPropagation();
+        var dd = document.getElementById('globalTenantDropdown');
+        var arrow = document.querySelector('.tenant-switcher-arrow');
+        if (!dd) return;
+        var isOpen = dd.classList.contains('show');
+        // 关闭所有 tenant dropdown
+        document.querySelectorAll('.tenant-dropdown').forEach(function(d) { d.classList.remove('show'); });
+        document.querySelectorAll('.tenant-switcher-arrow').forEach(function(a) { a.classList.remove('open'); });
+        if (!isOpen) {
+            this.renderTenantDropdown();
+            dd.classList.add('show');
+            if (arrow) arrow.classList.add('open');
+        }
+    }
+
+    renderTenantDropdown() {
+        var list = document.getElementById('globalTenantList');
+        if (!list) return;
+        if (!window.tenantManager || !tenantManager.tenants.length) {
+            list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-light);font-size:13px;">暂未加入企业</div>';
+            return;
+        }
+        var self = this;
+        var roleMap = { 'owner': '企业所有者', 'admin': '企业管理员', 'dept_admin': '部门管理员', 'member': '成员' };
+        list.innerHTML = tenantManager.tenants.map(function(t) {
+            var isActive = tenantManager.activeTenant && t.id === tenantManager.activeTenant.id;
+            return '<div class="tenant-dropdown-item' + (isActive ? ' active' : '') + '">'
+                + '<div class="td-icon"><i class="fas fa-building"></i></div>'
+                + '<div class="td-info">'
+                + '<div class="td-name">' + self._escape(t.short_name || t.name) + '</div>'
+                + '<div class="td-role">' + self._escape(roleMap[t.role] || t.tenant_type || '') + '</div>'
+                + '</div>'
+                + (isActive ? '<i class="fas fa-check-circle td-check"></i>'
+                    : '<button class="td-switch-btn" onclick="event.stopPropagation();chatClient._switchGlobalTenant(' + t.id + ')">切换</button>')
+                + '</div>';
+        }).join('');
+    }
+
+    async _switchGlobalTenant(tenantId) {
+        var dd = document.getElementById('globalTenantDropdown');
+        if (dd) dd.classList.remove('show');
+        var arrow = document.querySelector('.tenant-switcher-arrow');
+        if (arrow) arrow.classList.remove('open');
+        // 使用 tenantManager 的 switch 方法
+        await tenantManager.switchTenant(tenantId);
+    }
+
+    /** 更新全局顶栏的企业名称 */
+    updateGlobalTenantUI() {
+        var nameEl = document.getElementById('globalTenantName');
+        if (!nameEl) return;
+        if (window.tenantManager && tenantManager.activeTenant) {
+            nameEl.textContent = tenantManager.activeTenant.short_name || tenantManager.activeTenant.name;
+            nameEl.title = tenantManager.activeTenant.short_name || tenantManager.activeTenant.name;
+        } else {
+            nameEl.textContent = '企业聊天室';
+            nameEl.title = '企业聊天室';
+        }
+    }
+
     // 修复：打开新建群组模态框
     openNewGroupModal() {
         const newChatModal = document.getElementById('newChatModal');
@@ -5915,6 +6275,10 @@ class ChatClient {
         var notifContainer = document.getElementById('notificationMessages');
         if (notifContainer) { notifContainer.style.display = 'none'; }
 
+        // 隐藏组织架构视图（如果打开）
+        var orgView = document.getElementById('orgViewContainer');
+        if (orgView) { orgView.classList.add('hidden'); }
+
         // 🔧 新增：进入聊天室时清除未读@提及标记
         const targetRoom = this.chatRooms.find(r => r.id === parseInt(roomId));
         if (targetRoom) {
@@ -5928,6 +6292,9 @@ class ChatClient {
             this.renderChatRooms(); // ✅ 立即更新侧边栏状态
 
         }
+
+        // 恢复聊天输入区和头部按钮
+        this._setChatControlsVisible(true)
 
         // 🔧 关键修复 2: 清除所有输入指示器
         this.hideAllTypingIndicators();
@@ -6020,23 +6387,23 @@ class ChatClient {
 
         // 更新聊天头部
         const room = this.chatRooms.find(r => r.id === parseInt(roomId));
-        // console.log('this.currentUser:', this.currentUser)
-        console.log('room:', room)
-        console.log('roomId:', roomId, ' room_type: ', room?.room_type)
-        // console.log('this.chatRooms:', this.chatRooms)
 
 
-        // 清除该聊天室的未读数
         if (room) {
+            if (room.room_type === 'group') {
+                var headerRight = document.querySelector('.header-right');
+                if (headerRight) {
+                    var btns = headerRight.querySelectorAll('.btn-icon');
+                    btns.forEach(function(b, key) { if (key < 2) {b.style.display = 'none'; }});
+                }
+            }
+            // 清除该聊天室的未读数
             room.unread_count = 0;
-
             // 更新总未读数并设置角标
             const totalUnread = this.chatRooms.reduce((sum, r) => sum + (r.unread_count || 0), 0);
             this.updateAppBadge(totalUnread);
-        }
 
-
-        if (room) {
+            // 更新聊天头部
             let roomName, roomAvatar, is_online = false;
             if (room.room_type === 'private') {
                 const otherMember = room.members.find(m => m.id !== this.currentUser.id);
@@ -6088,7 +6455,7 @@ class ChatClient {
     // 选择用户发起聊天（私聊）
     selectUserForChat(userId) {
         console.log('选择用户发起聊天:', userId);
-        if (!userId || userId === this.currentUser.id) {
+        if (!userId || parseInt(userId) === parseInt(this.currentUser.id)) {
             return;
         }
 
@@ -6864,10 +7231,12 @@ class ChatClient {
                 const chatList = document.getElementById('chatList');
                 const contactsList = document.getElementById('contactsList');
                 const groupsList = document.getElementById('groupsList');
+                const orgPanel = document.getElementById('orgSidebarPanel');
 
                 if (chatList) chatList.classList.add('hidden');
                 if (contactsList) contactsList.classList.add('hidden');
                 if (groupsList) groupsList.classList.add('hidden');
+                if (orgPanel) orgPanel.classList.add('hidden');
 
                 // 显示当前 tab 对应的列表
                 const tabType = this.currentSearchTab;
@@ -7113,14 +7482,6 @@ class ChatClient {
         this.clearModal(modal.id);
 
 
-        // 动态生成部门选项
-        const departmentOptions = this.departments.map(dept =>
-            `<option value="${dept.id}" ${this.currentUser.department_info?.id === dept.id ? 'selected' : ''}>${dept.name}</option>`
-        ).join('');
-
-        console.log('departments:', this.departments)
-        console.log('departmentOptions:', departmentOptions)
-
         modal.innerHTML = `
         <div class="modal-content">
             <div class="modal-header">
@@ -7128,6 +7489,8 @@ class ChatClient {
                 <button class="close-btn">&times;</button>
             </div>
             <div class="modal-body">
+                ${window.tenantManager && tenantManager.activeTenant ? '<div style="margin-bottom:16px;padding:12px 16px;background:#f0f9eb;border-radius:8px;font-size:13px;display:flex;align-items:center;gap:8px;color:#67c23a;"><i class="fas fa-building"></i> 当前企业：<strong>' + chatClient._escape(tenantManager.activeTenant.short_name || tenantManager.activeTenant.name) + '</strong></div>' : ''}
+
                 <div class="profile-section">
                     <div class="profile-section-header">
                         <div class="grid-item-icon">
@@ -7146,7 +7509,7 @@ class ChatClient {
                         <small class="form-hint">点击头像上传新照片，支持JPG、PNG格式，最大2MB</small>
                     </div>
                 </div>
-        
+
                 <div class="profile-section">
                     <div class="profile-section-header">
                         <div class="grid-item-icon">
@@ -7182,7 +7545,7 @@ class ChatClient {
                         </div>
                     </div>
                 </div>
-        
+
                 <div class="profile-section">
                     <div class="profile-section-header">
                         <div class="grid-item-icon">
@@ -7192,20 +7555,24 @@ class ChatClient {
                     </div>
                     <div class="profile-info-grid">
                         <div class="profile-info-item">
+                            <label>所属企业</label>
+                            <span id="settingsTenantDisplay" style="line-height:36px;color:var(--primary-color,#409eff);font-weight:500;">-</span>
+                        </div>
+                        <div class="profile-info-item">
                             <label>部门</label>
-                            
-                            <select id="settingsDepartment" class="form-select"  ${this.currentUser.user_type === 'normal' ? 'readonly' : ''}>>
-                            <option value="">请选择部门</option>
-                            ${departmentOptions}
-                            </select>
+                            <div id="settingsDeptDisplay" style="line-height:1.8;"></div>
                         </div>
                         <div class="profile-info-item">
                             <label>职位</label>
-                            <input type="text" id="settingsPosition" placeholder="请输入职位" ${this.currentUser.user_type === 'normal' ? 'readonly' : ''}>
+                            <input type="text" id="settingsPosition" placeholder="请输入职位">
+                        </div>
+                        <div class="profile-info-item">
+                            <label>直属主管</label>
+                            <span id="settingsSupervisorDisplay" style="line-height:36px;">-</span>
                         </div>
                     </div>
                 </div>
-        
+
                 <div class="profile-section">
                     <div class="profile-section-header">
                         <div class="grid-item-icon">
@@ -7300,16 +7667,17 @@ class ChatClient {
         document.getElementById('settingsEmail').value = this.currentUser.email || '';
         document.getElementById('settingsPhone').value = this.currentUser.phone || '';
         document.getElementById('settingsGender').value = this.currentUser.gender || '';
-
-        // 工作信息
-        document.getElementById('settingsDepartment').value = this.currentUser.department_info?.id || this.currentUser.department || '';
-        document.getElementById('settingsPosition').value = this.currentUser.position || '';
+        var sp = document.getElementById('settingsPosition');
+        if (sp) sp.value = this.currentUser.position || '';
 
         // 头像
         const avatarImg = document.getElementById('settingsAvatar');
         if (avatarImg) {
             avatarImg.src = this.currentUser.avatar_url || this.currentUser.avatar || '/static/images/default-avatar.png';
         }
+
+        // 加载组织架构信息
+        this._loadSettingsOrgInfo();
 
         // 恢复通知设置
         const desktopNotifications = localStorage.getItem('desktopNotifications') !== 'false';
@@ -7320,6 +7688,50 @@ class ChatClient {
         document.getElementById('vibrateNotifications').checked = vibrateNotifications;
 
         console.log('==> 恢复通知设置：', desktopNotifications, soundNotifications, vibrateNotifications, typeof desktopNotifications);
+    }
+
+    async _loadSettingsOrgInfo() {
+        try {
+            // 企业信息
+            var tenantEl = document.getElementById('settingsTenantDisplay');
+            if (tenantEl && window.tenantManager && tenantManager.activeTenant) {
+                var t = tenantManager.activeTenant;
+                var roleMap = { 'owner': '企业所有者', 'admin': '企业管理员', 'dept_admin': '部门管理员', 'member': '成员' };
+                tenantEl.textContent = (t.short_name || t.name) + ' · ' + (roleMap[t.role] || '成员');
+            }
+
+            // 从 /api/auth/me/ 获取 supervisor / org_departments
+            var resp = await fetch('/api/auth/me/', { headers: TokenManager.getHeaders() });
+            if (resp.ok) {
+                var me = await resp.json();
+                // 部门（逐级链式显示，多部门分行）
+                var deptEl = document.getElementById('settingsDeptDisplay');
+                if (deptEl) {
+                    if (me.org_departments && me.org_departments.length) {
+                        deptEl.innerHTML = me.org_departments.map(function(d) {
+                            return '<div style="padding:2px 0;"><i class="fas fa-sitemap" style="color:#e6a23c;font-size:11px;margin-right:4px;"></i>' + chatClient._escape(d.full_path || d.name) + '</div>';
+                        }).join('');
+                    } else {
+                        deptEl.innerHTML = '<span>' + chatClient._escape((me.department_info && me.department_info.name) || '-') + '</span>';
+                    }
+                }
+                // 直属主管
+                var supEl = document.getElementById('settingsSupervisorDisplay');
+                if (supEl) {
+                    if (me.supervisor) {
+                        supEl.innerHTML = '<span style="display:inline-flex;align-items:center;gap:6px;">'
+                            + (me.supervisor.avatar ? '<img src="' + chatClient._escape(me.supervisor.avatar) + '" style="width:20px;height:20px;border-radius:50%;object-fit:cover;">' : '')
+                            + '<span>' + chatClient._escape(me.supervisor.real_name || me.supervisor.username) + '</span>'
+                            + (me.supervisor.position ? '<span style="color:var(--text-light,#909399);font-size:12px;">(' + chatClient._escape(me.supervisor.position) + ')</span>' : '')
+                            + '</span>';
+                    } else {
+                        supEl.textContent = '-';
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('加载组织信息失败:', e);
+        }
     }
 
     openAvatarUpload() {
@@ -7456,8 +7868,7 @@ class ChatClient {
             const phone = document.getElementById('settingsPhone').value;
             const email = document.getElementById('settingsEmail').value;
             const gender = document.getElementById('settingsGender').value;
-            const department = document.getElementById('settingsDepartment').value;
-            const position = document.getElementById('settingsPosition').value;
+            const position = document.getElementById('settingsPosition') ? document.getElementById('settingsPosition').value : '';
             const avatarInput = document.getElementById('avatarUpload');
 
             // 保存通知设置
@@ -7488,13 +7899,7 @@ class ChatClient {
             if (phone !== this.currentUser.phone) updateData.phone = phone;
             if (email !== this.currentUser.email) updateData.email = email;
             if (gender !== this.currentUser.gender) updateData.gender = gender;
-
-
-            // 检查权限 - 只有管理员以上才能修改部门和职位
-            if (this.currentUser.user_type !== 'normal') {
-                if (department !== this.currentUser.department) updateData.department = department;
-                if (position !== this.currentUser.position) updateData.position = position;
-            }
+            if (position && position !== (this.currentUser.position || '')) updateData.position = position;
 
             let response;
 
@@ -8253,7 +8658,7 @@ class ChatClient {
         return labels[type] || type;
     }
 
-// 处理搜索结果点击
+    // 处理搜索结果点击
     handleSearchResultClick(id, type) {
         switch (type) {
             case 'chats':
@@ -8598,7 +9003,6 @@ class ChatClient {
 
 // 软删除消息
     async softDeleteMessage(messageId) {
-        if (!confirm('确定要删除这条消息吗？')) return;
         const confirmed = await this.showConfirmDialog(
             '删除聊天消息',
             '确定要删除这条消息吗？',
@@ -8706,6 +9110,12 @@ class ChatClient {
             room = this.chatRooms.find(r => r.id === parseInt(roomId));
         }
 
+        // 获取当前企业名称
+        var tenantName = '';
+        if (window.tenantManager && tenantManager.activeTenant) {
+            tenantName = tenantManager.activeTenant.short_name || tenantManager.activeTenant.name;
+        }
+
         // 创建群聊管理模态框
         const modal = document.createElement('div');
         modal.className = 'modal group-management-modal';
@@ -8720,11 +9130,15 @@ class ChatClient {
                 <button class="close-btn">&times;</button>
             </div>
             <div class="modal-body">
+                <div style="margin-bottom:16px;padding:12px 16px;background:#f0f9eb;border-radius:8px;font-size:13px;display:flex;align-items:center;gap:8px;color:#67c23a;">
+                    <i class="fas fa-building"></i> 所属企业：<strong>${this._escape(tenantName || '-')}</strong>
+                </div>
+
                 <div class="form-group">
                     <label>群聊名称</label>
                     <input type="text" id="groupManageName" value="${room.name || room.display_name}" maxlength="50">
                 </div>
-                
+
                 <div class="form-group">
                     <label>群成员 (${room.members ? room.members.length : 0})</label>
                     <div class="search-box">
@@ -8735,7 +9149,7 @@ class ChatClient {
                         <!-- 成员列表将动态生成 -->
                     </div>
                 </div>
-                
+
                 <div class="form-group">
                     <label>添加成员</label>
                     <div class="search-box">
@@ -8794,6 +9208,12 @@ class ChatClient {
     showGroupMemberListModal(room) {
         let roomId = room.id;
 
+        // 获取当前企业名称
+        var tenantName = '';
+        if (window.tenantManager && tenantManager.activeTenant) {
+            tenantName = tenantManager.activeTenant.short_name || tenantManager.activeTenant.name;
+        }
+
         // 创建群聊管理模态框
         const modal = document.createElement('div');
         modal.className = 'modal group-management-modal';
@@ -8808,11 +9228,15 @@ class ChatClient {
                 <button class="close-btn">&times;</button>
             </div>
             <div class="modal-body">
+                <div style="margin-bottom:16px;padding:12px 16px;background:#f0f9eb;border-radius:8px;font-size:13px;display:flex;align-items:center;gap:8px;color:#67c23a;">
+                    <i class="fas fa-building"></i> 所属企业：<strong>${this._escape(tenantName || '-')}</strong>
+                </div>
+
                 <div class="form-group">
                     <label>群聊名称</label>
-                    <input type="text" id="groupManageName" value="${room.name || room.display_name}" maxlength="50">
+                    <input type="text" id="groupManageName" value="${room.name || room.display_name}" maxlength="50" readonly style="background:var(--bg-secondary,#f5f7fa);">
                 </div>
-                
+
                 <div class="form-group">
                     <label>群成员 (${room.members ? room.members.length : 0})</label>
                     <div class="search-box">
@@ -8823,7 +9247,7 @@ class ChatClient {
                         <!-- 成员列表将动态生成 -->
                     </div>
                 </div>
-                
+
             </div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="chatClient.closeModal('groupManagementModal')">确定</button>
@@ -8838,9 +9262,6 @@ class ChatClient {
 
         // 加载成员列表
         this.loadGroupMembersForManagement(roomId);
-
-        // 加载可添加的成员列表
-        this.loadAvailableMembersForGroup(roomId);
 
         // 绑定搜索事件
         document.getElementById('groupManageSearch').addEventListener('input', (e) => {
@@ -8862,16 +9283,39 @@ class ChatClient {
     }
 
 
-    // 优化：加载群聊成员用于管理（群主在第一位）
-    loadGroupMembersForManagement(roomId) {
+    // 优化：加载群聊成员用于管理（群主在第一位，显示部门职位）
+    async loadGroupMembersForManagement(roomId) {
         const room = this.chatRooms.find(r => r.id === parseInt(roomId));
         if (!room || !room.members) {
             console.error('未找到群聊或成员列表');
             return;
         }
 
+        var self = this;
+
         const membersContainer = document.getElementById('groupManageMembers');
         if (!membersContainer) return;
+
+        // 批量获取成员的企业角色和部门信息
+        var memberIds = room.members.map(function(m) { return m.id; });
+        var memberMap = {};
+        try {
+            // 调用 me API 获取当前用户的 org 信息
+            // 对每个成员，调用 profile API 获取 org_departments
+            var promises = memberIds.map(function(uid) {
+                return fetch('/api/auth/' + uid + '/profile/', {
+                    headers: TokenManager.getHeaders()
+                }).then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; });
+            });
+            var profiles = await Promise.all(promises);
+            for (var i = 0; i < memberIds.length; i++) {
+                if (profiles[i]) {
+                    memberMap[memberIds[i]] = profiles[i];
+                }
+            }
+        } catch (e) {
+            console.error('加载成员详细信息失败:', e);
+        }
 
         // 将群主排在第一位
         const sortedMembers = [...room.members].sort((a, b) => {
@@ -8881,18 +9325,33 @@ class ChatClient {
         });
 
         let html = '<div class="member-grid">';
-        sortedMembers.forEach(member => {
-            const isCreator = member.id === room.creator;
-            html += `
-        <div class="member-grid-item ${isCreator ? 'creator' : ''}" data-member-id="${member.id}">
-            <div class="member-grid-avatar">
-                <img src="${member.avatar_url || '/static/images/default-avatar.png'}" alt="${member.username}">
-            </div>
-            <div class="member-grid-name">${member.real_name || member.username}</div>
-            ${isCreator ? '<div class="member-grid-tag">群主</div>' : ''}
-            ${!isCreator ? `<button class="btn-remove" onclick="chatClient.removeGroupMember(${roomId}, ${member.id})" title="移除成员">×</button>` : ''}
-        </div>
-        `;
+        sortedMembers.forEach(function(member) {
+            var isCreator = member.id === room.creator
+            var isMember = self.currentUser?.id != room.creator;
+            var profile = memberMap[member.id];
+            var deptNames = [];
+            var posName = '';
+            if (profile) {
+                if (profile.org_departments && profile.org_departments.length) {
+                    deptNames = profile.org_departments.map(function(d) { return d.full_path || d.name; });
+                    if (profile.org_departments[0].position) posName = profile.org_departments[0].position;
+                }
+                if (!deptNames.length && profile.department_info) deptNames = [profile.department_info.name || ''];
+                if (!posName) posName = profile.position || '';
+            } else {
+                deptNames = (member.department_info && member.department_info.name) ? [member.department_info.name] : [];
+                posName = member.position || '';
+            }
+            html += '<div class="member-grid-item ' + (isCreator ? 'creator' : '') + '" data-member-id="' + member.id + '">'
+                + '<div class="member-grid-avatar">'
+                + '<img src="' + chatClient._escape(member.avatar_url || '/static/images/default-avatar.png') + '" alt="' + chatClient._escape(member.username) + '">'
+                + '</div>'
+                + '<div class="member-grid-name">' + chatClient._escape(member.real_name || member.username) + '</div>'
+                + (posName ? '<div style="font-size:10px;color:#409eff;margin-top:1px;">' + chatClient._escape(posName) + '</div>' : '')
+                + (deptNames && deptNames.length ? '<div style="font-size:11px;color:var(--text-light,#909399);margin-top:2px;line-height:1.5;">' + deptNames.map(function(n){return '<div><i class="fas fa-angle-right" style="font-size:9px;margin-right:2px;color:#c0c4cc;"></i>' + chatClient._escape(n) + '</div>';}).join('') + '</div>' : '')
+                + (isCreator ? '<div class="member-grid-tag">群主</div>' : '')
+                + (!isCreator && !isMember ? '<button class="btn-remove" onclick="chatClient.removeGroupMember(' + roomId + ', ' + member.id + ')" title="移除成员">×</button>' : '')
+                + '</div>';
         });
         html += '</div>';
 
@@ -9020,6 +9479,7 @@ class ChatClient {
             this.loadGroupMembersForManagement(roomId);
             return;
         }
+        const self = this;
 
         const room = this.chatRooms.find(r => r.id === parseInt(roomId));
         if (!room || !room.members) return;
@@ -9035,6 +9495,7 @@ class ChatClient {
         let html = '';
         filteredMembers.forEach(member => {
             const isCreator = member.id === room.creator;
+            var isMember = self.currentUser?.id != room.creator;
             html += `
             <div class="member-item" data-member-id="${member.id}">
                 <img src="${member.avatar_url || '/static/images/default-avatar.png'}" alt="${member.username}">
@@ -9042,7 +9503,7 @@ class ChatClient {
                     <div class="member-name">${member.real_name || member.username}</div>
                     ${isCreator ? '<span class="member-tag">群主</span>' : ''}
                 </div>
-                ${!isCreator ? `<button class="btn-remove" onclick="chatClient.removeGroupMember(${roomId}, ${member.id})">×</button>` : ''}
+                ${!isCreator && !isMember ? `<button class="btn-remove" onclick="chatClient.removeGroupMember(${roomId}, ${member.id})">×</button>` : ''}
             </div>
         `;
         });

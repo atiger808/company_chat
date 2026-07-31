@@ -33,6 +33,10 @@ class Task(models.Model):
     related_message = models.ForeignKey(Message, on_delete=models.SET_NULL, related_name='task', null=True, blank=True,
                                         verbose_name="来源消息")
 
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                               null=True, blank=True, related_name='tasks',
+                               verbose_name="所属企业")
+
     # 子任务支持
     parent_task = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='subtasks',
                                     verbose_name="父任务")

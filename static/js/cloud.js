@@ -935,6 +935,9 @@ class CloudApp {
                 document.getElementById('operationLogView').classList.add('active');
                 await this.loadOperationLogs();
                 break;
+            case 'org':
+                document.getElementById('orgView').classList.add('active');
+                break;
             case 'chat':
                 document.getElementById('chatView').classList.add('active');
                 break;
@@ -7574,10 +7577,7 @@ class CloudApp {
             } catch (e) {
                 console.error('登出失败:', e);
             } finally {
-                localStorage.removeItem('access_token');
-                localStorage.removeItem('user_id');
-                localStorage.removeItem('user_type');
-                window.location.href = this.cloud_login_url;
+                this.handleAuthError();
             }
         }
     }

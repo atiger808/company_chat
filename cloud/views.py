@@ -2928,6 +2928,66 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
             )
 
     @action(detail=False, methods=['post'])
+    def save_from_url(self, request):
+        """
+        从URL下载文件保存到网盘（含MD5去重）
+        POST /api/cloud/files/save_from_url/
+        """
+        url = request.data.get('url')
+        name = request.data.get('name', '')
+        if not url:
+            return Response({'error': '缺少url参数'}, status=400)
+        # 处理相对路径，拼接完整URL
+        if url.startswith('/'):
+            base = f"{request.scheme}://{request.get_host()}"
+            url = base + url
+        try:
+            resp = requests.get(url, timeout=30)
+            resp.raise_for_status()
+        except Exception as e:
+            return Response({'error': f'下载文件失败: {str(e)}'}, status=400)
+        content = resp.content
+        file_name = name or url.split('/')[-1] or '未命名文件'
+        mime_type = resp.headers.get('content-type', '')
+        md5 = hashlib.md5(content).hexdigest()
+        size = len(content)
+
+        # MD5去重：同一用户的相同MD5文件跳过重复保存
+        existing = CloudFile.objects.filter(
+            owner=request.user, md5=md5, deleted_at__isnull=True
+        ).first()
+        if existing:
+            return Response({
+                'file_id': str(existing.id),
+                'url': existing.file.url,
+                'name': file_name,
+                'already_exists': True,
+            })
+
+        safe_folder_name = '文档（来自审批）'
+        folder, _ = Folder.objects.get_or_create(
+            owner=request.user,
+            name=safe_folder_name,
+            defaults={'parent': None, 'description': '从OA审批同步', 'is_public': False}
+        )
+        cloud_file = CloudFile(
+            folder=folder, owner=request.user,
+            name=file_name[:255], original_name=file_name[:255],
+            size=size, mime_type=mime_type, md5=md5,
+        )
+        ext = os.path.splitext(file_name)[1]
+        save_name = f"{uuid.uuid4()}{ext}"
+        cloud_file.file.save(save_name, ContentFile(content))
+        cloud_file.save()
+        logger.info(f'用户 {request.user} 从URL保存文件 {file_name} 到网盘')
+        return Response({
+            'file_id': str(cloud_file.id),
+            'url': cloud_file.file.url,
+            'name': file_name,
+            'already_exists': False,
+        })
+
+    @action(detail=False, methods=['post'])
     def sync_file_from_chat(self, request, *args, **kwargs):
         """
         将聊天文件同步到企业云盘
@@ -7629,7 +7689,7 @@ class CloudSystemSettingsViewSet(viewsets.GenericViewSet):
             'description': '单个文件允许的最大上传大小（MB）',
             'category': 'upload',
             'is_public': True,
-            'validation': {'min': 1, 'max': 1024}
+            'validation': {'min': 1, 'max': 10240}
         },
         'upload.image_max_size_mb': {
             'name': '图片大小上限',
@@ -7647,7 +7707,7 @@ class CloudSystemSettingsViewSet(viewsets.GenericViewSet):
             'description': '视频文件允许的最大大小（MB）',
             'category': 'upload',
             'is_public': True,
-            'validation': {'min': 10, 'max': 2048}
+            'validation': {'min': 10, 'max': 20480}
         },
         'upload.audio_max_size_mb': {
             'name': '音频大小上限',
@@ -8653,7 +8713,7 @@ class CloudSystemSettingsViewSet(viewsets.GenericViewSet):
 
     def _validate_business_rules(self, key, value):
         rules = {
-            'upload.max_file_size_mb': lambda v: v <= 2048 or '文件上传大小不能超过 2048MB',
+            'upload.max_file_size_mb': lambda v: v <= 20480 or '文件上传大小不能超过 20480MB',
             'upload.image_max_size_mb': lambda v: v <= 200 or '图片大小不能超过 200MB',
             'upload.video_max_size_mb': lambda v: v <= 2048 or '视频大小不能超过 2048MB',
             'storage.quota_gb': lambda v: v <= 1024 or '存储配额不能超过 1024GB',

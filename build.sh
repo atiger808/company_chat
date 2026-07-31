@@ -73,6 +73,8 @@ $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/cloud_sett
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/tasks/tasks.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/oa/approval.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/oa/attendance.html" ${VERSION}
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/org/org.html" ${VERSION}
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/org/org_mobile.html" ${VERSION}
 
 
 

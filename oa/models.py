@@ -22,6 +22,9 @@ class AttendanceRecord(models.Model):
         related_name='attendance_records',
         verbose_name='用户'
     )
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                                null=True, blank=True, related_name='attendance_records',
+                                verbose_name='所属企业')
     clock_type = models.CharField(
         max_length=20,
         choices=CLOCK_TYPE_CHOICES,
@@ -70,6 +73,7 @@ class ApprovalRequest(models.Model):
         ('expense', '报销'),
         ('trip', '出差'),
         ('purchase', '采购'),
+        ('recruit', '招聘需求'),
         ('other', '其他'),
     ]
     STATUS_CHOICES = [
@@ -77,6 +81,8 @@ class ApprovalRequest(models.Model):
         ('pending', '待审批'),
         ('approved', '已通过'),
         ('rejected', '已驳回'),
+        ('deferred', '暂缓'),
+        ('processing', '办理中'),
         ('cancelled', '已撤回'),
     ]
     EXPENSE_TYPE_CHOICES = [
@@ -96,6 +102,9 @@ class ApprovalRequest(models.Model):
         related_name='approval_requests',
         verbose_name='申请人'
     )
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                                null=True, blank=True, related_name='approval_requests',
+                                verbose_name='所属企业')
     department = models.ForeignKey(
         Department,
         on_delete=models.SET_NULL,
@@ -133,6 +142,8 @@ class ApprovalRequest(models.Model):
         verbose_name='费用类型'
     )
     expense_date = models.DateField(null=True, blank=True, verbose_name='费用发生日期')
+    # 招聘需求结构化数据
+    recruit_data = models.JSONField(null=True, blank=True, default=dict, verbose_name='招聘需求数据')
     # 附件
     attachments = models.JSONField(null=True, blank=True, default=list, verbose_name='附件')
     sign_type = models.CharField(
@@ -160,7 +171,7 @@ class ApprovalRequest(models.Model):
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
     class Meta:
-        ordering = ['-created_at']
+        ordering = ['-updated_at']
         verbose_name = '审批请求'
         verbose_name_plural = '审批请求'
 
@@ -174,6 +185,8 @@ class ApprovalLog(models.Model):
     ACTION_CHOICES = [
         ('approve', '通过'),
         ('reject', '驳回'),
+        ('defer', '暂缓'),
+        ('processing', '正在办理'),
         ('resubmit', '重新提交'),
         ('cancel', '撤回'),
     ]
@@ -196,6 +209,9 @@ class ApprovalLog(models.Model):
         verbose_name='操作'
     )
     comment = models.TextField(blank=True, default='', verbose_name='操作意见')
+    attachments = models.JSONField(null=True, blank=True, default=list, verbose_name='附件')
+    signature = models.TextField(blank=True, default='', verbose_name='手写签名',
+                                 help_text='审批人手写签名的base64图片数据')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='操作时间')
 
     class Meta:
@@ -225,6 +241,9 @@ class WorkNotification(models.Model):
         verbose_name='接收人',
         db_index=True,
     )
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                                null=True, blank=True, related_name='notifications',
+                                verbose_name='所属企业')
     notification_type = models.CharField(
         max_length=20,
         choices=NOTIFICATION_TYPES,
@@ -248,6 +267,136 @@ class WorkNotification(models.Model):
 
     def __str__(self):
         return f'{self.recipient} {self.title}'
+
+
+class ApprovalCarbonCopy(models.Model):
+    """审批抄送（支持抄送用户和部门）"""
+    CC_TYPE_CHOICES = [
+        ('user', '用户'),
+        ('department', '部门'),
+    ]
+
+    request = models.ForeignKey(
+        ApprovalRequest,
+        on_delete=models.CASCADE,
+        related_name='carbon_copies',
+        verbose_name='审批请求'
+    )
+    cc_type = models.CharField(
+        max_length=20,
+        choices=CC_TYPE_CHOICES,
+        default='user',
+        verbose_name='抄送类型'
+    )
+    cc_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='approval_ccs',
+        verbose_name='抄送人'
+    )
+    cc_department = models.ForeignKey(
+        Department,
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='approval_ccs',
+        verbose_name='抄送部门'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+
+    class Meta:
+        verbose_name = '审批抄送'
+        verbose_name_plural = '审批抄送'
+
+    def __str__(self):
+        if self.cc_type == 'department' and self.cc_department:
+            return f'部门:{self.cc_department.name} 抄送 {self.request}'
+        if self.cc_user:
+            return f'{self.cc_user} 抄送 {self.request}'
+        return f'抄送 {self.request}'
+
+
+class ApprovalDeptConfig(models.Model):
+    """审批类型配置（超级管理员为每种审批类型设置最终审批部门、抄送部门、抄送人、审批人等）"""
+    tenant = models.ForeignKey(
+        'accounts.Tenant',
+        on_delete=models.CASCADE,
+        related_name='approval_dept_configs',
+        verbose_name='所属企业'
+    )
+    approval_type = models.CharField(
+        max_length=20,
+        choices=ApprovalRequest.APPROVAL_TYPE_CHOICES,
+        verbose_name='审批类型'
+    )
+    # 默认审批方式
+    default_sign_type = models.CharField(
+        max_length=20,
+        choices=[('countersign', '会签'), ('orsign', '或签')],
+        default='countersign',
+        verbose_name='默认审批方式'
+    )
+    # 默认审批模式
+    default_approval_mode = models.CharField(
+        max_length=20,
+        choices=[('sequential', '顺序审批'), ('parallel', '并行审批')],
+        default='sequential',
+        verbose_name='默认审批模式'
+    )
+    # 子公司专属配置（null=集团默认配置，非空=该子公司的专属配置）
+    sub_tenant = models.ForeignKey(
+        'accounts.Tenant',
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='sub_approval_dept_configs',
+        verbose_name='子公司'
+    )
+    # 最终审批部门
+    department = models.ForeignKey(
+        'accounts.Department',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        verbose_name='最终审批部门'
+    )
+    # 默认抄送部门列表
+    cc_departments = models.JSONField(default=list, blank=True, verbose_name='默认抄送部门ID列表')
+    # 默认抄送人列表
+    cc_users = models.JSONField(default=list, blank=True, verbose_name='默认抄送人ID列表')
+    # 默认审批人列表（如设置，则覆盖自动审批链）
+    approver_users = models.JSONField(default=list, blank=True, verbose_name='默认审批人ID列表')
+    # 阈值审批配置：超过阈值后增加一个最终审批部门
+    THRESHOLD_FIELD_CHOICES = [
+        ('duration', '天数/时长'),
+        ('amount', '金额'),
+        ('headcount', '招聘人数'),
+    ]
+    threshold_enabled = models.BooleanField(default=False, verbose_name='启用阈值审批')
+    threshold_field = models.CharField(max_length=30, blank=True, default='',
+        choices=THRESHOLD_FIELD_CHOICES,
+        verbose_name='阈值字段',
+        help_text='根据审批类型选择：请假/出差选天数，报销/采购选金额，招聘选人数')
+    threshold_value = models.FloatField(null=True, blank=True, verbose_name='阈值')
+    threshold_department = models.ForeignKey(
+        'accounts.Department',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='threshold_approval_configs',
+        verbose_name='阈值超额后最终审批部门'
+    )
+    # 是否要求审批人手写签名
+    require_signature = models.BooleanField(default=False, verbose_name='开启手写签名',
+                                           help_text='开启后审批人点击通过时需手写签名')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        unique_together = ('tenant', 'approval_type', 'sub_tenant')
+        verbose_name = '审批类型配置'
+        verbose_name_plural = '审批类型配置'
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f'{self.get_approval_type_display()} 配置'
 
 
 class ApprovalNode(models.Model):
@@ -286,7 +435,7 @@ class ApprovalNode(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
 
     class Meta:
-        ordering = ['order', 'id']
+        ordering = ['-order', '-id']
         verbose_name = '审批节点'
         verbose_name_plural = '审批节点'
 
@@ -304,6 +453,8 @@ class ApprovalAssignee(models.Model):
         ('pending', '待审批'),
         ('approved', '已通过'),
         ('rejected', '已驳回'),
+        ('deferred', '暂缓'),
+        ('processing', '办理中'),
     ]
 
     node = models.ForeignKey(
@@ -329,9 +480,40 @@ class ApprovalAssignee(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
 
     class Meta:
-        ordering = ['id']
+        ordering = ['-id']
         verbose_name = '审批人'
         verbose_name_plural = '审批人'
 
     def __str__(self):
         return f'{self.user} - {self.get_status_display()}'
+
+
+class AttendanceConfig(models.Model):
+    """考勤配置（支持多层级：集团默认 → 子公司 → 部门）"""
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                               related_name='attendance_configs', verbose_name='所属企业')
+    sub_tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                                   null=True, blank=True,
+                                   related_name='sub_attendance_configs', verbose_name='子公司')
+    department = models.ForeignKey('accounts.Department', on_delete=models.CASCADE,
+                                   null=True, blank=True,
+                                   related_name='attendance_configs', verbose_name='部门')
+    clock_in_enabled = models.BooleanField(default=True, verbose_name='启用上班打卡')
+    clock_in_time = models.TimeField(null=True, blank=True, verbose_name='上班打卡截止时间')
+    clock_out_enabled = models.BooleanField(default=True, verbose_name='启用下班打卡')
+    clock_out_time = models.TimeField(null=True, blank=True, verbose_name='下班打卡开始时间')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        unique_together = ('tenant', 'sub_tenant', 'department')
+        verbose_name = '考勤配置'
+        verbose_name_plural = '考勤配置'
+
+    def __str__(self):
+        parts = [self.tenant.short_name or self.tenant.name]
+        if self.sub_tenant:
+            parts.append(f'子公司:{self.sub_tenant.short_name or self.sub_tenant.name}')
+        if self.department:
+            parts.append(f'部门:{self.department.name}')
+        return ' - '.join(parts)

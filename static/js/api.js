@@ -35,6 +35,11 @@ class TokenManager {
 
 // API 调用封装
 class API {
+    constructor() {
+        this.configs = {};
+        this.login_url = '/login/'
+    }
+
     // 用户相关
     static async getCurrentUser() {
         const response = await fetch(`${API_BASE_URL}/auth/me/`, {
@@ -383,4 +388,70 @@ class API {
 
         return await response.json();
     }
+
+   async showConfirmDialog(title, message, type = 'confirm') {
+    return new Promise(resolve => {
+        const dialog = document.createElement('div');
+        dialog.className = 'confirm-dialog';
+        dialog.innerHTML = `
+            <div class="confirm-dialog-content">
+                <div class="confirm-dialog-header">
+                    <i class="fas fa-${type === 'danger' ? 'exclamation-triangle' : 'check-circle'}"></i>
+                    <h3>${title}</h3>
+                    <button class="close-btn">&times;</button>
+                </div>
+                <div class="confirm-dialog-body"><p>${message}</p></div>
+                <div class="confirm-dialog-footer">
+                    <button class="confirm-dialog-btn cancel">取消</button>
+                    <button class="confirm-dialog-btn ${type}">确定</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(dialog);
+
+        const close = (result) => {
+            dialog.remove();
+            resolve(result);
+        };
+
+        dialog.querySelector('.cancel').onclick = () => close(false);
+        dialog.querySelector(`.${type}`).onclick = () => close(true);
+        dialog.querySelector('.close-btn').onclick = () => close(false);
+
+        setTimeout(() => dialog.classList.add('show'), 10);
+    });
 }
+
+
+
+    handleAuthError(login_url) {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('user_id');
+        localStorage.removeItem('user_type');
+        localStorage.removeItem('current_user');
+        localStorage.setItem('redirect_url', window.location.href);
+        window.location.href = login_url || this.login_url;
+    }
+
+    async logoutDialog(login_url) {
+        const confirmed = await this.showConfirmDialog('退出登录', '确定要退出登录吗？', 'confirm');
+        if (confirmed) {
+            try {
+                await this.logout();
+            } catch (e) {
+                console.error('登出失败:', e);
+            } finally {
+                this.handleAuthError(login_url);
+            }
+        }
+    }
+
+}
+
+
+// 初始化
+let apiConsole = null;
+document.addEventListener('DOMContentLoaded', () => {
+    apiConsole = new API();
+    window.apiConsole = apiConsole;
+});

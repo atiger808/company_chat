@@ -1,16 +1,52 @@
 from django.contrib import admin
 
-from .models import CustomUser, Department, LoginLog, OperationLog, ConsultationRequest, UserActivity
+from .models import CustomUser, Department, LoginLog, OperationLog, ConsultationRequest, UserActivity, Tenant, TenantMembership
+
+@admin.register(Tenant)
+class TenantAdmin(admin.ModelAdmin):
+    list_display = ('id', 'name', 'short_name', 'code', 'tenant_type', 'owner', 'is_active', 'is_verified', 'created_at')
+    list_filter = ('tenant_type', 'is_active')
+    search_fields = ('name', 'code', 'short_name')
+    list_per_page = 20
+
+@admin.register(TenantMembership)
+class TenantMembershipAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'tenant', 'role', 'is_active', 'is_default', 'joined_at')
+    list_filter = ('role', 'is_active')
+    search_fields = ('user__username', 'tenant__name', 'employee_id')
+    list_per_page = 20
 
 @admin.register(CustomUser)
 class CustomUserAdmin(admin.ModelAdmin):
-    list_display = ('id', 'username', 'real_name', 'position', 'phone', 'email', 'is_online', 'is_active', 'last_seen', 'date_joined')
+    list_display = ('id', 'username', 'real_name', 'gender', 'position', 'phone', 'email', 'is_online', 'is_active', 'last_seen', 'date_joined')
+    list_filter = ('is_active', 'is_online', 'gender', 'user_type')
+    search_fields = ('username', 'real_name', 'phone', 'email')
     list_per_page = 20
 
 @admin.register(Department)
 class DepartmentAdmin(admin.ModelAdmin):
-    list_display = ('id', 'name', 'code', 'updated_at', 'created_at')
+    list_display = ('id', 'name', 'code', 'tenant_name', 'parent_name', 'manager_name', 'member_count', 'is_active', 'updated_at')
+    list_filter = ('is_active', 'tenant')
+    search_fields = ('name', 'code', 'full_path', 'tenant__name')
     list_per_page = 20
+
+    def tenant_name(self, obj):
+        return obj.tenant.short_name or obj.tenant.name if obj.tenant else '-'
+    tenant_name.short_description = '所属企业'
+    tenant_name.admin_order_field = 'tenant__name'
+
+    def parent_name(self, obj):
+        return obj.parent.name if obj.parent else '-'
+    parent_name.short_description = '上级部门'
+    parent_name.admin_order_field = 'parent__name'
+
+    def manager_name(self, obj):
+        return obj.manager.real_name or obj.manager.username if obj.manager else '-'
+    manager_name.short_description = '负责人'
+
+    def member_count(self, obj):
+        return obj.get_member_count()
+    member_count.short_description = '成员数'
 
 
 @admin.register(UserActivity)

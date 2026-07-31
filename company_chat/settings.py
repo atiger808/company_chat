@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     'cloud',
     'tasks',
     'oa',  # OA办公（考勤打卡+审批）
+    'org',  # 组织架构（多企业隔离）
 
     # JWT token 黑名单管理（需执行 migrate 创建表）
     'rest_framework_simplejwt.token_blacklist',
@@ -71,6 +72,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'accounts.middleware.TenantMiddleware',  # 多租户中间件
     # 'cloud.middleware.OnlyOfficeMiddleware',  # 🔧 添加这行
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -264,6 +266,11 @@ WEBSOCKET_DISCONNECT_TIMEOUT = 10  # 断开超时（秒）
 
 # REST Framework配置
 REST_FRAMEWORK = {
+    'DEFAULT_FILTER_BACKENDS': [
+        'org.filters.TenantFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+    ],
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
@@ -449,8 +456,22 @@ API_MODEL_MAP = {
 
     # ====== 聊天模块 ======
     "/api/chat/rooms/": "聊天室管理",
+    "/api/chat/rooms/<int:pk>/soft_delete/": "软删除聊天",
+    "/api/chat/rooms/<int:pk>/dismiss_chat/": "解散群聊",
+    "/api/chat/rooms/<int:pk>/update_group/": "更新群聊",
+    "/api/chat/rooms/<int:pk>/add_member/": "添加群成员",
+    "/api/chat/rooms/<int:pk>/remove_member/": "移除群成员",
+    "/api/chat/rooms/<int:pk>/pin_chat/": "置顶聊天",
+    "/api/chat/rooms/<int:pk>/mute_chat/": "消息免打扰",
+    "/api/chat/rooms/search_chats/": "搜索聊天",
     "/api/chat/messages/": "消息管理",
-    "/api/chat/upload/": "文件管理",
+    "/api/chat/messages/<int:pk>/soft_delete/": "删除消息",
+    "/api/chat/messages/<int:pk>/revoke/": "撤销消息",
+    "/api/chat/messages/clear_history/": "清空历史消息",
+    "/api/chat/messages/unread_count/": "未读消息数",
+    "/api/chat/upload/": "文件上传",
+    "/api/chat/audio/<int:file_id>/format/": "音频格式",
+    "/api/chat/version/": "版本信息",
     "/api/chat/admin/chat-rooms/": "聊天室管理",
     "/api/chat/admin/statistics/": "聊天统计",
     "/api/chat/admin/settings/": "系统设置",
@@ -460,6 +481,8 @@ API_MODEL_MAP = {
     # ====== 企业网盘 ======
     "/api/cloud/folders/": "文件夹管理",
     "/api/cloud/files/": "文件管理",
+    "/api/cloud/files/<uuid:file_id>/download_file/": "文件下载",
+    "/api/cloud/files/save_from_url/": "从URL保存文件到网盘",
     "/api/cloud/shares/": "文件分享",
     "/api/cloud/comments/": "文件评论",
     "/api/cloud/dashboard/": "网盘统计",
@@ -467,17 +490,96 @@ API_MODEL_MAP = {
     "/api/cloud/settings/": "网盘设置",
     "/api/cloud/shared-folders/": "共享文件夹",
     "/api/cloud/operation-logs/": "操作日志",
+    "/s/<str:share_code>/": "分享访问",
+    "/s/<str:share_code>/download/": "分享下载",
 
     # ====== 任务中心 ======
     "/api/tasks/": "任务中心",
 
     # ====== OA办公 ======
     "/api/oa/attendance/": "考勤打卡",
+    "/api/oa/attendance/statistics/": "考勤统计",
+    "/api/oa/attendance/today/": "今日打卡",
+    "/api/oa/attendance/clock-in/": "上班打卡",
+    "/api/oa/attendance/clock-out/": "下班打卡",
+    "/api/oa/attendance/export/": "考勤导出",
+    "/api/oa/attendance/<int:pk>/convert-coords/": "坐标转换",
+    "/api/oa/attendance/attendance-configs/": "考勤配置列表",
+    "/api/oa/attendance/save-attendance-config/": "保存考勤配置",
+    "/api/oa/attendance/delete-attendance-config/<int:pk>/": "删除考勤配置",
+    "/api/oa/attendance/my-config/": "我的考勤配置",
+    "/api/oa/attendance/calendar-stats/": "考勤日历统计",
+    "/api/oa/attendance/calendar-day-detail/": "考勤日历日期详情",
     "/api/oa/approval/": "OA审批",
+    "/api/oa/approval/approval_chain/": "审批链预览",
+    "/api/oa/approval/geocode/": "地理编码",
+    "/api/oa/approval/admins/": "审批管理员",
+    "/api/oa/approval/departments/": "审批部门",
+    "/api/oa/approval/all-departments/": "全部部门",
+    "/api/oa/approval/org_departments/": "组织部门",
+    "/api/oa/approval/upload-attachment/": "审批附件上传",
+    "/api/oa/approval/dept-configs/": "审批配置列表",
+    "/api/oa/approval/save-dept-config/": "保存审批配置",
+    "/api/oa/approval/delete-dept-config/<int:pk>/": "删除审批配置",
+    "/api/oa/approval/search-cc-users/": "搜索抄送人",
+    "/api/oa/approval/search-cc-departments/": "搜索抄送部门",
+    "/api/oa/approval/my-pending/": "我的待审批",
+    "/api/oa/approval/draft/": "审批草稿",
+    "/api/oa/approval/drafts/": "审批草稿列表",
+    "/api/oa/approval/<int:pk>/": "审批详情",
+    "/api/oa/approval/<int:pk>/approve/": "审批通过",
+    "/api/oa/approval/<int:pk>/reject/": "审批驳回",
+    "/api/oa/approval/<int:pk>/deferred/": "暂缓审批",
+    "/api/oa/approval/<int:pk>/processing/": "办理中审批",
+    "/api/oa/approval/<int:pk>/cancel/": "审批撤销",
+    "/api/oa/approval/<int:pk>/re-edit/": "审批重新编辑",
+    "/api/oa/approval/<int:pk>/delete-draft/": "删除审批草稿",
+    "/api/oa/approval/<int:pk>/update-draft/": "更新审批草稿",
     "/api/oa/notifications/": "工作通知",
+    "/api/oa/notifications/unread-count/": "通知未读数",
+    "/api/oa/notifications/mark-all-read/": "通知全部已读",
+    "/api/oa/notifications/<int:pk>/mark-read/": "标记通知已读",
+
+    # ====== 组织架构 ======
+    "/api/org/tenants/": "企业管理",
+    "/api/org/tenants/<int:pk>/switch/": "切换企业",
+    "/api/org/tenants/<int:pk>/members/": "企业成员",
+    "/api/org/tenants/<int:pk>/invite/": "邀请成员",
+    "/api/org/tenants/<int:pk>/remove_member/": "移出企业",
+    "/api/org/tenants/<int:pk>/update_member/": "更新成员信息",
+    "/api/org/tenants/<int:pk>/member_role/": "成员角色",
+    "/api/org/tenants/<int:pk>/stats/": "企业统计",
+    "/api/org/tenants/search_users/": "搜索用户",
+    "/api/org/tenants/search_tenant_members/": "搜索企业成员",
+    "/api/org/tenants/search_all_users/": "搜索全部用户",
+    "/api/org/departments/": "部门管理",
+    "/api/org/departments/<int:pk>/move/": "移动部门",
+    "/api/org/departments/<int:pk>/sort/": "部门排序",
+    "/api/org/departments/<int:pk>/set_leaders/": "设置负责人",
+    "/api/org/departments/<int:pk>/set_deputies/": "设置副负责人",
+    "/api/org/departments/<int:pk>/members/": "部门成员",
+    "/api/org/departments/<int:pk>/add_members/": "添加部门成员",
+    "/api/org/departments/<int:pk>/remove_members/": "移除部门成员",
+    "/api/org/departments/<int:pk>/update_member_position/": "更新成员职位",
+    "/api/org/departments/<int:pk>/sync_all_members/": "同步全部成员",
+    "/api/org/departments/<int:pk>/leaders/": "部门负责人",
+    "/api/org/departments/<int:pk>/convert_to_tenant/": "部门转子公司",
+    "/api/org/departments/<int:pk>/revert_to_department/": "子公司恢复为部门",
+    "/api/org/departments/create_sub_tenant/": "集团创建子公司",
+    "/api/org/departments/rebuild_report_relations/": "重建汇报关系",
+    "/api/org/departments/<int:pk>/path/": "部门路径",
+    "/api/org/departments/<int:pk>/org_chart/": "部门架构图",
+    "/api/org/departments/search/": "搜索部门",
+    "/api/org/org-chart/": "组织架构图",
+    "/api/org/users/<int:pk>/departments/": "用户部门",
+    "/api/org/users/<int:pk>/subordinates/": "下属列表",
+    "/api/org/users/<int:pk>/set-supervisor/": "设置上级",
+    "/api/org/users/<int:pk>/supervisors/": "上级列表",
+    "/api/org/change-logs/": "组织变更日志",
 }
 EXLUDE_API_LOG = [
-    "/api/chat/messages/mark_as_read/"  # 标记已读
+    "/api/chat/messages/mark_as_read/",  # 标记已读
+    "/api/cloud/files/upload_chunk/",  # 文件分片上传
 ]
 API_METHOD_MAP = {
     'GET': '查询',

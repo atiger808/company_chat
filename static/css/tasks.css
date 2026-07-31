@@ -143,6 +143,10 @@ body.task-body {
 }
 
 @media (max-width: 768px) {
+    .btn-text {
+        display: none;
+    }
+
     .task-sidebar {
         position: fixed;
         top: 60px;
@@ -163,6 +167,10 @@ body.task-body {
 }
 
 @media (max-width: 768px) {
+    .btn-text {
+        display: none;
+    }
+
     .sidebar-overlay {
         display: none;
         position: fixed;
@@ -196,6 +204,10 @@ body.task-body {
 }
 
 @media (max-width: 768px) {
+    .btn-text {
+        display: none;
+    }
+
     .sidebar-close-btn {
         display: flex;
         align-items: center;
@@ -778,6 +790,10 @@ body.task-body {
 
 /* ==================== 移动端适配 ==================== */
 @media (max-width: 768px) {
+    .btn-text {
+        display: none;
+    }
+
     .task-header {
         padding: 0 12px;
     }
