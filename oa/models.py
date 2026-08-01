@@ -185,7 +185,7 @@ class ApprovalLog(models.Model):
     ACTION_CHOICES = [
         ('approve', '通过'),
         ('reject', '驳回'),
-        ('defer', '暂缓'),
+        ('deferred', '暂缓'),
         ('processing', '正在办理'),
         ('resubmit', '重新提交'),
         ('cancel', '撤回'),

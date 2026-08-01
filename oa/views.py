@@ -813,7 +813,6 @@ class ApprovalViewSet(viewsets.ViewSet):
             try:
                 tenant = approval.tenant or getattr(request, 'tenant', None) or request.user.get_active_tenant()
                 config = self._get_config_for_tenant(tenant, approval.approval_type) if tenant else None
-                logger.info(f'审批 {pk} 签名配置: approval_tenant={approval.tenant} request_tenant={getattr(request, "tenant", None)} type={approval.approval_type} config={config}')
                 data['require_signature'] = bool(config and config.require_signature)
             except Exception as e:
                 logger.warning(f'解析审批签名配置失败: {e}')
@@ -1472,7 +1471,7 @@ class ApprovalViewSet(viewsets.ViewSet):
         except ApprovalRequest.DoesNotExist:
             return Response({'error': '审批不存在'}, status=404)
 
-        if approval.status != 'pending':
+        if approval.status not in ('pending', 'deferred', 'processing'):
             return Response({'error': '该审批已处理'}, status=400)
 
         can_approve = self._check_user_can_approve(approval, request.user)
@@ -1501,21 +1500,32 @@ class ApprovalViewSet(viewsets.ViewSet):
                 return Response({'error': '您已审批过，无需重复操作'}, status=400)
 
             # 检查当前节点是否完成
+            all_finished = True
             for node in nodes:
                 completed, result = self._check_node_completed(node)
+                if not completed:
+                    all_finished = False
                 if completed and approval.approval_mode == 'sequential':
                     # 顺序审批：进入下一节点
                     next_order = approval.current_node_order + 1
                     if approval.approval_nodes.filter(order=next_order).exists():
                         approval.current_node_order = next_order
                         approval.save()
-                    else:
-                        # 没有下一节点，完成审批
-                        self._finalize_approval(approval)
                     break
 
-            if approval.status == 'pending':
-                self._finalize_approval(approval)
+            if all_finished:
+                # 所有相关节点完成：调用收尾逻辑（通过/驳回/仍有未完成节点则保持待审批）
+                finished = self._finalize_approval(approval)
+                if not finished:
+                    # 节点完成但整体审批未完成（如还有后续节点/并行未完成）→ 恢复待审批
+                    if approval.status in ('deferred', 'processing'):
+                        approval.status = 'pending'
+                        approval.save(update_fields=['status'])
+            else:
+                # 当前节点通过但还有待审批的节点/审批人 → 恢复待审批
+                if approval.status in ('deferred', 'processing'):
+                    approval.status = 'pending'
+                    approval.save(update_fields=['status'])
 
         # 通知申请人
         timestamp = timezone.now().strftime('%m-%d %H:%M')
@@ -1557,7 +1567,7 @@ class ApprovalViewSet(viewsets.ViewSet):
         except ApprovalRequest.DoesNotExist:
             return Response({'error': '审批不存在'}, status=404)
 
-        if approval.status != 'pending':
+        if approval.status not in ('pending', 'deferred', 'processing'):
             return Response({'error': '该审批已处理'}, status=400)
 
 

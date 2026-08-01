@@ -1188,10 +1188,10 @@ class UserViewSet(viewsets.ModelViewSet):
             from django.template.loader import render_to_string
 
             # 获取系统名称
-            site_name = SystemConfigManager.get_config('system.name', '企联云')
+            site_name = SystemConfigManager.get_config('system.name', '义乌吉通集团')
 
             # 👇 2. 核心修复：使用 Header 将中文转换为 MIME 编码
-            # 这会将 '企联云' 转换为类似 '=?utf-8?b?5Lyg6IuN5Lq6?=' 的纯 ASCII 字符串
+            # 这会将 '义乌吉通集团' 转换为类似 '=?utf-8?b?5Lyg6IuN5Lq6?=' 的纯 ASCII 字符串
             encoded_name = str(Header(site_name, 'utf-8'))
 
             # 👇 3. 拼接成标准的发件人格式
@@ -1251,10 +1251,10 @@ class UserViewSet(viewsets.ModelViewSet):
         user = CustomUser.objects.get(email=email)
 
         # 获取系统名称
-        site_name = SystemConfigManager.get_config('system.name', '企联云')
+        site_name = SystemConfigManager.get_config('system.name', '义乌吉通集团')
 
         # 👇 2. 核心修复：使用 Header 将中文转换为 MIME 编码
-        # 这会将 '企联云' 转换为类似 '=?utf-8?b?5Lyg6IuN5Lq6?=' 的纯 ASCII 字符串
+        # 这会将 '义乌吉通集团' 转换为类似 '=?utf-8?b?5Lyg6IuN5Lq6?=' 的纯 ASCII 字符串
         encoded_name = str(Header(site_name, 'utf-8'))
 
         # 👇 3. 拼接成标准的发件人格式
@@ -1486,10 +1486,10 @@ class ConsultationRequestView(APIView):
             admin_emails = getattr(settings, 'CONTACT_NOTIFICATION_EMAILS', [settings.DEFAULT_FROM_EMAIL])
 
             # 获取系统名称
-            site_name = SystemConfigManager.get_config('system.name', '企联云')
+            site_name = SystemConfigManager.get_config('system.name', '义乌吉通集团')
 
             # 👇 2. 核心修复：使用 Header 将中文转换为 MIME 编码
-            # 这会将 '企联云' 转换为类似 '=?utf-8?b?5Lyg6IuN5Lq6?=' 的纯 ASCII 字符串
+            # 这会将 '义乌吉通集团' 转换为类似 '=?utf-8?b?5Lyg6IuN5Lq6?=' 的纯 ASCII 字符串
             encoded_name = str(Header(site_name, 'utf-8'))
 
             # 👇 3. 拼接成标准的发件人格式

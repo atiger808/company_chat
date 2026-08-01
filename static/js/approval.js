@@ -1872,7 +1872,7 @@ class ApprovalApp {
                     var signatureHtml = '';
                     if (log.signature) {
                         signatureHtml = '<div style="margin-top:6px;"><span style="font-size:11px;color:#909399;display:block;margin-bottom:2px;"><i class="fas fa-signature" style="color:#9b59b6;"></i> 手写签名</span>'
-                            + '<img src="' + log.signature + '" style="max-width:180px;max-height:80px;border:1px solid #e0e0e0;border-radius:4px;background:#fff;padding:4px;" alt="审批人签名"></div>';
+                            + '<a href="javascript:void(0)" onclick="approvalApp._previewSignature(this)" title="点击放大查看签名"><img src="' + log.signature + '" style="max-width:180px;max-height:80px;border:1px solid #e0e0e0;border-radius:4px;background:#fff;padding:4px;cursor:zoom-in;" alt="审批人签名"></a></div>';
                     }
                     html += '<div class="timeline-item ' + log.action + '">'
                         + '<div class="timeline-header">' + operatorName + (log.operator_position ? ' <span style="font-size:11px;color:var(--text-light,#909399);font-weight:400;">(' + log.operator_position + ')</span>' : '') + (log.operator_department ? ' <span style="font-size:11px;color:#a0a0a0;font-weight:400;">[' + approvalApp._escape(log.operator_department) + ']</span>' : '') + ' ' + actionText + '</div>'
@@ -1984,6 +1984,13 @@ class ApprovalApp {
     // ==================== 附件图片预览+云文档 ====================
 
     /** 根据URL直接预览图片 */
+    /** 预览手写签名图片（点击放大查看） */
+    _previewSignature(el) {
+        var img = el.tagName === 'IMG' ? el : el.querySelector('img');
+        if (!img || !img.src) return;
+        this._previewImageByUrl(img.src, '审批人手写签名');
+    }
+
     _previewImageByUrl(url, name) {
         var overlay = document.createElement('div');
         overlay.id = 'approvalPreviewOverlay';
@@ -2217,6 +2224,7 @@ class ApprovalApp {
                 + '<div id="actionSignaturePlaceholder" style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;color:#c0c4cc;font-size:14px;pointer-events:none;">请在此手写签名</div>'
                 + '<button type="button" id="actionSignatureExitFullscreen" onclick="approvalApp._toggleSignatureFullscreen()" style="display:none;position:absolute;top:10px;right:10px;z-index:10;align-items:center;gap:5px;padding:6px 14px;border:1px solid #dcdfe6;border-radius:6px;background:rgba(255,255,255,0.92);color:#606266;font-size:12px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.12);"><i class="fas fa-compress"></i> 退出全屏</button>'
                 + '<div id="actionSignatureFullActions" style="display:none;position:absolute;bottom:12px;left:50%;transform:translateX(-50%);z-index:10;gap:10px;align-items:center;background:rgba(255,255,255,0.95);border:1px solid #dcdfe6;border-radius:8px;padding:6px 10px;box-shadow:0 2px 12px rgba(0,0,0,0.15);">'
+                + '<button type="button" class="btn btn-secondary" onclick="approvalApp._rotateSignatureFullscreen()" id="actionSignatureRotateBtn" style="font-size:12px;padding:5px 12px;"><i class="fas fa-redo-alt"></i> 旋转</button>'
                 + '<button type="button" class="btn btn-secondary" onclick="approvalApp._clearSignature()" style="font-size:12px;padding:5px 14px;"><i class="fas fa-eraser"></i> 清除</button>'
                 + '<button type="button" class="btn btn-primary" onclick="approvalApp._confirmSignatureFullscreen()" style="font-size:12px;padding:5px 18px;"><i class="fas fa-check"></i> 确定</button>'
                 + '</div>'
@@ -2241,7 +2249,7 @@ class ApprovalApp {
         var sigWrap = document.getElementById('actionSignatureWrap');
         if (sigWrap) sigWrap.style.display = 'none';
         var sigBox = document.getElementById('actionSignatureBox');
-        if (sigBox) sigBox.classList.remove('sig-fullscreen');
+        if (sigBox) { sigBox.classList.remove('sig-fullscreen'); sigBox.classList.remove('sig-rotate'); }
         var sigExit = document.getElementById('actionSignatureExitFullscreen');
         if (sigExit) sigExit.style.display = 'none';
         var sigTopBtn = document.getElementById('actionSignatureFullscreenBtn');
@@ -2341,7 +2349,7 @@ class ApprovalApp {
             this.loadList(this.currentPage);
         } catch (e) {
             console.error('操作失败:', e);
-            this.showAlert('操作失败', e.message || '请重试');
+            // this.showAlert('操作失败', e.message || '请重试');
             this.showToast(('操作失败' +e.message || '请重试'), true);
         }
     }
@@ -2375,10 +2383,23 @@ class ApprovalApp {
 
     _getSigPos(e, canvas) {
         var rect = canvas.getBoundingClientRect();
-        var scaleX = canvas.width / rect.width;
-        var scaleY = canvas.height / rect.height;
         var clientX = e.touches && e.touches.length ? e.touches[0].clientX : (e.clientX || 0);
         var clientY = e.touches && e.touches.length ? e.touches[0].clientY : (e.clientY || 0);
+        // 全屏旋转90度时：画布视觉宽高互换，需按旋转后的坐标空间反向映射，
+        // 保证书写内容与旋正时一致、无拉伸变形
+        var box = document.getElementById('actionSignatureBox');
+        var rotated = box && box.classList.contains('sig-rotate');
+        if (rotated) {
+            // 90度顺时针旋转：局部x → 屏幕向下(y)，局部y → 屏幕向左(x)
+            var nx = (clientX - rect.left) / rect.width;
+            var ny = (clientY - rect.top) / rect.height;
+            return {
+                x: ny * canvas.width,
+                y: (1 - nx) * canvas.height
+            };
+        }
+        var scaleX = canvas.width / rect.width;
+        var scaleY = canvas.height / rect.height;
         return {
             x: (clientX - rect.left) * scaleX,
             y: (clientY - rect.top) * scaleY
@@ -2418,11 +2439,11 @@ class ApprovalApp {
         this._resetSignatureCanvas(canvas);
     }
 
-    /** 在签名下方自动添加日期时间，返回合成后的 dataURL */
+    /** 在签名下方自动添加日期时间与审批人信息，返回合成后的 dataURL */
     _signatureWithTimestamp(canvas) {
         var w = canvas.width;
         var h = canvas.height;
-        var stampH = Math.round(h * 0.12); // 时间戳区域高度
+        var stampH = Math.round(h * 0.18); // 底部信息区高度（时间戳+审批人）
         var tsCanvas = document.createElement('canvas');
         tsCanvas.width = w;
         tsCanvas.height = h + stampH;
@@ -2432,11 +2453,17 @@ class ApprovalApp {
         ctx.fillRect(0, 0, tsCanvas.width, tsCanvas.height);
         // 绘制原签名
         ctx.drawImage(canvas, 0, 0);
-        // 底部时间戳区域：浅灰分割线 + 日期时间
+        // 底部信息区：浅灰分割线 + 审批人 + 日期时间
         var now = new Date();
         var pad = function(n) { return String(n).padStart(2, '0'); };
-        var dateStr = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate())
+        var dateStr = '审批时间：' + now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate())
             + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+        // 获取当前用户（审批人）姓名
+        var approverName = '';
+        try {
+            var cu = JSON.parse(localStorage.getItem('current_user') || 'null');
+            approverName = (cu && (cu.real_name || cu.name)) ? (cu.real_name || cu.name) : '';
+        } catch (e) {}
         var lineY = h + 2;
         ctx.strokeStyle = '#c0c4cc';
         ctx.lineWidth = 1;
@@ -2444,12 +2471,17 @@ class ApprovalApp {
         ctx.moveTo(0, lineY);
         ctx.lineTo(w, lineY);
         ctx.stroke();
-        // 日期时间文字（居中）
+        var fontPx = Math.round(h * 0.065);
         ctx.fillStyle = '#606266';
-        ctx.font = (Math.round(h * 0.06)) + 'px "Microsoft YaHei", sans-serif';
-        ctx.textAlign = 'center';
+        ctx.font = fontPx + 'px "Microsoft YaHei", sans-serif';
         ctx.textBaseline = 'middle';
-        ctx.fillText(dateStr, w / 2, h + stampH / 2);
+        // 审批人：靠左
+        ctx.textAlign = 'left';
+        var nameStr = '审批人：' + approverName;
+        ctx.fillText(nameStr, 16, h + stampH / 2);
+        // 日期时间：靠右
+        ctx.textAlign = 'right';
+        ctx.fillText(dateStr, w - 16, h + stampH / 2);
         return tsCanvas.toDataURL('image/png');
     }
 
@@ -2458,26 +2490,29 @@ class ApprovalApp {
         var btn = document.getElementById('actionSignatureFullscreenBtn');
         var exitBtn = document.getElementById('actionSignatureExitFullscreen');
         var fullActions = document.getElementById('actionSignatureFullActions');
+        var rotateBtn = document.getElementById('actionSignatureRotateBtn');
         var canvas = document.getElementById('actionSignatureCanvas');
         if (!box) return;
         var isFull = box.classList.toggle('sig-fullscreen');
+        // 全屏默认不自动旋转；退出全屏时清除旋转状态（回正）
+        if (!isFull) {
+            box.classList.remove('sig-rotate');
+        }
         if (canvas && !this._actionSignatureData) {
             this._resetSignatureCanvas(canvas);
         }
         // 顶部全屏按钮：全屏时隐藏（框内按钮接管）
         if (btn) btn.style.display = isFull ? 'none' : 'inline-flex';
-        // 框内退出全屏按钮：仅全屏时显示（横向屏幕右上角）
+        // 框内退出全屏按钮：仅全屏时显示
         if (exitBtn) exitBtn.style.display = isFull ? 'inline-flex' : 'none';
-        // 全屏操作栏（清除/确定）：仅全屏时显示（横向屏幕底部）
+        // 全屏操作栏（清除/确定）：仅全屏时显示
         if (fullActions) {
             fullActions.style.display = isFull ? 'inline-flex' : 'none';
         }
-        // 手机端进入全屏锁定横屏，退出时解锁（自动转正方向）
-        var self = this;
-        if (isFull) {
-            this._lockLandscape();
-        } else {
-            this._unlockOrientation();
+        // 旋转按钮：仅全屏时显示，初始图标随当前旋转状态
+        if (rotateBtn) {
+            rotateBtn.style.display = isFull ? 'inline-flex' : 'none';
+            if (isFull) this._updateRotateBtnIcon();
         }
         // 下方"全屏签名"按钮文字
         var allBtns = document.querySelectorAll('#actionSignatureWrap button[onclick*="_toggleSignatureFullscreen"]');
@@ -2488,40 +2523,27 @@ class ApprovalApp {
         });
     }
 
-    /** 手机端锁定横屏（竖屏签名时自动旋转为横向），失败静默降级 */
-    _lockLandscape() {
-        var self = this;
-        var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-        if (!isMobile) return;
-        if (screen.orientation && screen.orientation.lock) {
-            screen.orientation.lock('landscape').then(function() {
-                self._isLandscapeLocked = true;
-            }).catch(function() {
-                self._isLandscapeLocked = false;
-            });
-        } else if (screen.lockOrientation) {
-            self._isLandscapeLocked = screen.lockOrientation('landscape');
-        } else {
-            self._isLandscapeLocked = false;
-        }
+    /** 旋转按钮：点击后输入区域旋转90度铺满全屏，再次点击回正 */
+    _rotateSignatureFullscreen() {
+        var box = document.getElementById('actionSignatureBox');
+        if (!box) return;
+        box.classList.toggle('sig-rotate');
+        this._updateRotateBtnIcon();
     }
 
-    /** 解锁方向（退出全屏时恢复自动旋转，方向转正） */
-    _unlockOrientation() {
-        var self = this;
-        try {
-            if (self._isLandscapeLocked) {
-                if (screen.orientation && screen.orientation.unlock) {
-                    screen.orientation.unlock();
-                }
-                self._isLandscapeLocked = false;
-            }
-        } catch (e) {
-            self._isLandscapeLocked = false;
-        }
+    /** 更新旋转按钮图标（横竖屏状态提示） */
+    _updateRotateBtnIcon() {
+        var rotateBtn = document.getElementById('actionSignatureRotateBtn');
+        if (!rotateBtn) return;
+        var box = document.getElementById('actionSignatureBox');
+        var isRotated = box && box.classList.contains('sig-rotate');
+        rotateBtn.innerHTML = isRotated
+            ? '<i class="fas fa-undo"></i> 回正'
+            : '<i class="fas fa-redo-alt"></i> 旋转';
+        rotateBtn.title = isRotated ? '旋转回正' : '旋转90度铺满屏幕';
     }
 
-    /** 全屏签名确定：退出全屏（签名已保留在画布，方向自动转正） */
+    /** 全屏签名确定：退出全屏（签名已保留在画布，方向自动回正） */
     _confirmSignatureFullscreen() {
         this._toggleSignatureFullscreen();
     }

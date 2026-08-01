@@ -1400,14 +1400,15 @@ input[type="date"].date-styled::-webkit-calendar-picker-indicator:hover {
 #actionSignatureBox {
     transition: all 0.2s ease;
 }
+/* 桌面端全屏：直接铺满视口 */
 #actionSignatureBox.sig-fullscreen {
     position: fixed !important;
     top: 0 !important;
     left: 0 !important;
     right: 0 !important;
     bottom: 0 !important;
-    width: 100vw !important;
-    height: 100vh !important;
+    width: auto !important;
+    height: auto !important;
     max-width: none !important;
     z-index: 10005;
     border-radius: 0 !important;
@@ -1416,15 +1417,26 @@ input[type="date"].date-styled::-webkit-calendar-picker-indicator:hover {
     display: flex !important;
     align-items: center;
     justify-content: center;
-    padding: 40px 24px;
+    padding: 16px;
     box-sizing: border-box;
 }
-/* 全屏时画布保持 2.5:1 内部长宽比，居中显示不拉伸，横向屏幕下尽可能大 */
+/* 移动端全屏：以屏幕中心为原点向右旋转90度（视觉横屏），容器宽高互换 */
+#actionSignatureBox.sig-fullscreen.sig-rotate {
+    top: 50% !important;
+    left: 50% !important;
+    right: auto !important;
+    bottom: auto !important;
+    width: 100vh !important;
+    height: 100vw !important;
+    transform: translate(-50%, -50%) rotate(90deg) !important;
+    padding: 16px;
+}
+/* 全屏时画布保持 2.5:1 内部长宽比，居中显示不拉伸，最大化铺满（减少左右间距） */
 #actionSignatureBox.sig-fullscreen canvas {
     width: auto !important;
     height: auto !important;
-    max-width: 92%;
-    max-height: 82%;
+    max-width: 97%;
+    max-height: 88%;
     aspect-ratio: 2.5 / 1;
     background: #fff;
     border-radius: 6px;
@@ -1443,6 +1455,7 @@ input[type="date"].date-styled::-webkit-calendar-picker-indicator:hover {
     text-align: center;
     pointer-events: none;
 }
+/* 退出按钮：旋转后出现在横向屏幕右上角 */
 #actionSignatureBox.sig-fullscreen #actionSignatureExitFullscreen {
     position: absolute !important;
     top: 16px !important;
@@ -1451,6 +1464,7 @@ input[type="date"].date-styled::-webkit-calendar-picker-indicator:hover {
     bottom: auto !important;
     z-index: 11;
 }
+/* 操作栏（清除/确定）：旋转后出现在横向屏幕底部居中 */
 #actionSignatureBox.sig-fullscreen #actionSignatureFullActions {
     position: absolute !important;
     bottom: 16px !important;

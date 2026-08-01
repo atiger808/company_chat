@@ -615,7 +615,7 @@ PASSWORD_RESET_TOKEN_EXPIRES_HOURS = config('PASSWORD_RESET_TOKEN_EXPIRES_HOURS'
 
 CONTACT_NOTIFICATION_EMAILS = config('CONTACT_NOTIFICATION_EMAILS', cast=lambda x: x.split(',')) or []
 
-SYSTEM_NAME = '企联云'
+SYSTEM_NAME = '义乌吉通集团'
 
 # 前端地址（用于生成重置链接）
 FRONTEND_URL = config('FRONTEND_URL', default='https://chat.first-iq.com', cast=str)

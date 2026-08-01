@@ -33,6 +33,7 @@ class TenantManager {
                 var data = await resp.json();
                 this.isSuperAdmin = data.user_type === "super_admin";
                 this.currentUser = data;
+                localStorage.setItem('current_user', JSON.stringify(data));
             }
         } catch (e) { console.error('检查管理员权限失败:', e); }
     }
