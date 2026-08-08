@@ -1217,7 +1217,7 @@ class OrgApp {
                 + '</span>'
                 + '<span><i class="fas fa-id-badge"></i> ' + self._escape(m.enterprise_role ? {'owner':'企业所有者','admin':'企业管理员','dept_admin':'部门管理员','member':'成员'}[m.enterprise_role] || m.enterprise_role : '成员') + '</span>'
                 + (m.email ? '<span><i class="fas fa-envelope"></i> ' + self._escape(m.email) + '</span>' : '')
-                + (m.phone ? '<span><i class="fas fa-phone"></i> ' + self._escape(m.phone) + '</span>' : '')
+                + (canEdit && m.phone ? '<span><i class="fas fa-phone"></i> ' + self._escape(m.phone) + '</span>' : '')
                 + '</div></div>'
                 + (canEdit ? '<button class="btn-icon-sm btn-remove" onclick="orgApp.removeMember(' + m.id + ')" title="移出部门"><i class="fas fa-times"></i></button>' : '')
                 + '</div>';
@@ -1761,7 +1761,7 @@ class OrgApp {
                         + '</div>'
                         + '<div class="member-detail">'
                         + '<span><i class="fas fa-user"></i> ' + orgApp._escape(m.username) + '</span>'
-                        + (m.phone ? '<span><i class="fas fa-phone"></i> ' + orgApp._escape(m.phone) : '') + '</span>'
+                        + (canEdit && m.phone ? '<span><i class="fas fa-phone"></i> ' + orgApp._escape(m.phone) : '') + '</span>'
                         + (m.email ? '<span><i class="fas fa-envelope"></i> ' + orgApp._escape(m.email) : '') + '</span>'
                         + (m.position ? '<span title="职位"><i class="fas fa-briefcase"></i> ' + orgApp._escape(m.position) : '') + '</span>'
                         + (defaultTenantName ? '<span title="默认企业"><i class="fas fa-building" style="color:#e6a23c;"></i> ' + orgApp._escape(defaultTenantName) : '') + '</span>'

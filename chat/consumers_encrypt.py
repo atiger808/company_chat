@@ -232,9 +232,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def cancel_all_tasks(self):
         """🔧 取消所有后台任务"""
-        # 取消心跳任务
+        # 取消心跳任务（heartbeat_task 可能为 None：连接在心跳启动前就失败时）
 
-        if hasattr(self, 'heartbeat_task'):
+        if hasattr(self, 'heartbeat_task') and self.heartbeat_task:
             self.heartbeat_task.cancel()
             try:
                 await self.heartbeat_task
@@ -402,6 +402,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.send_global_notification({
             'type': 'new_message',
             'chat_room': message.chat_room.id,  # 🔧 使用消息实际的聊天室 ID
+            'message_id': message.id,
             'content': content,
             'sender': sender,
             'sender_name': self.user.username,
@@ -764,16 +765,39 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # 获取聊天室所有成员
             members = await database_sync_to_async(list)(chat_room.members.all())
 
+            from django.conf import settings as dj_settings
+            push_enabled = dj_settings.PUSH_ENABLED
+            # 推送载荷只需构建一次（发送者固定）
+            push_payload = None
+            if push_enabled:
+                from .push_utils import build_chat_push_payload
+                try:
+                    push_payload = await database_sync_to_async(
+                        lambda: build_chat_push_payload(notification_data, self.user)
+                    )()
+                except Exception as e:
+                    logger.warning(f"构建推送载荷失败: {e}")
+                    push_payload = None
+
             for member in members:
                 if member.id == self.user.id:
                     continue  # 跳过发送者
 
-                # 发送通知到用户的全局通知组
+                # 发送通知到用户的全局通知组（页面在线时即时展示）
                 group_name = f'user_{member.id}_notifications'
                 await self.channel_layer.group_send(
                     group_name,
                     notification_data
                 )
+                # 一律异步发送 Web Push：只要 PUSH_ENABLED，目标用户的每个设备订阅都会收到推送，
+                # 无论其是否在线/后台/锁屏/回到主屏幕。SW 收到推送后一律展示系统通知（不去重）。
+                # urgent=True → urgency=high（APNs priority 10）：即时送达，避免 iOS 低功耗/省电模式批量延迟推送。
+                if push_enabled and push_payload:
+                    try:
+                        from .tasks import send_push_task
+                        send_push_task.delay(member.id, push_payload, ttl=43200, urgent=True)
+                    except Exception as e:
+                        logger.warning(f"推送聊天通知失败 user={member.id}: {e}")
         except ChatRoom.DoesNotExist:
             logger.warning(f"ChatRoom {chat_room_id} not found for global notification")
         except Exception as e:
@@ -804,6 +828,18 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             await self.accept()
             logger.info(f"Notification WebSocket connection accepted for user {self.user.username}")
 
+            # 🔧 补发待接听的来电：用户后台/锁屏期间错过了 call_offer，
+            # 重新打开 App 连上本 WS 后把保存的来电 offer 发给前端，弹出接听提示框。
+            try:
+                from django.core.cache import cache
+                pending = cache.get(f'pending_call_{self.user.id}')
+                if pending:
+                    cache.delete(f'pending_call_{self.user.id}')
+                    await self.send(text_data=json.dumps(pending))
+                    logger.info(f"📞 补发待接听来电 user={self.user.id}")
+            except Exception as e:
+                logger.warning(f"补发待接听来电失败: {e}")
+
         except Exception as e:
             logger.error(f"Error during notification WebSocket connection: {e}")
             await self.close()
@@ -817,7 +853,18 @@ class NotificationConsumer(AsyncWebsocketConsumer):
 
     async def receive(self, text_data):
         """接收消息（通知消费者通常只接收不发送）"""
-        pass
+        try:
+            data = json.loads(text_data)
+            # 🔧 前端打开/回到前台时主动查询待接听来电
+            if data.get('type') == 'check_pending_call':
+                from django.core.cache import cache
+                pending = cache.get(f'pending_call_{self.user.id}')
+                if pending:
+                    cache.delete(f'pending_call_{self.user.id}')
+                    await self.send(text_data=json.dumps(pending))
+                    logger.info(f"📞 查询待接听来电成功 user={self.user.id}")
+        except Exception:
+            pass
 
     async def new_message(self, event):
         """新消息通知"""
@@ -1276,6 +1323,32 @@ class CallConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_send(notification_group, message_data)
         logger.info(f"✅ call_offer 已发送到通知组 {notification_group}")
 
+        # 🔧 保存待接听的来电（限时 90 秒），用户后台/锁屏期间 WS 断开时，
+        # 重新打开 App 连上通知 WS 后会补发该来电，从而弹出接听提示框。
+        try:
+            from django.core.cache import cache
+            cache.set(f'pending_call_{target_id}', message_data, timeout=90)
+        except Exception as e:
+            logger.warning(f'保存待接听来电失败: {e}')
+
+        # 🔧 发送 Web Push 来电提醒（后台/锁屏也能收到，即使 WS 断开）
+        if settings.PUSH_ENABLED:
+            try:
+                from .push_utils import build_call_push_payload
+                from .tasks import send_push_task
+                media_type = data.get('media_type', 'audio')
+                payload = await database_sync_to_async(
+                    lambda: build_call_push_payload(self.room_id, self.user, media_type)
+                )()
+                try:
+                    target_int = int(target_id)
+                except (TypeError, ValueError):
+                    target_int = target_id
+                send_push_task.delay(target_int, payload, ttl=120, urgent=True)
+                logger.info(f"📞 已发送来电 Web Push to user={target_int}, media_type={media_type}")
+            except Exception as e:
+                logger.warning(f"来电 Web Push 失败 user={target_id}: {e}")
+
     async def handle_call_answer(self, data):
         target_id = data.get('to')
         if not target_id or target_id == self.user.id:
@@ -1371,6 +1444,13 @@ class CallConsumer(AsyncWebsocketConsumer):
                 await self.channel_layer.group_send(notification_group, message_data)
                 logger.info(f"✅ call_end 已发送到 {call_group} 和 {notification_group}")
 
+                # 🔧 通话已结束，清除该成员的待接听来电，避免重复弹出
+                try:
+                    from django.core.cache import cache
+                    cache.delete(f'pending_call_{member.id}')
+                except Exception:
+                    pass
+
         except Exception as e:
             logger.error(f"❌ 转发 call_end 失败: {e}", exc_info=True)
 
@@ -1439,6 +1519,11 @@ class CallConsumer(AsyncWebsocketConsumer):
 
         await self.channel_layer.group_send(call_group, message_data)
         await self.channel_layer.group_send(notification_group, message_data)
+        try:
+            from django.core.cache import cache
+            cache.delete(f'pending_call_{target_id}')
+        except Exception:
+            pass
 
     async def handle_call_missed(self, data):  # 🔧 新增：处理未接听信令
         """转发未接听信令"""
@@ -1474,6 +1559,11 @@ class CallConsumer(AsyncWebsocketConsumer):
 
         await self.channel_layer.group_send(call_group, message_data)
         await self.channel_layer.group_send(notification_group, message_data)
+        try:
+            from django.core.cache import cache
+            cache.delete(f'pending_call_{target_id}')
+        except Exception:
+            pass
 
     async def create_call_record_message(self, room_id, from_user_id, duration=0, media_type='audio', reason='ended'):
         """🔧 新增：创建通话记录消息（只创建一条）"""
@@ -1603,6 +1693,28 @@ class CallConsumer(AsyncWebsocketConsumer):
             chat_room = await database_sync_to_async(ChatRoom.objects.get)(id=room_id)
             members = await database_sync_to_async(list)(chat_room.members.exclude(id=sender.id))
 
+            from django.conf import settings as dj_settings
+            push_enabled = dj_settings.PUSH_ENABLED
+            push_payload = None
+            if push_enabled:
+                from .push_utils import build_chat_push_payload
+                nd = {
+                    'type': 'new_message',
+                    'chat_room': room_id,
+                    'message_id': message.id,
+                    'content': content,
+                    'message_type': message_type,
+                    'call_status': message.call_status,
+                }
+                try:
+                    push_payload = await database_sync_to_async(
+                        lambda: build_chat_push_payload(nd, sender)
+                    )()
+                except Exception as e:
+                    logger.warning(f"构建通话推送载荷失败: {e}")
+                    push_payload = None
+            urgent = push_enabled and message.call_status == 'missed'
+
             for member in members:
                 group_name = f'user_{member.id}_notifications'
                 await self.channel_layer.group_send(
@@ -1610,6 +1722,7 @@ class CallConsumer(AsyncWebsocketConsumer):
                     {
                         'type': 'new_message',
                         'chat_room': room_id,
+                        'message_id': message.id,
                         'content': content,
                         'sender': {
                             'id': sender.id,
@@ -1641,6 +1754,13 @@ class CallConsumer(AsyncWebsocketConsumer):
                         'call_status': message.call_status,
                     }
                 )
+                # 🔧 通话通知同样走 Web Push（未接听置为高优）
+                if push_enabled and push_payload:
+                    try:
+                        from .tasks import send_push_task
+                        send_push_task.delay(member.id, push_payload, ttl=43200, urgent=urgent)
+                    except Exception as e:
+                        logger.warning(f"推送通话通知失败 user={member.id}: {e}")
         except Exception as e:
             logger.error(f"❌ 发送通话记录全局通知失败: {e}", exc_info=True)
 

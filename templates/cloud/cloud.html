@@ -5,12 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>企业网盘 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/cloud.css?v=20260731-09c0a6d">
+    <link rel="stylesheet" href="/static/css/cloud.css?v=20260807-8591e09">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
     <!-- 🔧 添加二维码库 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>-->
-    <script src="/static/js/dist/qrcode.min.js?v=20260731-09c0a6d"></script>
+    <script src="/static/js/dist/qrcode.min.js?v=20260807-8591e09"></script>
 </head>
 <body>
 <div class="cloud-layout">
@@ -144,7 +144,7 @@
                 </div>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="cloudApp.toggleUserDropdown(event)">
                     <span id="adminUsername"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260731-09c0a6d" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260807-8591e09" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/attendance/'">
@@ -175,10 +175,24 @@
 
                         <div class="dropdown-divider"></div>
 
+                        <div class="dropdown-item" id="adminConsoleBtn" style="display:none;" onclick="event.stopPropagation();window.location.href='/control/'">
+                            <i class="fas fa-shield-alt"></i> 管理控制台
+                        </div>
+
                         <div class="dropdown-item text-danger" onclick="event.stopPropagation();cloudApp.logout()">
                             <i class="fas fa-sign-out-alt"></i> 退出登录
                         </div>
                     </div>
+                    <!-- 仅管理员/超级管理员显示「管理控制台」 -->
+                    <script>
+                        (function () {
+                            var t = localStorage.getItem('user_type');
+                            if (t === 'admin' || t === 'super_admin') {
+                                var b = document.getElementById('adminConsoleBtn');
+                                if (b) b.style.display = 'flex';
+                            }
+                        })();
+                    </script>
                 </div>
             </div>
         </header>
@@ -540,6 +554,7 @@
                         </div>
                         <select id="logOperationFilter" class="form-select log-filter-select" onchange="cloudApp.filterLogsByOperation(this.value)">
                             <option value="">全部操作</option>
+                            <option value="create">创建</option>
                             <option value="upload">上传</option>
                             <option value="download">下载</option>
                             <option value="delete">删除</option>
@@ -549,6 +564,8 @@
                             <option value="edit_save">编辑保存</option>
                             <option value="add_collaborator">添加协作者</option>
                             <option value="remove_collaborator">移除协作者</option>
+                            <option value="add_folder_member">添加共享文件夹成员</option>
+                            <option value="remove_folder_member">移除共享文件夹成员</option>
                         </select>
                         <button class="btn btn-secondary" onclick="cloudApp.loadOperationLogs()" title="刷新">
                             <i class="fas fa-sync"></i> <span class="btn-text">刷新</span>
@@ -963,6 +980,12 @@
                 </select>
                 <button class="btn btn-primary" onclick="cloudApp.addSharedFolderMember()">添加</button>
             </div>
+            <div class="form-group" style="margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+                <input type="checkbox" id="sendWorkNotifyCheckbox" checked>
+                <label for="sendWorkNotifyCheckbox" style="cursor: pointer; font-size: 13px; color: var(--text-secondary, #606266); margin: 0;">
+                    添加后发送工作通知给该成员
+                </label>
+            </div>
             <div id="memberSearchResults" class="search-results"
                  style="max-height: 150px; overflow-y: auto; border: 1px solid #eee; margin-bottom: 10px; display: none; background: white;"></div>
 
@@ -1011,17 +1034,17 @@
 
 <!-- 脚本引入 -->
 <!--<script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>-->
-<script src="/static/js/dist/spark-md5.min.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/encrypts.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/utils.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/frontend_cloud_config.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/api.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/tenant.js?v=20260731-09c0a6e"></script>
-<script src="/static/js/org.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/cloud.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/notifications.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260807-8591e09"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260807-8591e09"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260807-8591e09"></script>
+<script src="/static/js/encrypts.js?v=20260807-8591e09"></script>
+<script src="/static/js/utils.js?v=20260807-8591e09"></script>
+<script src="/static/js/frontend_cloud_config.js?v=20260807-8591e09"></script>
+<script src="/static/js/api.js?v=20260807-8591e09"></script>
+<script src="/static/js/tenant.js?v=20260807-8591e09"></script>
+<script src="/static/js/org.js?v=20260807-8591e09"></script>
+<script src="/static/js/cloud.js?v=20260807-8591e09"></script>
+<script src="/static/js/notifications.js?v=20260807-8591e09"></script>
 
 <script>
     // 🔧 初始化侧边栏按钮显示状态

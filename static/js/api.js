@@ -20,7 +20,7 @@ class TokenManager {
 
     static getHeaders() {
         const token = this.getToken();
-        if (!token) return {'Content-Type': 'application/json' };
+        if (!token) return {'Content-Type': 'application/json'};
         return {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
@@ -37,7 +37,7 @@ class TokenManager {
 class API {
     constructor() {
         this.configs = {};
-        this.login_url = '/login/'
+        this.login_url = '/login/';
     }
 
     // 用户相关
@@ -389,11 +389,11 @@ class API {
         return await response.json();
     }
 
-   async showConfirmDialog(title, message, type = 'confirm') {
-    return new Promise(resolve => {
-        const dialog = document.createElement('div');
-        dialog.className = 'confirm-dialog';
-        dialog.innerHTML = `
+    async showConfirmDialog(title, message, type = 'confirm') {
+        return new Promise(resolve => {
+            const dialog = document.createElement('div');
+            dialog.className = 'confirm-dialog';
+            dialog.innerHTML = `
             <div class="confirm-dialog-content">
                 <div class="confirm-dialog-header">
                     <i class="fas fa-${type === 'danger' ? 'exclamation-triangle' : 'check-circle'}"></i>
@@ -407,21 +407,20 @@ class API {
                 </div>
             </div>
         `;
-        document.body.appendChild(dialog);
+            document.body.appendChild(dialog);
 
-        const close = (result) => {
-            dialog.remove();
-            resolve(result);
-        };
+            const close = (result) => {
+                dialog.remove();
+                resolve(result);
+            };
 
-        dialog.querySelector('.cancel').onclick = () => close(false);
-        dialog.querySelector(`.${type}`).onclick = () => close(true);
-        dialog.querySelector('.close-btn').onclick = () => close(false);
+            dialog.querySelector('.cancel').onclick = () => close(false);
+            dialog.querySelector(`.${type}`).onclick = () => close(true);
+            dialog.querySelector('.close-btn').onclick = () => close(false);
 
-        setTimeout(() => dialog.classList.add('show'), 10);
-    });
-}
-
+            setTimeout(() => dialog.classList.add('show'), 10);
+        });
+    }
 
 
     handleAuthError(login_url) {
@@ -437,7 +436,8 @@ class API {
         const confirmed = await this.showConfirmDialog('退出登录', '确定要退出登录吗？', 'confirm');
         if (confirmed) {
             try {
-                await this.logout();
+                // logout 是静态方法，需通过 API.logout() 调用，this.logout() 不存在会导致登出不生效
+                await API.logout();
             } catch (e) {
                 console.error('登出失败:', e);
             } finally {
@@ -449,9 +449,26 @@ class API {
 }
 
 
-// 初始化
+// 初始化全局实例
 let apiConsole = null;
-document.addEventListener('DOMContentLoaded', () => {
+
+
+document.addEventListener(
+    'DOMContentLoaded', () => {
+        console
+            .log(
+                'DOM 加载完成，创建 apiConsole 实例'
+            )
+        ;
+        apiConsole = new API();
+        window
+            .apiConsole = apiConsole;
+    }
+);
+
+// 如果页面已经加载完成
+if (document.readyState === 'complete') {
+    console.log('页面已加载完成，立即创建 apiConsole 实例');
     apiConsole = new API();
     window.apiConsole = apiConsole;
-});
+}

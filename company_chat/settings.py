@@ -285,7 +285,7 @@ REST_FRAMEWORK = {
 
 # JWT 配置
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=2*24),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
@@ -429,6 +429,7 @@ BUILD_TIME = str(datetime.datetime.now())[:19]
 API_LOG_ENABLE = True
 # API_LOG_METHODS = 'ALL' # ['POST', 'DELETE']
 API_LOG_METHODS = ["POST", "UPDATE", "DELETE", "PUT", 'PATCH']  # ['POST', 'DELETE']
+# 接口模型映射
 API_MODEL_MAP = {
     # ====== 认证模块 ======
     "/api/auth/login/": "登录",
@@ -479,16 +480,31 @@ API_MODEL_MAP = {
     "/api/chat/turn/credentials/": "TURN凭证",
 
     # ====== 企业网盘 ======
-    "/api/cloud/folders/": "文件夹管理",
-    "/api/cloud/files/": "文件管理",
-    "/api/cloud/files/<uuid:file_id>/download_file/": "文件下载",
+    # 文件上传（分片/秒传）相关，必须放在 /api/cloud/files/ 之前以优先匹配
+    "/api/cloud/files/init_upload/": "初始化文件上传",
+    "/api/cloud/files/upload_chunk/": "上传文件分片",
+    "/api/cloud/files/merge_chunks/": "合并分片完成上传",
+    "/api/cloud/files/check_session/": "检查上传会话",
+    "/api/cloud/files/cancel_upload/": "取消上传",
     "/api/cloud/files/save_from_url/": "从URL保存文件到网盘",
+    "/api/cloud/files/save_from_chat/": "从聊天保存文件到网盘",
+    "/api/cloud/files/": "文件管理",
+    "/api/cloud/cloudfiles/": "文件下载",
+    "/api/cloud/folders/": "文件夹管理",
+    "/api/cloud/search-users/": "搜索用户",
     "/api/cloud/shares/": "文件分享",
     "/api/cloud/comments/": "文件评论",
     "/api/cloud/dashboard/": "网盘统计",
     "/api/cloud/documents/": "文档编辑",
     "/api/cloud/settings/": "网盘设置",
+    # 共享文件夹（含成员管理）
     "/api/cloud/shared-folders/": "共享文件夹",
+    "/api/cloud/shared-folders/<uuid:folder_id>/add_member/": "共享文件夹添加成员",
+    "/api/cloud/shared-folders/<uuid:folder_id>/update_member/": "共享文件夹更新成员",
+    "/api/cloud/shared-folders/<uuid:folder_id>/remove_member/": "共享文件夹移除成员",
+    "/api/cloud/shared-folders/<uuid:folder_id>/members/": "共享文件夹成员列表",
+    "/api/cloud/shared-folders/<uuid:folder_id>/my_permission/": "共享文件夹我的权限",
+    "/api/cloud/shared-folders/<uuid:folder_id>/move_items/": "共享文件夹移动文件",
     "/api/cloud/operation-logs/": "操作日志",
     "/s/<str:share_code>/": "分享访问",
     "/s/<str:share_code>/download/": "分享下载",
@@ -511,6 +527,7 @@ API_MODEL_MAP = {
     "/api/oa/attendance/calendar-stats/": "考勤日历统计",
     "/api/oa/attendance/calendar-day-detail/": "考勤日历日期详情",
     "/api/oa/approval/": "OA审批",
+    "/api/oa/approval/types/": "审批类型管理",
     "/api/oa/approval/approval_chain/": "审批链预览",
     "/api/oa/approval/geocode/": "地理编码",
     "/api/oa/approval/admins/": "审批管理员",
@@ -1035,3 +1052,19 @@ TURN_REALM = config('TURN_REALM')
 
 # 百度地图key
 BAIDU_MAP_SERVER_AK = config('BAIDU_MAP_SERVER_AK')
+
+# ===== Web Push (VAPID) =====
+VAPID_PUBLIC_KEY = config('VAPID_PUBLIC_KEY', default='')
+VAPID_PRIVATE_KEY = config('VAPID_PRIVATE_KEY', default='')
+VAPID_ADMIN_EMAIL = config('VAPID_ADMIN_EMAIL', default='admin@first-iq.com')
+PUSH_ENABLED = bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)
+print(f'PUSH_ENABLED: {PUSH_ENABLED}')
+
+# 🔧 FCM（安卓/鸿蒙）代理：国内服务器无法直连 Google 的 fcm.googleapis.com 时，
+# 在 .env 里配置一个可用的 HTTP(S) 代理（如企业代理）即可让安卓/鸿蒙收到推送。
+PUSH_PROXY = config('PUSH_PROXY', default='')
+
+# 🔧 海外推送中继：在不使用代理时，把 FCM 推送转发给海外中继服务发送
+# （见项目根目录 push_relay.py）。PUSH_RELAY_SECRET 需与中继端配置一致。
+PUSH_RELAY_URL = config('PUSH_RELAY_URL', default='')
+PUSH_RELAY_SECRET = config('PUSH_RELAY_SECRET', default='')

@@ -20,10 +20,14 @@ from django.urls import path, include
 from django.views.generic import TemplateView
 from django.conf import settings
 from django.conf.urls.static import static
+from .views import service_worker_view, admin_console_view
 import sys
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+
+    # 🔧 PWA: 从根路径提供 Service Worker（扩大 scope 覆盖全站）
+    path('service-worker.js', service_worker_view, name='service-worker'),
 
     # 🔧 认证相关
     path('api/auth/', include('accounts.urls')),
@@ -48,8 +52,9 @@ urlpatterns = [
     path('chat/', TemplateView.as_view(template_name='chat/chat.html'), name='chat'),
     path('login/', TemplateView.as_view(template_name='chat/login.html'), name='login'),
     path('register/', TemplateView.as_view(template_name='chat/register.html'), name='register'),
-    path('control/', TemplateView.as_view(template_name='chat/admin.html'), name='admin-control'),
-    path('manifest.json', TemplateView.as_view(template_name='manifest.json',content_type='application/json'), name='manifest'),
+    path('control/', admin_console_view, name='admin-control'),
+    path('manifest.json', TemplateView.as_view(template_name='manifest.json', content_type='application/manifest+json'), name='manifest'),
+    path('offline/', TemplateView.as_view(template_name='chat/offline.html'), name='offline'),
 
 
     # 任务与项目管理页面路由

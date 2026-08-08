@@ -45,6 +45,9 @@
         css += '[data-theme="dark"] .notif-item.unread { background:#1a2740; }';
         css += '[data-theme="dark"] .notif-item.unread:hover { background:#1f3050; }';
         css += '[data-theme="dark"] .notif-bell-wrap:hover { background:#2d2d2d; }';
+        // 🔧 移动端：扩大「全部标为已读」按钮点击区域，并覆盖 chat.css 中 .btn-text{display:none}
+        // （该规则本意是隐藏通话界面文字，误伤了通知头部按钮），确保移动端可见可点。
+        css += '@media (max-width: 768px) { .notif-dropdown-header { padding:10px 14px; } .notif-dropdown-header .btn-text { display:inline-block !important; padding:6px 8px; } }';
         var style = document.createElement('style');
         style.textContent = css;
         document.head.appendChild(style);
@@ -134,12 +137,13 @@
                 sidebarSub.textContent = unreadCount > 0 ? (unreadCount + ' 条未读通知') : '查看工作通知';
             }
         }
-        // 全局应用图标
-        if (navigator.setAppBadge && unreadCount > 0) {
-            navigator.setAppBadge(unreadCount);
-        } else if (navigator.setAppBadge) {
-            navigator.clearAppBadge();
-        }
+        // 全局应用图标：把工作通知未读数上报给 Service Worker，
+        // 由 SW 汇总「聊天未读 + 工作未读」统一设置图标徽章（避免与聊天未读互相覆盖）。
+        try {
+            if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({type: 'work-badge', count: unreadCount});
+            }
+        } catch (e) {}
     }
 
     function formatTime(iso) {
@@ -178,8 +182,18 @@
             var bell = document.getElementById('notifBellWrap');
             if (bell) {
                 var rect = bell.getBoundingClientRect();
-                dd.style.left = Math.max(10, rect.right - 360) + 'px';
-                dd.style.top = (rect.bottom + 6) + 'px';
+                // 🔧 移动端适配：宽高与位置都限制在视口内，保证顶部「全部标为已读」按钮始终可见
+                var vw = window.innerWidth;
+                var vh = window.innerHeight;
+                var ddWidth = Math.min(360, vw - 16);
+                var top = rect.bottom + 6;
+                var ddHeight = Math.min(480, vh - top - 8);
+                dd.style.width = ddWidth + 'px';
+                dd.style.left = Math.max(8, Math.min(rect.right - ddWidth, vw - ddWidth - 8)) + 'px';
+                dd.style.top = top + 'px';
+                dd.style.maxHeight = ddHeight + 'px';
+                var list = document.getElementById('notifList');
+                if (list) list.style.maxHeight = Math.max(120, ddHeight - 50) + 'px';
             }
 
             dd.classList.add('show');

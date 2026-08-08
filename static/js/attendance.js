@@ -1405,3 +1405,19 @@ class AttendanceApp {
     }
 
 }
+
+
+// // 全局初始化
+// let attendanceApp = null;
+//
+// // 确保在 DOM 加载完成后初始化 attendanceApp
+// if (document.readyState === 'loading') {
+//     document.addEventListener('DOMContentLoaded', () => {
+//         attendanceApp = new AttendanceApp();
+//         window.attendanceApp = attendanceApp;
+//     });
+// } else {
+//     // 如果 DOM 已经加载完成，直接初始化
+//     attendanceApp = new AttendanceApp();
+//     window.attendanceApp = attendanceApp;
+// }

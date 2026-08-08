@@ -4,24 +4,14 @@
     <meta charset="UTF-8">
     <title>企业聊天室 - 公司内部通讯</title>
 
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    {% include '_pwa_meta.html' %}
     <meta name="format-detection" content="telephone=no, email=no, address=no">
-
-
-    <!-- PWA Manifest -->
-    <!-- 🔧 关键修复：iOS PWA 专用设置 PWA 必需 - 支持锁屏通知 添加到主屏幕 -->
-    <link rel="manifest" href="/manifest.json?v=20260306-e8651d5">
-    <meta name="theme-color" content="#409EFF">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="企业聊天室">
-    <link rel="apple-touch-icon" href="/static/icons/icon-128x128.png?v=20260731-09c0a6d">
-    <!-- Service Worker 注册（降级方案） -->
+    <!-- Service Worker 注册（根路径，scope 覆盖全站） -->
     <script>
-        // Service Worker 降级注册（确保在 DOMContentLoaded 前注册）
+        // Service Worker 注册（确保在 DOMContentLoaded 前注册）
         if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/static/js/service-worker.js')
+                navigator.serviceWorker.register('/service-worker.js', {updateViaCache: 'none'})
                     .then(reg => console.log('SW registered:', reg))
                     .catch(err => console.error('SW registration failed:', err));
             });
@@ -33,9 +23,9 @@
     <meta name="msapplication-TileColor" content="#409EFF">
     <meta name="msapplication-TileImage" content="/static/icons/icon-144x144.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20260731-09c0a6d">-->
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260731-09c0a6d">
-    <link rel="stylesheet" href="/static/css/org.css?v=20260731-09c0a6d">
+    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20260807-8591e09">-->
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260807-8591e09">
+    <link rel="stylesheet" href="/static/css/org.css?v=20260807-8591e09">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
 
     <!-- 🔧 iOS 专用样式修复 -->
@@ -76,54 +66,21 @@
                 background: var(--bg-primary) !important;
                 box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1) !important;
             }
+
+            /* 移动端不使用屏幕截图功能，隐藏截图按钮 */
+            #screenshotBtn {
+                display: none !important;
+            }
         }
     </style>
 
 
     <!-- iOS PWA 专用样式 -->
+    <!-- 头部安全区与高度统一由 chat.css 的 standalone 块处理（左右两栏 header 高度一致）；
+         这里只保留输入区底部安全区，避免内联样式与外链 CSS 相互覆盖导致头部错位/压扁。 -->
     <style>
-        /* 修复 iOS PWA 安全区域 */
-        @supports (-webkit-touch-callout: default !important) {
-            /* iPhone X 及以上 */
-            @media (min-aspect-ratio: 4/3) {
-                body {
-                    padding-top: env(safe-area-inset-top);
-                    padding-bottom: env(safe-area-inset-bottom);
-                }
-
-                .sidebar-header {
-                    padding-top: calc(16px + env(safe-area-inset-top));
-                }
-
-                .chat-header {
-                    padding-top: calc(16px + env(safe-area-inset-top));
-                }
-
-                .chat-input-area {
-                    padding-bottom: calc(8px + env(safe-area-inset-bottom));
-                }
-            }
-        }
-
-        /* 通用安全区域适配 */
-        .sidebar-header {
-            padding-top: max(16px, env(safe-area-inset-top));
-        }
-
-        .chat-header {
-            padding-top: max(16px, env(safe-area-inset-top));
-        }
-
         .chat-input-area {
             padding-bottom: max(8px, env(safe-area-inset-bottom));
-        }
-
-        /* 检测是否为standalone模式 */
-        @media all and (display-mode: standalone) {
-            .sidebar-header,
-            .chat-header {
-                padding-top: max(20px, env(safe-area-inset-top));
-            }
         }
     </style>
 
@@ -177,6 +134,12 @@
 
                 <!-- 下拉菜单 -->
                 <div class="user-dropdown-menu" id="userDropdownMenu">
+                    <!-- 安装桌面应用（Android/Chromium 触发 beforeinstallprompt 时显示） -->
+                    <div class="dropdown-item" id="installAppBtn" style="display: none;">
+                        <i class="fas fa-mobile-alt"></i>
+                        <span>安装到桌面</span>
+                    </div>
+
                     <!-- 管理员按钮（默认隐藏，JS 控制显示） -->
                     <div class="dropdown-item" id="adminConsoleBtn" style="display: none;">
                         <i class="fas fa-shield-alt"></i>
@@ -233,7 +196,7 @@
         </div>
 
         <div class="user-profile">
-            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260731-09c0a6d"
+            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260807-8591e09"
                  alt="头像" class="avatar">
             <div class="user-info">
                 <div class="username" id="currentUsername">加载中...</div>
@@ -328,7 +291,7 @@
                 </button>
                 <div class="chat-info" onclick="chatClient.showProfile(chatClient.currentRoomId)">
                     <div class="chat-avatar">
-                        <img src="/static/images/default-avatar.png?v=20260731-09c0a6d"
+                        <img src="/static/images/default-avatar.png?v=20260807-8591e09"
                              alt="聊天对象" id="chatAvatar">
                     </div>
                     <div class="chat-details">
@@ -385,7 +348,7 @@
             </div>
 
             <!-- 🔧 关键修复1: 按钮和徽章分离，徽章在按钮外部右上角 -->
-            <div id="scrollToBottomContainer" class="scroll-to-bottom-container">
+            <div id="scrollToBottomContainer" class="scroll-to-bottom-container" title="滚动到底部">
                 <div id="scrollToBottomBtn" class="scroll-to-bottom-btn" style="display: none;">
                     <div class="scroll-to-bottom-icon">
                         <i class="fas fa-arrow-down"></i>
@@ -435,6 +398,9 @@
                     <input type="file" id="fileInput" multiple style="display:none;">
                 </button>
 
+                <button class="action-btn" id="screenshotBtn" title="截图（鼠标拖拽选择区域并发送到聊天）">
+                    <i class="fas fa-cut"></i>
+                </button>
 
                 <button class="btn-icon" title="表情" id="emojiBtn">
                     <i class="far fa-smile"></i>
@@ -656,7 +622,7 @@
                 </div>
                 <div class="profile-avatar-section">
                     <div class="avatar-upload-container">
-                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20260731-09c0a6d"
+                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20260807-8591e09"
                              alt="头像">
                         <label class="upload-btn" for="avatarUpload">
                             <i class="fas fa-camera"></i>
@@ -828,6 +794,31 @@
 <div id="notificationContainer"></div>
 <div id="toastContainer"></div>
 
+<!-- 🔧 PWA：移动端一次性引导横幅（添加到主屏幕 + 开启通知） -->
+<div id="pwaGuideBanner" class="pwa-guide-banner">
+    <div class="pwa-guide-inner">
+        <div class="pwa-guide-icon">
+            <i class="fas fa-bell"></i>
+        </div>
+        <div class="pwa-guide-text">
+            <div class="pwa-guide-title">安装到桌面 · 开启消息通知</div>
+            <div class="pwa-guide-desc">将「企业聊天室」添加到手机桌面（PWA 应用），并允许通知，即使回到主屏幕或锁屏也能实时收到消息。</div>
+            <div class="pwa-guide-steps" id="pwaGuideSteps">
+                <span>① 点击下方按钮安装到桌面</span>
+                <span>② 再开启通知</span>
+            </div>
+        </div>
+        <div class="pwa-guide-actions">
+            <button id="pwaGuideInstall" class="pwa-guide-btn pwa-install-btn" style="display:none;">安装应用</button>
+            <button id="pwaGuideEnable" class="pwa-guide-btn">开启通知</button>
+            <button id="pwaGuidePerms" class="pwa-guide-btn pwa-perm-btn" style="display:none;">授权摄像头/麦克风</button>
+        </div>
+        <button id="pwaGuideClose" class="pwa-guide-close" aria-label="关闭">
+            <i class="fas fa-times"></i>
+        </button>
+    </div>
+</div>
+
 <!-- 通话覆盖层 -->
 <div id="callOverlay" class="call-overlay hidden">
     <div class="call-container">
@@ -880,23 +871,24 @@
 
 
 <!-- 🔧 关键修复：脚本资源直接带版本参数 -->
-<script src="/static/js/dist/spark-md5.min.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/encrypts.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/api.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/utils.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/chat.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/tenant.js?v=20260731-09c0a6e"></script>
-<script src="/static/js/org.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/notifications.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260807-8591e09"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260807-8591e09"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260807-8591e09"></script>
+<script src="/static/js/encrypts.js?v=20260807-8591e09"></script>
+<script src="/static/js/api.js?v=20260807-8591e09"></script>
+<script src="/static/js/utils.js?v=20260807-8591e09"></script>
+<script src="/static/js/chat.js?v=20260807-8591e09"></script>
+<script src="/static/js/tenant.js?v=20260807-8591e09"></script>
+<script src="/static/js/org.js?v=20260807-8591e09"></script>
+<script src="/static/js/notifications.js?v=20260807-8591e09"></script>
+<script src="/static/js/push.js?v=20260807-8591e09"></script>
 
 
 <!-- templates/chat/index.html - 替换原有的版本检测脚本 -->
 
 <script>
     // 🔧 修复1: 从构建时注入的版本号（与后端保持一致）
-    const CURRENT_VERSION = '20260731-09c0a6d';
+    const CURRENT_VERSION = '20260807-8591e09';
 
     // 🔧 修复2: 首次访问时保存版本到 localStorage（不是 sessionStorage）
     const LAST_VERSION = localStorage.getItem('static_version');

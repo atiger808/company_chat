@@ -1375,7 +1375,7 @@ class DocumentEditorApp {
             return;
         }
         try {
-            const response = await fetch(`/api/auth/search_users/?q=${encodeURIComponent(keyword)}`, {headers: TokenManagerCustom.getHeaders()});
+            const response = await fetch(`/api/cloud/search-users/?q=${encodeURIComponent(keyword)}`, {headers: TokenManagerCustom.getHeaders()});
             if (!response.ok) throw new Error('搜索失败');
             const data = await response.json();
             const users = data.results || [];
@@ -1408,7 +1408,7 @@ class DocumentEditorApp {
                 <img src="${avatar}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;">
                 <div style="flex:1;">
                     <div style="font-weight:500;">${name}</div>
-                    <div style="font-size:12px;color:#999;">${user.department_info?.name || ''} ${user.position || ''}</div>
+                    <div style="font-size:12px;color:#999;">${this.escapeHtml([user.position || '', user.department_name || user.department || (user.department_info && user.department_info.name) || ''].filter(Boolean).join(' · '))}</div>
                 </div>
                 <i class="fas fa-plus-circle add-icon" data-user-id="${userId}" title="添加协作者"></i>
               

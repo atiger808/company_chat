@@ -62,6 +62,138 @@ import uuid
 import shutil
 from loguru import logger
 from datetime import timedelta
+
+
+def _cloud_tenant(request):
+    """获取当前企业：优先 middleware 设置的 request.tenant，兜底用用户活跃企业"""
+    t = getattr(request, 'tenant', None)
+    if t is not None:
+        return t
+    try:
+        return getattr(request.user, 'get_active_tenant', lambda: None)()
+    except Exception:
+        return None
+
+
+def _tenant_owner_q(request, user=None):
+    """企业隔离（仅本人可见类：文件/文件夹）：
+    当前企业的数据 + 本人遗留的未归属企业数据，兼容历史数据"""
+    user = user or request.user
+    t = _cloud_tenant(request)
+    if t is None:
+        return Q(tenant__isnull=True)
+    return Q(tenant=t) | Q(tenant__isnull=True, owner=user)
+
+
+def _tenant_q(request):
+    """企业隔离（跨用户可见类：分享/共享文件夹/协作文档）：
+    当前企业的数据 + 遗留的未归属企业数据"""
+    t = _cloud_tenant(request)
+    if t is None:
+        return Q(tenant__isnull=True)
+    return Q(tenant=t) | Q(tenant__isnull=True)
+
+
+def _search_user_department(u, tenant=None):
+    """获取用户部门名称（优先企业专属部门，兜底全局部门）"""
+    try:
+        d = u.get_primary_department(tenant) if tenant and hasattr(u, 'get_primary_department') else getattr(u, 'department', None)
+        if d:
+            return getattr(d, 'name', '') or ''
+    except Exception:
+        pass
+    d = getattr(u, 'department', None)
+    return d.name if d else ''
+
+
+def _can_add_cloud_user(request, target_user):
+    """目标用户是否可作为协作者/共享成员：当前企业成员；无所属企业时为其通讯录好友"""
+    if not target_user or target_user.is_authenticated is False:
+        return False
+    t = _cloud_tenant(request)
+    if t is not None:
+        return target_user.tenant_memberships.filter(tenant=t, is_active=True).exists()
+    return request.user.friends.filter(id=target_user.id).exists()
+
+
+def _find_shared_folder_root(folder_or_id):
+    """向上查找指定文件夹所属的共享文件夹（根），非共享文件夹返回 None"""
+    if folder_or_id is None:
+        return None
+    if isinstance(folder_or_id, Folder):
+        f = folder_or_id
+    else:
+        try:
+            f = Folder.objects.filter(id=folder_or_id, deleted_at__isnull=True).first()
+        except (ValueError, TypeError):
+            return None
+    seen = set()
+    while f is not None and f.id not in seen:
+        if f.is_shared_folder:
+            return f
+        seen.add(f.id)
+        f = f.parent
+    return None
+
+
+def _build_upload_log(request, file_obj, folder_id, description, extra_data=None):
+    """构建文件上传操作日志；目标在共享文件夹内时附加共享文件夹上下文"""
+    shared_folder = _find_shared_folder_root(folder_id)
+    kwargs = {
+        'file': file_obj,
+        'user': request.user,
+        'operation': 'upload',
+        'description': description,
+        'ip_address': get_request_ip(request),
+        'user_agent': request.META.get('HTTP_USER_AGENT', ''),
+        'extra_data': extra_data or {},
+    }
+    if shared_folder:
+        kwargs['folder'] = shared_folder
+        kwargs['tenant'] = shared_folder.tenant or _cloud_tenant(request)
+        kwargs['description'] = f'上传文件到共享文件夹 "{shared_folder.name}"：{file_obj.name}'
+    return kwargs
+
+
+class CloudSearchUsersView(APIView):
+    """🔧 多企业隔离：搜索可协作 / 可共享的用户
+    - 有所属企业 → 返回当前企业成员
+    - 无所属企业 → 返回通讯录好友
+    结果附带职位、部门、真实姓名，便于前端展示选择。
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        q = (request.query_params.get('q') or '').strip().lower()
+        t = _cloud_tenant(request)
+        users = []
+        if t is not None:
+            from accounts.models import TenantMembership
+            memberships = TenantMembership.objects.filter(tenant=t, is_active=True) \
+                .select_related('user__department').distinct()
+            for m in memberships:
+                u = m.user
+                if u.is_active and u.id != request.user.id:
+                    if not q or q in (u.username or '').lower() or q in (u.real_name or '').lower() or q in (u.position or '').lower():
+                        users.append(u)
+        else:
+            for u in request.user.friends.all():
+                if u.is_active and u.id != request.user.id:
+                    if not q or q in (u.username or '').lower() or q in (u.real_name or '').lower() or q in (u.position or '').lower():
+                        users.append(u)
+
+        result = []
+        for u in users[:100]:
+            result.append({
+                'id': u.id,
+                'username': u.username,
+                'real_name': u.real_name or '',
+                'position': u.position or '',
+                'department': _search_user_department(u, t),
+                'department_name': _search_user_department(u, t),
+                'avatar_url': u.get_avatar_url() if hasattr(u, 'get_avatar_url') else '/static/images/default-avatar.png',
+            })
+        return Response({'results': result})
 import requests
 import json
 import jwt
@@ -294,8 +426,8 @@ class FolderViewSet(viewsets.ModelViewSet, UtilsTools):
         - 🔧 关键：过滤已删除的文件夹
         """
         user = self.request.user
-        # 🔧 关键修复：确保 deleted_at 字段存在后再过滤
-        queryset = Folder.objects.filter(deleted_at__isnull=True, owner=user)
+        # 🔧 多企业隔离：仅当前企业数据（含本人遗留未归属数据）
+        queryset = Folder.objects.filter(_tenant_owner_q(self.request, user), deleted_at__isnull=True, owner=user)
 
         # 🔧 关键修复：支持加载所有文件夹（用于移动模态框）
         load_all = self.request.query_params.get('load_all', 'false').lower() == 'true'
@@ -337,8 +469,8 @@ class FolderViewSet(viewsets.ModelViewSet, UtilsTools):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # 🔧 自动设置所有者为当前用户
-        serializer.save(owner=request.user)
+        # 🔧 自动设置所有者为当前用户，并归属当前企业
+        serializer.save(owner=request.user, tenant=_cloud_tenant(request))
 
         # 🔧 记录操作日志
         FileOperationLog.objects.create(
@@ -1261,8 +1393,9 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
         """
         user = self.request.user
 
-        # 基础过滤：当前用户 + 未删除
+        # 🔧 多企业隔离：当前企业数据 + 本人遗留数据；基础过滤：当前用户 + 未删除
         queryset = CloudFile.objects.filter(
+            _tenant_owner_q(self.request, user),
             owner=user,
             deleted_at__isnull=True
         ).select_related('owner', 'folder')
@@ -1470,19 +1603,15 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                 )
 
                 # 记录操作日志
-                FileOperationLog.objects.create(
-                    file=new_file,
-                    user=request.user,
-                    operation='upload',
-                    description=f'秒传文件：{new_file.name}',
-                    ip_address=get_request_ip(request),
-                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                FileOperationLog.objects.create(**_build_upload_log(
+                    request, new_file, folder_id,
+                    f'秒传文件：{new_file.name}',
                     extra_data={
                         'original_file_id': str(existing_file.id),
                         'file_md5': file_md5,
                         'quick_upload': True,
                     }
-                )
+                ))
 
                 # 序列化返回结果
                 serializer = self.get_serializer(new_file)
@@ -1516,15 +1645,11 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
             serializer.is_valid(raise_exception=True)
             self.perform_create(serializer)
 
-            FileOperationLog.objects.create(
-                file=serializer.instance,
-                user=request.user,
-                operation='upload',
-                description=f'上传文件：{uploaded_file.name}',
-                ip_address=get_request_ip(request),
-                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            FileOperationLog.objects.create(**_build_upload_log(
+                request, serializer.instance, folder_id,
+                f'上传文件：{uploaded_file.name}',
                 extra_data={'quick_upload': False}
-            )
+            ))
 
             return Response({
                 **serializer.data,
@@ -1660,19 +1785,15 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                 )
 
                 # 记录操作日志
-                FileOperationLog.objects.create(
-                    file=new_file,
-                    user=request.user,
-                    operation='upload',
-                    description=f'秒传文件：{new_file.name}',
-                    ip_address=get_request_ip(request),
-                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                FileOperationLog.objects.create(**_build_upload_log(
+                    request, new_file, folder_id,
+                    f'秒传文件：{new_file.name}',
                     extra_data={
                         'original_file_id': str(existing_file.id),
                         'file_md5': file_md5,
                         'quick_upload': True,
                     }
-                )
+                ))
 
                 serializer = self.get_serializer(existing_file)
                 return Response({
@@ -2027,13 +2148,9 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                 session.save(update_fields=['is_completed', 'updated_at'])
 
                 # 记录操作日志
-                FileOperationLog.objects.create(
-                    file=cloud_file,
-                    user=request.user,
-                    operation='upload',
-                    description=f'分片上传文件: {session.file_name}',
-                    ip_address=get_request_ip(request),
-                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                FileOperationLog.objects.create(**_build_upload_log(
+                    request, cloud_file, folder_id,
+                    f'分片上传文件: {session.file_name}',
                     extra_data={
                         'upload_method': 'chunked',
                         'total_chunks': session.total_chunks,
@@ -2041,7 +2158,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                         'file_md5': session.file_md5,
                         'session_id': str(session.id)
                     }
-                )
+                ))
 
             # 🔧 清理临时文件
             self._cleanup_temp_files(session)
@@ -3855,7 +3972,8 @@ class FileShareViewSet(viewsets.ModelViewSet, UtilsTools):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = FileShare.objects.select_related('owner', 'file', 'folder').filter(is_active=True)
+        # 🔧 多企业隔离：仅当前企业的分享（含遗留数据）
+        queryset = FileShare.objects.select_related('owner', 'file', 'folder').filter(_tenant_q(self.request), is_active=True)
 
         # 🔧 路由逻辑：优先处理自定义视图参数
         owner_param = self.request.query_params.get('owner')
@@ -4299,19 +4417,23 @@ class CloudDashboardViewSet(viewsets.ViewSet):
         """获取网盘概览"""
         user = request.user
 
-        # 用户文件统计
-        total_count = CloudFile.objects.filter(owner=user, deleted_at__isnull=True).count()
+        # 用户文件统计（🔧 多企业隔离：仅当前企业数据）
+        total_count = CloudFile.objects.filter(_tenant_owner_q(request, user), owner=user, deleted_at__isnull=True).count()
         total_size = CloudFile.objects.filter(
+            _tenant_owner_q(request, user),
             owner=user,
             deleted_at__isnull=True
         ).aggregate(total=Sum('size'))['total'] or 0
 
         # 回收站统计
 
-        # 协作文档统计
+        # 协作文档统计（🔧 多企业隔离：仅当前企业的协作文档）
+        t = _cloud_tenant(request)
+        file_tenant_q = (Q(file__tenant=t) | Q(file__tenant__isnull=True)) if t else Q(file__tenant__isnull=True)
         collab_file_ids = FileCollaboration.objects.filter(
             is_active=True
-        ).filter(Q(user=user) | Q(file__owner=user)).values_list('file_id', flat=True)
+        ).filter(Q(user=user) | Q(file__owner=user)) \
+            .filter(file_tenant_q).values_list('file_id', flat=True)
         query_condition = Q(id__in=collab_file_ids)
         # 基础查询：文档类型 + 联合权限条件
         queryset = CloudFile.objects.filter(
@@ -4323,6 +4445,7 @@ class CloudDashboardViewSet(viewsets.ViewSet):
 
         # 最近文件
         recent_files = CloudFile.objects.filter(
+            _tenant_owner_q(request, user),
             owner=user,
             deleted_at__isnull=True
         ).order_by('-created_at')[:5]
@@ -5847,10 +5970,14 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
             # 2. 用户作为协作者被授权的文档 (FileCollaboration)
 
             # 获取协作关系的文件 ID (他人分享给当前用户的) + 协作文件主体是当前用户
-
+            # 🔧 多企业隔离：仅当前企业的协作文档（含遗留未归属数据）
+            t = _cloud_tenant(request)
+            file_tenant_q = (Q(file__tenant=t) | Q(file__tenant__isnull=True)) if t else Q(file__tenant__isnull=True)
             collab_file_ids = FileCollaboration.objects.filter(
                 is_active=True
-            ).filter(Q(user=user) | Q(file__owner=user)).values_list('file_id', flat=True)
+            ).filter(Q(user=user) | Q(file__owner=user)) \
+                .filter(file_tenant_q) \
+                .values_list('file_id', flat=True)
 
             logger.info(f'collab_file_ids (shared with me): {list(collab_file_ids)}')
 
@@ -6408,6 +6535,10 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
             # 不能添加自己
             if collaborator.id == request.user.id:
                 return Response({'error': '不能添加自己为协作者'}, status=400)
+
+            # 🔧 多企业隔离：只能添加当前企业成员（无企业时为好友）
+            if not _can_add_cloud_user(request, collaborator):
+                return Response({'error': '只能选择当前企业的成员'}, status=status.HTTP_403_FORBIDDEN)
 
             # 创建或更新协作关系（FileCollaboration）
             collab, created = FileCollaboration.objects.update_or_create(
@@ -7997,7 +8128,7 @@ class CloudSystemSettingsViewSet(viewsets.GenericViewSet):
                 })
             return Response({'error': '配置项不存在'}, status=status.HTTP_404_NOT_FOUND)
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def public_configs(self, request):
         """🌐 获取公开配置（前端初始化使用）"""
         configs = CloudSystemConfig.objects.filter(is_public=True)
@@ -8769,8 +8900,10 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
 
     def get_queryset(self):
         user = self.request.user
+        # 🔧 多企业隔离：仅当前企业的共享文件夹（含遗留数据）
         # 获取用户有权限访问的共享文件夹：创建者 或 协作者
         queryset = Folder.objects.filter(
+            _tenant_q(self.request),
             is_shared_folder=True,
             deleted_at__isnull=True
         ).filter(
@@ -8795,11 +8928,48 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
     def perform_create(self, serializer):
         # 创建时自动标记为共享文件夹
         serializer.save(owner=self.request.user, is_shared_folder=True)
+        instance = serializer.instance
+        # 🔧 记录操作日志
+        try:
+            FileOperationLog.objects.create(
+                folder=instance,
+                tenant=instance.tenant or _cloud_tenant(self.request),
+                user=self.request.user,
+                operation='create',
+                description=f'创建共享文件夹：{instance.name}',
+                ip_address=get_request_ip(self.request),
+                user_agent=self.request.META.get('HTTP_USER_AGENT', ''),
+                extra_data={
+                    'folder_id': str(instance.id),
+                    'folder_name': instance.name,
+                    'is_shared_folder': True,
+                }
+            )
+        except Exception as log_err:
+            logger.warning(f'记录创建共享文件夹日志失败: {log_err}')
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         if not self._is_admin_or_owner(instance, request.user):
             return Response({'error': '无删除该共享文件夹权限'}, status=status.HTTP_403_FORBIDDEN)
+        # 🔧 记录操作日志
+        try:
+            FileOperationLog.objects.create(
+                folder=instance,
+                tenant=instance.tenant or _cloud_tenant(request),
+                user=request.user,
+                operation='delete',
+                description=f'删除共享文件夹：{instance.name}',
+                ip_address=get_request_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                extra_data={
+                    'folder_id': str(instance.id),
+                    'folder_name': instance.name,
+                    'is_shared_folder': True,
+                }
+            )
+        except Exception as log_err:
+            logger.warning(f'记录删除共享文件夹日志失败: {log_err}')
         return super().destroy(request, *args, **kwargs)
 
     # 🔧 新增：重写list方法，混合返回子文件夹和文件
@@ -8897,49 +9067,256 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
 
     @action(detail=True, methods=['post'])
     def add_member(self, request, pk=None):
-        """添加或更新成员权限"""
+        """添加或更新成员权限，新成员默认发送工作通知 + 私聊通知"""
         folder = self.get_object()
         if not self._is_admin_or_owner(folder, request.user):
             return Response({'error': '无操作权限'}, status=status.HTTP_403_FORBIDDEN)
 
         user_id = request.data.get('user_id')
         permission = request.data.get('permission', 'read')
+        notify_private_chat = request.data.get('notify_private_chat', True)
+        send_work_notify = request.data.get('send_work_notify', True)
+        if isinstance(notify_private_chat, str):
+            notify_private_chat = notify_private_chat.lower() in ('1', 'true', 'yes', 'on')
+        if isinstance(send_work_notify, str):
+            send_work_notify = send_work_notify.lower() in ('1', 'true', 'yes', 'on')
 
         try:
             target_user = CustomUser.objects.get(id=user_id)
         except CustomUser.DoesNotExist:
             return Response({'error': '用户不存在'}, status=status.HTTP_404_NOT_FOUND)
 
+        # 🔧 多企业隔离：只能添加当前企业成员（无企业时为好友）
+        if not _can_add_cloud_user(request, target_user):
+            return Response({'error': '只能选择当前企业的成员'}, status=status.HTTP_403_FORBIDDEN)
+
+        existing = FolderCollaboration.objects.filter(folder=folder, user=target_user).first()
+        # 未显式传值时：新成员默认开启私聊通知；已有成员保留原设置，避免重新加入时重置开关
+        if existing is not None and 'notify_private_chat' not in request.data:
+            notify_private_chat = existing.notify_private_chat
+
         collab, created = FolderCollaboration.objects.update_or_create(
             folder=folder,
             user=target_user,
-            defaults={'permission': permission, 'is_active': True}
+            defaults={
+                'permission': permission,
+                'is_active': True,
+                'notify_private_chat': notify_private_chat,
+            }
         )
-        return Response({'message': '添加成功', 'created': created})
+        # 仅当「新加入」或「从移除状态恢复」时才发送通知，避免每次修改权限重复打扰
+        is_new = created or (existing is not None and not existing.is_active)
+
+        if is_new:
+            try:
+                inviter_name = getattr(request.user, 'real_name', request.user.username)
+                permission_display = {'read': '只读', 'write': '可编辑', 'admin': '管理员'}.get(permission, permission)
+                folder_url = f'{settings.BASE_URL.rstrip("/")}/cloud/'
+
+                # 🔧 记录操作日志
+                try:
+                    FileOperationLog.objects.create(
+                        folder=folder,
+                        tenant=folder.tenant or _cloud_tenant(request),
+                        user=request.user,
+                        operation='add_folder_member',
+                        description=f'添加共享文件夹 "{folder.name}" 成员：{target_user.real_name or target_user.username}（权限：{permission_display}）',
+                        ip_address=get_request_ip(request),
+                        user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                        extra_data={
+                            'folder_id': str(folder.id),
+                            'folder_name': folder.name,
+                            'member_id': target_user.id,
+                            'member_name': target_user.real_name or target_user.username,
+                            'permission': permission,
+                            'created': created,
+                        }
+                    )
+                except Exception as log_err:
+                    logger.warning(f'记录添加共享文件夹成员日志失败: {log_err}')
+
+                # 1. 工作通知（默认发送）
+                if send_work_notify:
+                    from oa.views import send_work_notification
+                    send_work_notification(
+                        user_id=target_user.id,
+                        title='共享文件夹邀请',
+                        content=f'{inviter_name} 邀请你加入共享文件夹 "{folder.name}"（权限：{permission_display}）',
+                        notification_type='collab',
+                        related_url=folder_url,
+                        extra_data={
+                            'folder_id': str(folder.id),
+                            'folder_name': folder.name,
+                            'inviter_id': request.user.id,
+                            'inviter_name': inviter_name,
+                            'permission': permission,
+                            'action': 'invite',
+                        },
+                    )
+
+                # 2. 私聊通知（由成员开关控制，默认开启）
+                if notify_private_chat:
+                    self._send_member_private_notify(request.user, target_user, folder, permission)
+            except Exception as notify_err:
+                logger.error(f'共享文件夹成员通知发送失败: {notify_err}', exc_info=True)
+
+        return Response({
+            'message': '添加成功',
+            'created': created,
+            'notify_private_chat': collab.notify_private_chat,
+        })
+
+    def _send_member_private_notify(self, inviter, target_user, folder, permission):
+        """以私聊消息形式通知被加入共享文件夹的成员"""
+        from chat.models import ChatRoom, Message as ChatMessage
+        from django.utils.html import escape
+
+        inviter_name = getattr(inviter, 'real_name', inviter.username)
+        permission_display = {'read': '只读', 'write': '可编辑', 'admin': '管理员'}.get(permission, permission)
+        folder_url = f'{settings.BASE_URL.rstrip("/")}/cloud/'
+        safe_folder_name = escape(folder.name)
+
+        # 查找或创建两者的私聊聊天室
+        existing_room = ChatRoom.objects.filter(
+            room_type='private',
+            members=inviter
+        ).filter(
+            members=target_user
+        ).first()
+
+        if existing_room:
+            chat_room = existing_room
+            for user in [inviter, target_user]:
+                del_status = existing_room.delete_statuses.filter(user=user).first()
+                if del_status and del_status.is_deleted:
+                    del_status.is_deleted = False
+                    del_status.deleted_at = None
+                    del_status.save()
+        else:
+            chat_room = ChatRoom.objects.create(room_type='private', creator=inviter)
+            chat_room.members.add(inviter, target_user)
+
+        invite_content = (
+            f'📂 共享文件夹邀请\n'
+            f'<b>{escape(inviter_name)}</b> 邀请你加入共享文件夹 "<b>{safe_folder_name}</b>"\n'
+            f'权限：{permission_display}\n\n'
+            f'👉 <a href="{folder_url}" target="_blank" style="color:#3c8dbc;text-decoration:none;">点击此处打开共享文件夹  <i class="fa fa-external-link" title="点击打开"></i></a>'
+        )
+
+        invite_message = ChatMessage.objects.create(
+            chat_room=chat_room,
+            sender=inviter,
+            content=invite_content,
+            message_type='text',
+        )
+        chat_room.updated_at = timezone.now()
+        chat_room.save(update_fields=['updated_at'])
+
+        channel_layer = get_channel_layer()
+        sender_data = {
+            'id': inviter.id,
+            'username': inviter.username,
+            'email': inviter.email,
+            'real_name': inviter_name,
+            'avatar': inviter.get_avatar_url() if hasattr(inviter, 'get_avatar_url') else None,
+            'is_active': inviter.is_active,
+            'is_online': inviter.is_online,
+        }
+        # 广播消息到聊天室
+        async_to_sync(channel_layer.group_send)(
+            f'chat_{chat_room.id}',
+            {
+                'type': 'chat_message',
+                'chat_room': chat_room.id,
+                'message_id': str(invite_message.id),
+                'is_read': False,
+                'sender': sender_data,
+                'sender_id': inviter.id,
+                'sender_name': inviter.username,
+                'content': invite_content,
+                'message_type': 'text',
+                'file_info': None,
+                'timestamp': invite_message.timestamp.isoformat(),
+                'mentioned_users': [],
+                'mentioned_all': False,
+                'temp_id': None,
+                'quote_message_id': None,
+                'quote_content': None,
+                'quote_sender': None,
+                'quote_sender_id': None,
+                'quote_timestamp': None,
+                'quote_message_type': None,
+                'quote_file_info': None,
+                'voice_duration': None,
+            }
+        )
+        # 给成员发送全局新消息提醒
+        async_to_sync(channel_layer.group_send)(
+            f'user_{target_user.id}_notifications',
+            {
+                'type': 'new_message',
+                'chat_room': chat_room.id,
+                'content': invite_content,
+                'sender': sender_data,
+                'sender_name': inviter.username,
+                'sender_id': inviter.id,
+                'message_type': 'text',
+                'file_info': None,
+                'mentioned_users': [],
+                'mentioned_all': False,
+                'timestamp': invite_message.timestamp.isoformat(),
+                'temp_id': None,
+                'quote_message_id': None,
+                'quote_content': None,
+                'quote_sender': None,
+                'quote_sender_id': None,
+                'quote_timestamp': None,
+                'quote_message_type': None,
+                'quote_file_info': None,
+                'voice_duration': None,
+            }
+        )
+        logger.info(f'[通知] 共享文件夹成员私信已发送：room_id={chat_room.id}, message_id={invite_message.id}')
 
     @action(detail=True, methods=['post'])
     def update_member(self, request, pk=None):
-        """更新成员权限"""
+        """更新成员权限 / 私聊通知开关"""
         folder = self.get_object()
         if not self._is_admin_or_owner(folder, request.user):
             return Response({'error': '无操作权限'}, status=status.HTTP_403_FORBIDDEN)
 
         user_id = request.data.get('user_id')
-        permission = request.data.get('permission', 'read')
-
         try:
             collab = FolderCollaboration.objects.get(folder=folder, user_id=user_id)
-            if collab.permission == permission:
-                return Response({'message': '权限未改变'})
-
-            if collab.user == request.user:
-                return Response({'error': '不能修改自己的权限'}, status=status.HTTP_400_BAD_REQUEST)
-
-            collab.permission = permission
-            collab.save(update_fields=['permission', 'updated_at'])
-            return Response({'message': '权限更新成功'})
         except FolderCollaboration.DoesNotExist:
             return Response({'error': '成员不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+        changed = False
+        update_fields = ['updated_at']
+
+        if 'permission' in request.data:
+            if collab.user == request.user:
+                return Response({'error': '不能修改自己的权限'}, status=status.HTTP_400_BAD_REQUEST)
+            permission = request.data.get('permission')
+            if collab.permission != permission:
+                collab.permission = permission
+                update_fields.append('permission')
+                changed = True
+
+        if 'notify_private_chat' in request.data:
+            val = request.data.get('notify_private_chat')
+            if isinstance(val, str):
+                val = val.lower() in ('1', 'true', 'yes', 'on')
+            if collab.notify_private_chat != val:
+                collab.notify_private_chat = val
+                update_fields.append('notify_private_chat')
+                changed = True
+
+        if not changed:
+            return Response({'message': '未修改'})
+
+        collab.save(update_fields=update_fields)
+        return Response({'message': '更新成功'})
 
     @action(detail=True, methods=['post'])
     def remove_member(self, request, pk=None):
@@ -8953,7 +9330,27 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
             collab = FolderCollaboration.objects.get(folder=folder, user_id=user_id)
             if collab.user == request.user:
                 return Response({'error': '不能移除自己'}, status=status.HTTP_400_BAD_REQUEST)
+            member = collab.user
             collab.delete()
+            # 🔧 记录操作日志
+            try:
+                FileOperationLog.objects.create(
+                    folder=folder,
+                    tenant=folder.tenant or _cloud_tenant(request),
+                    user=request.user,
+                    operation='remove_folder_member',
+                    description=f'从共享文件夹 "{folder.name}" 移除成员：{member.real_name or member.username}',
+                    ip_address=get_request_ip(request),
+                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                    extra_data={
+                        'folder_id': str(folder.id),
+                        'folder_name': folder.name,
+                        'member_id': member.id,
+                        'member_name': member.real_name or member.username,
+                    }
+                )
+            except Exception as log_err:
+                logger.warning(f'记录移除共享文件夹成员日志失败: {log_err}')
             return Response({'message': '移除成功'})
         except FolderCollaboration.DoesNotExist:
             return Response({'error': '成员不存在'}, status=status.HTTP_404_NOT_FOUND)
@@ -8971,6 +9368,7 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
             'username': c.user.username,
             'real_name': c.user.real_name or c.user.username,
             'permission': c.permission,
+            'notify_private_chat': c.notify_private_chat,
             'is_owner': False
         } for c in collabs]
 
@@ -8980,6 +9378,7 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
             'username': folder.owner.username,
             'real_name': folder.owner.real_name or folder.owner.username,
             'permission': 'admin',
+            'notify_private_chat': True,
             'is_owner': True
         })
         return Response({'members': data})
@@ -9129,9 +9528,9 @@ class FileOperationLogViewSet(viewsets.ViewSet):
 
         # 获取当前用户的操作日志（超级管理员可以看所有）
         if user.is_superuser:
-            queryset = FileOperationLog.objects.select_related('user', 'file').all()
+            queryset = FileOperationLog.objects.select_related('user', 'file').filter(_tenant_q(request))
         else:
-            queryset = FileOperationLog.objects.select_related('user', 'file').filter(user=user)
+            queryset = FileOperationLog.objects.select_related('user', 'file').filter(_tenant_q(request), user=user)
 
         # 搜索（按文件名或操作描述）
         if search:

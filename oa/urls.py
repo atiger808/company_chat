@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import AttendanceViewSet, ApprovalViewSet, WorkNotificationViewSet
+from .views import AttendanceViewSet, ApprovalViewSet, ApprovalTypeViewSet, WorkNotificationViewSet
 
 urlpatterns = [
     # 考勤打卡
@@ -34,6 +34,9 @@ urlpatterns = [
     path('approval/my-pending/', ApprovalViewSet.as_view({'get': 'my_pending'}), name='approval-my-pending'),
     path('approval/draft/', ApprovalViewSet.as_view({'post': 'draft'}), name='approval-draft'),
     path('approval/drafts/', ApprovalViewSet.as_view({'get': 'drafts'}), name='approval-drafts'),
+    # 审批类型管理（动态自定义类型）
+    path('approval/types/', ApprovalTypeViewSet.as_view({'get': 'list', 'post': 'create'}), name='approval-types'),
+    path('approval/types/<int:pk>/', ApprovalTypeViewSet.as_view({'put': 'update', 'patch': 'update', 'delete': 'destroy'}), name='approval-type-detail'),
     path('approval/', ApprovalViewSet.as_view({'get': 'list', 'post': 'create'}), name='approval-list'),
     path('approval/<int:pk>/', ApprovalViewSet.as_view({'get': 'retrieve'}), name='approval-detail'),
     path('approval/<int:pk>/approve/', ApprovalViewSet.as_view({'post': 'approve'}), name='approval-approve'),

@@ -2,8 +2,20 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>义乌吉通集团 | 企业级安全通讯与协同办公平台</title>
+
+    {% include '_pwa_meta.html' %}
+    <meta name="format-detection" content="telephone=no, email=no, address=no">
+    <!-- Service Worker 注册：官网首页也可安装为 PWA 并接收推送 -->
+    <script>
+        if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register('/service-worker.js', {updateViaCache: 'none'})
+                    .catch(function (err) { console.error('SW registration failed:', err); });
+            });
+        }
+    </script>
+
     <meta name="description"
           content="义乌吉通集团为企业提供安全、高效的即时通讯与企业网盘解决方案，支持多人实时协作办公，支持私有化部署，金融级数据加密，助力团队无缝协作。">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
@@ -1659,6 +1671,68 @@
         const fadeElements = document.querySelectorAll('.fade-in-up');
         fadeElements.forEach(el => observer.observe(el));
     });
+</script>
+
+<!-- 🔧 PWA：安装为 App（Android/鸿蒙 一键安装，iOS 引导添加到主屏幕） -->
+<style>
+    .hp-install-fab {
+        position: fixed;
+        right: 20px;
+        bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+        z-index: 99999;
+        display: none;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 18px;
+        border: none;
+        border-radius: 40px;
+        background: linear-gradient(135deg, #3b82f6, #2563eb);
+        color: #fff;
+        font-size: 14px;
+        font-weight: 600;
+        box-shadow: 0 6px 24px rgba(59,130,246,.35);
+        cursor: pointer;
+    }
+    .hp-install-fab i { font-size: 18px; }
+    .hp-install-fab.show { display: flex; }
+</style>
+<button class="hp-install-fab" id="hpInstallFab">
+    <i class="fas fa-download"></i><span>安装为 App</span>
+</button>
+<script>
+(function () {
+    var fab = document.getElementById('hpInstallFab');
+    if (!fab) return;
+    var deferredPrompt = null;
+    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    var standalone = window.navigator.standalone === true ||
+        (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+
+    window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        deferredPrompt = e;
+        fab.classList.add('show');
+    });
+
+    fab.addEventListener('click', function () {
+        if (deferredPrompt) {
+            deferredPrompt.prompt();
+            deferredPrompt.userChoice.then(function () {
+                deferredPrompt = null;
+                fab.classList.remove('show');
+            }).catch(function () {});
+        } else if (isIOS) {
+            alert('请在 Safari 中点击分享按钮 → 添加到主屏幕，即可将「企业聊天室」安装为 App，并接收消息推送。');
+        } else {
+            alert('请使用浏览器右上角菜单 → 安装应用 / 添加到主屏幕。');
+        }
+    });
+
+    // 未安装时，移动端显示安装入口（Android/鸿蒙 触发 beforeinstallprompt 时一键安装，iOS 给提示）
+    if (!standalone && window.innerWidth <= 768) {
+        fab.classList.add('show');
+    }
+})();
 </script>
 </body>
 </html>

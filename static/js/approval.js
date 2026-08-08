@@ -27,17 +27,120 @@ class ApprovalApp {
         this._configEditType = null;
         this._configEditSubTenant = '';
         this._configApprovers = [];
+        this._configFinalApprover = null;   // 最终审批人 {id, name, position}
         this._configCcDepts = [];
         this._configCcUsers = [];
         this._configDeleteId = null;
         this._currentCcType = '';   // tracks which type's CC is currently loaded
+        this._approvalTypes = [];          // 审批类型列表（启用：内置+自定义，供选择）
+        this._manageTypes = [];            // 类型管理列表（含未启用自定义类型）
+        this._dynAttachmentValues = {};    // 动态字段附件值 {key: [{url,name}]}
+        this._dynUserValues = {};          // 动态字段成员值 {key: [{id,name}]}
+        this._editFormData = {};           // 编辑/回填时的 form_data
+        // 可供选择的 FontAwesome 图标（审批类型常用）
+        this._ICON_LIST = [
+            // 文件/合同/文档
+            'fa-file-contract', 'fa-file-invoice', 'fa-file-invoice-dollar', 'fa-file-signature', 'fa-file-lines', 'fa-file-word',
+            'fa-file-excel', 'fa-file-pdf', 'fa-file-zipper', 'fa-file-arrow-up', 'fa-file-circle-check', 'fa-clipboard-check',
+            'fa-clipboard-list', 'fa-clipboard-question', 'fa-folder-open', 'fa-folder', 'fa-box-archive', 'fa-scroll',
+            // 交通/差旅
+            'fa-car', 'fa-car-side', 'fa-car-rear', 'fa-bus', 'fa-bus-simple', 'fa-plane', 'fa-plane-departure', 'fa-plane-arrival',
+            'fa-train', 'fa-train-subway', 'fa-truck', 'fa-truck-fast', 'fa-motorcycle', 'fa-bicycle', 'fa-taxi', 'fa-ship', 'fa-rocket',
+            'fa-suitcase', 'fa-suitcase-rolling', 'fa-luggage-cart', 'fa-map-location-dot', 'fa-map', 'fa-location-dot', 'fa-gas-pump',
+            // 人事/转正/调岗
+            'fa-user-check', 'fa-user-plus', 'fa-user-shield', 'fa-user-pen', 'fa-user-gear', 'fa-user-tie', 'fa-id-card', 'fa-id-badge',
+            'fa-address-card', 'fa-people-group', 'fa-users', 'fa-user-graduate', 'fa-user-clock', 'fa-user-large', 'fa-chalkboard-user',
+            'fa-arrow-right-arrow-left', 'fa-arrows-rotate', 'fa-exchange', 'fa-rotate', 'fa-up-right-from-square',
+            // 财务/采购/报销
+            'fa-money-bill-wave', 'fa-money-bill-1', 'fa-coins', 'fa-sack-dollar', 'fa-handshake', 'fa-handshake-angle', 'fa-box',
+            'fa-box-open', 'fa-boxes-stacked', 'fa-cart-plus', 'fa-cart-shopping', 'fa-shopping-cart', 'fa-gift', 'fa-receipt',
+            'fa-credit-card', 'fa-wallet', 'fa-bank', 'fa-scale-balanced', 'fa-calculator', 'fa-percent',
+            // 办公/设备/其他
+            'fa-building', 'fa-building-columns', 'fa-house', 'fa-house-laptop', 'fa-laptop', 'fa-desktop', 'fa-mobile-screen',
+            'fa-computer', 'fa-print', 'fa-keyboard', 'fa-mouse', 'fa-network-wired', 'fa-wifi', 'fa-plug', 'fa-plug-circle-check',
+            'fa-shield-halved', 'fa-shield', 'fa-lock', 'fa-key', 'fa-fingerprint', 'fa-shield-virus',
+            'fa-medal', 'fa-award', 'fa-trophy', 'fa-star', 'fa-certificate', 'fa-fire', 'fa-bolt',
+            'fa-calendar', 'fa-calendar-check', 'fa-calendar-days', 'fa-clock', 'fa-hourglass-half', 'fa-stopwatch', 'fa-alarm-clock',
+            'fa-heart', 'fa-heart-pulse', 'fa-stethoscope', 'fa-briefcase', 'fa-chart-line', 'fa-chart-pie', 'fa-chart-bar',
+            'fa-tasks', 'fa-check-double', 'fa-circle-check', 'fa-list-check', 'fa-gavel', 'fa-book', 'fa-graduation-cap', 'fa-wrench', 'fa-gear'
+        ];
+        // 金额字段单位（币种）
+        this._AMOUNT_UNITS = [
+            {code: 'cny', label: '人民币', symbol: '¥'},
+            {code: 'usd', label: '美元', symbol: '$'},
+            {code: 'eur', label: '欧元', symbol: '€'},
+            {code: 'gbp', label: '英镑', symbol: '£'},
+            {code: 'jpy', label: '日元', symbol: '¥'},
+            {code: 'hkd', label: '港币', symbol: 'HK$'},
+            {code: 'krw', label: '韩元', symbol: '₩'},
+            {code: 'aud', label: '澳元', symbol: 'A$'},
+            {code: 'cad', label: '加元', symbol: 'C$'},
+            {code: 'sgd', label: '新加坡元', symbol: 'S$'}
+        ];
+        // 数字字段单位
+        this._NUMBER_UNITS = [
+            {code: 'ge', label: '个'}, {code: 'tian', label: '天'}, {code: 'xiaoshi', label: '小时'},
+            {code: 'jian', label: '件'}, {code: 'tao', label: '套'}, {code: 'ci', label: '次'},
+            {code: 'ben', label: '本'}, {code: 'tai', label: '台'}, {code: 'gege', label: '台(台)'},
+            {code: 'ren', label: '人'}, {code: 'dun', label: '吨'}, {code: 'kg', label: '千克'},
+            {code: 'li', label: '里'}, {code: 'gongli', label: '公里'}, {code: 'pingfang', label: '平方米'},
+            {code: 'lip', label: '粒'}, {code: 'pi', label: '批'}, {code: 'che', label: '车'}
+        ];
         this.chat_login_url = '/login/';
+        this._initStarted = false;
 
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', () => this.init());
-        } else {
-            this.init();
+        // 全局错误捕获：任何异常都打到控制台并显示可见错误条，便于定位问题
+        if (!window.__approvalErrBound) {
+            window.__approvalErrBound = true;
+            const showErr = (msg) => {
+                console.error('[审批页] ', msg);
+                try {
+                    let el = document.getElementById('approvalFatalError');
+                    if (!el) {
+                        el = document.createElement('div');
+                        el.id = 'approvalFatalError';
+                        el.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:99999;background:#f56c6c;color:#fff;padding:8px 12px;font-size:13px;line-height:1.5;box-shadow:0 2px 8px rgba(0,0,0,.2);cursor:pointer;';
+                        el.onclick = function() { el.remove(); };
+                        document.body.appendChild(el);
+                    }
+                    el.textContent = '审批页加载出错：' + msg + '（点击关闭）';
+                } catch (ignore) {}
+            };
+            window.addEventListener('error', function (e) {
+                if (e && e.message) showErr(e.message);
+            });
+            window.addEventListener('unhandledrejection', function (e) {
+                const r = e && e.reason;
+                const m = (r && (r.message || r.error)) || String(r) || 'unhandledrejection';
+                showErr(m);
+            });
         }
+
+        // 确保 init 一定会被调用：DOM 未就绪时监听 DOMContentLoaded，已就绪则立即执行；
+        // 并用 _initStarted 防止重复初始化。
+        const start = () => {
+            if (!this._initStarted) {
+                this._initStarted = true;
+                this.init().catch(function (err) {
+                    console.error('审批页 init 失败:', err);
+                    if (window.__approvalErrBound) {
+                        window.dispatchEvent(new ErrorEvent('error', {message: (err && err.message) || 'init 失败'}));
+                    }
+                });
+            }
+        };
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', start);
+            window.addEventListener('load', start); // 兜底：万一 DOMContentLoaded 未触发
+            // 已就绪则立即启动
+            if (document.readyState !== 'loading') start();
+        } else {
+            // 微任务延迟一拍，确保构造完成后 DOM 查询稳定
+            Promise.resolve().then(start);
+        }
+
+
+
     }
 
     async init() {
@@ -47,14 +150,888 @@ class ApprovalApp {
             window.location.href = this.chat_login_url;
             return;
         }
-        await this.loadList();
-        // Show config button for admins
-        var userType = localStorage.getItem('user_type');
-        var configBtn = document.getElementById('approvalConfigBtn');
-        if (configBtn && (userType === 'super_admin' || userType === 'admin')) {
-            configBtn.style.display = 'inline-flex';
+        // 管理员按钮：先按本地信息立即显示（不等待列表/类型加载），再以接口实时校正
+        var isAdmin = this._isAdminFromStorage();
+        console.log('isAdmin:', isAdmin);
+        this._applyAdminButtons(isAdmin);
+        // 各初始化步骤独立容错：任一失败不阻断后续执行
+        try {
+            await this.loadList();
+        } catch (e) {
+            console.error('加载审批列表失败:', e);
+        }
+        try {
+            await this._loadApprovalTypes();
+        } catch (e) {
+            console.error('加载审批类型失败:', e);
+        }
+        // 实时校正管理员状态（避免 localStorage 未写入/过期导致按钮不显示）
+        try {
+            const me = await this.apiGet('/api/auth/me/');
+            if (me && me.user_type) {
+                localStorage.setItem('user_type', me.user_type);
+                if (me.id) localStorage.setItem('user_id', me.id);
+                if (me.avatar_url || me.avatar) {
+                    try { localStorage.setItem('current_user', JSON.stringify(me)); } catch (ignore) {}
+                }
+                var realAdmin = (me.user_type === 'super_admin' || me.user_type === 'admin');
+                console.log('realAdmin::', realAdmin);
+                if (realAdmin !== isAdmin) {
+                    isAdmin = realAdmin;
+                    this._applyAdminButtons(isAdmin);
+                }
+            }
+        } catch (e) {
+            console.warn('获取当前用户失败，使用本地 user_type:', isAdmin ? '管理员' : '非管理员');
         }
         this._ccTab = 'users';
+    }
+
+    _isAdminFromStorage() {
+        var ut = localStorage.getItem('user_type');
+        if (ut === 'admin' || ut === 'super_admin') return true;
+        try {
+            var cu = JSON.parse(localStorage.getItem('current_user') || '{}');
+            if (cu.user_type === 'admin' || cu.user_type === 'super_admin') return true;
+        } catch (e) {}
+        return false;
+    }
+
+    _applyAdminButtons(isAdmin) {
+        var configBtn = document.getElementById('approvalConfigBtn');
+        if (configBtn) configBtn.style.display = isAdmin ? 'inline-flex' : 'none';
+        var typeManageBtn = document.getElementById('approvalTypeManageBtn');
+        if (typeManageBtn) typeManageBtn.style.display = isAdmin ? 'inline-flex' : 'none';
+    }
+
+    // 内置类型兜底（接口异常时保证类型筛选/选择仍可用）
+    _fallbackBuiltinTypes() {
+        return [
+            {code: 'leave', name: '请假', icon: 'fa-calendar-check', color: '#409EFF', is_builtin: true, form_schema: []},
+            {code: 'overtime', name: '加班', icon: 'fa-clock', color: '#e6a23c', is_builtin: true, form_schema: []},
+            {code: 'expense', name: '报销', icon: 'fa-file-invoice-dollar', color: '#67c23a', is_builtin: true, form_schema: []},
+            {code: 'trip', name: '出差', icon: 'fa-plane', color: '#9b59b6', is_builtin: true, form_schema: []},
+            {code: 'purchase', name: '采购', icon: 'fa-cart-plus', color: '#f56c6c', is_builtin: true, form_schema: []},
+            {code: 'recruit', name: '招聘需求', icon: 'fa-user-plus', color: '#e6a23c', is_builtin: true, form_schema: []},
+            {code: 'other', name: '其他', icon: 'fa-file-lines', color: '#909399', is_builtin: true, form_schema: []}
+        ];
+    }
+
+    // ===== 单位工具（金额币种 / 数字单位） =====
+    _unitOf(code) {
+        return (this._AMOUNT_UNITS || []).find(function (u) { return u.code === code; })
+            || (this._NUMBER_UNITS || []).find(function (u) { return u.code === code; }) || null;
+    }
+
+    _unitSymbol(code) {
+        const u = this._unitOf(code);
+        return u ? u.symbol : '';
+    }
+
+    _unitLabel(code) {
+        const u = this._unitOf(code);
+        return u ? u.label : '';
+    }
+
+    _schemaUnitOptions(type, selected) {
+        const list = type === 'amount' ? (this._AMOUNT_UNITS || []) : (type === 'number' ? (this._NUMBER_UNITS || []) : []);
+        if (type === 'amount' && !selected) selected = 'cny'; // 金额默认人民币元
+        let html = '<option value="">单位</option>';
+        html += list.map(function (u) {
+            return '<option value="' + u.code + '"' + (selected === u.code ? ' selected' : '') + '>' + u.label + '</option>';
+        }).join('');
+        return html;
+    }
+
+    // 字段类型变化时刷新单位下拉选项（amount→币种，number→数量单位）
+    _onSchemaFieldTypeChange(sel) {
+        const row = sel.closest('.tm-field-row');
+        if (!row) return;
+        const unitSel = row.querySelector('[data-f="unit"]');
+        if (!unitSel) return;
+        unitSel.innerHTML = this._schemaUnitOptions(sel.value, unitSel.value);
+    }
+
+    // ===== 审批类型（动态自定义） =====
+    async _loadApprovalTypes() {
+        try {
+            const data = await this.apiGet(OA_API_URL + '/approval/types/');
+            this._approvalTypes = Array.isArray(data) ? data : (data.results || []);
+            if (!this._approvalTypes.length) this._approvalTypes = this._fallbackBuiltinTypes();
+        } catch (e) {
+            console.error('加载审批类型失败，使用内置类型兜底:', e);
+            this._approvalTypes = this._fallbackBuiltinTypes();
+        }
+        this._renderTypeSelector();
+        this._renderTypeFilterBar();
+        this._renderConfigTypeGrid();
+        const cur = document.getElementById('newApprovalType');
+        if (cur && !cur.value && this._approvalTypes.length) {
+            this.selectType(this._approvalTypes[0].code);
+        } else if (cur && cur.value && !this._isBuiltinType(cur.value)) {
+            // 类型保存后：当前已选中的自定义类型实时重渲染动态表单（无需刷新页面）
+            const t = this._getType(cur.value);
+            this._renderDynamicFields(t ? (t.form_schema || []) : [], this._editFormData || {});
+        }
+    }
+
+    _getType(code) {
+        return (this._approvalTypes || []).find(t => t.code === code) || null;
+    }
+
+    _getTypeName(code) {
+        const t = this._getType(code);
+        return t ? t.name : code;
+    }
+
+    _getTypeIcon(code) {
+        const t = this._getType(code);
+        return t ? t.icon : this._typeIcon(code);
+    }
+
+    _getTypeColor(code) {
+        const t = this._getType(code);
+        return t ? t.color : '#409EFF';
+    }
+
+    _hexA(hex, alpha) {
+        try {
+            const h = String(hex || '#409EFF').replace('#', '');
+            const r = parseInt(h.substring(0, 2), 16);
+            const g = parseInt(h.substring(2, 4), 16);
+            const b = parseInt(h.substring(4, 6), 16);
+            return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+        } catch (e) {
+            return 'rgba(64,158,255,0.12)';
+        }
+    }
+
+    _renderTypeSelector() {
+        const container = document.getElementById('approvalTypeSelector');
+        if (!container) return;
+        container.innerHTML = (this._approvalTypes || []).map(t => {
+            return '<div class="type-card" data-type="' + this._escape(t.code) + '" onclick="approvalApp.selectType(\'' + this._escape(t.code) + '\')">'
+                + '<div class="type-card-icon" style="background:' + this._hexA(t.color, 0.14) + ';color:' + this._escape(t.color) + ';"><i class="fas ' + this._escape(t.icon || 'fa-file-lines') + '"></i></div>'
+                + '<div class="type-card-label">' + this._escape(t.name) + '</div>'
+                + '</div>';
+        }).join('');
+    }
+
+    _renderTypeFilterBar() {
+        const container = document.getElementById('approvalTypeFilterBar');
+        if (!container) return;
+        let html = '<span class="type-filter-card active" data-type="" onclick="approvalApp.filterByTypeBtn(this,\'\')">'
+            + '<div class="type-filter-card-icon" style="background:#e8f4fd;color:#409eff;"><i class="fas fa-list"></i></div>'
+            + '<div class="type-filter-card-label">全部</div></span>';
+        html += (this._approvalTypes || []).map(t => {
+            return '<span class="type-filter-card" data-type="' + this._escape(t.code) + '" onclick="approvalApp.filterByTypeBtn(this,\'' + this._escape(t.code) + '\')">'
+                + '<div class="type-filter-card-icon" style="background:' + this._hexA(t.color, 0.14) + ';color:' + this._escape(t.color) + ';"><i class="fas ' + this._escape(t.icon || 'fa-file-lines') + '"></i></div>'
+                + '<div class="type-filter-card-label">' + this._escape(t.name) + '</div></span>';
+        }).join('');
+        container.innerHTML = html;
+    }
+
+    _renderConfigTypeGrid() {
+        const grid = document.getElementById('config-type-grid');
+        if (!grid) return;
+        grid.innerHTML = (this._approvalTypes || []).map(t => {
+            return '<div class="config-type-card" data-type="' + this._escape(t.code) + '" onclick="approvalApp._selectConfigType(\'' + this._escape(t.code) + '\')">'
+                + '<div class="config-type-icon" style="background:' + this._hexA(t.color, 0.12) + ';color:' + this._escape(t.color) + ';"><i class="fas ' + this._escape(t.icon || 'fa-file-lines') + '"></i></div>'
+                + '<span>' + this._escape(t.name) + '</span>'
+                + '</div>';
+        }).join('');
+    }
+
+    // ===== 自定义类型动态表单引擎 =====
+    _isBuiltinType(code) {
+        const t = this._getType(code);
+        if (t) return t.is_builtin;
+        return ['leave', 'overtime', 'expense', 'trip', 'purchase', 'recruit', 'other'].indexOf(code) !== -1;
+    }
+
+    _hideBuiltinFields() {
+        ['dateRow', 'amountGroup', 'expenseRow', 'recruitForm'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+        });
+    }
+
+    _renderDynamicFields(schema, values) {
+        const container = document.getElementById('dynamicFormFields');
+        if (!container) return;
+        values = values || {};
+        this._dynAttachmentValues = {};
+        this._dynUserValues = {};
+        let html = '';
+        const self = this;
+        (schema || []).forEach(f => {
+            const key = f.key, label = f.label || key, type = f.type || 'text';
+            const req = f.required ? ' <span class="required">*</span>' : '';
+            const val = values[key] !== undefined ? values[key] : (f.default !== undefined ? f.default : '');
+            const placeholder = f.placeholder || '';
+            html += '<div class="form-group" style="margin-top:12px;">';
+            html += '<label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;"><i class="fas fa-edit" style="color:#9b59b6;margin-right:4px;"></i> ' + self._escape(label) + req + '</label>';
+            switch (type) {
+                case 'textarea':
+                    html += '<textarea class="form-textarea" data-k="' + self._escape(key) + '" rows="2" placeholder="' + self._escape(placeholder) + '" style="min-height:56px;">' + self._escape(val) + '</textarea>';
+                    break;
+                case 'select': {
+                    html += '<select class="form-select" data-k="' + self._escape(key) + '"><option value="">请选择</option>';
+                    (f.options || []).forEach(o => {
+                        const ov = typeof o === 'object' ? o.value : o;
+                        const ol = typeof o === 'object' ? (o.label || o.value) : o;
+                        html += '<option value="' + self._escape(ov) + '"' + (String(val) === String(ov) ? ' selected' : '') + '>' + self._escape(ol) + '</option>';
+                    });
+                    html += '</select>';
+                    break;
+                }
+                case 'radio': {
+                    (f.options || []).forEach(o => {
+                        const ov = typeof o === 'object' ? o.value : o;
+                        const ol = typeof o === 'object' ? (o.label || o.value) : o;
+                        html += '<label style="margin-right:14px;font-size:13px;cursor:pointer;"><input type="radio" name="dyn_' + self._escape(key) + '" value="' + self._escape(ov) + '"' + (String(val) === String(ov) ? ' checked' : '') + '> ' + self._escape(ol) + '</label>';
+                    });
+                    break;
+                }
+                case 'checkbox': {
+                    const arr = Array.isArray(val) ? val : (val ? [val] : []);
+                    (f.options || []).forEach(o => {
+                        const ov = typeof o === 'object' ? o.value : o;
+                        const ol = typeof o === 'object' ? (o.label || o.value) : o;
+                        html += '<label style="margin-right:14px;font-size:13px;cursor:pointer;"><input type="checkbox" name="dyn_' + self._escape(key) + '" value="' + self._escape(ov) + '"' + (arr.indexOf(ov) !== -1 ? ' checked' : '') + '> ' + self._escape(ol) + '</label>';
+                    });
+                    break;
+                }
+                case 'date':
+                    html += '<input type="date" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(val) + '">';
+                    break;
+                case 'datetime':
+                    html += '<input type="datetime-local" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(val) + '">';
+                    break;
+                case 'number':
+                    html += '<div style="display:flex;align-items:center;gap:6px;"><input type="number" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(val) + '" placeholder="' + self._escape(placeholder) + '" style="flex:1;">'
+                        + (f.unit ? '<span style="font-size:12px;color:#909399;white-space:nowrap;flex-shrink:0;">' + self._escape(self._unitLabel(f.unit)) + '</span>' : '') + '</div>';
+                    break;
+                case 'amount':
+                    html += '<div style="display:flex;align-items:center;gap:6px;">'
+                        + (f.unit ? '<span style="font-size:15px;font-weight:600;color:#e6a23c;white-space:nowrap;flex-shrink:0;">' + self._escape(self._unitSymbol(f.unit)) + '</span>' : '<i class="fas fa-yen-sign" style="color:#e6a23c;"></i>')
+                        + '<input type="number" step="0.01" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(val) + '" placeholder="0.00" style="flex:1;">'
+                        + (f.unit ? '<span style="font-size:12px;color:#909399;white-space:nowrap;flex-shrink:0;">' + self._escape(self._unitLabel(f.unit)) + '</span>' : '') + '</div>';
+                    break;
+                case 'attachment':
+                    html += '<div class="dyn-attachment"><input type="file" multiple style="display:none;" onchange="approvalApp._onDynAttachmentChange(event, \'' + self._escape(key) + '\')">'
+                        + '<button type="button" class="btn btn-secondary btn-sm" onclick="this.previousElementSibling.click()"><i class="fas fa-paperclip"></i> 选择附件</button>'
+                        + '<div class="dyn-attach-list" id="dynAttach_' + self._escape(key) + '"></div></div>';
+                    break;
+                case 'department':
+                    html += '<select class="form-select" data-k="' + self._escape(key) + '" id="dynDept_' + self._escape(key) + '"><option value="">请选择部门</option></select>';
+                    break;
+                case 'user':
+                    html += '<div class="dyn-user"><div style="position:relative;">'
+                        + '<input type="text" class="form-input" placeholder="搜索成员添加..." oninput="approvalApp._onDynUserSearch(event, \'' + self._escape(key) + '\')">'
+                        + '<div class="dyn-user-results" id="dynUserRes_' + self._escape(key) + '" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:#fff;border:1px solid #dcdfe6;border-radius:6px;max-height:160px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);"></div>'
+                        + '</div><div class="dyn-user-tags" id="dynUserTags_' + self._escape(key) + '"></div></div>';
+                    break;
+                default:
+                    html += '<input type="text" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(val) + '" placeholder="' + self._escape(placeholder) + '">';
+            }
+            html += '</div>';
+        });
+        container.innerHTML = html;
+        container.style.display = 'block';
+        (schema || []).forEach(f => {
+            if (f.type === 'attachment') {
+                this._dynAttachmentValues[f.key] = Array.isArray(values[f.key]) ? values[f.key] : [];
+                this._renderDynAttachList(f.key);
+            }
+            if (f.type === 'user') {
+                this._dynUserValues[f.key] = Array.isArray(values[f.key]) ? values[f.key] : [];
+                this._renderDynUserTags(f.key);
+            }
+            if (f.type === 'department') {
+                // 始终加载部门下拉（新建审批无值也要渲染选项）
+                this._loadDynDeptOptions(f.key, values[f.key]);
+            }
+        });
+    }
+
+    _collectDynamicFormData() {
+        const data = {};
+        const container = document.getElementById('dynamicFormFields');
+        if (!container) return data;
+        container.querySelectorAll('[data-k]').forEach(el => {
+            if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA' && el.tagName !== 'SELECT') return;
+            const k = el.getAttribute('data-k');
+            if (!k) return;
+            if (el.tagName === 'INPUT' && (el.type === 'number' || el.type === 'date' || el.type === 'datetime-local')) {
+                data[k] = el.value !== '' ? el.value : null;
+            } else {
+                data[k] = el.value;
+            }
+        });
+        container.querySelectorAll('input[type="radio"]').forEach(el => {
+            if (el.checked) data[el.name.replace(/^dyn_/, '')] = el.value;
+        });
+        container.querySelectorAll('input[type="checkbox"]').forEach(el => {
+            const key = el.name.replace(/^dyn_/, '');
+            if (el.checked) {
+                if (!data[key]) data[key] = [];
+                data[key].push(el.value);
+            }
+        });
+        Object.keys(this._dynAttachmentValues || {}).forEach(k => {
+            if (this._dynAttachmentValues[k] && this._dynAttachmentValues[k].length) data[k] = this._dynAttachmentValues[k];
+        });
+        Object.keys(this._dynUserValues || {}).forEach(k => {
+            if (this._dynUserValues[k] && this._dynUserValues[k].length) data[k] = this._dynUserValues[k].map(u => ({
+                id: u.id,
+                name: u.name
+            }));
+        });
+        return data;
+    }
+
+    _onDynAttachmentChange(e, key) {
+        const files = e.target.files;
+        if (!files || !files.length) return;
+        const self = this;
+        Array.from(files).forEach(file => {
+            const fd = new FormData();
+            fd.append('file', file);
+            // multipart 上传不能手动设置 Content-Type（浏览器自动带 boundary），只传 Authorization
+            fetch(OA_API_URL + '/approval/upload-attachment/', {
+                method: 'POST',
+                headers: {'Authorization': TokenManager.getHeaders()['Authorization']},
+                body: fd
+            }).then(r => r.json()).then(d => {
+                if (d.url) {
+                    if (!self._dynAttachmentValues[key]) self._dynAttachmentValues[key] = [];
+                    self._dynAttachmentValues[key].push({url: d.url, name: d.name || file.name});
+                    self._renderDynAttachList(key);
+                } else {
+                    self.showError('附件上传失败');
+                }
+            }).catch(() => self.showError('附件上传失败'));
+        });
+        e.target.value = '';
+    }
+
+    _renderDynAttachList(key) {
+        const container = document.getElementById('dynAttach_' + key);
+        if (!container) return;
+        const items = this._dynAttachmentValues[key] || [];
+        const self = this;
+        container.innerHTML = items.map((a, i) => {
+            const name = a.name || '';
+            const url = a.url || '';
+            const isImg = name.match(/\.(jpg|jpeg|png|gif|webp)$/i);
+            const isVideo = name.match(/\.(mp4|avi|mov|webm|mkv)$/i);
+            // 缩略图/图标：图片可点击预览，文档/文件可点击保存到网盘并打开/下载
+            let thumbHtml;
+            if (isImg) {
+                thumbHtml = '<img src="' + url + '" style="width:48px;height:48px;border-radius:6px;object-fit:cover;flex-shrink:0;border:1px solid #dcdfe6;cursor:pointer;" title="' + self._escape(name) + '">';
+            } else if (isVideo) {
+                thumbHtml = '<video src="' + url + '" controls preload="metadata" style="width:130px;height:72px;border-radius:6px;object-fit:cover;flex-shrink:0;"></video>';
+            } else {
+                thumbHtml = '<div style="width:40px;height:40px;border-radius:6px;background:var(--bg-secondary,#e8ecf1);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><i class="fas ' + self._getFileIcon(name) + '" style="font-size:16px;color:#409eff;"></i></div>';
+            }
+            const clickWrap = isVideo
+                ? thumbHtml
+                : '<a href="javascript:void(0)" data-url="' + url + '" data-name="' + self._escape(name) + '" onclick="approvalApp._handleAttach(this)" title="' + self._escape(name) + '">' + thumbHtml + '</a>';
+            const downloadIcon = (!isImg && !isVideo)
+                ? '<a href="' + url + '" download="' + self._escape(name) + '" target="_blank" title="下载" style="color:#409eff;"><i class="fas fa-cloud-download-alt"></i></a>'
+                : '';
+            return '<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-secondary,#f5f7fa);border-radius:6px;margin-bottom:4px;flex-wrap:wrap;">'
+                + clickWrap
+                + '<span style="flex:1;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:50px;">' + self._escape(name) + '</span>'
+                + downloadIcon
+                + '<button onclick="approvalApp._removeDynAttachment(\'' + self._escape(key) + '\',' + i + ')" style="width:24px;height:24px;border:none;background:transparent;cursor:pointer;color:#909399;" title="移除"><i class="fas fa-times"></i></button>'
+                + '</div>';
+        }).join('') || '';
+    }
+
+    _removeDynAttachment(key, idx) {
+        if (!this._dynAttachmentValues[key]) return;
+        this._dynAttachmentValues[key].splice(idx, 1);
+        this._renderDynAttachList(key);
+    }
+
+    _loadDynDeptOptions(key, selectedId) {
+        const sel = document.getElementById('dynDept_' + key);
+        if (!sel) return;
+        // scope=all：自定义类型「部门」字段，展示当前用户所属所有企业下的所有部门
+        this.apiGet(OA_API_URL + '/approval/org_departments/?scope=all').then(data => {
+            const depts = data.results || [];
+            sel.innerHTML = this._buildDepartmentTreeHtml(depts, selectedId);
+        }).catch(() => {
+        });
+    }
+
+    _onDynUserSearch(e, key) {
+        const kw = e.target.value.trim();
+        const res = document.getElementById('dynUserRes_' + key);
+        if (!res) return;
+        if (!kw) {
+            res.style.display = 'none';
+            return;
+        }
+        this.apiGet(OA_API_URL + '/approval/search-cc-users/?search=' + encodeURIComponent(kw)).then(data => {
+            const users = data.results || [];
+            const selectedIds = {};
+            (this._dynUserValues[key] || []).forEach(u => selectedIds[u.id] = true);
+            res.innerHTML = users.length ? users.map(u => {
+                const cls = selectedIds[u.id] ? 'opacity:0.5;cursor:not-allowed;' : 'cursor:pointer;';
+                return '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;' + cls + '" onclick="approvalApp._addDynUser(\'' + this._escape(key) + '\',' + u.id + ',\'' + this._escape(u.name) + '\')">'
+                    + '<img src="' + (u.avatar || '/static/images/default-avatar.png') + '" style="width:26px;height:26px;border-radius:50%;object-fit:cover;">'
+                    + '<span style="flex:1;font-size:13px;">' + this._escape(u.name) + '</span>'
+                    + (u.position ? '<span style="font-size:11px;color:#909399;">' + this._escape(u.position) + '</span>' : '')
+                    + '</div>';
+            }).join('') : '<div style="padding:8px 12px;color:#909399;font-size:13px;">未找到用户</div>';
+            res.style.display = 'block';
+        }).catch(() => {
+        });
+    }
+
+    _addDynUser(key, id, name) {
+        if (!this._dynUserValues[key]) this._dynUserValues[key] = [];
+        if (this._dynUserValues[key].some(u => u.id === id)) return;
+        this._dynUserValues[key].push({id: id, name: name});
+        this._renderDynUserTags(key);
+        const res = document.getElementById('dynUserRes_' + key);
+        if (res) res.style.display = 'none';
+    }
+
+    _removeDynUser(key, idx) {
+        if (!this._dynUserValues[key]) return;
+        this._dynUserValues[key].splice(idx, 1);
+        this._renderDynUserTags(key);
+    }
+
+    _renderDynUserTags(key) {
+        const container = document.getElementById('dynUserTags_' + key);
+        if (!container) return;
+        const items = this._dynUserValues[key] || [];
+        container.innerHTML = items.map((u, i) => {
+            return '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#ecf5ff;border-radius:14px;font-size:12px;margin:2px;">'
+                + '<i class="fas fa-user" style="font-size:10px;color:#409eff;"></i>'
+                + '<span>' + this._escape(u.name) + '</span>'
+                + '<i class="fas fa-times" style="cursor:pointer;color:#909399;font-size:11px;" onclick="approvalApp._removeDynUser(\'' + this._escape(key) + '\',' + i + ')"></i>'
+                + '</span>';
+        }).join('') || '';
+    }
+
+    _renderDynamicDetail(form_data, schema, display) {
+        if (!schema || !schema.length) return '';
+        display = display || {};
+        const self = this;
+        let html = '<div class="detail-item full-width" style="border:1px solid #e8d5f5;border-radius:8px;padding:12px;background:#faf7ff;margin-top:8px;">'
+            + '<div style="font-size:14px;font-weight:600;color:#9b59b6;margin-bottom:8px;border-bottom:1px solid #e8d5f5;padding-bottom:6px;"><i class="fas fa-clipboard-list"></i> 表单详情</div>'
+            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;">';
+        schema.forEach(f => {
+            const key = f.key;
+            // 后端已解析好的可读值（如部门名称）优先
+            if (display[key] !== undefined && display[key] !== null && display[key] !== '') {
+                html += '<div><strong>' + self._escape(f.label || key) + '：</strong>' + self._escape(String(display[key])) + '</div>';
+                return;
+            }
+            let v = (form_data || {})[key];
+            if (v === undefined || v === null || v === '') v = '-';
+            if (f.type === 'attachment' && Array.isArray(v)) {
+                // 与内置附件一致：图片预览、视频播放、文档/文件点击保存到网盘并打开或下载
+                v = v.map(function (a) {
+                    var url = a.url || a;
+                    var name = a.name || url.split('/').pop() || '';
+                    var isImg = name.match(/\.(jpg|jpeg|png|gif|webp)$/i);
+                    var isVideo = name.match(/\.(mp4|avi|mov|webm|mkv)$/i);
+                    var icon = self._getFileIcon(name);
+                    var inner;
+                    if (isImg) {
+                        inner = '<img src="' + url + '" style="width:48px;height:48px;border-radius:4px;object-fit:cover;border:1px solid #dcdfe6;cursor:pointer;" title="' + self._escape(name) + '">';
+                    } else if (isVideo) {
+                        inner = '<video src="' + url + '" controls preload="metadata" style="width:140px;height:80px;border-radius:4px;"></video>';
+                    } else {
+                        inner = '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;background:#f0f9eb;border-radius:4px;font-size:12px;color:#409eff;"><i class="fas ' + icon + '"></i>' + self._escape(name) + '</span>';
+                    }
+                    var clickWrap = isVideo ? inner
+                        : '<a href="javascript:void(0)" data-url="' + url + '" data-name="' + self._escape(name) + '" onclick="approvalApp._handleAttach(this)" title="' + self._escape(name) + '">' + inner + '</a>';
+                    var downloadIcon = (!isImg && !isVideo)
+                        ? '<a href="' + url + '" download="' + self._escape(name) + '" target="_blank" title="下载" style="color:#409eff;margin-left:2px;"><i class="fas fa-cloud-download-alt"></i></a>'
+                        : '';
+                    return '<span style="display:inline-flex;align-items:center;gap:4px;margin:2px;vertical-align:middle;">' + clickWrap + downloadIcon + '</span>';
+                }).join('') || '-';
+            } else if (f.type === 'user' && Array.isArray(v)) {
+                v = v.map(u => self._escape(u.name || u)).join('、') || '-';
+            } else if ((f.type === 'select' || f.type === 'radio') && typeof v === 'string') {
+                const opt = (f.options || []).find(o => String((typeof o === 'object' ? o.value : o)) === String(v));
+                if (opt) v = typeof opt === 'object' ? (opt.label || opt.value) : opt;
+            } else if (f.type === 'checkbox' && Array.isArray(v)) {
+                v = v.map(x => {
+                    const o = (f.options || []).find(oo => String((typeof oo === 'object' ? oo.value : oo)) === String(x));
+                    return o ? (typeof o === 'object' ? (o.label || o.value) : o) : x;
+                }).join('、') || '-';
+            } else if (f.type === 'amount' && f.unit) {
+                // 金额：带币种符号（¥/$/€/£/HK$…）
+                const sym = self._unitSymbol(f.unit);
+                v = (sym ? sym : '') + v;
+            } else if (f.type === 'number' && f.unit) {
+                // 数字：带单位后缀（个/天/小时/件/套…）
+                const lb = self._unitLabel(f.unit);
+                v = v + (lb ? ' ' + lb : '');
+            } else if (typeof v === 'object') {
+                v = JSON.stringify(v);
+            }
+            html += '<div><strong>' + self._escape(f.label || key) + '：</strong>' + v + '</div>';
+        });
+        html += '</div></div>';
+        return html;
+    }
+
+    // ===== 审批类型管理（企业自定义类型 + 表单 schema 编辑器） =====
+    async openTypeManageModal() {
+        document.getElementById('approvalTypeManageModal').style.display = 'flex';
+        setTimeout(function () {
+            document.getElementById('approvalTypeManageModal').classList.add('show');
+        }, 10);
+        this._typeManageEditingType = null;
+        // 未选中类型时右侧不渲染内容，仅显示引导占位
+        this._renderTypeManageForm(null);
+        this._initSplitter('tmSplitter', 'tmManageLayout', 'tmSidebar');
+        await this._loadTypeManageList();
+    }
+
+    // 左右拖动分隔条（动态调整左右占比，桌面端；可复用于配置/类型管理模态框）
+    _initSplitter(splitterId, layoutId, sidebarId) {
+        if (!this._splittersInit) this._splittersInit = {};
+        if (this._splittersInit[splitterId]) return;
+        this._splittersInit[splitterId] = true;
+        const splitter = document.getElementById(splitterId);
+        const layout = document.getElementById(layoutId);
+        const sidebar = document.getElementById(sidebarId);
+        if (!splitter || !layout || !sidebar) return;
+        let dragging = false;
+        splitter.addEventListener('mousedown', function (e) {
+            e.preventDefault();
+            dragging = true;
+            splitter.classList.add('active');
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+        });
+        document.addEventListener('mousemove', function (e) {
+            if (!dragging) return;
+            const rect = layout.getBoundingClientRect();
+            if (!rect.width) return;
+            let pct = ((e.clientX - rect.left) / rect.width) * 100;
+            pct = Math.max(18, Math.min(pct, 62));
+            sidebar.style.flex = '0 0 ' + pct + '%';
+            sidebar.style.width = pct + '%';
+        });
+        document.addEventListener('mouseup', function () {
+            if (dragging) {
+                dragging = false;
+                splitter.classList.remove('active');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            }
+        });
+    }
+
+    async _loadTypeManageList() {
+        const list = document.getElementById('typeManageList');
+        if (!list) return;
+        try {
+            // scope=manage：包含未启用类型，保证未启用的自定义类型也能编辑/重新启用
+            const data = await this.apiGet(OA_API_URL + '/approval/types/?scope=manage');
+            this._manageTypes = Array.isArray(data) ? data : (data.results || []);
+            const types = this._manageTypes;
+            const cur = this._typeManageEditingType;
+            list.innerHTML = types.filter(function (t) {
+                return !t.is_builtin;
+            }).map(function (t) {
+                var active = (cur && cur.id === t.id) ? ' active' : '';
+                return '<div class="config-list-item' + active + '" data-id="' + t.id + '" onclick="approvalApp._editTypeManage(' + t.id + ')">'
+                    + '<i class="fas ' + (t.icon || 'fa-file-lines') + '" style="color:' + t.color + ';width:16px;text-align:center;"></i>'
+                    + '<span style="flex:1;">' + this._escape(t.name) + '</span>'
+                    + (t.enabled ? '<span class="tm-status on">启用</span>' : '<span class="tm-status">停用</span>')
+                    + '<span class="tm-fields">' + (t.form_schema || []).length + ' 字段</span>'
+                    + '</div>';
+            }, this).join('') || '<div style="padding:12px;color:#909399;font-size:13px;">暂无自定义类型，点击右上角「新建类型」</div>';
+        } catch (e) {
+            console.error('加载类型列表失败:', e);
+        }
+    }
+
+    _editTypeManage(id) {
+        // 用类型管理列表（含未启用）查找，保证未启用的自定义类型也可编辑/启用
+        const t = (this._manageTypes || []).find(function (x) {
+            return x.id === id;
+        });
+        if (t) this._renderTypeManageForm(t);
+        // 更新左侧列表选中高亮
+        document.querySelectorAll('#typeManageList .config-list-item').forEach(function (el) {
+            el.classList.toggle('active', parseInt(el.getAttribute('data-id')) === id);
+        });
+    }
+
+    _newType() {
+        this._renderTypeManageForm({
+            name: '',
+            code: '',
+            icon: 'fa-file-lines',
+            color: '#409EFF',
+            description: '',
+            enabled: true,
+            form_schema: [],
+            is_builtin: false,
+            id: null
+        });
+    }
+
+    _fieldTypeOptions(sel) {
+        const types = [
+            ['text', '单行文本'], ['textarea', '多行文本'], ['number', '数字'],
+            ['date', '日期'], ['datetime', '日期时间'], ['amount', '金额'],
+            ['select', '下拉选择'], ['radio', '单选'], ['checkbox', '多选'],
+            ['attachment', '附件'], ['department', '部门选择'], ['user', '成员选择']
+        ];
+        return types.map(function (t) {
+            return '<option value="' + t[0] + '"' + (sel === t[0] ? ' selected' : '') + '>' + t[1] + '</option>';
+        }).join('');
+    }
+
+    _renderTypeManageForm(type) {
+        const wrap = document.getElementById('typeManageFormWrap');
+        if (!wrap) return;
+        if (!type) {
+            wrap.innerHTML = '<div style="text-align:center;padding:60px 20px;color:var(--text-light,#909399);">'
+                + '<i class="fas fa-chevron-left" style="font-size:24px;display:block;margin-bottom:12px;"></i>'
+                + '<p>请从左侧选择类型编辑，或新建一个类型</p></div>';
+            return;
+        }
+        this._typeManageEditingType = type;
+        const schema = type.form_schema || [];
+        let fieldRows = schema.map(function (f, i) {
+            return '<div class="tm-field-row" style="border:1px solid #dcdfe6;border-radius:8px;padding:8px;margin-bottom:8px;background:#fafbfc;">'
+                + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
+                + '<input type="text" class="form-input" data-f="label" placeholder="字段名称" value="' + this._escape(f.label || '') + '" style="flex:1;min-width:70px;">'
+                + '<input type="text" class="form-input" data-f="key" placeholder="字段key" value="' + this._escape(f.key || '') + '" style="width:90px;">'
+                + '<select class="form-select" data-f="type" style="width:108px;" onchange="approvalApp._onSchemaFieldTypeChange(this)">' + this._fieldTypeOptions(f.type || 'text') + '</select>'
+                + '<label style="font-size:12px;"><input type="checkbox" data-f="required"' + (f.required ? ' checked' : '') + '> 必填</label>'
+                + '<button type="button" class="btn btn-sm btn-danger" onclick="approvalApp._removeSchemaField(this)"><i class="fas fa-times"></i></button>'
+                + '</div>'
+                + '<div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
+                + '<input type="text" class="form-input" data-f="placeholder" placeholder="占位提示" value="' + this._escape(f.placeholder || '') + '" style="flex:1;min-width:70px;">'
+                + '<input type="text" class="form-input" data-f="options" placeholder="选项（逗号分隔，下拉/单选/多选用）" value="' + this._escape(Array.isArray(f.options) ? f.options.map(function (o) {
+                    return typeof o === 'object' ? o.value : o;
+                }).join(',') : (f.options || '')) + '" style="flex:2;min-width:80px;">'
+                + '<select class="form-select" data-f="unit" style="width:110px;" title="金额/数字字段可设置单位">' + this._schemaUnitOptions(f.type || 'text', f.unit || (f.type === 'amount' ? 'cny' : '')) + '</select>'
+                + '</div></div>';
+        }, this).join('');
+        wrap.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">'
+            + '<div><label style="font-size:12px;">类型名称</label><input type="text" id="tmName" class="form-input" value="' + this._escape(type.name || '') + '"></div>'
+            + '<div><label style="font-size:12px;">类型编码（英文，唯一）</label><input type="text" id="tmCode" class="form-input" value="' + this._escape(type.code || '') + '"' + (type.is_builtin ? ' disabled' : '') + '></div>'
+            + '</div>'
+            + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;">'
+            + '<div><label style="font-size:12px;">图标</label>'
+            + '<div style="display:flex;gap:6px;align-items:center;">'
+            + '<span id="tmIconPreview" style="width:34px;height:34px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:#f0f2f5;border-radius:8px;color:#409EFF;font-size:15px;"><i class="fas ' + this._escape(type.icon || 'fa-file-lines') + '"></i></span>'
+            + '<input type="text" id="tmIcon" class="form-input" value="' + this._escape(type.icon || 'fa-file-lines') + '" style="flex:1;min-width:0;">'
+            + '<button type="button" class="btn btn-sm btn-secondary" onclick="approvalApp._openIconPicker()"><i class="fas fa-th-large"></i> 选择</button>'
+            + '</div></div>'
+            + '<div><label style="font-size:12px;">颜色</label><input type="color" id="tmColor" value="' + this._escape(type.color || '#409EFF') + '" style="height:34px;width:100%;border:none;"></div>'
+            + '<div style="display:flex;align-items:flex-end;padding-bottom:6px;"><label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="tmEnabled"' + (type.enabled !== false ? ' checked' : '') + '> 启用</label></div>'
+            + '</div>'
+            + '<div class="form-group" style="margin-bottom:10px;"><label style="font-size:12px;">说明</label><input type="text" id="tmDesc" class="form-input" value="' + this._escape(type.description || '') + '"></div>'
+            + '<div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0 6px;">'
+            + '<label style="font-size:13px;font-weight:600;"><i class="fas fa-clipboard-list"></i> 表单字段</label>'
+            + '<button type="button" class="btn btn-sm btn-secondary" onclick="approvalApp._addSchemaField()"><i class="fas fa-plus"></i> 添加字段</button></div>'
+            + '<div id="tmSchemaFields">' + fieldRows + '</div>'
+            + '<div style="display:flex;justify-content:space-between;margin-top:12px;">'
+            + (type.is_builtin ? '' : '<button type="button" class="btn btn-danger" onclick="approvalApp._deleteType()"><i class="fas fa-trash"></i> 删除类型</button>')
+            + '<div style="display:flex;gap:8px;' + (type.is_builtin ? 'margin-left:auto;' : '') + '">'
+            + '<button type="button" class="btn btn-secondary" onclick="approvalApp._renderTypeManageForm(null)">取消</button>'
+            + '<button type="button" class="btn btn-primary" onclick="approvalApp._saveType()"><i class="fas fa-save"></i> 保存类型</button>'
+            + '</div></div>';
+    }
+
+    _addSchemaField() {
+        const container = document.getElementById('tmSchemaFields');
+        if (!container) return;
+        const row = document.createElement('div');
+        row.className = 'tm-field-row';
+        row.style.cssText = 'border:1px solid #dcdfe6;border-radius:8px;padding:8px;margin-bottom:8px;background:#fafbfc;';
+        row.innerHTML = '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
+            + '<input type="text" class="form-input" data-f="label" placeholder="字段名称" style="flex:1;min-width:70px;">'
+            + '<input type="text" class="form-input" data-f="key" placeholder="字段key" style="width:90px;">'
+            + '<select class="form-select" data-f="type" style="width:108px;" onchange="approvalApp._onSchemaFieldTypeChange(this)">' + this._fieldTypeOptions('text') + '</select>'
+            + '<label style="font-size:12px;"><input type="checkbox" data-f="required"> 必填</label>'
+            + '<button type="button" class="btn btn-sm btn-danger" onclick="approvalApp._removeSchemaField(this)"><i class="fas fa-times"></i></button>'
+            + '</div>'
+            + '<div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
+            + '<input type="text" class="form-input" data-f="placeholder" placeholder="占位提示" style="flex:1;min-width:70px;">'
+            + '<input type="text" class="form-input" data-f="options" placeholder="选项（逗号分隔）" style="flex:2;min-width:80px;">'
+            + '<select class="form-select" data-f="unit" style="width:110px;" title="金额/数字字段可设置单位">' + this._schemaUnitOptions('text', '') + '</select>'
+            + '</div>';
+        container.appendChild(row);
+    }
+
+    _removeSchemaField(el) {
+        const row = el.closest ? el.closest('.tm-field-row') : null;
+        if (row) row.remove();
+    }
+
+    _collectTypeSchema() {
+        const rows = document.querySelectorAll('#tmSchemaFields .tm-field-row');
+        const schema = [];
+        rows.forEach(function (row, i) {
+            const label = row.querySelector('[data-f="label"]').value.trim();
+            const key = row.querySelector('[data-f="key"]').value.trim();
+            const type = row.querySelector('[data-f="type"]').value;
+            const required = row.querySelector('[data-f="required"]').checked;
+            const placeholder = row.querySelector('[data-f="placeholder"]').value.trim();
+            const optsRaw = row.querySelector('[data-f="options"]').value;
+            const unit = row.querySelector('[data-f="unit"]').value;
+            if (!label && !key) return;
+            const field = {label: label || key, key: key || ('field_' + (i + 1)), type: type, required: !!required};
+            if (placeholder) field.placeholder = placeholder;
+            if (unit && (type === 'amount' || type === 'number')) field.unit = unit;
+            else if (type === 'amount') field.unit = 'cny'; // 金额未选时默认人民币元
+            if (['select', 'radio', 'checkbox'].indexOf(type) !== -1 && optsRaw.trim()) {
+                field.options = optsRaw.split(/[,，]/).map(function (s) {
+                    return s.trim();
+                }).filter(Boolean);
+            }
+            schema.push(field);
+        });
+        return schema;
+    }
+
+    async _saveType() {
+        const t = this._typeManageEditingType;
+        if (!t) return;
+        const schema = this._collectTypeSchema();
+        // 校验字段 key 不重复（避免保存后提交/回显错乱）
+        const keyMap = {};
+        for (let i = 0; i < schema.length; i++) {
+            const k = schema[i].key;
+            if (keyMap[k]) {
+                this.showAlert('提示', '字段编码(key)「' + k + '」存在重复，请修改后再保存');
+                return;
+            }
+            keyMap[k] = true;
+        }
+        // 校验下拉/单选/多选必须配置选项（避免后端 400）
+        const typeNameMap = {select: '下拉', radio: '单选', checkbox: '多选'};
+        for (let i = 0; i < schema.length; i++) {
+            const f = schema[i];
+            if (typeNameMap[f.type] && (!f.options || !f.options.length)) {
+                this.showAlert('提示', '字段「' + f.label + '」为' + typeNameMap[f.type] + '类型，必须填写选项');
+                return;
+            }
+        }
+        const data = {
+            name: document.getElementById('tmName').value.trim(),
+            icon: document.getElementById('tmIcon').value.trim() || 'fa-file-lines',
+            color: document.getElementById('tmColor').value || '#409EFF',
+            description: document.getElementById('tmDesc').value.trim(),
+            enabled: document.getElementById('tmEnabled').checked,
+            form_schema: schema
+        };
+        if (!t.is_builtin) data.code = document.getElementById('tmCode').value.trim();
+        if (!data.name) {
+            this.showAlert('提示', '请输入类型名称');
+            return;
+        }
+        if (!t.is_builtin && !data.code) {
+            this.showAlert('提示', '请输入类型编码');
+            return;
+        }
+        try {
+            const url = t.id ? (OA_API_URL + '/approval/types/' + t.id + '/') : (OA_API_URL + '/approval/types/');
+            const method = t.id ? 'PUT' : 'POST';
+            const r = await fetch(url, {
+                method: method,
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify(data)
+            });
+            const rd = await r.json().catch(function () {
+                return {};
+            });
+            if (!r.ok) throw new Error(rd.error || '保存失败');
+            this.showToast('类型保存成功', false);
+            // this._typeManageEditingType = null;
+            await this._loadTypeManageList();
+            await this._loadApprovalTypes();
+        } catch (e) {
+            this.showAlert('保存失败', e.message || '请重试');
+        }
+    }
+
+    async _deleteType() {
+        const t = this._typeManageEditingType;
+        if (!t || !t.id || t.is_builtin) return;
+        if (!window.confirm('确定删除该审批类型？删除后历史数据仍保留，但不可再发起该类型审批')) return;
+        try {
+            const r = await fetch(OA_API_URL + '/approval/types/' + t.id + '/', {
+                method: 'DELETE',
+                headers: TokenManager.getHeaders()
+            });
+            if (!r.ok) {
+                const rd = await r.json().catch(function () {
+                    return {};
+                });
+                throw new Error(rd.error || '删除失败');
+            }
+            this.showToast('类型已删除', false);
+            this._typeManageEditingType = null;
+            await this._loadTypeManageList();
+            await this._loadApprovalTypes();
+        } catch (e) {
+            this.showAlert('删除失败', e.message);
+        }
+    }
+
+    // 全屏/退出全屏
+    _toggleMaximize(modalId) {
+        const modal = document.getElementById(modalId);
+        if (!modal) return;
+        const content = modal.querySelector('.modal-content');
+        if (content) {
+            const max = content.classList.toggle('maximized');
+            const icon = modal.querySelector('#tmMaximizeBtn i');
+            if (icon) icon.className = max ? 'fas fa-compress' : 'fas fa-expand';
+        }
+    }
+
+    // 图标选择弹窗
+    _openIconPicker() {
+        const grid = document.getElementById('tmIconGrid');
+        const modal = document.getElementById('tmIconPickerModal');
+        if (!grid || !modal) return;
+        const current = document.getElementById('tmIcon') ? document.getElementById('tmIcon').value : '';
+        const self = this;
+        grid.innerHTML = (this._ICON_LIST || []).map(function (c) {
+            const active = c === current ? ' background:#ecf5ff;border-color:#409eff;color:#409eff;' : '';
+            return '<div class="tm-icon-opt" data-icon="' + c + '" onclick="approvalApp._pickIcon(\'' + c + '\')" style="height:48px;display:flex;align-items:center;justify-content:center;background:#fff;border:1px solid #eee;border-radius:6px;cursor:pointer;font-size:18px;color:#409EFF;' + active + '" title="' + c + '"><i class="fas ' + c + '"></i></div>';
+        }).join('');
+        modal.style.display = 'flex';
+        setTimeout(function () {
+            modal.classList.add('show');
+        }, 10);
+    }
+
+    _closeIconPicker() {
+        const modal = document.getElementById('tmIconPickerModal');
+        if (!modal) return;
+        modal.classList.remove('show');
+        modal.style.display = 'none';
+    }
+
+    _pickIcon(cls) {
+        const input = document.getElementById('tmIcon');
+        const preview = document.getElementById('tmIconPreview');
+        if (input) input.value = cls;
+        if (preview) preview.innerHTML = '<i class="fas ' + cls + '"></i>';
+        this._closeIconPicker();
     }
 
     handleAuthError() {
@@ -75,7 +1052,8 @@ class ApprovalApp {
             }
             const err = await resp.json().catch(() => ({}));
             throw new Error(err.error || '请求失败');
-        };
+        }
+        ;
         const raw = await resp.json();
         return raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
     }
@@ -126,8 +1104,24 @@ class ApprovalApp {
             container.innerHTML = '<div class="empty-state"><i class="fas fa-inbox"></i><p>暂无审批记录</p></div>';
             return;
         }
-        const statusMap = {'draft': '草稿', 'pending': '待审批', 'approved': '已通过', 'rejected': '已驳回', 'deferred': '暂缓', 'processing': '办理中', 'cancelled': '已撤回'};
-        const scMap = {'draft': 'badge-default', 'pending': 'badge-info', 'approved': 'status-badge normal', 'rejected': 'status-badge late', 'deferred': 'status-badge deferred', 'processing': 'status-badge processing', 'cancelled': 'badge-default'};
+        const statusMap = {
+            'draft': '草稿',
+            'pending': '待审批',
+            'approved': '已通过',
+            'rejected': '已驳回',
+            'deferred': '暂缓',
+            'processing': '办理中',
+            'cancelled': '已撤回'
+        };
+        const scMap = {
+            'draft': 'badge-default',
+            'pending': 'badge-info',
+            'approved': 'status-badge normal',
+            'rejected': 'status-badge late',
+            'deferred': 'status-badge deferred',
+            'processing': 'status-badge processing',
+            'cancelled': 'badge-default'
+        };
         const tMap = {
             'leave': '请假',
             'overtime': '加班',
@@ -148,7 +1142,7 @@ class ApprovalApp {
                 + '<div><div class="approval-item-title">' + self._escape(r.title) + '</div>'
                 + '<div class="approval-item-meta">'
                 + '<span><i class="fas fa-user"></i> ' + self._escape(r.applicant_name || '') + '</span>'
-                + '<span><i class="fas fa-tag"></i> <span class="type-icon-badge type-' + r.approval_type + '"><i class="fas ' + self._typeIcon(r.approval_type) + '"></i> ' + (tMap[r.approval_type] || r.approval_type) + '</span></span>'
+                + '<span><i class="fas fa-tag"></i> <span class="type-icon-badge type-' + r.approval_type + '" style="color:' + (r.approval_type_color || self._getTypeColor(r.approval_type)) + ';"><i class="fas ' + (r.approval_type_icon || self._getTypeIcon(r.approval_type)) + '"></i> ' + self._escape(r.approval_type_display || r.approval_type) + '</span></span>'
                 + '<span title="更新时间"><i class="fas fa-clock"></i> ' + self._formatTime(r.updated_at) + '</span>'
                 + (r.department_name ? '<span><i class="fas fa-building"></i> ' + self._escape(r.department_name) + '</span>' : '')
                 + (amt || '') + '</div></div></div></div>'
@@ -221,7 +1215,7 @@ class ApprovalApp {
         // 更新隐藏字段
         document.getElementById('newApprovalType').value = type;
         // 更新选中状态
-        document.querySelectorAll('.type-card').forEach(function(c) {
+        document.querySelectorAll('.type-card').forEach(function (c) {
             c.classList.toggle('selected', c.dataset.type === type);
         });
         this.onTypeChange();
@@ -230,6 +1224,19 @@ class ApprovalApp {
 
     onTypeChange() {
         const type = document.getElementById('newApprovalType').value;
+        // 自定义类型：隐藏内置专属表单，按 schema 渲染动态表单
+        if (!this._isBuiltinType(type)) {
+            this._hideBuiltinFields();
+            const t = this._getType(type);
+            this._renderDynamicFields(t ? (t.form_schema || []) : [], this._editFormData || {});
+            return;
+        }
+        const dynC = document.getElementById('dynamicFormFields');
+        if (dynC) {
+            dynC.style.display = 'none';
+            dynC.innerHTML = '';
+        }
+        this._editFormData = {};
         const isExpense = type === 'expense';
         const isRecruit = type === 'recruit';
         const isOvertime = type === 'overtime';
@@ -249,22 +1256,54 @@ class ApprovalApp {
 
         if (isOvertime) {
             // 加班：日期时间 → 自动计算小时数
-            if (startInput) { startInput.type = 'datetime-local'; startInput.onchange = function() { approvalApp.calcDays(); }; startInput.oninput = function() { approvalApp.calcDays(); }; }
-            if (endInput) { endInput.type = 'datetime-local'; endInput.onchange = function() { approvalApp.calcDays(); }; endInput.oninput = function() { approvalApp.calcDays(); }; }
+            if (startInput) {
+                startInput.type = 'datetime-local';
+                startInput.onchange = function () {
+                    approvalApp.calcDays();
+                };
+                startInput.oninput = function () {
+                    approvalApp.calcDays();
+                };
+            }
+            if (endInput) {
+                endInput.type = 'datetime-local';
+                endInput.onchange = function () {
+                    approvalApp.calcDays();
+                };
+                endInput.oninput = function () {
+                    approvalApp.calcDays();
+                };
+            }
             if (startLabel) startLabel.innerHTML = '<i class="fas fa-play-circle" style="color:#e6a23c;margin-right:4px;"></i> 加班开始';
             if (endLabel) endLabel.innerHTML = '<i class="fas fa-stop-circle" style="color:#e6a23c;margin-right:4px;"></i> 加班结束';
             if (durLabel) durLabel.innerHTML = '<i class="fas fa-clock" style="color:#e6a23c;margin-right:4px;"></i> 时数';
             if (durUnit) durUnit.textContent = '小时';
-            if (durInput) { durInput.readOnly = true; durInput.placeholder = '0'; }
+            if (durInput) {
+                durInput.readOnly = true;
+                durInput.placeholder = '0';
+            }
         } else if (hasDateFields) {
             // 请假/出差：日期 → 自动计算天数
-            if (startInput) { startInput.type = 'date'; startInput.onchange = function() { approvalApp.calcDays(); }; }
-            if (endInput) { endInput.type = 'date'; endInput.onchange = function() { approvalApp.calcDays(); }; }
+            if (startInput) {
+                startInput.type = 'date';
+                startInput.onchange = function () {
+                    approvalApp.calcDays();
+                };
+            }
+            if (endInput) {
+                endInput.type = 'date';
+                endInput.onchange = function () {
+                    approvalApp.calcDays();
+                };
+            }
             if (startLabel) startLabel.innerHTML = '<i class="fas fa-calendar-alt" style="color:var(--primary-color,#409eff);margin-right:4px;"></i> 开始日期';
             if (endLabel) endLabel.innerHTML = '<i class="fas fa-calendar-check" style="color:#67c23a;margin-right:4px;"></i> 结束日期';
             if (durLabel) durLabel.innerHTML = '<i class="fas fa-clock" style="color:#e6a23c;margin-right:4px;"></i> 天数';
             if (durUnit) durUnit.textContent = '天';
-            if (durInput) { durInput.readOnly = true; durInput.placeholder = '0'; }
+            if (durInput) {
+                durInput.readOnly = true;
+                durInput.placeholder = '0';
+            }
         }
 
         // 金额单位
@@ -302,7 +1341,15 @@ class ApprovalApp {
     }
 
     _typeIcon(type) {
-        var m = {'leave':'fa-plane-departure','overtime':'fa-clock','expense':'fa-file-invoice-dollar','trip':'fa-suitcase-rolling','purchase':'fa-shopping-cart','recruit':'fa-user-plus','other':'fa-file'};
+        var m = {
+            'leave': 'fa-plane-departure',
+            'overtime': 'fa-clock',
+            'expense': 'fa-file-invoice-dollar',
+            'trip': 'fa-suitcase-rolling',
+            'purchase': 'fa-shopping-cart',
+            'recruit': 'fa-user-plus',
+            'other': 'fa-file'
+        };
         return m[type] || 'fa-file';
     }
 
@@ -316,17 +1363,20 @@ class ApprovalApp {
             var curYear = now.getFullYear();
             for (var y = curYear; y <= curYear + 1; y++) {
                 var opt = document.createElement('option');
-                opt.value = y; opt.textContent = y + '年';
+                opt.value = y;
+                opt.textContent = y + '年';
                 yearSel.appendChild(opt);
             }
             for (var m = 1; m <= 12; m++) {
                 var opt2 = document.createElement('option');
-                opt2.value = m; opt2.textContent = m + '月';
+                opt2.value = m;
+                opt2.textContent = m + '月';
                 monthSel.appendChild(opt2);
             }
             for (var d = 1; d <= 31; d++) {
                 var opt3 = document.createElement('option');
-                opt3.value = d; opt3.textContent = d + '日';
+                opt3.value = d;
+                opt3.textContent = d + '日';
                 daySel.appendChild(opt3);
             }
             yearSel.value = curYear;
@@ -358,13 +1408,24 @@ class ApprovalApp {
         };
         return rd;
     }
+
     _statusIcon(st) {
-        var m = {'draft':'fa-pen','pending':'fa-hourglass-half','approved':'fa-check-circle','rejected':'fa-times-circle','deferred':'fa-pause-circle','processing':'fa-spinner','cancelled':'fa-undo'};
+        var m = {
+            'draft': 'fa-pen',
+            'pending': 'fa-hourglass-half',
+            'approved': 'fa-check-circle',
+            'rejected': 'fa-times-circle',
+            'deferred': 'fa-pause-circle',
+            'processing': 'fa-spinner',
+            'cancelled': 'fa-undo'
+        };
         return m[st] || 'fa-circle';
     }
 
     filterByTypeBtn(el, type) {
-        document.querySelectorAll('.type-filter-card').forEach(function(b) { b.classList.remove('active'); });
+        document.querySelectorAll('.type-filter-card').forEach(function (b) {
+            b.classList.remove('active');
+        });
         el.classList.add('active');
         this.typeFilter = type;
         this.loadList(1);
@@ -398,7 +1459,9 @@ class ApprovalApp {
     async openCreateModal() {
         var self = this;
         document.getElementById('createApprovalForm').reset();
-        document.querySelectorAll('.type-card').forEach(function(c) { c.classList.remove('selected'); });
+        document.querySelectorAll('.type-card').forEach(function (c) {
+            c.classList.remove('selected');
+        });
         document.getElementById('expenseTypeGroup').style.display = 'none';
         document.getElementById('expenseDateGroup').style.display = 'none';
         document.getElementById('expenseRow').style.display = 'none';
@@ -409,7 +1472,7 @@ class ApprovalApp {
         // Reset recruit form
         document.getElementById('recruitForm').style.display = 'none';
         var recruitInputs = document.querySelectorAll('#recruitForm input, #recruitForm textarea, #recruitForm select');
-        recruitInputs.forEach(function(el) {
+        recruitInputs.forEach(function (el) {
             if (el.type === 'text' || el.tagName === 'TEXTAREA') el.value = '';
             else if (el.type === 'number') el.value = '';
             else if (el.tagName === 'SELECT') el.selectedIndex = 0;
@@ -421,6 +1484,13 @@ class ApprovalApp {
         this._approverNodes = [];
         this._isReEdit = false;
         this._reEditId = null;
+        this._editFormData = {};
+        // 自定义类型：重置动态表单为空白
+        var _curType = document.getElementById('newApprovalType') ? document.getElementById('newApprovalType').value : '';
+        if (_curType && !this._isBuiltinType(_curType)) {
+            var _t = this._getType(_curType);
+            this._renderDynamicFields(_t ? (_t.form_schema || []) : [], {});
+        }
         this._ccUsers = [];
         this._ccDepartments = [];
         this._ccTab = 'users';
@@ -449,7 +1519,9 @@ class ApprovalApp {
             document.getElementById('createApprovalModal').classList.add('show');
         }, 10);
         // Init CC search
-        setTimeout(function() { self._initCcSearch(); }, 100);
+        setTimeout(function () {
+            self._initCcSearch();
+        }, 100);
     }
 
     async _loadApprovalChainPreview() {
@@ -471,6 +1543,20 @@ class ApprovalApp {
         if (amt) params.push('amount=' + amt);
         var hc = document.getElementById('recruitHeadcount') ? document.getElementById('recruitHeadcount').value : '';
         if (hc) params.push('headcount=' + hc);
+        // 自定义类型：传递动态表单数字字段值用于阈值预览
+        if (!this._isBuiltinType(apprType)) {
+            var fd = this._collectDynamicFormData();
+            var numeric = {};
+            Object.keys(fd).forEach(function (k) {
+                var v = fd[k];
+                if (typeof v === 'number' || (typeof v === 'string' && v !== '' && !isNaN(v))) {
+                    numeric[k] = Number(v);
+                }
+            });
+            if (Object.keys(numeric).length) {
+                params.push('form_data=' + encodeURIComponent(JSON.stringify(numeric)));
+            }
+        }
         if (params.length) url += '?' + params.join('&');
         try {
             var data = await this.apiGet(url);
@@ -479,8 +1565,14 @@ class ApprovalApp {
             var chain = data.results || [];
             var departments = data.departments || {};
             // Store approver nodes from chain preview (converts API format to backend format)
-            this._approverNodes = chain.map(function(a) {
-                return {type: a.type || 'user', id: a.id, label: a.label, user_position: a.user_position || ''};
+            this._approverNodes = chain.map(function (a) {
+                return {
+                    type: a.type || 'user',
+                    id: a.id,
+                    label: a.label,
+                    user_position: a.user_position || '',
+                    is_final_approver: !!a.is_final_approver
+                };
             });
             this._approverNodesReady = true;
             var self = this;
@@ -491,13 +1583,20 @@ class ApprovalApp {
                     + (departments.final ? ' → ' + self._escape(departments.final) : '')
                     + '</div>';
                 var currentLevel = 0;
-                chain.forEach(function(a, i) {
+                chain.forEach(function (a, i) {
                     var arrow = i < chain.length - 1 ? ' <span style="color:var(--text-light,#c0c4cc);font-size:11px;"><i class="fas fa-arrow-down"></i></span>' : '';
                     var levelLabel = a.level_label || ('第' + (a.level || (i + 1)) + '级');
-                    html += '<div class="approver-node-item" style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#f0f9eb;border-radius:6px;margin-bottom:4px;border-left:3px solid #67c23a;">'
-                        + '<i class="fas fa-user-check" style="color:#67c23a;font-size:13px;"></i>'
+                    var isFinal = !!a.is_final_approver;
+                    var nodeBg = isFinal ? '#f3e8ff' : '#f0f9eb';
+                    var nodeBorder = isFinal ? '#9b59b6' : '#67c23a';
+                    var nodeIcon = isFinal ? 'fa-user-shield' : 'fa-user-check';
+                    var nodeColor = isFinal ? '#9b59b6' : '#67c23a';
+                    var srcLabel = isFinal ? (a.final_approver_source_label || '') : '';
+                    html += '<div class="approver-node-item" style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:' + nodeBg + ';border-radius:6px;margin-bottom:4px;border-left:3px solid ' + nodeBorder + ';">'
+                        + '<i class="fas ' + nodeIcon + '" style="color:' + nodeColor + ';font-size:13px;"></i>'
                         + '<span style="flex:1;font-size:13px;">' + self._escape(a.label) + (a.user_position ? ' <span style="font-size:11px;color:#909399;">(' + self._escape(a.user_position) + ')</span>' : '') + '</span>'
-                        + '<span style="font-size:11px;color:#67c23a;background:#fff;padding:2px 8px;border-radius:4px;">' + levelLabel + '</span>'
+                        + (srcLabel ? '<span style="font-size:10px;color:#9b59b6;background:#fff;border:1px solid #e8d5f5;padding:2px 8px;border-radius:4px;margin-right:4px;" title="最终审批人配置来源">' + self._escape(srcLabel) + '</span>' : '')
+                        + '<span style="font-size:11px;color:' + nodeColor + ';background:#fff;padding:2px 8px;border-radius:4px;">' + levelLabel + '</span>'
                         + arrow + '</div>';
                 });
                 container.innerHTML = html;
@@ -532,21 +1631,27 @@ class ApprovalApp {
         sel.innerHTML = '<option value="">加载中...</option>';
         try {
             var data = await this.apiGet(OA_API_URL + '/approval/org_departments/');
-            if (!data || !data.results) { sel.innerHTML = '<option value="">请选择部门</option>'; return; }
+            if (!data || !data.results) {
+                sel.innerHTML = '<option value="">请选择部门</option>';
+                return;
+            }
             var depts = data.results;
 
-            if (!depts.length) { sel.innerHTML = '<option value="">请选择部门</option>'; return; }
+            if (!depts.length) {
+                sel.innerHTML = '<option value="">请选择部门</option>';
+                return;
+            }
             var tree = {};
-            depts.forEach(function(d) {
+            depts.forEach(function (d) {
                 var pid = d.parent_id != null ? d.parent_id : 0;
                 if (!tree[pid]) tree[pid] = [];
                 tree[pid].push(d);
             });
 
             var html = '<option value="">请选择部门</option>';
-            var walk = function(pid, depth) {
+            var walk = function (pid, depth) {
                 var children = tree[pid] || [];
-                children.forEach(function(d) {
+                children.forEach(function (d) {
                     var prefix = '';
                     for (var i = 0; i < depth; i++) prefix += '—— ';
                     html += '<option value="' + d.id + '">' + prefix + d.name + '</option>';
@@ -557,17 +1662,19 @@ class ApprovalApp {
             // Fallback: if no roots at 0, find actual roots (parent_id not matching any id)
             if (!tree[0] || !tree[0].length) {
                 var allIds = {};
-                depts.forEach(function(d) { allIds[d.id] = true; });
+                depts.forEach(function (d) {
+                    allIds[d.id] = true;
+                });
                 var actualRoots = [];
-                depts.forEach(function(d) {
+                depts.forEach(function (d) {
                     if (!allIds[d.parent_id]) actualRoots.push(d);
                 });
                 if (actualRoots.length) {
                     html = '<option value="">请选择部门</option>';
-                    var renderFlat = function(items, depth) {
+                    var renderFlat = function (items, depth) {
                         var prefix = '';
                         for (var i = 0; i < depth; i++) prefix += '—— ';
-                        items.forEach(function(d) {
+                        items.forEach(function (d) {
                             html += '<option value="' + d.id + '">' + prefix + d.name + '</option>';
                             var kids = tree[d.id] || [];
                             renderFlat(kids, depth + 1);
@@ -578,17 +1685,24 @@ class ApprovalApp {
             }
 
             sel.innerHTML = html;
-            if (selectedId) { sel.value = selectedId; return; }
+            if (selectedId) {
+                sel.value = selectedId;
+                return;
+            }
             try {
                 var meRaw = await this.apiGet('/api/auth/me/');
                 if (meRaw && meRaw.org_departments && meRaw.org_departments.length) {
                     var pdid = meRaw.org_departments[0].id;
                     for (var i = 0; i < sel.options.length; i++) {
-                        if (parseInt(sel.options[i].value) === pdid) { sel.value = pdid; break; }
+                        if (parseInt(sel.options[i].value) === pdid) {
+                            sel.value = pdid;
+                            break;
+                        }
                     }
                 }
-            } catch(e) {}
-        } catch(e) {
+            } catch (e) {
+            }
+        } catch (e) {
             console.error('Load dept tree failed:', e);
             sel.innerHTML = '<option value="">请选择部门</option>';
         }
@@ -609,17 +1723,23 @@ class ApprovalApp {
         var type = this._currentCcType;
         this._ccUsers = [];
         this._ccDepartments = [];
-        if (!type) { this._renderCcTags(); return; }
+        if (!type) {
+            this._renderCcTags();
+            return;
+        }
         try {
             var data = await this.apiGet(OA_API_URL + '/approval/dept-configs/');
             var configs = data.results || [];
             // 根据当前用户企业匹配配置：优先子企业专属配置，再找集团默认配置
             var activeTenant = null;
-            try { activeTenant = JSON.parse(localStorage.getItem('active_tenant')); } catch(e) {}
+            try {
+                activeTenant = JSON.parse(localStorage.getItem('active_tenant'));
+            } catch (e) {
+            }
             var userTenantId = activeTenant ? activeTenant.id : null;
             var cfg = null;
             var defaultCfg = null;
-            configs.forEach(function(c) {
+            configs.forEach(function (c) {
                 if (c.approval_type !== type) return;
                 if (c.sub_tenant && userTenantId && parseInt(c.sub_tenant) === parseInt(userTenantId)) {
                     cfg = c;
@@ -628,24 +1748,37 @@ class ApprovalApp {
                 }
             });
             if (!cfg) cfg = defaultCfg;
-            if (!cfg) { this._renderCcTags(); return; }
+            if (!cfg) {
+                this._renderCcTags();
+                return;
+            }
             // Apply sign_type and approval_mode defaults from config
             var signTypeSel = document.getElementById('newSignType');
             if (signTypeSel && cfg.default_sign_type) signTypeSel.value = cfg.default_sign_type;
             var apprModeSel = document.getElementById('newApprovalMode');
             if (apprModeSel && cfg.default_approval_mode) apprModeSel.value = cfg.default_approval_mode;
             if (cfg.cc_user_details && cfg.cc_user_details.length) {
-                cfg.cc_user_details.forEach(function(u) {
-                    this._ccUsers.push({id: u.id, name: u.name, avatar: u.avatar || ''});
+                cfg.cc_user_details.forEach(function (u) {
+                    if (!this._ccUsers) this._ccUsers = [];
+                    if (!this._ccUsers.some(function (x) {
+                        return x.id === u.id;
+                    })) {
+                        this._ccUsers.push({id: u.id, name: u.name, avatar: u.avatar || ''});
+                    }
                 }, this);
             }
             if (cfg.cc_department_details && cfg.cc_department_details.length) {
-                cfg.cc_department_details.forEach(function(d) {
-                    this._ccDepartments.push({id: d.id, name: d.name});
+                cfg.cc_department_details.forEach(function (d) {
+                    if (!this._ccDepartments) this._ccDepartments = [];
+                    if (!this._ccDepartments.some(function (x) {
+                        return x.id === d.id;
+                    })) {
+                        this._ccDepartments.push({id: d.id, name: d.name});
+                    }
                 }, this);
             }
             this._renderCcTags();
-        } catch(e) {
+        } catch (e) {
             console.error('加载审批配置默认值失败:', e);
         }
     }
@@ -671,7 +1804,10 @@ class ApprovalApp {
                 + 'color:' + (tab === 'departments' ? '#fff' : 'var(--text-secondary)');
         }
         var input = document.getElementById('ccUserSearch');
-        if (input) { input.value = ''; input.placeholder = tab === 'users' ? '搜索企业成员...' : '搜索部门...'; }
+        if (input) {
+            input.value = '';
+            input.placeholder = tab === 'users' ? '搜索企业成员...' : '搜索部门...';
+        }
         document.getElementById('ccUserDropdown').style.display = 'none';
     }
 
@@ -679,14 +1815,14 @@ class ApprovalApp {
         var self = this;
         var input = document.getElementById('ccUserSearch');
         if (!input) return;
-        input.oninput = function() {
+        input.oninput = function () {
             clearTimeout(self._ccSearchTimer);
             var val = input.value.trim();
             if (!val) {
                 document.getElementById('ccUserDropdown').style.display = 'none';
                 return;
             }
-            self._ccSearchTimer = setTimeout(function() {
+            self._ccSearchTimer = setTimeout(function () {
                 if (self._ccTab === 'departments') {
                     self._searchCcDepartments(val);
                 } else {
@@ -694,7 +1830,7 @@ class ApprovalApp {
                 }
             }, 300);
         };
-        input.onfocus = function() {
+        input.onfocus = function () {
             if (input.value.trim()) {
                 if (self._ccTab === 'departments') {
                     self._searchCcDepartments(input.value.trim());
@@ -703,7 +1839,7 @@ class ApprovalApp {
                 }
             }
         };
-        document.addEventListener('click', function(e) {
+        document.addEventListener('click', function (e) {
             var dd = document.getElementById('ccUserDropdown');
             if (dd && !e.target.closest('#ccUserSearch') && !e.target.closest('#ccUserDropdown') && !e.target.closest('.cc-tab')) {
                 dd.style.display = 'none';
@@ -722,8 +1858,10 @@ class ApprovalApp {
             } else {
                 var self = this;
                 var selectedIds = {};
-                (this._ccUsers || []).forEach(function(u) { selectedIds[u.id] = true; });
-                dd.innerHTML = users.map(function(u) {
+                (this._ccUsers || []).forEach(function (u) {
+                    selectedIds[u.id] = true;
+                });
+                dd.innerHTML = users.map(function (u) {
                     var cls = selectedIds[u.id] ? 'opacity:0.5;cursor:not-allowed;' : 'cursor:pointer;';
                     return '<div class="cc-user-item" data-id="' + u.id + '" data-name="' + self._escape(u.name) + '" data-avatar="' + (u.avatar || '') + '" style="display:flex;align-items:center;gap:8px;padding:8px 12px;' + cls + '" onclick="approvalApp._addCcUser(' + u.id + ',\'' + self._escape(u.name) + '\',\'' + (u.avatar || '') + '\')">'
                         + '<img src="' + (u.avatar || '/static/images/default-avatar.png') + '" style="width:28px;height:28px;border-radius:50%;object-fit:cover;">'
@@ -733,7 +1871,7 @@ class ApprovalApp {
                 }).join('');
             }
             dd.style.display = 'block';
-        } catch(e) {
+        } catch (e) {
             console.error('Search CC users failed:', e);
         }
     }
@@ -749,8 +1887,10 @@ class ApprovalApp {
             } else {
                 var self = this;
                 var selectedIds = {};
-                (this._ccDepartments || []).forEach(function(d) { selectedIds[d.id] = true; });
-                dd.innerHTML = depts.map(function(d) {
+                (this._ccDepartments || []).forEach(function (d) {
+                    selectedIds[d.id] = true;
+                });
+                dd.innerHTML = depts.map(function (d) {
                     var cls = selectedIds[d.id] ? 'opacity:0.5;cursor:not-allowed;' : 'cursor:pointer;';
                     return '<div class="cc-user-item" data-id="' + d.id + '" data-name="' + self._escape(d.name) + '" style="display:flex;align-items:center;gap:8px;padding:8px 12px;' + cls + '" onclick="approvalApp._addCcDept(' + d.id + ',\'' + self._escape(d.name) + '\')">'
                         + '<i class="fas fa-building" style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;color:#409eff;font-size:16px;"></i>'
@@ -760,14 +1900,16 @@ class ApprovalApp {
                 }).join('');
             }
             dd.style.display = 'block';
-        } catch(e) {
+        } catch (e) {
             console.error('Search CC departments failed:', e);
         }
     }
 
     _addCcUser(id, name, avatar) {
         if (!this._ccUsers) this._ccUsers = [];
-        if (this._ccUsers.some(function(u) { return u.id === id; })) return;
+        if (this._ccUsers.some(function (u) {
+            return u.id === id;
+        })) return;
         this._ccUsers.push({id: id, name: name, avatar: avatar});
         this._renderCcTags();
         document.getElementById('ccUserDropdown').style.display = 'none';
@@ -776,7 +1918,9 @@ class ApprovalApp {
 
     _addCcDept(id, name) {
         if (!this._ccDepartments) this._ccDepartments = [];
-        if (this._ccDepartments.some(function(d) { return d.id === id; })) return;
+        if (this._ccDepartments.some(function (d) {
+            return d.id === id;
+        })) return;
         this._ccDepartments.push({id: id, name: name});
         this._renderCcTags();
         document.getElementById('ccUserDropdown').style.display = 'none';
@@ -785,13 +1929,17 @@ class ApprovalApp {
 
     _removeCcUser(id) {
         if (!this._ccUsers) return;
-        this._ccUsers = this._ccUsers.filter(function(u) { return u.id !== id; });
+        this._ccUsers = this._ccUsers.filter(function (u) {
+            return u.id !== id;
+        });
         this._renderCcTags();
     }
 
     _removeCcDept(id) {
         if (!this._ccDepartments) return;
-        this._ccDepartments = this._ccDepartments.filter(function(d) { return d.id !== id; });
+        this._ccDepartments = this._ccDepartments.filter(function (d) {
+            return d.id !== id;
+        });
         this._renderCcTags();
     }
 
@@ -802,7 +1950,7 @@ class ApprovalApp {
         var html = '';
         // Department tags
         if (this._ccDepartments && this._ccDepartments.length) {
-            html += this._ccDepartments.map(function(d) {
+            html += this._ccDepartments.map(function (d) {
                 return '<span class="cc-tag cc-tag-dept" style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#e8f4fd;border-radius:14px;font-size:12px;margin:2px;">'
                     + '<i class="fas fa-building" style="font-size:11px;color:#409eff;"></i>'
                     + '<span>' + self._escape(d.name) + '</span>'
@@ -812,7 +1960,7 @@ class ApprovalApp {
         }
         // User tags
         if (this._ccUsers && this._ccUsers.length) {
-            html += this._ccUsers.map(function(u) {
+            html += this._ccUsers.map(function (u) {
                 return '<span class="cc-tag" style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#f3e8ff;border-radius:14px;font-size:12px;margin:2px;">'
                     + '<img src="' + (u.avatar || '/static/images/default-avatar.png') + '" style="width:18px;height:18px;border-radius:50%;object-fit:cover;">'
                     + '<span>' + self._escape(u.name) + '</span>'
@@ -951,13 +2099,26 @@ class ApprovalApp {
         const signType = document.getElementById('newSignType').value;
         const approvalMode = document.getElementById('newApprovalMode').value;
 
-        if (!type) { this.showAlert('提示', '请选择审批类型'); return; }
-        if (!title) { this.showAlert('提示', '请输入审批标题'); return; }
-        if (!departmentId) { this.showAlert('提示', '请选择所属部门'); return; }
+        if (!type) {
+            this.showAlert('提示', '请选择审批类型');
+            return;
+        }
+        if (!title) {
+            this.showAlert('提示', '请输入审批标题');
+            return;
+        }
+        if (!departmentId) {
+            this.showAlert('提示', '请选择所属部门');
+            return;
+        }
         // 审批人可为空，后端会自动根据汇报关系确定审批人
 
-        var ccIds = (this._ccUsers || []).map(function(u) { return u.id; });
-        var ccDeptIds = (this._ccDepartments || []).map(function(d) { return d.id; });
+        var ccIds = (this._ccUsers || []).map(function (u) {
+            return u.id;
+        });
+        var ccDeptIds = (this._ccDepartments || []).map(function (d) {
+            return d.id;
+        });
         const data = {
             approval_type: type,
             title: title,
@@ -974,13 +2135,20 @@ class ApprovalApp {
             var rd = this._gatherRecruitData();
             if (rd) data.recruit_data = rd;
         }
+        // 自定义类型：收集动态表单数据
+        if (!this._isBuiltinType(type)) {
+            var fd = this._collectDynamicFormData();
+            data.form_data = fd;
+        }
         if (startDate) data.start_date = startDate.substring(0, 10);
         if (endDate) data.end_date = endDate.substring(0, 10);
         if (duration) data.duration = parseFloat(duration);
         if (amount) data.amount = parseFloat(amount);
         if (expenseType) data.expense_type = expenseType;
         if (expenseDate) data.expense_date = expenseDate;
-        if (this._attachmentFiles.length) data.attachments = this._attachmentFiles.map(function (f) { return {url: f.url, name: f.name}; });
+        if (this._attachmentFiles.length) data.attachments = this._attachmentFiles.map(function (f) {
+            return {url: f.url, name: f.name};
+        });
 
         try {
             if (this._isReEdit && this._reEditId) {
@@ -1029,12 +2197,20 @@ class ApprovalApp {
             sign_type: f.sign_type,
             approval_mode: f.approval_mode,
             approver_nodes: this._approverNodes,
-            cc_users: (this._ccUsers || []).map(function(u) { return u.id; }),
-            cc_departments: (this._ccDepartments || []).map(function(d) { return d.id; }),
+            cc_users: (this._ccUsers || []).map(function (u) {
+                return u.id;
+            }),
+            cc_departments: (this._ccDepartments || []).map(function (d) {
+                return d.id;
+            }),
         };
         if (f.approval_type === 'recruit') {
             var rd = this._gatherRecruitData();
             if (rd) data.recruit_data = rd;
+        }
+        // 自定义类型：收集动态表单数据
+        if (!this._isBuiltinType(f.approval_type)) {
+            data.form_data = this._collectDynamicFormData();
         }
         if (f.start_date) data.start_date = f.start_date.substring(0, 10);
         if (f.end_date) data.end_date = f.end_date.substring(0, 10);
@@ -1042,7 +2218,9 @@ class ApprovalApp {
         if (f.amount) data.amount = parseFloat(f.amount);
         if (f.expense_type) data.expense_type = f.expense_type;
         if (f.expense_date) data.expense_date = f.expense_date;
-        if (this._attachmentFiles.length) data.attachments = this._attachmentFiles.map(function (x) { return {url: x.url, name: x.name}; });
+        if (this._attachmentFiles.length) data.attachments = this._attachmentFiles.map(function (x) {
+            return {url: x.url, name: x.name};
+        });
         try {
             if (this._isReEdit && this._reEditId) {
                 await this.apiPost(OA_API_URL + '/approval/' + this._reEditId + '/update-draft/', data);
@@ -1052,7 +2230,9 @@ class ApprovalApp {
             this.closeModal('createApprovalModal');
             this.showToast('草稿已保存', false);
             this.statusFilter = 'draft';
-            document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.toggle('active', b.dataset.status === 'draft'); });
+            document.querySelectorAll('.filter-btn').forEach(function (b) {
+                b.classList.toggle('active', b.dataset.status === 'draft');
+            });
             this.loadList(1);
         } catch (e) {
             // this.showAlert('保存失败', e.message);
@@ -1106,7 +2286,7 @@ class ApprovalApp {
             document.getElementById('newSignType').value = d.sign_type || 'orsign';
             document.getElementById('newApprovalMode').value = d.approval_mode || 'parallel';
             if (d.attachments && d.attachments.length) {
-                this._attachmentFiles = d.attachments.map(function(u) {
+                this._attachmentFiles = d.attachments.map(function (u) {
                     if (typeof u === 'object' && u !== null) {
                         return {url: u.url || u, name: u.name || (u.url ? u.url.split('/').pop() : '附件')};
                     }
@@ -1118,7 +2298,7 @@ class ApprovalApp {
             this._ccUsers = [];
             this._ccDepartments = [];
             if (d.cc_users && d.cc_users.length) {
-                d.cc_users.forEach(function(u) {
+                d.cc_users.forEach(function (u) {
                     if (u.cc_type === 'department') {
                         this._ccDepartments.push({id: u.id, name: u.name});
                     } else {
@@ -1158,11 +2338,15 @@ class ApprovalApp {
             // 填充已选审批人节点
             this._approverNodes = [];
             if (d.approval_nodes) {
-                d.approval_nodes.forEach(function(n) {
+                d.approval_nodes.forEach(function (n) {
                     if (n.node_type === 'user' && n.user) {
                         this._approverNodes.push({type: 'user', id: n.user, label: n.user_name || '用户'});
                     } else if (n.node_type === 'department' && n.department) {
-                        this._approverNodes.push({type: 'department', id: n.department, label: n.department_name || '部门'});
+                        this._approverNodes.push({
+                            type: 'department',
+                            id: n.department,
+                            label: n.department_name || '部门'
+                        });
                     }
                 }, this);
             }
@@ -1171,6 +2355,8 @@ class ApprovalApp {
             this._reEditId = id;
             // Set current CC type to prevent config defaults from overwriting restored CC
             this._currentCcType = d.approval_type || '';
+            // 自定义类型：保存 form_data 供动态表单回填
+            this._editFormData = d.form_data || {};
             // 选中审批类型卡片
             if (d.approval_type) this.selectType(d.approval_type);
             // 显示费用行
@@ -1182,7 +2368,9 @@ class ApprovalApp {
             document.getElementById('saveDraftBtn').textContent = '重新保存';
             document.getElementById('submitApprovalBtn').innerHTML = '<i class="fas fa-paper-plane"></i> 重新提交';
             document.getElementById('createApprovalModal').style.display = 'flex';
-            setTimeout(function() { document.getElementById('createApprovalModal').classList.add('show'); }, 10);
+            setTimeout(function () {
+                document.getElementById('createApprovalModal').classList.add('show');
+            }, 10);
         } catch (e) {
             this.showAlert('加载失败', e.message);
         }
@@ -1194,26 +2382,32 @@ class ApprovalApp {
         this._configEditType = null;
         this._configEditSubTenant = '';
         this._configApprovers = [];
+        this._configFinalApprover = null;
         this._configCcDepts = [];
         this._configCcUsers = [];
         this._configDeleteId = null;
         document.getElementById('configApprovalType').value = '';
-        document.querySelectorAll('.config-type-card').forEach(function(c) { c.classList.remove('active'); });
+        document.querySelectorAll('.config-type-card').forEach(function (c) {
+            c.classList.remove('active');
+        });
         document.getElementById('configForm').style.display = 'none';
         document.getElementById('configDeleteBtn').style.display = 'none';
+        // 配置模态框左右拖动分隔条
+        this._initSplitter('configSplitter', 'configManageLayout', 'configSidebar');
         // Load sub-tenant selector for group enterprises
         await this._loadSubTenants();
         // Load config list
         await this._renderConfigList();
         // Init search fields
         var self = this;
-        setTimeout(function() {
+        setTimeout(function () {
             self._initConfigSearch('configApproverSearch', 'configApproverDropdown', self._searchConfigApprovers, self._addConfigApprover);
+            self._initConfigSearch('configFinalApproverSearch', 'configFinalApproverDropdown', self._searchConfigFinalApprover, self._selectConfigFinalApprover);
             self._initConfigSearch('configCcDeptSearch', 'configCcDeptDropdown', self._searchConfigCcDepts, self._addConfigCcDept);
             self._initConfigSearch('configCcUserSearch', 'configCcUserDropdown', self._searchConfigCcUsers, self._addConfigCcUser);
         }, 100);
         document.getElementById('approvalConfigModal').style.display = 'flex';
-        setTimeout(function() {
+        setTimeout(function () {
             document.getElementById('approvalConfigModal').classList.add('show');
         }, 10);
     }
@@ -1231,14 +2425,14 @@ class ApprovalApp {
             if (resp.ok) {
                 var json = await resp.json();
                 var subTenants = json.sub_tenants || [];
-                subTenants.forEach(function(st) {
+                subTenants.forEach(function (st) {
                     var opt = document.createElement('option');
                     opt.value = st.id;
                     opt.textContent = (st.short_name || st.name) + '（' + (st.tenant_type || '公司') + '）';
                     sel.appendChild(opt);
                 });
             }
-        } catch(e) {
+        } catch (e) {
             console.warn('加载子公司列表失败', e);
         }
     }
@@ -1251,13 +2445,12 @@ class ApprovalApp {
             var data = await this.apiGet(OA_API_URL + '/approval/dept-configs/');
             var configs = data.results || [];
             var self = this;
-            var typeNames = {'leave':'请假','overtime':'加班','expense':'报销','trip':'出差','purchase':'采购','recruit':'招聘需求','other':'其他'};
             if (!configs.length) {
                 container.innerHTML = '<div style="color:#909399;font-size:13px;padding:8px 0;">暂无配置</div>';
                 return;
             }
             var currentSt = document.getElementById('configSubTenant') ? document.getElementById('configSubTenant').value : '';
-            container.innerHTML = configs.map(function(c) {
+            container.innerHTML = configs.map(function (c) {
                 // Only show configs for the selected sub-tenant (or global when none selected)
                 var cSt = c.sub_tenant ? String(c.sub_tenant) : '';
                 if (currentSt && cSt !== currentSt) return '';
@@ -1265,11 +2458,11 @@ class ApprovalApp {
                 var sel = self._configEditType === c.approval_type ? ' style="background:#e8f4fd;font-weight:600;display:flex;align-items:center;justify-content:space-between;"' : '';
                 var subTag = c.sub_tenant_name ? ' <span style="font-size:10px;color:#e67e22;">[' + self._escape(c.sub_tenant_name) + ']</span>' : '';
                 return '<div class="config-list-item"' + sel + ' data-type="' + c.approval_type + '" onclick="approvalApp._editConfig(\'' + c.approval_type + '\')" style="padding:8px 10px;border-radius:6px;cursor:pointer;margin-bottom:4px;font-size:13px;display:flex;align-items:center;justify-content:space-between;">'
-                    + '<span><i class="fas fa-tag" style="color:var(--primary-color,#409eff);margin-right:4px;font-size:11px;"></i>' + self._escape(typeNames[c.approval_type] || c.approval_type) + subTag + '</span>'
+                    + '<span><i class="fas fa-tag" style="color:var(--primary-color,#409eff);margin-right:4px;font-size:11px;"></i>' + self._escape(self._getTypeName(c.approval_type)) + subTag + '</span>'
                     + '<span style="font-size:11px;color:#909399;">' + (c.department_name || '未设置') + '</span>'
                     + '</div>';
             }).join('');
-        } catch(e) {
+        } catch (e) {
             console.error('Load config list failed:', e);
             container.innerHTML = '<div style="color:#f56c6c;font-size:13px;">加载失败</div>';
         }
@@ -1278,7 +2471,9 @@ class ApprovalApp {
     _selectConfigType(type) {
         this._configEditType = type;
         document.getElementById('configApprovalType').value = type;
-        document.querySelectorAll('.config-type-card').forEach(function(c) { c.classList.remove('active'); });
+        document.querySelectorAll('.config-type-card').forEach(function (c) {
+            c.classList.remove('active');
+        });
         document.querySelector('.config-type-card[data-type="' + type + '"]').classList.add('active');
         this._updateThresholdFieldOptions();
         this._loadConfig();
@@ -1300,7 +2495,11 @@ class ApprovalApp {
         var type = document.getElementById('configApprovalType').value;
         var form = document.getElementById('configForm');
         var delBtn = document.getElementById('configDeleteBtn');
-        if (!type) { form.style.display = 'none'; if (delBtn) delBtn.style.display = 'none'; return; }
+        if (!type) {
+            form.style.display = 'none';
+            if (delBtn) delBtn.style.display = 'none';
+            return;
+        }
         form.style.display = 'block';
         await this._loadConfigDepts();
         // 获取当前选中的子公司
@@ -1309,7 +2508,7 @@ class ApprovalApp {
             var data = await this.apiGet(OA_API_URL + '/approval/dept-configs/');
             var configs = data.results || [];
             var cfg = null;
-            configs.forEach(function(c) {
+            configs.forEach(function (c) {
                 var cSt = c.sub_tenant ? String(c.sub_tenant) : '';
                 if (c.approval_type === type && cSt === subTenantId) cfg = c;
             });
@@ -1320,21 +2519,30 @@ class ApprovalApp {
             else if (deptSel) deptSel.value = '';
             this._configApprovers = [];
             if (cfg && cfg.approver_user_details) {
-                this._configApprovers = cfg.approver_user_details.map(function(u) {
+                this._configApprovers = cfg.approver_user_details.map(function (u) {
                     return {id: u.id, name: u.name, position: u.position || ''};
                 });
             }
             this._renderConfigApproverTags();
+            this._configFinalApprover = null;
+            if (cfg && cfg.final_approver_details) {
+                this._configFinalApprover = {
+                    id: cfg.final_approver_details.id,
+                    name: cfg.final_approver_details.name,
+                    position: cfg.final_approver_details.position || ''
+                };
+            }
+            this._renderConfigFinalApproverTag();
             this._configCcDepts = [];
             if (cfg && cfg.cc_department_details) {
-                this._configCcDepts = cfg.cc_department_details.map(function(d) {
+                this._configCcDepts = cfg.cc_department_details.map(function (d) {
                     return {id: d.id, name: d.name};
                 });
             }
             this._renderConfigCcDeptTags();
             this._configCcUsers = [];
             if (cfg && cfg.cc_user_details) {
-                this._configCcUsers = cfg.cc_user_details.map(function(u) {
+                this._configCcUsers = cfg.cc_user_details.map(function (u) {
                     return {id: u.id, name: u.name, avatar: u.avatar || ''};
                 });
             }
@@ -1363,22 +2571,22 @@ class ApprovalApp {
             else if (thDept) thDept.value = '';
             var sigEl = document.getElementById('configRequireSignature');
             if (sigEl) sigEl.checked = cfg && cfg.require_signature ? true : false;
-        } catch(e) {
+        } catch (e) {
             console.error('Load config failed:', e);
         }
     }
 
     _buildDepartmentTreeHtml(depts, selectedId) {
         var tree = {};
-        depts.forEach(function(d) {
+        depts.forEach(function (d) {
             var pid = d.parent_id != null ? d.parent_id : 0;
             if (!tree[pid]) tree[pid] = [];
             tree[pid].push(d);
         });
         var html = '<option value="">请选择</option>';
-        var walk = function(pid, depth) {
+        var walk = function (pid, depth) {
             var children = tree[pid] || [];
-            children.forEach(function(d) {
+            children.forEach(function (d) {
                 var prefix = '';
                 for (var i = 0; i < depth; i++) prefix += '—— ';
                 var sel = selectedId && parseInt(d.id) === parseInt(selectedId) ? ' selected' : '';
@@ -1390,15 +2598,17 @@ class ApprovalApp {
         // Fallback for non-zero root parent_ids
         if (!tree[0] || !tree[0].length) {
             var allIds = {};
-            depts.forEach(function(d) { allIds[d.id] = true; });
+            depts.forEach(function (d) {
+                allIds[d.id] = true;
+            });
             var actualRoots = [];
-            depts.forEach(function(d) {
+            depts.forEach(function (d) {
                 if (!allIds[d.parent_id]) actualRoots.push(d);
             });
             if (actualRoots.length) {
                 html = '<option value="">请选择</option>';
-                var renderFlat = function(items, depth) {
-                    items.forEach(function(d) {
+                var renderFlat = function (items, depth) {
+                    items.forEach(function (d) {
                         var prefix = '';
                         for (var i = 0; i < depth; i++) prefix += '—— ';
                         var sel = selectedId && parseInt(d.id) === parseInt(selectedId) ? ' selected' : '';
@@ -1423,7 +2633,7 @@ class ApprovalApp {
             var treeHtml = this._buildDepartmentTreeHtml(depts);
             sel.innerHTML = treeHtml;
             if (thSel) thSel.innerHTML = treeHtml;
-        } catch(e) {
+        } catch (e) {
             console.error('Load config depts failed:', e);
         }
     }
@@ -1434,13 +2644,18 @@ class ApprovalApp {
         var dd = document.getElementById(dropdownId);
         if (!input || !dd) return;
         var timer = null;
-        input.oninput = function() {
+        input.oninput = function () {
             clearTimeout(timer);
             var val = input.value.trim();
-            if (!val) { dd.style.display = 'none'; return; }
-            timer = setTimeout(function() { searchFn.call(self, val, dd); }, 300);
+            if (!val) {
+                dd.style.display = 'none';
+                return;
+            }
+            timer = setTimeout(function () {
+                searchFn.call(self, val, dd);
+            }, 300);
         };
-        input.onfocus = function() {
+        input.onfocus = function () {
             if (input.value.trim()) searchFn.call(self, input.value.trim(), dd);
         };
     }
@@ -1451,8 +2666,10 @@ class ApprovalApp {
             var data = await this.apiGet(OA_API_URL + '/approval/search-cc-users/?search=' + encodeURIComponent(keyword));
             var users = data.results || [];
             var selectedIds = {};
-            (this._configApprovers || []).forEach(function(u) { selectedIds[u.id] = true; });
-            dd.innerHTML = users.length ? users.map(function(u) {
+            (this._configApprovers || []).forEach(function (u) {
+                selectedIds[u.id] = true;
+            });
+            dd.innerHTML = users.length ? users.map(function (u) {
                 var cls = selectedIds[u.id] ? 'opacity:0.5;cursor:not-allowed;' : 'cursor:pointer;';
                 return '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;' + cls + '" onclick="if(!this.classList.contains(\'disabled\'))approvalApp._addConfigApprover(' + u.id + ',\'' + self._escape(u.name) + '\',\'' + self._escape(u.position || '') + '\')">'
                     + '<img src="' + (u.avatar || '/static/images/default-avatar.png') + '" style="width:28px;height:28px;border-radius:50%;object-fit:cover;">'
@@ -1461,11 +2678,15 @@ class ApprovalApp {
                     + '</div>';
             }) : '<div style="padding:8px 12px;color:#909399;font-size:13px;">未找到用户</div>';
             dd.style.display = 'block';
-        } catch(e) { console.error(e); }
+        } catch (e) {
+            console.error(e);
+        }
     }
 
     _addConfigApprover(id, name, position) {
-        if (this._configApprovers.some(function(u) { return u.id === id; })) return;
+        if (this._configApprovers.some(function (u) {
+            return u.id === id;
+        })) return;
         this._configApprovers.push({id: id, name: name, position: position});
         this._renderConfigApproverTags();
         document.getElementById('configApproverDropdown').style.display = 'none';
@@ -1473,7 +2694,9 @@ class ApprovalApp {
     }
 
     _removeConfigApprover(id) {
-        this._configApprovers = this._configApprovers.filter(function(u) { return u.id !== id; });
+        this._configApprovers = this._configApprovers.filter(function (u) {
+            return u.id !== id;
+        });
         this._renderConfigApproverTags();
     }
 
@@ -1481,7 +2704,7 @@ class ApprovalApp {
         var container = document.getElementById('configApproverTags');
         if (!container) return;
         var self = this;
-        container.innerHTML = (this._configApprovers || []).map(function(u) {
+        container.innerHTML = (this._configApprovers || []).map(function (u) {
             return '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#f0f9eb;border-radius:14px;font-size:12px;margin:2px;">'
                 + '<i class="fas fa-user-check" style="font-size:10px;color:#67c23a;"></i>'
                 + '<span>' + self._escape(u.name) + '</span>'
@@ -1491,14 +2714,62 @@ class ApprovalApp {
         }).join('') || '';
     }
 
+    // ===== 最终审批人（单个，可选） =====
+    async _searchConfigFinalApprover(keyword, dd) {
+        var self = this;
+        try {
+            var data = await this.apiGet(OA_API_URL + '/approval/search-cc-users/?search=' + encodeURIComponent(keyword));
+            var users = data.results || [];
+            var currentId = this._configFinalApprover ? this._configFinalApprover.id : null;
+            dd.innerHTML = users.length ? users.map(function (u) {
+                var cls = (currentId && u.id === currentId) ? 'opacity:0.5;cursor:not-allowed;' : 'cursor:pointer;';
+                return '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;' + cls + '" onclick="approvalApp._selectConfigFinalApprover(' + u.id + ',\'' + self._escape(u.name) + '\',\'' + self._escape(u.position || '') + '\')">'
+                    + '<img src="' + (u.avatar || '/static/images/default-avatar.png') + '" style="width:28px;height:28px;border-radius:50%;object-fit:cover;">'
+                    + '<span style="flex:1;font-size:13px;">' + self._escape(u.name) + '</span>'
+                    + (u.position ? '<span style="font-size:11px;color:#909399;">' + self._escape(u.position) + '</span>' : '')
+                    + '</div>';
+            }) : '<div style="padding:8px 12px;color:#909399;font-size:13px;">未找到用户</div>';
+            dd.style.display = 'block';
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    _selectConfigFinalApprover(id, name, position) {
+        this._configFinalApprover = {id: id, name: name, position: position || ''};
+        this._renderConfigFinalApproverTag();
+        document.getElementById('configFinalApproverDropdown').style.display = 'none';
+        document.getElementById('configFinalApproverSearch').value = '';
+    }
+
+    _removeConfigFinalApprover() {
+        this._configFinalApprover = null;
+        this._renderConfigFinalApproverTag();
+    }
+
+    _renderConfigFinalApproverTag() {
+        var container = document.getElementById('configFinalApproverTags');
+        if (!container) return;
+        var self = this;
+        var fa = this._configFinalApprover;
+        container.innerHTML = fa ? '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#ecf5ff;border-radius:14px;font-size:12px;margin:2px;">'
+            + '<i class="fas fa-user-shield" style="font-size:10px;color:#409eff;"></i>'
+            + '<span>' + self._escape(fa.name) + '</span>'
+            + (fa.position ? '<span style="font-size:10px;color:#909399;">(' + self._escape(fa.position) + ')</span>' : '')
+            + '<i class="fas fa-times" style="cursor:pointer;font-size:11px;color:#909399;" onclick="approvalApp._removeConfigFinalApprover()"></i>'
+            + '</span>' : '';
+    }
+
     async _searchConfigCcDepts(keyword, dd) {
         var self = this;
         try {
             var data = await this.apiGet(OA_API_URL + '/approval/search-cc-departments/?search=' + encodeURIComponent(keyword));
             var depts = data.results || [];
             var selectedIds = {};
-            (this._configCcDepts || []).forEach(function(d) { selectedIds[d.id] = true; });
-            dd.innerHTML = depts.length ? depts.map(function(d) {
+            (this._configCcDepts || []).forEach(function (d) {
+                selectedIds[d.id] = true;
+            });
+            dd.innerHTML = depts.length ? depts.map(function (d) {
                 var cls = selectedIds[d.id] ? 'opacity:0.5;cursor:not-allowed;' : 'cursor:pointer;';
                 return '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;' + cls + '" onclick="approvalApp._addConfigCcDept(' + d.id + ',\'' + self._escape(d.name) + '\')">'
                     + '<i class="fas fa-building" style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;color:#409eff;"></i>'
@@ -1506,11 +2777,15 @@ class ApprovalApp {
                     + '</div>';
             }) : '<div style="padding:8px 12px;color:#909399;font-size:13px;">未找到部门</div>';
             dd.style.display = 'block';
-        } catch(e) { console.error(e); }
+        } catch (e) {
+            console.error(e);
+        }
     }
 
     _addConfigCcDept(id, name) {
-        if (this._configCcDepts.some(function(d) { return d.id === id; })) return;
+        if (this._configCcDepts.some(function (d) {
+            return d.id === id;
+        })) return;
         this._configCcDepts.push({id: id, name: name});
         this._renderConfigCcDeptTags();
         document.getElementById('configCcDeptDropdown').style.display = 'none';
@@ -1518,7 +2793,9 @@ class ApprovalApp {
     }
 
     _removeConfigCcDept(id) {
-        this._configCcDepts = this._configCcDepts.filter(function(d) { return d.id !== id; });
+        this._configCcDepts = this._configCcDepts.filter(function (d) {
+            return d.id !== id;
+        });
         this._renderConfigCcDeptTags();
     }
 
@@ -1526,7 +2803,7 @@ class ApprovalApp {
         var container = document.getElementById('configCcDeptTags');
         if (!container) return;
         var self = this;
-        container.innerHTML = (this._configCcDepts || []).map(function(d) {
+        container.innerHTML = (this._configCcDepts || []).map(function (d) {
             return '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#e8f4fd;border-radius:14px;font-size:12px;margin:2px;">'
                 + '<i class="fas fa-building" style="font-size:10px;color:#409eff;"></i>'
                 + '<span>' + self._escape(d.name) + '</span>'
@@ -1541,8 +2818,10 @@ class ApprovalApp {
             var data = await this.apiGet(OA_API_URL + '/approval/search-cc-users/?search=' + encodeURIComponent(keyword));
             var users = data.results || [];
             var selectedIds = {};
-            (this._configCcUsers || []).forEach(function(u) { selectedIds[u.id] = true; });
-            dd.innerHTML = users.length ? users.map(function(u) {
+            (this._configCcUsers || []).forEach(function (u) {
+                selectedIds[u.id] = true;
+            });
+            dd.innerHTML = users.length ? users.map(function (u) {
                 var cls = selectedIds[u.id] ? 'opacity:0.5;cursor:not-allowed;' : 'cursor:pointer;';
                 return '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;' + cls + '" onclick="approvalApp._addConfigCcUser(' + u.id + ',\'' + self._escape(u.name) + '\',\'' + (u.avatar || '') + '\')">'
                     + '<img src="' + (u.avatar || '/static/images/default-avatar.png') + '" style="width:28px;height:28px;border-radius:50%;object-fit:cover;">'
@@ -1550,11 +2829,15 @@ class ApprovalApp {
                     + '</div>';
             }) : '<div style="padding:8px 12px;color:#909399;font-size:13px;">未找到用户</div>';
             dd.style.display = 'block';
-        } catch(e) { console.error(e); }
+        } catch (e) {
+            console.error(e);
+        }
     }
 
     _addConfigCcUser(id, name, avatar) {
-        if (this._configCcUsers.some(function(u) { return u.id === id; })) return;
+        if (this._configCcUsers.some(function (u) {
+            return u.id === id;
+        })) return;
         this._configCcUsers.push({id: id, name: name, avatar: avatar || ''});
         this._renderConfigCcUserTags();
         document.getElementById('configCcUserDropdown').style.display = 'none';
@@ -1562,7 +2845,9 @@ class ApprovalApp {
     }
 
     _removeConfigCcUser(id) {
-        this._configCcUsers = this._configCcUsers.filter(function(u) { return u.id !== id; });
+        this._configCcUsers = this._configCcUsers.filter(function (u) {
+            return u.id !== id;
+        });
         this._renderConfigCcUserTags();
     }
 
@@ -1570,7 +2855,7 @@ class ApprovalApp {
         var container = document.getElementById('configCcUserTags');
         if (!container) return;
         var self = this;
-        container.innerHTML = (this._configCcUsers || []).map(function(u) {
+        container.innerHTML = (this._configCcUsers || []).map(function (u) {
             return '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#f3e8ff;border-radius:14px;font-size:12px;margin:2px;">'
                 + '<i class="fas fa-user" style="font-size:10px;color:#9b59b6;"></i>'
                 + '<span>' + self._escape(u.name) + '</span>'
@@ -1582,7 +2867,10 @@ class ApprovalApp {
     async _deleteConfig() {
         var confirmed = await this.showConfirmDialog('删除配置', '确定要删除当前审批类型的配置吗？删除后不可恢复。', 'danger');
         if (!confirmed) return;
-        if (!this._configDeleteId) { this.showAlert('提示', '未找到配置ID'); return; }
+        if (!this._configDeleteId) {
+            this.showAlert('提示', '未找到配置ID');
+            return;
+        }
         try {
             var resp = await fetch(OA_API_URL + '/approval/delete-dept-config/' + this._configDeleteId + '/', {
                 method: 'DELETE',
@@ -1596,7 +2884,7 @@ class ApprovalApp {
             document.getElementById('configDeleteBtn').style.display = 'none';
             document.getElementById('configApprovalType').value = '';
             await this._renderConfigList();
-        } catch(e) {
+        } catch (e) {
             this.showAlert('删除失败', e.message || '请重试');
         }
     }
@@ -1627,6 +2915,20 @@ class ApprovalApp {
         } else if (type === 'recruit') {
             fieldSel.innerHTML = '<option value="headcount">招聘人数</option>';
             if (fieldLabel) fieldLabel.innerHTML = '阈值（人）';
+        } else if (!this._isBuiltinType(type)) {
+            // 自定义类型：列出 schema 中的数字/金额字段
+            const t = this._getType(type);
+            const numericFields = ((t && t.form_schema) || []).filter(function (f) {
+                return f.type === 'number' || f.type === 'amount';
+            });
+            if (numericFields.length) {
+                fieldSel.innerHTML = numericFields.map(function (f) {
+                    return '<option value="' + this._escape(f.key) + '">' + this._escape(f.label || f.key) + '</option>';
+                }, this).join('');
+            } else {
+                fieldSel.innerHTML = '<option value="">该类型无数字字段</option>';
+            }
+            if (fieldLabel) fieldLabel.innerHTML = '阈值字段';
         } else {
             fieldSel.innerHTML = '<option value="duration">天数/时长</option><option value="amount">金额</option><option value="headcount">招聘人数</option>';
             if (fieldLabel) fieldLabel.innerHTML = '阈值字段';
@@ -1635,7 +2937,10 @@ class ApprovalApp {
 
     async _saveConfig() {
         var type = document.getElementById('configApprovalType').value;
-        if (!type) { this.showAlert('提示', '请选择审批类型'); return; }
+        if (!type) {
+            this.showAlert('提示', '请选择审批类型');
+            return;
+        }
         var departmentId = document.getElementById('configFinalDept').value;
         var thEnabled = document.getElementById('configThresholdEnable') ? document.getElementById('configThresholdEnable').checked : false;
         var thField = document.getElementById('configThresholdField') ? document.getElementById('configThresholdField').value : '';
@@ -1647,9 +2952,16 @@ class ApprovalApp {
         var data = {
             approval_type: type,
             department_id: departmentId ? parseInt(departmentId) : null,
-            cc_departments: (this._configCcDepts || []).map(function(d) { return d.id; }),
-            cc_users: (this._configCcUsers || []).map(function(u) { return u.id; }),
-            approver_users: (this._configApprovers || []).map(function(u) { return u.id; }),
+            cc_departments: (this._configCcDepts || []).map(function (d) {
+                return d.id;
+            }),
+            cc_users: (this._configCcUsers || []).map(function (u) {
+                return u.id;
+            }),
+            approver_users: (this._configApprovers || []).map(function (u) {
+                return u.id;
+            }),
+            final_approver: this._configFinalApprover ? this._configFinalApprover.id : null,
             sign_type: signType,
             approval_mode: apprMode,
             threshold_enabled: thEnabled,
@@ -1662,8 +2974,8 @@ class ApprovalApp {
         try {
             await this.apiPost(OA_API_URL + '/approval/save-dept-config/', data);
             this.showToast('配置保存成功', false);
-            this.closeModal('approvalConfigModal');
-        } catch(e) {
+            // this.closeModal('approvalConfigModal');
+        } catch (e) {
             this.showAlert('保存失败', e.message || '请重试');
         }
     }
@@ -1673,8 +2985,24 @@ class ApprovalApp {
     async showDetail(id) {
         try {
             const d = await this.apiGet(OA_API_URL + '/approval/' + id + '/');
-            const statusMap = {'draft': '草稿', 'pending': '待审批', 'approved': '已通过', 'rejected': '已驳回', 'deferred': '暂缓', 'processing': '办理中', 'cancelled': '已撤回'};
-            const scMap = {'draft': 'badge-default', 'pending': 'badge-info', 'approved': 'status-badge normal', 'rejected': 'status-badge late', 'deferred': 'status-badge deferred', 'processing': 'status-badge processing', 'cancelled': 'badge-default'};
+            const statusMap = {
+                'draft': '草稿',
+                'pending': '待审批',
+                'approved': '已通过',
+                'rejected': '已驳回',
+                'deferred': '暂缓',
+                'processing': '办理中',
+                'cancelled': '已撤回'
+            };
+            const scMap = {
+                'draft': 'badge-default',
+                'pending': 'badge-info',
+                'approved': 'status-badge normal',
+                'rejected': 'status-badge late',
+                'deferred': 'status-badge deferred',
+                'processing': 'status-badge processing',
+                'cancelled': 'badge-default'
+            };
             const tMap = {
                 'leave': '请假',
                 'overtime': '加班',
@@ -1700,7 +3028,7 @@ class ApprovalApp {
             let html = '<div class="detail-grid">'
                 + '<div class="detail-item" style="grid-column:1/-1;"><label><i class="fas fa-user-circle" style="color:var(--primary-color,#409eff);"></i> 申请人</label><span style="display:flex;align-items:center;gap:8px;"><img src="' + (d.applicant_avatar || defAv) + '" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">' + (d.applicant === currentUserId ? '我' : this._escape(d.applicant_name || '')) + '</span></div>'
                 + '<div class="detail-item"><label><i class="fas fa-tag" style="color:#409eff;"></i> 审批标题</label><span>' + this._escape(d.title) + '</span></div>'
-                + '<div class="detail-item"><label><i class="fas fa-list" style="color:#67c23a;"></i> 审批类型</label><span><span class="type-icon-badge type-' + d.approval_type + '"><i class="fas ' + this._typeIcon(d.approval_type) + '"></i> ' + (tMap[d.approval_type] || d.approval_type) + '</span></span></div>'
+                + '<div class="detail-item"><label><i class="fas fa-list" style="color:#67c23a;"></i> 审批类型</label><span><span class="type-icon-badge type-' + d.approval_type + '" style="color:' + (d.approval_type_color || this._getTypeColor(d.approval_type)) + ';"><i class="fas ' + (d.approval_type_icon || this._getTypeIcon(d.approval_type)) + '"></i> ' + this._escape(d.approval_type_name || d.approval_type_display || d.approval_type) + '</span></span></div>'
                 + '<div class="detail-item"><label><i class="fas fa-building" style="color:#e6a23c;"></i> 所属部门</label><span>' + this._escape(d.department_name || '-') + '</span></div>'
                 + '<div class="detail-item"><label><i class="fas fa-sitemap" style="color:#9b59b6;"></i> 审批方式</label><span>' + modeLabel + '</span></div>'
                 + '<div class="detail-item"><label><i class="fas fa-info-circle" style="color:#909399;"></i> 状态</label><span class="' + (scMap[d.status] || '') + '"><i class="fas ' + this._statusIcon(d.status) + '" style="margin-right:4px;"></i>' + (statusMap[d.status] || d.status) + '</span></div>'
@@ -1758,7 +3086,7 @@ class ApprovalApp {
             // 抄送人显示（支持用户和部门）
             if (d.cc_users && d.cc_users.length) {
                 html += '<div class="detail-item full-width"><label><i class="fas fa-eye" style="color:#9b59b6;"></i> 抄送人</label><div style="display:flex;flex-wrap:wrap;gap:6px;">';
-                d.cc_users.forEach(function(cc) {
+                d.cc_users.forEach(function (cc) {
                     if (cc.cc_type === 'department') {
                         html += '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px 3px 4px;background:#e8f4fd;border-radius:14px;font-size:12px;" title="部门抄送">'
                             + '<i class="fas fa-building" style="font-size:12px;color:#409eff;"></i>'
@@ -1777,9 +3105,13 @@ class ApprovalApp {
             // 招聘需求详情展示
             if (d.approval_type === 'recruit' && d.recruit_data) {
                 var rd = d.recruit_data;
-                var urgencyText = {'normal':'常规（7-15个工作日）','urgent':'紧急（3-7个工作日）','critical':'特急（3个工作日内）'};
-                var empText = {'fulltime':'全职正式岗','parttime':'兼职岗','temporary':'临时顶岗'};
-                var staffText = {'annual':'年度核定编制内招聘','supplement':'临时增补超编招聘'};
+                var urgencyText = {
+                    'normal': '常规（7-15个工作日）',
+                    'urgent': '紧急（3-7个工作日）',
+                    'critical': '特急（3个工作日内）'
+                };
+                var empText = {'fulltime': '全职正式岗', 'parttime': '兼职岗', 'temporary': '临时顶岗'};
+                var staffText = {'annual': '年度核定编制内招聘', 'supplement': '临时增补超编招聘'};
                 var self = this;
                 html += '<div class="detail-item full-width" style="border:1px solid #fef3e0;border-radius:8px;padding:12px;background:#fffbf0;margin-top:8px;">'
                     + '<div style="font-size:14px;font-weight:600;color:#e67e22;margin-bottom:8px;border-bottom:1px solid #fef3e0;padding-bottom:6px;"><i class="fas fa-user-plus"></i> 招聘需求详情</div>'
@@ -1788,7 +3120,7 @@ class ApprovalApp {
                     + '<div><strong>招聘人数：</strong>' + (rd.headcount || 0) + '人</div>'
                     + '<div style="grid-column:1/-1;"><strong>编制属性：</strong>' + (staffText[rd.staffing_type] || rd.staffing_type) + '</div>'
                     + (rd.staffing_remark ? '<div style="grid-column:1/-1;"><strong>超编说明：</strong>' + self._escape(rd.staffing_remark) + '</div>' : '')
-                    + '<div style="grid-column:1/-1;margin-top:4px;"><strong>岗位职责：</strong><br>' + self._escape(rd.responsibilities || '-').replace(/\n/g,'<br>') + '</div>'
+                    + '<div style="grid-column:1/-1;margin-top:4px;"><strong>岗位职责：</strong><br>' + self._escape(rd.responsibilities || '-').replace(/\n/g, '<br>') + '</div>'
                     + '<div style="grid-column:1/-1;margin-top:4px;"><strong>① 基础条件：</strong>' + self._escape(rd.basic_requirement || '-') + '</div>'
                     + '<div style="grid-column:1/-1;"><strong>② 工作经验：</strong>' + self._escape(rd.experience_requirement || '-') + '</div>'
                     + '<div style="grid-column:1/-1;"><strong>③ 专业技能：</strong>' + self._escape(rd.skill_requirement || '-') + '</div>'
@@ -1802,6 +3134,14 @@ class ApprovalApp {
                     + '</div></div>';
             }
 
+            // 自定义审批类型：动态表单详情
+            if (!this._isBuiltinType(d.approval_type)) {
+                var dynType = this._getType(d.approval_type);
+                if (dynType && dynType.form_schema && dynType.form_schema.length) {
+                    html += this._renderDynamicDetail(d.form_data || {}, dynType.form_schema, d.form_data_display || {});
+                }
+            }
+
             if (d.content) html += '<div class="detail-item full-width"><label><i class="fas fa-align-left" style="color:#606266;"></i> 审批内容</label><span>' + this._escape(d.content) + '</span></div>';
             html += '</div>';
 
@@ -1810,14 +3150,20 @@ class ApprovalApp {
                 html += '<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-color,#ebeef5);">'
                     + '<h4 style="font-size:15px;margin:0 0 12px 0;"><i class="fas fa-sitemap" style="color:#67c23a;margin-right:6px;"></i>审批流程 <span style="font-size:12px;font-weight:400;color:var(--text-light,#909399);">根据汇报关系</span></h4>';
                 d.approval_nodes.forEach(function (node, ni) {
-                    var icon = node.node_type === 'department' ? 'fa-building' : (node.node_type === 'initiator' ? 'fa-play-circle' : 'fa-user-check');
+                    var isFinal = !!node.is_final_approver;
+                    var icon = isFinal ? 'fa-user-shield' : (node.node_type === 'department' ? 'fa-building' : (node.node_type === 'initiator' ? 'fa-play-circle' : 'fa-user-check'));
                     var label = node.user_name || node.department_name || ('节点' + (ni + 1));
                     if (node.user_name && node.user_position) label += ', ' + node.user_position;
-                    var typeLabel = node.node_type === 'department' ? '部门审批' : (node.node_type === 'initiator' ? '发起人' : (ni === 0 ? '直属上级' : '上级审批'));
-                    var borderColor = node.node_type === 'initiator' ? 'var(--primary-color,#409eff)' : '#67c23a';
-                    var iconColor = node.node_type === 'initiator' ? 'var(--primary-color,#409eff)' : '#67c23a';
+                    var typeLabel = isFinal ? '最终审批人' : (node.node_type === 'department' ? '部门审批' : (node.node_type === 'initiator' ? '发起人' : (ni === 0 ? '直属上级' : '上级审批')));
+                    var borderColor = isFinal ? '#9b59b6' : (node.node_type === 'initiator' ? 'var(--primary-color,#409eff)' : '#67c23a');
+                    var iconColor = isFinal ? '#9b59b6' : (node.node_type === 'initiator' ? 'var(--primary-color,#409eff)' : '#67c23a');
+                    var badgeBg = isFinal ? '#f3e8ff' : '#fff';
+                    var badgeColor = isFinal ? '#9b59b6' : 'var(--text-light,#909399)';
+                    var srcLabel = isFinal ? (node.final_approver_source_label || '') : '';
                     html += '<div style="margin-bottom:12px;padding:10px 14px;background:var(--bg-secondary,#f5f7fa);border-radius:8px;border-left:3px solid ' + borderColor + ';">'
-                        + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><i class="fas ' + icon + '" style="color:' + iconColor + ';font-size:13px;"></i><span style="font-weight:600;font-size:14px;">' + label + '</span><span style="font-size:11px;color:var(--text-light,#909399);background:#fff;padding:1px 8px;border-radius:4px;">' + typeLabel + '</span></div>';
+                        + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><i class="fas ' + icon + '" style="color:' + iconColor + ';font-size:13px;"></i><span style="font-weight:600;font-size:14px;">' + label + '</span>'
+                        + (srcLabel ? '<span style="font-size:10px;color:#9b59b6;background:#fff;border:1px solid #e8d5f5;padding:1px 8px;border-radius:4px;" title="最终审批人配置来源">' + approvalApp._escape(srcLabel) + '</span>' : '')
+                        + '<span style="font-size:11px;color:' + badgeColor + ';background:' + badgeBg + ';padding:1px 8px;border-radius:4px;">' + typeLabel + '</span></div>';
                     (node.assignees || []).forEach(function (as) {
                         var stCls = as.status === 'approved' ? 'status-badge normal' : as.status === 'rejected' ? 'status-badge late' : as.status === 'deferred' ? 'status-badge deferred' : as.status === 'processing' ? 'status-badge processing' : 'badge-info';
                         var stTxt = as.status_display || (as.status === 'approved' ? '已通过' : as.status === 'rejected' ? '已驳回' : as.status === 'deferred' ? '暂缓' : as.status === 'processing' ? '办理中' : '待审批');
@@ -1846,7 +3192,7 @@ class ApprovalApp {
                     var attachHtml = '';
                     if (log.attachments && log.attachments.length) {
                         attachHtml = '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">';
-                        log.attachments.forEach(function(att) {
+                        log.attachments.forEach(function (att) {
                             var url = typeof att === 'object' ? (att.url || att) : att;
                             var name = typeof att === 'object' ? (att.name || '') : url.split('/').pop() || '';
                             var isLogImg = name.match(/\.(jpg|jpeg|png|gif|webp)$/i);
@@ -1978,6 +3324,7 @@ class ApprovalApp {
             }, 10);
         } catch (e) {
             console.error('加载详情失败:', e);
+            this.showToast(e.message || '加载详情失败', true)
         }
     }
 
@@ -1995,17 +3342,32 @@ class ApprovalApp {
         var overlay = document.createElement('div');
         overlay.id = 'approvalPreviewOverlay';
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;z-index:10000;background:rgba(0,0,0,0.85);';
-        overlay.innerHTML = '<span onclick="approvalApp._closePreview()" style="position:fixed;top:20px;right:30px;color:#fff;font-size:32px;cursor:pointer;z-index:10001;"><i class="fas fa-times"></i></span>'
+        overlay.innerHTML = '<span onclick="approvalApp._closePreview()" style="position:fixed;top:max(20px, env(safe-area-inset-top, 0px));right:30px;color:#fff;font-size:32px;cursor:pointer;z-index:10001;"><i class="fas fa-times"></i></span>'
             + '<img src="' + url + '" style="max-width:90vw;max-height:90vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);">'
             + '<div style="position:fixed;bottom:30px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,0.7);font-size:14px;z-index:10001;">' + approvalApp._escape(name || '') + '</div>';
         document.body.appendChild(overlay);
         this._previewImgs = null;
         this._previewOverlay = overlay;
         var self = this;
-        var keyHandler = function(e) { if (e.key === 'Escape') { self._closePreview(); e.preventDefault(); } };
+        var keyHandler = function (e) {
+            if (e.key === 'Escape') {
+                self._closePreview();
+                e.preventDefault();
+            }
+        };
         this._previewKeyHandler = keyHandler;
         document.addEventListener('keydown', keyHandler);
-        overlay.addEventListener('click', function(e) { if (e.target === overlay) self._closePreview(); });
+        // 🔧 点击图片/背景退出预览
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) self._closePreview();
+        });
+        var mainImg = overlay.querySelector('img');
+        if (mainImg) {
+            mainImg.addEventListener('click', function (e) {
+                e.stopPropagation();
+                self._closePreview();
+            });
+        }
     }
 
     /** 统一附件处理：图片→预览，文档→保存到网盘并编辑，其他→保存到网盘并提示 */
@@ -2053,7 +3415,7 @@ class ApprovalApp {
             } else {
                 window.open(url, '_blank');
             }
-        } catch(e) {
+        } catch (e) {
             window.open(url, '_blank');
         }
     }
@@ -2062,9 +3424,13 @@ class ApprovalApp {
 
     _previewImage(idx) {
         var urls = this._previewUrls || [];
-        var _getUrl = function(u) { return (typeof u === 'object' && u !== null) ? (u.url || u) : u; };
-        var _getName = function(u) { return (typeof u === 'object' && u !== null) ? (u.name || '') : ''; };
-        var imgs = urls.filter(function(u) {
+        var _getUrl = function (u) {
+            return (typeof u === 'object' && u !== null) ? (u.url || u) : u;
+        };
+        var _getName = function (u) {
+            return (typeof u === 'object' && u !== null) ? (u.name || '') : '';
+        };
+        var imgs = urls.filter(function (u) {
             var fn = _getName(u) || _getUrl(u).split('/').pop() || '';
             return fn.match(/\.(jpg|jpeg|png|gif|webp)$/i);
         });
@@ -2080,7 +3446,7 @@ class ApprovalApp {
         overlay.id = 'approvalPreviewOverlay';
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;z-index:10000;background:rgba(0,0,0,0.85);';
         var prevDisplay = imgs.length <= 1 ? 'opacity:0.2;cursor:default;pointer-events:none;' : '';
-        overlay.innerHTML = '<span onclick="approvalApp._closePreview()" style="position:fixed;top:20px;right:30px;color:#fff;font-size:32px;cursor:pointer;z-index:10001;"><i class="fas fa-times"></i></span>'
+        overlay.innerHTML = '<span onclick="approvalApp._closePreview()" style="position:fixed;top:max(20px, env(safe-area-inset-top, 0px));right:30px;color:#fff;font-size:32px;cursor:pointer;z-index:10001;"><i class="fas fa-times"></i></span>'
             + '<span onclick="approvalApp._previewNav(-1)" id="approvalPrevBtn" style="position:fixed;left:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + prevDisplay + '"><i class="fas fa-chevron-left"></i></span>'
             + '<span onclick="approvalApp._previewNav(1)" id="approvalNextBtn" style="position:fixed;right:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + prevDisplay + '"><i class="fas fa-chevron-right"></i></span>'
             + '<img id="previewMainImg" src="' + _getUrl(imgs[currentIdx]) + '" style="max-width:90vw;max-height:90vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);">'
@@ -2090,16 +3456,66 @@ class ApprovalApp {
         this._previewCurrent = currentIdx;
         this._previewOverlay = overlay;
         var self = this;
-        var keyHandler = function(e) {
-            if (e.key === 'ArrowLeft') { self._previewNav(-1); e.preventDefault(); }
-            else if (e.key === 'ArrowRight') { self._previewNav(1); e.preventDefault(); }
-            else if (e.key === 'Escape') { self._closePreview(); e.preventDefault(); }
+        var keyHandler = function (e) {
+            if (e.key === 'ArrowLeft') {
+                self._previewNav(-1);
+                e.preventDefault();
+            } else if (e.key === 'ArrowRight') {
+                self._previewNav(1);
+                e.preventDefault();
+            } else if (e.key === 'Escape') {
+                self._closePreview();
+                e.preventDefault();
+            }
         };
         this._previewKeyHandler = keyHandler;
         document.addEventListener('keydown', keyHandler);
-        overlay.addEventListener('click', function(e) {
+
+        // 🔧 触摸滑动：左右滑动切换图片（移动端）
+        var touchStartX = null, touchStartY = null, swiped = false;
+        overlay.addEventListener('touchstart', function (e) {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            swiped = false;
+        }, {passive: true});
+        overlay.addEventListener('touchmove', function (e) {
+            if (touchStartX !== null) {
+                var dx = e.touches[0].clientX - touchStartX;
+                var dy = e.touches[0].clientY - touchStartY;
+                if (Math.abs(dx) > 30 || Math.abs(dy) > 30) swiped = true;
+            }
+        }, {passive: true});
+        overlay.addEventListener('touchend', function (e) {
+            if (touchStartX !== null) {
+                var endX = e.changedTouches[0].clientX;
+                var endY = e.changedTouches[0].clientY;
+                var dx = endX - touchStartX, dy = endY - touchStartY;
+                if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+                    self._previewNav(dx < 0 ? 1 : -1);  // 左滑下一张，右滑上一张
+                }
+            }
+            touchStartX = null;
+        }, {passive: true});
+
+        // 🔧 点击图片切换预览模式（再点一次退出）；点击背景也退出
+        overlay.addEventListener('click', function (e) {
+            if (swiped) {
+                swiped = false;
+                return;
+            }  // 刚滑动过，忽略本次点击
             if (e.target === overlay) self._closePreview();
         });
+        var mainImg = document.getElementById('previewMainImg');
+        if (mainImg) {
+            mainImg.addEventListener('click', function (e) {
+                e.stopPropagation();
+                if (swiped) {
+                    swiped = false;
+                    return;
+                }
+                self._closePreview();
+            });
+        }
     }
 
     _closePreview() {
@@ -2116,8 +3532,14 @@ class ApprovalApp {
     _previewNav(dir) {
         if (!this._previewImgs || !this._previewImgs.length) return;
         var len = this._previewImgs.length;
-        if (dir < 0 && this._previewCurrent <= 0) { this._approvalShowTip('已是第一张'); return; }
-        if (dir > 0 && this._previewCurrent >= len - 1) { this._approvalShowTip('已是最后一张'); return; }
+        if (dir < 0 && this._previewCurrent <= 0) {
+            this._approvalShowTip('已是第一张');
+            return;
+        }
+        if (dir > 0 && this._previewCurrent >= len - 1) {
+            this._approvalShowTip('已是最后一张');
+            return;
+        }
         this._previewCurrent += dir;
         var img = document.getElementById('previewMainImg');
         var item = this._previewImgs[this._previewCurrent];
@@ -2127,8 +3549,14 @@ class ApprovalApp {
         if (counter) counter.textContent = (this._previewCurrent + 1) + ' / ' + this._previewImgs.length;
         var p = document.getElementById('approvalPrevBtn');
         var n = document.getElementById('approvalNextBtn');
-        if (p) { p.style.opacity = this._previewCurrent <= 0 ? '0.2' : '1'; p.style.cursor = this._previewCurrent <= 0 ? 'default' : 'pointer'; }
-        if (n) { n.style.opacity = this._previewCurrent >= this._previewImgs.length - 1 ? '0.2' : '1'; n.style.cursor = this._previewCurrent >= this._previewImgs.length - 1 ? 'default' : 'pointer'; }
+        if (p) {
+            p.style.opacity = this._previewCurrent <= 0 ? '0.2' : '1';
+            p.style.cursor = this._previewCurrent <= 0 ? 'default' : 'pointer';
+        }
+        if (n) {
+            n.style.opacity = this._previewCurrent >= this._previewImgs.length - 1 ? '0.2' : '1';
+            n.style.cursor = this._previewCurrent >= this._previewImgs.length - 1 ? 'default' : 'pointer';
+        }
     }
 
     _approvalShowTip(msg) {
@@ -2142,7 +3570,9 @@ class ApprovalApp {
         tip.textContent = msg;
         tip.style.opacity = '1';
         clearTimeout(tip._t);
-        tip._t = setTimeout(function() { tip.style.opacity = '0'; }, 1500);
+        tip._t = setTimeout(function () {
+            tip.style.opacity = '0';
+        }, 1500);
     }
 
     // ==================== 打印 ====================
@@ -2188,7 +3618,9 @@ class ApprovalApp {
                 + '}';
             document.head.appendChild(this._printStyle);
         }
-        setTimeout(function(){ window.print(); }, 300);
+        setTimeout(function () {
+            window.print();
+        }, 300);
     }
 
     // ==================== 审批操作 ====================
@@ -2249,7 +3681,10 @@ class ApprovalApp {
         var sigWrap = document.getElementById('actionSignatureWrap');
         if (sigWrap) sigWrap.style.display = 'none';
         var sigBox = document.getElementById('actionSignatureBox');
-        if (sigBox) { sigBox.classList.remove('sig-fullscreen'); sigBox.classList.remove('sig-rotate'); }
+        if (sigBox) {
+            sigBox.classList.remove('sig-fullscreen');
+            sigBox.classList.remove('sig-rotate');
+        }
         var sigExit = document.getElementById('actionSignatureExitFullscreen');
         if (sigExit) sigExit.style.display = 'none';
         var sigTopBtn = document.getElementById('actionSignatureFullscreenBtn');
@@ -2281,7 +3716,9 @@ class ApprovalApp {
             }
         }
         modal.style.display = 'flex';
-        setTimeout(function () { modal.classList.add('show'); }, 10);
+        setTimeout(function () {
+            modal.classList.add('show');
+        }, 10);
     }
 
     async _triggerActionUpload() {
@@ -2291,7 +3728,11 @@ class ApprovalApp {
     async _handleActionFileSelect(e) {
         var file = e.target.files[0];
         if (!file) return;
-        if (file.size > this.fileMaxSizeMB * 1024 * 1024) { console.log('文件大小超过限制::', file.size); this.showAlert('提示', `文件大小不能超过${this.fileMaxSizeMB}MB`); return; }
+        if (file.size > this.fileMaxSizeMB * 1024 * 1024) {
+            console.log('文件大小超过限制::', file.size);
+            this.showAlert('提示', `文件大小不能超过${this.fileMaxSizeMB}MB`);
+            return;
+        }
         var formData = new FormData();
         formData.append('file', file);
         try {
@@ -2301,7 +3742,9 @@ class ApprovalApp {
                 body: formData
             });
             if (!resp.ok) {
-                var errData = await resp.json().catch(function(){ return {}; });
+                var errData = await resp.json().catch(function () {
+                    return {};
+                });
                 throw new Error(errData.error || errData.detail || '上传失败');
             }
             var result = await resp.json();
@@ -2310,13 +3753,15 @@ class ApprovalApp {
                 this._actionAttachments.push({url: result.url, name: result.name || file.name});
                 this._renderActionAttachments();
             }
-        } catch(e) { this.showAlert('错误', '附件上传失败'); }
+        } catch (e) {
+            this.showAlert('错误', '附件上传失败');
+        }
     }
 
     _renderActionAttachments() {
         var container = document.getElementById('actionAttachmentPreview');
         if (!container) return;
-        container.innerHTML = (this._actionAttachments || []).map(function(a) {
+        container.innerHTML = (this._actionAttachments || []).map(function (a) {
             return '<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;background:#f5f7fa;border-radius:4px;font-size:12px;">'
                 + '<i class="fas fa-paperclip" style="color:#409eff;"></i>'
                 + '<span>' + approvalApp._escape(a.name) + '</span>'
@@ -2350,7 +3795,7 @@ class ApprovalApp {
         } catch (e) {
             console.error('操作失败:', e);
             // this.showAlert('操作失败', e.message || '请重试');
-            this.showToast(('操作失败' +e.message || '请重试'), true);
+            this.showToast(('操作失败' + e.message || '请重试'), true);
         }
     }
 
@@ -2370,13 +3815,30 @@ class ApprovalApp {
         canvas._drawing = false;
         canvas._lastX = 0;
         canvas._lastY = 0;
-        canvas.onmousedown = function(e) { self._sigStart(e, canvas); };
-        canvas.onmousemove = function(e) { self._sigMove(e, canvas); };
-        canvas.onmouseup = function(e) { self._sigEnd(e, canvas); };
-        canvas.onmouseleave = function(e) { self._sigEnd(e, canvas); };
-        canvas.ontouchstart = function(e) { e.preventDefault(); self._sigStart(e, canvas); };
-        canvas.ontouchmove = function(e) { e.preventDefault(); self._sigMove(e, canvas); };
-        canvas.ontouchend = function(e) { e.preventDefault(); self._sigEnd(e, canvas); };
+        canvas.onmousedown = function (e) {
+            self._sigStart(e, canvas);
+        };
+        canvas.onmousemove = function (e) {
+            self._sigMove(e, canvas);
+        };
+        canvas.onmouseup = function (e) {
+            self._sigEnd(e, canvas);
+        };
+        canvas.onmouseleave = function (e) {
+            self._sigEnd(e, canvas);
+        };
+        canvas.ontouchstart = function (e) {
+            e.preventDefault();
+            self._sigStart(e, canvas);
+        };
+        canvas.ontouchmove = function (e) {
+            e.preventDefault();
+            self._sigMove(e, canvas);
+        };
+        canvas.ontouchend = function (e) {
+            e.preventDefault();
+            self._sigEnd(e, canvas);
+        };
         var placeholder = document.getElementById('actionSignaturePlaceholder');
         if (placeholder) placeholder.style.display = 'flex';
     }
@@ -2455,7 +3917,9 @@ class ApprovalApp {
         ctx.drawImage(canvas, 0, 0);
         // 底部信息区：浅灰分割线 + 审批人 + 日期时间
         var now = new Date();
-        var pad = function(n) { return String(n).padStart(2, '0'); };
+        var pad = function (n) {
+            return String(n).padStart(2, '0');
+        };
         var dateStr = '审批时间：' + now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate())
             + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
         // 获取当前用户（审批人）姓名
@@ -2463,7 +3927,8 @@ class ApprovalApp {
         try {
             var cu = JSON.parse(localStorage.getItem('current_user') || 'null');
             approverName = (cu && (cu.real_name || cu.name)) ? (cu.real_name || cu.name) : '';
-        } catch (e) {}
+        } catch (e) {
+        }
         var lineY = h + 2;
         ctx.strokeStyle = '#c0c4cc';
         ctx.lineWidth = 1;
@@ -2516,7 +3981,7 @@ class ApprovalApp {
         }
         // 下方"全屏签名"按钮文字
         var allBtns = document.querySelectorAll('#actionSignatureWrap button[onclick*="_toggleSignatureFullscreen"]');
-        allBtns.forEach(function(b) {
+        allBtns.forEach(function (b) {
             if (b !== btn) {
                 b.innerHTML = isFull ? '<i class="fas fa-compress"></i> 退出全屏' : '<i class="fas fa-expand"></i> 全屏签名';
             }
@@ -2553,7 +4018,9 @@ class ApprovalApp {
         if (modal) {
             // Remove maximized state if present
             var mc = modal.querySelector('.modal-content');
-            if (mc) { mc.classList.remove('maximized'); }
+            if (mc) {
+                mc.classList.remove('maximized');
+            }
             modal.classList.remove('show');
             setTimeout(function () {
                 modal.style.display = 'none';
@@ -2673,5 +4140,28 @@ class ApprovalApp {
         toast._timer = setTimeout(() => toast.classList.remove('show'), 3000);
     }
 
+    showError(message) {
+        this.showToast(message, true);
+    }
+
+    showSuccess(message) {
+        this.showToast(message, false);
+    }
+
 
 }
+
+// // 全局初始化
+// let approvalApp = null;
+//
+// // 确保在 DOM 加载完成后初始化 approvalApp
+// if (document.readyState === 'loading') {
+//     document.addEventListener('DOMContentLoaded', () => {
+//         approvalApp = new ApprovalApp();
+//         window.approvalApp = approvalApp;
+//     });
+// } else {
+//     // 如果 DOM 已经加载完成，直接初始化
+//     approvalApp = new ApprovalApp();
+//     window.approvalApp = approvalApp;
+// }

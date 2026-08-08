@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>网络不可用 - 企业聊天室</title>
+    <meta name="theme-color" content="#409EFF">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: #f0f2f5;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100dvh;
+            min-height: 100vh;
+            color: #303133;
+        }
+        .offline-box { text-align: center; padding: 40px 24px; max-width: 380px; }
+        .offline-box .icon {
+            width: 88px; height: 88px; margin: 0 auto 20px;
+            border-radius: 24px; background: linear-gradient(135deg, #409EFF, #337ECC);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 42px; color: #fff; box-shadow: 0 8px 24px rgba(64,158,255,0.3);
+        }
+        .offline-box h1 { font-size: 22px; margin-bottom: 12px; }
+        .offline-box p { font-size: 14px; color: #909399; line-height: 1.6; margin-bottom: 28px; }
+        .offline-box button {
+            padding: 12px 32px; border: none; border-radius: 8px;
+            background: #409EFF; color: #fff; font-size: 15px; cursor: pointer;
+            transition: background 0.2s;
+        }
+        .offline-box button:hover { background: #337ECC; }
+    </style>
+</head>
+<body>
+    <div class="offline-box">
+        <div class="icon"><i style="font-style:normal;">📡</i></div>
+        <h1>网络连接不可用</h1>
+        <p>请检查您的网络连接，恢复后点击下方按钮重试。</p>
+        <button onclick="location.reload()">重新连接</button>
+    </div>
+</body>
+</html>

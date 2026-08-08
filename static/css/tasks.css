@@ -113,6 +113,12 @@ body.task-body {
     background: #fef0f0;
 }
 
+.dropdown-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 4px 0;
+}
+
 .user-avatar {
     width: 36px;
     height: 36px;

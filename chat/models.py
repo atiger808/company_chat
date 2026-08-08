@@ -533,3 +533,23 @@ class SystemConfig(models.Model):
     def get_category_display(self):
         """获取分类显示名称"""
         return dict(self.CATEGORY_CHOICES).get(self.category, '')
+
+class PushSubscription(models.Model):
+    """Web Push 订阅（每 endpoint 一条）"""
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='push_subscriptions', verbose_name='用户')
+    endpoint = models.CharField(max_length=500, db_index=True, verbose_name='Push Endpoint')
+    p256dh = models.CharField(max_length=256, verbose_name='p256dh 公钥')
+    auth = models.CharField(max_length=128, verbose_name='auth 密钥')
+    user_agent = models.CharField(max_length=500, blank=True, default='', verbose_name='设备UA')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        unique_together = ('user', 'endpoint')
+        verbose_name = 'Push 订阅'
+        verbose_name_plural = 'Push 订阅'
+
+    def __str__(self):
+        return f'{self.user} - {self.endpoint[:40]}'

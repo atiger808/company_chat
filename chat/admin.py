@@ -1,6 +1,5 @@
 from django.contrib import admin
-from .models import ChatRoom, Message, MessageReadStatus, MessageDeleteStatus, UserOnlineStatus, ChatRoomDeleteStatus, FileUpload, SystemConfig
-
+from .models import ChatRoom, Message, MessageReadStatus, MessageDeleteStatus, UserOnlineStatus, ChatRoomDeleteStatus, FileUpload, SystemConfig, PushSubscription
 
 @admin.register(ChatRoom)
 class ChatRoomAdmin(admin.ModelAdmin):
@@ -49,7 +48,7 @@ class FileUploadAdmin(admin.ModelAdmin):
 @admin.register(UserOnlineStatus)
 class UserOnlineStatusAdmin(admin.ModelAdmin):
     list_display = ('id', 'user', 'is_online', 'last_seen', 'updated_at')
-    list_filter = ('user', 'is_online')
+    list_filter = ('is_online',)
     search_fields = ('id',)
     list_per_page = 20
 
@@ -61,3 +60,10 @@ class SystemConfigAdmin(admin.ModelAdmin):
     search_fields = ('key', 'name', 'id')
     list_per_page = 20
 
+
+@admin.register(PushSubscription)
+class PushSubscriptionAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'user_agent', 'updated_at', 'created_at')
+    list_filter = ('user_agent', )
+    search_fields = ('id', 'endpoint')
+    list_per_page = 20

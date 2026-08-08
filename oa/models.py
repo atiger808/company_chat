@@ -64,10 +64,57 @@ class AttendanceRecord(models.Model):
         return f'{self.user} {self.get_clock_type_display()} {self.date}'
 
 
+class ApprovalType(models.Model):
+    """审批类型（内置 + 企业自定义），自定义类型通过 form_schema 定义动态表单字段"""
+    FIELD_TYPES = [
+        ('text', '单行文本'),
+        ('textarea', '多行文本'),
+        ('number', '数字'),
+        ('date', '日期'),
+        ('datetime', '日期时间'),
+        ('amount', '金额'),
+        ('select', '下拉选择'),
+        ('radio', '单选'),
+        ('checkbox', '多选'),
+        ('attachment', '附件'),
+        ('department', '部门选择'),
+        ('user', '成员选择'),
+    ]
+
+    code = models.CharField(max_length=40, verbose_name='类型编码')
+    name = models.CharField(max_length=50, verbose_name='类型名称')
+    icon = models.CharField(max_length=50, default='fa-file-lines', verbose_name='图标')
+    color = models.CharField(max_length=20, default='#409EFF', verbose_name='颜色')
+    description = models.TextField(blank=True, default='', verbose_name='说明')
+    enabled = models.BooleanField(default=True, verbose_name='是否启用')
+    is_builtin = models.BooleanField(default=False, verbose_name='是否内置')
+    tenant = models.ForeignKey(
+        'accounts.Tenant',
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='approval_types',
+        verbose_name='所属企业（null=全局内置）'
+    )
+    form_schema = models.JSONField(default=list, blank=True, verbose_name='表单字段定义')
+    sort_order = models.IntegerField(default=0, verbose_name='排序')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        unique_together = [('tenant', 'code')]
+        ordering = ['sort_order', 'id']
+        verbose_name = '审批类型'
+        verbose_name_plural = '审批类型'
+
+    def __str__(self):
+        return self.name
+
+
 class ApprovalRequest(models.Model):
     """审批请求"""
 
-    APPROVAL_TYPE_CHOICES = [
+    # 内置审批类型编码（ensure_builtin_types 会自动播种到 ApprovalType）
+    BUILTIN_TYPE_CHOICES = [
         ('leave', '请假'),
         ('overtime', '加班'),
         ('expense', '报销'),
@@ -113,10 +160,12 @@ class ApprovalRequest(models.Model):
         verbose_name='所属部门'
     )
     approval_type = models.CharField(
-        max_length=20,
-        choices=APPROVAL_TYPE_CHOICES,
-        verbose_name='审批类型'
+        max_length=40,
+        verbose_name='审批类型',
+        help_text='对应 ApprovalType.code（内置 + 企业自定义）'
     )
+    # 自定义审批类型动态表单数据（key 与 ApprovalType.form_schema 字段 key 对应）
+    form_data = models.JSONField(default=dict, blank=True, verbose_name='动态表单数据')
     title = models.CharField(max_length=200, verbose_name='审批标题')
     content = models.TextField(blank=True, default='', verbose_name='审批内容')
     status = models.CharField(
@@ -176,7 +225,7 @@ class ApprovalRequest(models.Model):
         verbose_name_plural = '审批请求'
 
     def __str__(self):
-        return f'{self.applicant} {self.get_approval_type_display()} {self.title}'
+        return f'{self.applicant} {self.approval_type} {self.title}'
 
 
 class ApprovalLog(models.Model):
@@ -325,9 +374,9 @@ class ApprovalDeptConfig(models.Model):
         verbose_name='所属企业'
     )
     approval_type = models.CharField(
-        max_length=20,
-        choices=ApprovalRequest.APPROVAL_TYPE_CHOICES,
-        verbose_name='审批类型'
+        max_length=40,
+        verbose_name='审批类型',
+        help_text='对应 ApprovalType.code（内置 + 企业自定义）'
     )
     # 默认审批方式
     default_sign_type = models.CharField(
@@ -371,10 +420,9 @@ class ApprovalDeptConfig(models.Model):
         ('headcount', '招聘人数'),
     ]
     threshold_enabled = models.BooleanField(default=False, verbose_name='启用阈值审批')
-    threshold_field = models.CharField(max_length=30, blank=True, default='',
-        choices=THRESHOLD_FIELD_CHOICES,
+    threshold_field = models.CharField(max_length=40, blank=True, default='',
         verbose_name='阈值字段',
-        help_text='根据审批类型选择：请假/出差选天数，报销/采购选金额，招聘选人数')
+        help_text='内置类型为 duration/amount/headcount；自定义类型为 form_schema 中数字字段的 key')
     threshold_value = models.FloatField(null=True, blank=True, verbose_name='阈值')
     threshold_department = models.ForeignKey(
         'accounts.Department',
@@ -382,6 +430,15 @@ class ApprovalDeptConfig(models.Model):
         null=True, blank=True,
         related_name='threshold_approval_configs',
         verbose_name='阈值超额后最终审批部门'
+    )
+    # 最终审批人（可选，追加到自动审批链最后一级；允许置空）
+    final_approver = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='approval_final_approver_configs',
+        verbose_name='最终审批人',
+        help_text='在自动审批链基础上追加一个最终审批人'
     )
     # 是否要求审批人手写签名
     require_signature = models.BooleanField(default=False, verbose_name='开启手写签名',
@@ -396,7 +453,7 @@ class ApprovalDeptConfig(models.Model):
         ordering = ['-updated_at']
 
     def __str__(self):
-        return f'{self.get_approval_type_display()} 配置'
+        return f'{self.approval_type} 配置'
 
 
 class ApprovalNode(models.Model):
@@ -432,6 +489,17 @@ class ApprovalNode(models.Model):
         verbose_name='审批部门'
     )
     order = models.IntegerField(default=0, verbose_name='排序')
+
+    is_final_approver = models.BooleanField(
+        default=False,
+        verbose_name='是否最终审批人',
+        help_text='由审批类型配置的最终审批人生成的节点'
+    )
+    final_approver_source = models.CharField(
+        max_length=20, blank=True, default='',
+        verbose_name='最终审批人配置来源',
+        help_text="'sub'=子公司自定义配置，'default'=集团/企业默认配置"
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
 
     class Meta:

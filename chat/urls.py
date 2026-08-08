@@ -19,6 +19,7 @@ from .views import (
     SystemcConfigView,
     TurnCredentialsView,
 )
+from .push_views import VapidPublicKeyView, PushSubscriptionView, PushSubscriptionListView
 
 router = DefaultRouter()
 router.register(r'rooms', ChatRoomViewSet, basename='chatroom')
@@ -39,6 +40,12 @@ urlpatterns = [
 
     path('system/configs/', SystemcConfigView.as_view(), name='system-config'),
     path('turn/credentials/', TurnCredentialsView.as_view(), name='turn-credentials'),
+
+    # Web Push
+    path('push/vapid-public-key/', VapidPublicKeyView.as_view(), name='push-vapid-key'),
+    path('push/subscribe/', PushSubscriptionView.as_view(), name='push-subscribe'),
+    path('push/unsubscribe/', PushSubscriptionView.as_view(), name='push-unsubscribe'),
+    path('push/subscriptions/', PushSubscriptionListView.as_view(), name='push-subscriptions'),
 
     # 聊天室相关操作
     # path('rooms/<int:pk>/clear_history/', ChatRoomViewSet.as_view({'delete': 'clear_history'}), name='clear-history'),

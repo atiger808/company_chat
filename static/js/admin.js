@@ -69,9 +69,9 @@ class AdminConsole {
             }
 
 
-            if (this.currentUser.user_type === 'normal' || this.currentUser.user_type === 'visitor') {
-                // 替换原生 alert 为优雅的提示框
-                this.showAlert('权限不足', '您没有管理员权限').then(() => {
+            if (!['admin', 'super_admin'].includes(this.currentUser?.user_type)) {
+                // 仅管理员/超级管理员可访问，其余给出无权限警告并跳回聊天室
+                this.showAlert('没有访问权限', '管理控制台仅限管理员 / 超级管理员访问。').then(() => {
                     window.location.href = '/chat/';
                 });
                 return;

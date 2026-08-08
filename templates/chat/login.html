@@ -3,22 +3,34 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="apple-mobile-web-app-capable" content="yes">
     <title>企业聊天室 - 登录</title>
+
+    {% include '_pwa_meta.html' %}
+    <meta name="format-detection" content="telephone=no, email=no, address=no">
+
+    <!-- Service Worker 注册（PWA 应用形态下登录页同样受控，登录后推送保持可用） -->
+    <script>
+        if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register('/service-worker.js', {updateViaCache: 'none'})
+                    .catch(function (err) { console.error('SW registration failed:', err); });
+            });
+        }
+    </script>
+
     <!--    <script src="https://cdn.jsdelivr.net/npm/crypto-js@4.2.0/crypto-js.min.js"></script>-->
     <!--    <script src="https://cdn.jsdelivr.net/npm/sm-crypto@0.3.13/dist/sm4.min.js"></script>-->
 
     <!--    1. 样式表-->
-    <link rel="stylesheet" href="/static/css/chat_auth.css?v=20260731-09c0a6d">
+    <link rel="stylesheet" href="/static/css/chat_auth.css?v=20260807-8591e09">
 
     <!-- 2. 依赖库 -->
-    <script src="/static/js/dist/crypto-js.min.js?v=20260731-09c0a6d"></script>
-    <script src="/static/js/dist/sm4.min.js?v=20260731-09c0a6d"></script>
-    <script src="/static/js/encrypts.js?v=20260731-09c0a6d"></script>
+    <script src="/static/js/dist/crypto-js.min.js?v=20260807-8591e09"></script>
+    <script src="/static/js/dist/sm4.min.js?v=20260807-8591e09"></script>
+    <script src="/static/js/encrypts.js?v=20260807-8591e09"></script>
 
     <!-- 3. 业务逻辑 -->
-    <script src="/static/js/chat_auth.js?v=20260731-09c0a6d"></script>
+    <script src="/static/js/chat_auth.js?v=20260807-8591e09"></script>
 
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">

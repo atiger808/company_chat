@@ -15,6 +15,7 @@ from .views import (
     CloudSystemSettingsViewSet,
     SharedFolderViewSet,
     FileOperationLogViewSet,
+    CloudSearchUsersView,
 )
 
 router = DefaultRouter()
@@ -31,6 +32,10 @@ router.register(r'operation-logs', FileOperationLogViewSet, basename='operation-
 
 urlpatterns = [
     path('', include(router.urls)),
+
+    # 🔧 多企业隔离：搜索可协作/共享的用户（企业成员或好友）
+    path('search-users/', CloudSearchUsersView.as_view(), name='cloud-search-users'),
+
 
 
     # 🔧 独立的文件下载视图

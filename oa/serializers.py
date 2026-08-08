@@ -4,6 +4,7 @@ from .models import (
     ApprovalAssignee, ApprovalCarbonCopy, ApprovalDeptConfig,
     AttendanceConfig,
 )
+from .type_utils import resolve_approval_type
 
 
 class AttendanceRecordSerializer(serializers.ModelSerializer):
@@ -94,6 +95,7 @@ class ApprovalNodeSerializer(serializers.ModelSerializer):
     user_name = serializers.SerializerMethodField()
     user_position = serializers.SerializerMethodField()
     department_name = serializers.SerializerMethodField()
+    final_approver_source_label = serializers.SerializerMethodField()
     assignees = serializers.SerializerMethodField()
 
     class Meta:
@@ -101,11 +103,29 @@ class ApprovalNodeSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'node_type', 'node_type_display',
             'user', 'user_name', 'user_position', 'department', 'department_name',
-            'order', 'assignees',
+            'order', 'is_final_approver', 'final_approver_source', 'final_approver_source_label',
+            'assignees',
         ]
 
     def get_node_type_display(self, obj):
         return obj.get_node_type_display()
+
+    def get_final_approver_source_label(self, obj):
+        """根据固化的配置来源 + 审批所属企业生成展示文案"""
+        if obj.final_approver_source == 'sub':
+            return '子公司自定义配置'
+        if obj.final_approver_source == 'default':
+            try:
+                t = obj.request.tenant
+                if t and t.parent:
+                    return '集团默认配置'
+                cfg_tenant = t.parent if t and t.parent else t
+                if cfg_tenant and cfg_tenant.sub_tenants.exists():
+                    return '集团默认配置'
+            except Exception:
+                pass
+            return '默认配置'
+        return ''
 
     def get_user_name(self, obj):
         return obj.user.real_name or obj.user.username if obj.user else ''
@@ -127,11 +147,15 @@ class ApprovalRequestSerializer(serializers.ModelSerializer):
     applicant_position = serializers.SerializerMethodField()
     department_name = serializers.SerializerMethodField()
     approval_type_display = serializers.SerializerMethodField()
+    approval_type_name = serializers.SerializerMethodField()
+    approval_type_icon = serializers.SerializerMethodField()
+    approval_type_color = serializers.SerializerMethodField()
     status_display = serializers.SerializerMethodField()
     approver_name = serializers.SerializerMethodField()
     expense_type_display = serializers.SerializerMethodField()
     sign_type_display = serializers.SerializerMethodField()
     approval_mode_display = serializers.SerializerMethodField()
+    form_data_display = serializers.SerializerMethodField()
     logs = serializers.SerializerMethodField()
     approval_nodes = serializers.SerializerMethodField()
     cc_users = serializers.SerializerMethodField()
@@ -142,10 +166,11 @@ class ApprovalRequestSerializer(serializers.ModelSerializer):
             'id', 'applicant', 'applicant_name', 'applicant_avatar', 'applicant_position',
             'department', 'department_name',
             'approval_type', 'approval_type_display',
+            'approval_type_name', 'approval_type_icon', 'approval_type_color',
             'title', 'content', 'status', 'status_display',
             'start_date', 'end_date', 'duration', 'amount',
             'expense_type', 'expense_type_display', 'expense_date',
-            'recruit_data',
+            'recruit_data', 'form_data', 'form_data_display',
             'attachments', 'sign_type', 'sign_type_display',
             'approval_mode', 'approval_mode_display', 'current_node_order',
             'approver', 'approver_name', 'approver_comment',
@@ -169,7 +194,19 @@ class ApprovalRequestSerializer(serializers.ModelSerializer):
         return obj.department.name if obj.department else ''
 
     def get_approval_type_display(self, obj):
-        return obj.get_approval_type_display()
+        return self.get_approval_type_name(obj)
+
+    def get_approval_type_name(self, obj):
+        t = resolve_approval_type(obj.approval_type, obj.tenant)
+        return t.name if t else obj.approval_type
+
+    def get_approval_type_icon(self, obj):
+        t = resolve_approval_type(obj.approval_type, obj.tenant)
+        return t.icon if t else 'fa-file-lines'
+
+    def get_approval_type_color(self, obj):
+        t = resolve_approval_type(obj.approval_type, obj.tenant)
+        return t.color if t else '#409EFF'
 
     def get_status_display(self, obj):
         return obj.get_status_display()
@@ -186,12 +223,56 @@ class ApprovalRequestSerializer(serializers.ModelSerializer):
     def get_approval_mode_display(self, obj):
         return obj.get_approval_mode_display()
 
+    def get_form_data_display(self, obj):
+        """把 form_data 中的部门ID/成员等解析为可读文本，供详情「表单详情」渲染"""
+        t = resolve_approval_type(obj.approval_type, obj.tenant)
+        schema = (t.form_schema or []) if t else []
+        if not schema:
+            return {}
+        fd = obj.form_data or {}
+        result = {}
+        from accounts.models import Department
+        for f in schema:
+            key = f.get('key')
+            if not key or key not in fd:
+                continue
+            val = fd[key]
+            if val in (None, ''):
+                continue
+            ftype = f.get('type')
+            if ftype == 'department':
+                dept = Department.objects.filter(id=val).first()
+                result[key] = dept.name if dept else str(val)
+            elif ftype == 'user':
+                if isinstance(val, list):
+                    result[key] = ', '.join([str(u.get('name') if isinstance(u, dict) else u) for u in val])
+                elif isinstance(val, dict):
+                    result[key] = str(val.get('name', val))
+            elif ftype in ('select', 'radio') and isinstance(val, str):
+                opt = next((o for o in (f.get('options') or [])
+                            if str(o.get('value') if isinstance(o, dict) else o) == val), None)
+                if opt:
+                    result[key] = opt.get('label') if isinstance(opt, dict) and opt.get('label') else opt
+            elif ftype == 'checkbox' and isinstance(val, list):
+                labels = []
+                for x in val:
+                    o = next((oo for oo in (f.get('options') or [])
+                              if str(oo.get('value') if isinstance(oo, dict) else oo) == str(x)), None)
+                    labels.append(o.get('label') if isinstance(o, dict) and o.get('label') else (o if o else str(x)))
+                result[key] = ', '.join(labels)
+        return result
+
     def get_cc_users(self, obj):
         ccs = obj.carbon_copies.select_related('cc_user', 'cc_department').all()
         defAv = '/static/images/default-avatar.png'
         result = []
+        seen = set()
         for cc in ccs:
             if cc.cc_type == 'user' and cc.cc_user:
+                key = ('user', cc.cc_user.id)
+                if key in seen:
+                    continue
+                seen.add(key)
                 result.append({
                     'id': cc.cc_user.id,
                     'name': cc.cc_user.real_name or cc.cc_user.username,
@@ -199,6 +280,10 @@ class ApprovalRequestSerializer(serializers.ModelSerializer):
                     'cc_type': 'user',
                 })
             elif cc.cc_type == 'department' and cc.cc_department:
+                key = ('department', cc.cc_department.id)
+                if key in seen:
+                    continue
+                seen.add(key)
                 # 部门抄送时显示部门信息，并附带部门负责人
                 mgr_name = ''
                 mgr_avatar = defAv
@@ -249,6 +334,9 @@ class ApprovalRequestSerializer(serializers.ModelSerializer):
             'department': None,
             'department_name': '',
             'order': -1,
+            'is_final_approver': False,
+            'final_approver_source': '',
+            'final_approver_source_label': '',
             'assignees': [{
                 'id': 0,
                 'user': applicant.id,
@@ -270,6 +358,8 @@ class ApprovalListSerializer(serializers.ModelSerializer):
     applicant_position = serializers.SerializerMethodField()
     department_name = serializers.SerializerMethodField()
     approval_type_display = serializers.SerializerMethodField()
+    approval_type_icon = serializers.SerializerMethodField()
+    approval_type_color = serializers.SerializerMethodField()
     status_display = serializers.SerializerMethodField()
 
     class Meta:
@@ -278,6 +368,7 @@ class ApprovalListSerializer(serializers.ModelSerializer):
             'id', 'applicant', 'applicant_name', 'applicant_avatar', 'applicant_position',
             'department', 'department_name',
             'approval_type', 'approval_type_display',
+            'approval_type_icon', 'approval_type_color',
             'title', 'status', 'status_display',
             'amount', 'created_at', 'updated_at',
         ]
@@ -295,7 +386,16 @@ class ApprovalListSerializer(serializers.ModelSerializer):
         return obj.department.name if obj.department else ''
 
     def get_approval_type_display(self, obj):
-        return obj.get_approval_type_display()
+        t = resolve_approval_type(obj.approval_type, obj.tenant)
+        return t.name if t else obj.approval_type
+
+    def get_approval_type_icon(self, obj):
+        t = resolve_approval_type(obj.approval_type, obj.tenant)
+        return t.icon if t else 'fa-file-lines'
+
+    def get_approval_type_color(self, obj):
+        t = resolve_approval_type(obj.approval_type, obj.tenant)
+        return t.color if t else '#409EFF'
 
     def get_status_display(self, obj):
         return obj.get_status_display()
@@ -331,7 +431,7 @@ class ApprovalLogSerializer(serializers.ModelSerializer):
 
 
 class ApprovalCreateSerializer(serializers.Serializer):
-    approval_type = serializers.ChoiceField(choices=ApprovalRequest.APPROVAL_TYPE_CHOICES)
+    approval_type = serializers.CharField(max_length=40)
     title = serializers.CharField(max_length=200)
     content = serializers.CharField(required=False, allow_blank=True)
     department_id = serializers.IntegerField(required=False, allow_null=True)
@@ -343,11 +443,23 @@ class ApprovalCreateSerializer(serializers.Serializer):
     expense_date = serializers.DateField(required=False, allow_null=True)
     attachments = serializers.JSONField(required=False, default=list)
     recruit_data = serializers.JSONField(required=False, default=dict)
+    form_data = serializers.JSONField(required=False, default=dict)
     sign_type = serializers.ChoiceField(choices=[('countersign', '会签'), ('orsign', '或签')], required=False, default='countersign')
     approval_mode = serializers.ChoiceField(choices=[('sequential', '顺序审批'), ('parallel', '并行审批')], required=False, default='sequential')
     approver_nodes = serializers.ListField(child=serializers.DictField(), required=False, default=[])
     cc_users = serializers.ListField(child=serializers.IntegerField(), required=False, default=[])
     cc_departments = serializers.ListField(child=serializers.IntegerField(), required=False, default=[])
+
+    def validate_approval_type(self, value):
+        request = self.context.get('request') if hasattr(self, 'context') else None
+        # 与 create/draft 保存逻辑保持一致：request.tenant 优先，兜底 get_active_tenant
+        tenant = None
+        if request:
+            tenant = getattr(request, 'tenant', None) or getattr(request.user, 'get_active_tenant', lambda: None)()
+        t = resolve_approval_type(value, tenant)
+        if not t:
+            raise serializers.ValidationError('审批类型不存在或未启用')
+        return value
 
 
 class ApprovalActionSerializer(serializers.Serializer):
@@ -358,7 +470,7 @@ class ApprovalActionSerializer(serializers.Serializer):
 
 class ApprovalDraftSerializer(serializers.Serializer):
     """存草稿/重新编辑 序列化器"""
-    approval_type = serializers.ChoiceField(choices=ApprovalRequest.APPROVAL_TYPE_CHOICES, required=False)
+    approval_type = serializers.CharField(max_length=40, required=False)
     title = serializers.CharField(max_length=200, required=False)
     content = serializers.CharField(required=False, allow_blank=True)
     department_id = serializers.IntegerField(required=False, allow_null=True)
@@ -370,11 +482,23 @@ class ApprovalDraftSerializer(serializers.Serializer):
     expense_date = serializers.DateField(required=False, allow_null=True)
     attachments = serializers.JSONField(required=False, default=list)
     recruit_data = serializers.JSONField(required=False, default=dict)
+    form_data = serializers.JSONField(required=False, default=dict)
     sign_type = serializers.ChoiceField(choices=[('countersign', '会签'), ('orsign', '或签')], required=False, default='countersign')
     approval_mode = serializers.ChoiceField(choices=[('sequential', '顺序审批'), ('parallel', '并行审批')], required=False, default='sequential')
     approver_nodes = serializers.ListField(child=serializers.DictField(), required=False, default=[])
     cc_users = serializers.ListField(child=serializers.IntegerField(), required=False, default=[])
     cc_departments = serializers.ListField(child=serializers.IntegerField(), required=False, default=[])
+
+    def validate_approval_type(self, value):
+        request = self.context.get('request') if hasattr(self, 'context') else None
+        # 与 create/draft 保存逻辑保持一致：request.tenant 优先，兜底 get_active_tenant
+        tenant = None
+        if request:
+            tenant = getattr(request, 'tenant', None) or getattr(request.user, 'get_active_tenant', lambda: None)()
+        t = resolve_approval_type(value, tenant)
+        if not t:
+            raise serializers.ValidationError('审批类型不存在或未启用')
+        return value
 
 
 class ApprovalCarbonCopySerializer(serializers.ModelSerializer):
@@ -410,6 +534,7 @@ class ApprovalDeptConfigSerializer(serializers.ModelSerializer):
     cc_department_details = serializers.SerializerMethodField()
     cc_user_details = serializers.SerializerMethodField()
     approver_user_details = serializers.SerializerMethodField()
+    final_approver_details = serializers.SerializerMethodField()
     threshold_department_name = serializers.SerializerMethodField()
     threshold_field_display = serializers.SerializerMethodField()
     sub_tenant_name = serializers.SerializerMethodField()
@@ -424,6 +549,7 @@ class ApprovalDeptConfigSerializer(serializers.ModelSerializer):
             'cc_departments', 'cc_department_details',
             'cc_users', 'cc_user_details',
             'approver_users', 'approver_user_details',
+            'final_approver', 'final_approver_details',
             'threshold_enabled', 'threshold_field', 'threshold_field_display',
             'threshold_value', 'threshold_department', 'threshold_department_name',
             'require_signature',
@@ -435,7 +561,8 @@ class ApprovalDeptConfigSerializer(serializers.ModelSerializer):
         return obj.department.name if obj.department else ''
 
     def get_approval_type_display(self, obj):
-        return obj.get_approval_type_display()
+        t = resolve_approval_type(obj.approval_type, obj.tenant)
+        return t.name if t else obj.approval_type
 
     def get_cc_department_details(self, obj):
         if not obj.cc_departments:
@@ -467,6 +594,16 @@ class ApprovalDeptConfigSerializer(serializers.ModelSerializer):
             'position': u.position or '',
         } for u in users]
 
+    def get_final_approver_details(self, obj):
+        if not obj.final_approver:
+            return None
+        u = obj.final_approver
+        return {
+            'id': u.id,
+            'name': u.real_name or u.username,
+            'position': u.position or '',
+        }
+
     def get_threshold_department_name(self, obj):
         return obj.threshold_department.name if obj.threshold_department else ''
 
@@ -479,7 +616,15 @@ class ApprovalDeptConfigSerializer(serializers.ModelSerializer):
         if not obj.threshold_field:
             return ''
         field_map = dict(ApprovalDeptConfig.THRESHOLD_FIELD_CHOICES)
-        return field_map.get(obj.threshold_field, obj.threshold_field)
+        if obj.threshold_field in field_map:
+            return field_map[obj.threshold_field]
+        # 自定义类型：回退到 form_schema 中该字段的 label
+        t = resolve_approval_type(obj.approval_type, obj.tenant)
+        if t:
+            for f in (t.form_schema or []):
+                if f.get('key') == obj.threshold_field:
+                    return f.get('label') or obj.threshold_field
+        return obj.threshold_field
 
 
 class AttendanceConfigSerializer(serializers.ModelSerializer):

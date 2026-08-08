@@ -547,55 +547,9 @@ class ChatClient {
         // 检测是否为standalone模式
         if (this.isPWAStandaloneMode()) {
             console.log('检测到 PWA standalone 模式');
-
-            // 添加PWA样式类
+            // 仅添加 PWA 样式类，顶栏保持 flex 流内，安全区由 CSS 统一处理
+            // （不再设置 position:fixed，否则会遮住侧边栏头像和聊天头部按钮）
             document.body.classList.add('pwa-mode');
-
-            // // 调整header高度
-            // const headers = document.querySelectorAll('.sidebar-header, .chat-header');
-            // headers.forEach(header => {
-            //     header.style.paddingTop = 'max(20px, env(safe-area-inset-top))';
-            // });
-            //
-            // // 调整输入区域
-            // const inputArea = document.querySelector('.chat-input-area');
-            // if (inputArea) {
-            //     inputArea.style.paddingBottom = 'max(12px, env(safe-area-inset-bottom))';
-            // }
-
-
-            // 确保侧边栏顶部铺满屏幕
-            const sidebarHeader = document.querySelector('.sidebar-header');
-            if (sidebarHeader) {
-                sidebarHeader.style.position = 'fixed';
-                sidebarHeader.style.top = '0';
-                sidebarHeader.style.left = '0';
-                sidebarHeader.style.right = '0';
-                sidebarHeader.style.zIndex = '100';
-
-                // // 添加安全区域处理
-                // const safeAreaTop = window.getComputedStyle(document.body).getPropertyValue('env(safe-area-inset-top)');
-                // if (safeAreaTop && safeAreaTop !== '0px') {
-                //     sidebarHeader.style.paddingTop = `max(20px, ${safeAreaTop})`;
-                // }
-            }
-
-            // 确保聊天区域不被遮挡
-            const chatHeader = document.querySelector('.chat-header');
-            if (chatHeader) {
-                chatHeader.style.position = 'fixed';
-                chatHeader.style.top = '0';
-                chatHeader.style.left = '0';
-                chatHeader.style.right = '0';
-                chatHeader.style.zIndex = '100';
-            }
-
-            // 调整输入区域
-            const inputArea = document.querySelector('.chat-input-area');
-            if (inputArea) {
-                inputArea.style.paddingBottom = 'max(20px, env(safe-area-inset-bottom))';
-            }
-
         }
     }
 
@@ -661,8 +615,16 @@ class ChatClient {
 
     async init() {
         console.log('ChatClient 初始化开始...');
+        // 🔧 PWA：尽早监听安装事件（Android/鸿蒙 beforeinstallprompt），避免错过
+        this.initInstallPrompt();
+        // 🔧 初始同步安装入口显示状态（无 beforeinstallprompt 的浏览器也展示「安装到桌面」以提供引导）
+        this._updateInstallPromptUI();
+
         // 🔧 关键修复1: 注册 Service Worker（锁屏通知必需）
         this.registerServiceWorker();
+
+        // 🔧 PWA：移动端「添加到主屏幕 + 开启通知」一次性引导
+        this.initPwaGuideBanner();
 
 
         try {
@@ -670,10 +632,31 @@ class ChatClient {
             // 检查登录状态
             await this.checkLoginStatus();
 
+            // 🔧 PWA：登录后确保订阅 Web Push（注册 SW 时可能还未拿到 token）
+            this.ensurePushSubscribed();
+
+            // 🔧 订阅自动补订：服务端 token 因 410 被清理后，定时重试直到重新建订阅
+            // （幂等：已有订阅则重 POST 同步，无订阅则新建），避免安卓/鸿蒙长期 subs=0
+            this._startPushSubscribeRetry();
+
+            // 🔧 关键修复：以用户手势请求通知权限（iOS 必须手势触发，否则不弹窗/可能静默拒绝）
+            this.requestNotificationPermission();
+
+            // 🔧 通知权限诊断：权限被拒绝时页面无法再次弹窗，必须引导去浏览器设置开启
+            if ('Notification' in window && Notification.permission === 'denied') {
+                setTimeout(() => {
+                    this.showInfo('通知权限已被拒绝：请在浏览器地址栏点锁图标 → 网站设置 → 通知 → 允许，才能收到推送。');
+                }, 1500);
+            } else if (!(window.PushNotifier && window.PushNotifier.supported())) {
+                setTimeout(() => {
+                    this.showInfo('当前浏览器不支持消息推送，请用 Chrome / Edge / 夸克 打开后安装。');
+                }, 1500);
+            }
+
             // 🔧 关键修复：加载系统配置（使用 FrontendConfigManager）
             await this.loadSystemConfigs();
 
-            // 初始化通知系统（用户交互后）
+            // 初始化通知系统（音频等，不在加载时自动请求权限）
             this.initNotificationSystem();
 
 
@@ -688,15 +671,19 @@ class ChatClient {
                 if (document.visibilityState === 'visible') {
                     this.stopTitleBlink();
 
+                    // 回到前台：查询是否有待接听的来电（后台/锁屏期间错过的）
+                    this._checkPendingCall();
+
                     // 更新角标（可能有新消息）
                     const totalUnread = this.chatRooms.reduce((sum, r) => sum + (r.unread_count || 0), 0);
                     this.updateAppBadge(totalUnread);
 
-                    // // 页面恢复可见时，标记当前聊天室消息为已读
-                    // if (this.currentRoomId) {
-                    //     console.log('页面恢复可见时, 标记当前聊天室消息为已读');
-                    //     this.markMessagesAsRead(this.currentRoomId);
-                    // }
+                    // 兜底：已授权通知但尚未订阅 Web Push 时补订（新设备 / 订阅被清理后）
+                    if ('Notification' in window && Notification.permission === 'granted' &&
+                        window.PushNotifier && !localStorage.getItem('pushSubscribed')) {
+                        window.PushNotifier.subscribe();
+                    }
+
                 }
                 // 页面变为隐藏时，停止音频播放（可选优化）
                 else if (document.visibilityState === 'hidden') {
@@ -707,11 +694,6 @@ class ChatClient {
                         }
                     });
                 }
-            });
-
-            // 监听窗口聚焦/失焦
-            window.addEventListener('blur', () => {
-                // console.log('窗口失焦');
             });
 
             window.addEventListener('focus', () => {
@@ -818,22 +800,24 @@ class ChatClient {
 
             // 更新全局顶栏企业名称
             var self = this;
-            setTimeout(function() {
+            setTimeout(function () {
                 self.updateGlobalTenantUI();
             }, 200);
 
             // 点击页面空白处关闭企业切换下拉
-            document.addEventListener('click', function(e) {
+            document.addEventListener('click', function (e) {
                 if (!e.target.closest('.tenant-switcher-trigger') && !e.target.closest('.tenant-dropdown')) {
-                    document.querySelectorAll('.tenant-dropdown').forEach(function(d) { d.classList.remove('show'); });
-                    document.querySelectorAll('.tenant-switcher-arrow').forEach(function(a) { a.classList.remove('open'); });
+                    document.querySelectorAll('.tenant-dropdown').forEach(function (d) {
+                        d.classList.remove('show');
+                    });
+                    document.querySelectorAll('.tenant-switcher-arrow').forEach(function (a) {
+                        a.classList.remove('open');
+                    });
                 }
             });
 
-            // 请求通知权限
-            if ('Notification' in window) {
-                Notification.requestPermission();
-            }
+            // 请求通知权限（改由用户手势触发；页面加载时无手势调用在 iOS 上不弹窗且可能影响后续授权）
+            this.requestNotificationPermission();
 
 
             // 移动端优化
@@ -987,7 +971,7 @@ class ChatClient {
             return;
         }
 
-        navigator.serviceWorker.register('/static/js/service-worker.js')
+        navigator.serviceWorker.register('/service-worker.js', {updateViaCache: 'none'})
             .then(registration => {
                 console.log('Service Worker registered with scope:', registration.scope);
 
@@ -997,10 +981,23 @@ class ChatClient {
                         this.selectChatRoom(event.data.chat_room);
                     }
                 });
+
+                // Web Push 订阅（已授权通知时自动订阅，锁屏/后台也能收到消息；登录后会再次兜底）
+                this.ensurePushSubscribed();
             })
             .catch(error => {
                 console.error('Service Worker registration failed:', error);
             });
+
+        // 🔧 部署更新：新 Service Worker 激活接管页面时自动刷新一次，
+        // 确保改版本号后第一时间拿到最新静态资源（而非旧 SW 缓存）
+        let _swRefreshing = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (_swRefreshing) return;
+            _swRefreshing = true;
+            console.log('Service Worker 已更新，自动刷新加载最新资源');
+            window.location.reload();
+        });
     }
 
 
@@ -1022,6 +1019,8 @@ class ChatClient {
 
             this.globalWs.onopen = () => {
                 console.log('Global WebSocket connected');
+                // 🔧 打开/重连后查询是否有待接听的来电（后台/锁屏错过的，补发并弹接听框）
+                this._checkPendingCall();
             };
 
             this.globalWs.onmessage = (event) => {
@@ -1045,6 +1044,17 @@ class ChatClient {
             };
         } catch (error) {
             console.error('Failed to create global WebSocket:', error);
+        }
+    }
+
+    // 查询待接听的来电：后台/锁屏期间错过的来电，回到前台时补发并弹出接听提示框
+    _checkPendingCall() {
+        try {
+            if (this.globalWs && this.globalWs.readyState === WebSocket.OPEN) {
+                this.globalWs.send(JSON.stringify({type: 'check_pending_call'}));
+            }
+        } catch (e) {
+            console.warn('查询待接听来电失败:', e);
         }
     }
 
@@ -1873,8 +1883,54 @@ class ChatClient {
         return desktopNotifications;
     }
 
-    // 请求通知权限（用户首次交互后）
+    // 确保已订阅 Web Push（已授权且有 token 时执行；未订阅会自动补订）
+    ensurePushSubscribed() {
+        if (window.PushNotifier && window.PushNotifier.supported() &&
+            'Notification' in window && Notification.permission === 'granted' &&
+            localStorage.getItem('access_token')) {
+            // 当前浏览器支持推送：清除历史「不支持」标记（用户可能已换到支持推送的浏览器）
+            try {
+                localStorage.removeItem('pushUnsupported');
+            } catch (ignore) {
+            }
+            window.PushNotifier.subscribe(true);
+        }
+    }
+
+    // 🔧 订阅自动补订：服务端 token 因 410 被清理后，设备端订阅可能已失效或未同步，
+    // 定时重试 subscribe（幂等），直到服务端重新建立订阅，避免安卓/鸿蒙长期 subs=0。
+    // 一旦判定当前浏览器不支持推送（pushUnsupported）即停止，避免无限空转。
+    _startPushSubscribeRetry() {
+        if (this._pushRetryTimer) return;
+        if (localStorage.getItem('pushUnsupported')) return;
+        let attempts = 0;
+        const doRetry = () => {
+            if (localStorage.getItem('pushUnsupported')) {
+                clearInterval(this._pushRetryTimer);
+                this._pushRetryTimer = null;
+                return;
+            }
+            attempts++;
+            if ('Notification' in window && Notification.permission === 'granted' &&
+                window.PushNotifier && window.PushNotifier.supported() &&
+                localStorage.getItem('access_token')) {
+                try {
+                    localStorage.removeItem('pushUnsupported');
+                } catch (ignore) {
+                }
+                window.PushNotifier.subscribe(true);
+            }
+            if (attempts >= 6) { // 最多重试 6 次（约 60 秒），后续由可见性/登录兜底
+                clearInterval(this._pushRetryTimer);
+                this._pushRetryTimer = null;
+            }
+        };
+        this._pushRetryTimer = setInterval(doRetry, 10000);
+    }
+
+    // 请求通知权限（必须在用户手势中触发，iOS 尤其要求如此）
     requestNotificationPermission() {
+        if (!('Notification' in window)) return;
         // 避免重复请求
         if (this.notificationPermissionRequested || Notification.permission !== 'default') {
             return;
@@ -1882,7 +1938,7 @@ class ChatClient {
 
         this.notificationPermissionRequested = true;
 
-        // 等待用户交互后请求权限
+        // 等待用户首次交互后再请求权限（iOS 无手势调用会不弹窗甚至影响后续授权）
         const requestPermission = () => {
             Notification.requestPermission().then(permission => {
                 console.log('Notification permission:', permission);
@@ -1890,9 +1946,15 @@ class ChatClient {
                 // 权限被拒绝时显示友好提示
                 if (permission === 'denied') {
                     this.showNotificationPermissionHint();
+                } else if (permission === 'granted') {
+                    // 授权后同时订阅 Web Push（锁屏/后台也能收到消息）
+                    this.ensurePushSubscribed();
                 }
 
                 // 移除事件监听（只请求一次）
+                document.removeEventListener('click', requestPermission);
+                document.removeEventListener('touchstart', requestPermission);
+            }).catch(() => {
                 document.removeEventListener('click', requestPermission);
                 document.removeEventListener('touchstart', requestPermission);
             });
@@ -1901,13 +1963,6 @@ class ChatClient {
         // 监听用户交互
         document.addEventListener('click', requestPermission, {once: true});
         document.addEventListener('touchstart', requestPermission, {once: true});
-
-        // 3秒后自动请求（降级方案）
-        setTimeout(() => {
-            if (Notification.permission === 'default') {
-                Notification.requestPermission();
-            }
-        }, 3000);
     }
 
     // 显示通知权限提示（权限被拒绝时）
@@ -1937,7 +1992,12 @@ class ChatClient {
                     hint.remove();
                     this.showSuccess('通知已开启');
                 } else {
-                    this.showInfo('请在浏览器设置中手动开启通知权限');
+                    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+                    if (isIOS && permission === 'denied') {
+                        this.showInfo('iOS 需在「设置 → 通知」中找到本应用并手动允许通知');
+                    } else {
+                        this.showInfo('请在浏览器设置中手动开启通知权限');
+                    }
                 }
             });
         };
@@ -1957,16 +2017,260 @@ class ChatClient {
     }
 
 
+    // 🔧 PWA 安装：Android / Chromium（含鸿蒙浏览器）会触发 beforeinstallprompt，
+    // 用它提供"一键安装到桌面"按钮；iOS 走 Safari「添加到主屏幕」。
+    initInstallPrompt() {
+        try {
+            window.addEventListener('beforeinstallprompt', (e) => {
+                e.preventDefault();
+                this.deferredInstallPrompt = e;
+                this._updateInstallPromptUI();
+            });
+            window.addEventListener('appinstalled', () => {
+                this.deferredInstallPrompt = null;
+                this.hideInstallPromptUI();
+                this.showSuccess('应用已安装，欢迎使用企业聊天室 App');
+            });
+
+            // 右上角菜单「安装到桌面」入口
+            const installMenu = document.getElementById('installAppBtn');
+            if (installMenu) {
+                installMenu.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const menu = document.getElementById('userDropdownMenu');
+                    if (menu) menu.classList.remove('show');
+                    this._promptInstall();
+                };
+            }
+        } catch (e) {
+            console.warn('PWA install prompt 不支持:', e);
+        }
+    }
+
+    _updateInstallPromptUI() {
+        const installBtn = document.getElementById('pwaGuideInstall');
+        const installMenu = document.getElementById('installAppBtn');
+        const isStandalone = window.navigator.standalone === true ||
+            (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+        if (isStandalone || this._installed) {
+            if (installBtn) installBtn.style.display = 'none';
+            if (installMenu) installMenu.style.display = 'none';
+            return;
+        }
+        // 无论是否有 beforeinstallprompt 都提供入口：
+        // 有则走原生安装弹窗，无则点按后经 _promptInstall() 给平台化引导（如 iOS/夸克/鸿蒙）
+        if (installBtn) installBtn.style.display = 'inline-block';
+        if (installMenu) installMenu.style.display = 'flex';
+    }
+
+    hideInstallPromptUI() {
+        this.deferredInstallPrompt = null;
+        this._installed = true;
+        this._updateInstallPromptUI();
+        const banner = document.getElementById('pwaGuideBanner');
+        if (banner) banner.classList.remove('show');
+    }
+
+    // 🔧 浏览器/平台识别（用于安装与推送引导）
+    detectBrowser() {
+        const ua = navigator.userAgent || '';
+        if (/iPad|iPhone|iPod/.test(ua) && !window.MSStream) return 'ios-safari';
+        if (/HuaweiBrowser|PetalBrowser|TASBrowser/i.test(ua)) return 'huawei-harmony';
+        if (/Quark/i.test(ua)) return 'quark';
+        if (/Edg\//i.test(ua)) return 'edge';
+        if (/Chrome\//i.test(ua)) return 'chrome';
+        if (/HarmonyOS/i.test(ua)) return 'huawei-harmony';
+        return 'other';
+    }
+
+    // 安装不可用时的引导（不同浏览器菜单不同）
+    showInstallGuidance() {
+        const browser = this.detectBrowser();
+        const msgs = {
+            'ios-safari': '请使用 Safari 底部「分享」按钮 → 「添加到主屏幕」',
+            'chrome': '请点击浏览器右上角「⋮」菜单 → 「安装应用」',
+            'edge': '请点击浏览器右上角「…」菜单 → 「应用」→「安装此网站为应用」',
+            'quark': '请点击夸克浏览器菜单 → 「添加到桌面」',
+            'huawei-harmony': '请使用浏览器菜单 → 「添加到主屏幕」（快捷方式）；如需收到推送通知，请改用 Chrome 或夸克浏览器打开并安装',
+            'other': '请使用浏览器菜单 → 「安装应用 / 添加到主屏幕 / 添加到桌面」'
+        };
+        this.showInfo(msgs[browser] || msgs['other']);
+    }
+
+    async _promptInstall() {
+        const promptEvent = this.deferredInstallPrompt;
+        if (!promptEvent) {
+            this.showInstallGuidance();
+            return;
+        }
+        try {
+            promptEvent.prompt();
+            // 部分浏览器（如夸克）beforeinstallprompt 触发但 prompt() 不弹窗，
+            // userChoice 永不 resolve，用超时兜底并引导走浏览器菜单。
+            const timeout = new Promise(resolve => setTimeout(() => resolve({outcome: 'timeout'}), 8000));
+            const choice = await Promise.race([promptEvent.userChoice, timeout]);
+            this.deferredInstallPrompt = null;
+            this._updateInstallPromptUI();
+            if (choice && choice.outcome === 'accepted') {
+                this.hideInstallPromptUI();
+            } else if (choice && choice.outcome === 'timeout') {
+                console.warn('浏览器未弹出安装界面，引导使用浏览器菜单');
+                this.showInstallGuidance();
+            }
+        } catch (e) {
+            console.warn('安装被取消或失败:', e);
+            this.deferredInstallPrompt = null;
+            this._updateInstallPromptUI();
+            this.showInstallGuidance();
+        }
+    }
+
+    // 🔧 PWA：移动端一次性引导（安装到桌面 + 开启通知），兼容 iOS / Android / 鸿蒙
+    initPwaGuideBanner() {
+        // 已安装为 App（standalone）则不显示安装引导
+        const isStandalone = window.navigator.standalone === true ||
+            (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+        // 已授权通知：无需再引导（即使之前关闭过横幅也不打扰）
+        if ('Notification' in window && Notification.permission === 'granted') return;
+        // 未授权通知时：即使之前关闭过横幅也要重新出现（否则用户永远无法重新授权/订阅，收不到推送）
+        // 已关闭过：改为只在用户明确拒绝过（denied）时不再打扰
+        if (localStorage.getItem('pwaGuideShown') && 'Notification' in window && Notification.permission === 'denied') return;
+        // 桌面大屏：安装入口在右上角菜单，不弹横幅
+        if (window.innerWidth > 768) return;
+
+        const banner = document.getElementById('pwaGuideBanner');
+        if (!banner) return;
+
+        const hide = (remember) => {
+            banner.classList.remove('show');
+            if (remember) localStorage.setItem('pwaGuideShown', '1');
+        };
+
+        const closeBtn = document.getElementById('pwaGuideClose');
+        if (closeBtn) closeBtn.onclick = () => hide(true);
+
+        // 平台适配：安装按钮 / 步骤文案
+        const stepsEl = document.getElementById('pwaGuideSteps');
+        const installBtn = document.getElementById('pwaGuideInstall');
+        const browser = this.detectBrowser();
+        if (installBtn) {
+            if (isStandalone) {
+                // 已安装为 App：隐藏安装按钮，只保留「开启通知」（standalone 下未授权时才走到这里）
+                installBtn.style.display = 'none';
+                if (stepsEl) stepsEl.innerHTML = '<span>开启通知后，主屏幕 / 锁屏也能实时收到消息</span>';
+            } else {
+                // 统一入口：有 beforeinstallprompt 走原生安装弹窗；无则点按后经 _promptInstall() 给平台化引导
+                installBtn.style.display = 'inline-block';
+                installBtn.onclick = () => this._promptInstall();
+                if (this.deferredInstallPrompt) {
+                    if (stepsEl) stepsEl.innerHTML = '<span>① 点击下方「安装应用」</span><span>② 再开启通知</span>';
+                } else if (browser === 'ios-safari') {
+                    if (stepsEl) stepsEl.innerHTML = '<span>① Safari 分享按钮 → 添加到主屏幕</span><span>② 再开启通知</span>';
+                } else if (browser === 'huawei-harmony') {
+                    if (stepsEl) stepsEl.innerHTML = '<span>① 浏览器菜单 → 添加到主屏幕（快捷方式）</span><span>② 推送请用 Chrome / 夸克</span>';
+                } else if (browser === 'quark') {
+                    if (stepsEl) stepsEl.innerHTML = '<span>① 夸克菜单 → 添加到桌面</span><span>② 再开启通知</span>';
+                } else {
+                    if (stepsEl) stepsEl.innerHTML = '<span>① 浏览器菜单 → 安装应用 / 添加到主屏幕</span><span>② 再开启通知</span>';
+                }
+            }
+        }
+
+        // 浏览器不支持 Web Push（华为/鸿蒙自带浏览器、老版本）：明确提示换用支持推送的浏览器
+        if (window.PushNotifier && !window.PushNotifier.supported()) {
+            if (stepsEl) {
+                if (browser === 'huawei-harmony') {
+                    stepsEl.innerHTML = '<span>⚠️ 华为/鸿蒙自带浏览器不支持消息推送</span><span>仍可「添加到主屏幕」，推送请用 Chrome / 夸克</span>';
+                } else {
+                    stepsEl.innerHTML = '<span>⚠️ 当前浏览器不支持消息推送</span><span>仍可「添加到主屏幕」，推送请用 Chrome / Edge / 夸克</span>';
+                }
+            }
+            const enableBtn2 = document.getElementById('pwaGuideEnable');
+            if (enableBtn2) enableBtn2.style.display = 'none';
+        }
+
+        // 开启通知按钮：已授权则隐藏
+        const enableBtn = document.getElementById('pwaGuideEnable');
+        if (enableBtn) {
+            if ('Notification' in window && Notification.permission === 'granted') {
+                enableBtn.style.display = 'none';
+            } else {
+                enableBtn.onclick = () => {
+                    if ('Notification' in window) {
+                        Notification.requestPermission().then(permission => {
+                            if (permission === 'granted') {
+                                this.ensurePushSubscribed();
+                            }
+                            hide(true);
+                        }).catch(() => hide(true));
+                    } else {
+                        hide(true);
+                    }
+                };
+            }
+        }
+
+        // 🔧 授权摄像头/麦克风按钮（点击一次性请求通知 + 摄像头 + 麦克风权限）
+        const permBtn = document.getElementById('pwaGuidePerms');
+        if (permBtn) {
+            permBtn.style.display = 'inline-block';
+            permBtn.onclick = () => this._requestAllPermissions();
+        }
+
+        // 延迟出现，避免打断登录/首屏
+        setTimeout(() => banner.classList.add('show'), 800);
+    }
+
+    // 🔧 一次性获取推送通知 + 摄像头 + 麦克风权限（供安卓/鸿蒙安装后一键授权）
+    async _requestAllPermissions() {
+        let granted = 0;
+        // 1) 推送通知
+        if ('Notification' in window && Notification.permission !== 'granted') {
+            try {
+                const p = await Notification.requestPermission();
+                if (p === 'granted') {
+                    granted++;
+                    this.ensurePushSubscribed();
+                }
+            } catch (e) {
+            }
+        } else if ('Notification' in window && Notification.permission === 'granted') {
+            granted++;
+            this.ensurePushSubscribed();
+        }
+        // 2) 摄像头 + 麦克风（需要用户手势 + HTTPS）
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({audio: true, video: true});
+                stream.getTracks().forEach(t => t.stop()); // 只授权，不持续占用设备
+                granted++;
+            } catch (e) {
+                console.warn('摄像头/麦克风授权失败:', e);
+            }
+        } else {
+            granted++;
+        }
+        if (granted >= 2) {
+            this.showSuccess('通知、摄像头、麦克风权限已获取');
+        } else if (granted >= 1) {
+            this.showInfo('部分权限已获取，未授权的请在浏览器设置中开启');
+        } else {
+            this.showInfo('请允许通知与摄像头/麦克风权限（浏览器设置中可开启）');
+        }
+        const permBtn = document.getElementById('pwaGuidePerms');
+        if (permBtn) permBtn.style.display = 'none';
+        const banner = document.getElementById('pwaGuideBanner');
+        if (banner) banner.classList.remove('show');
+    }
+
     // 初始化通知系统（在用户首次交互后）
     initNotificationSystem() {
-        // 桌面通知权限
-        if ('Notification' in window) {
-            // 尝试请求权限（如果尚未授权）
-            if (Notification.permission === 'default') {
-                Notification.requestPermission().then(permission => {
-                    console.log('Notification permission:', permission);
-                });
-            }
+        // 不再在页面加载时自动请求权限：
+        // iOS 上无用户手势的 requestPermission 不弹窗，且可能在非安装态下影响后续授权。
+        // 授权改由 requestNotificationPermission()（手势触发）与引导横幅「开启通知」按钮完成。
+        if ('Notification' in window && Notification.permission === 'granted') {
+            this.ensurePushSubscribed();
         }
 
         // 音频上下文初始化（用户交互后恢复）
@@ -2078,8 +2382,12 @@ class ChatClient {
 
         // 检查通知权限
         if (Notification.permission !== 'granted') {
-            // 尝试请求权限（用户已交互）
-            await Notification.requestPermission();
+            // iOS 必须在用户手势中授权，这里（消息事件，非手势）不自动请求，避免影响后续授权，直接降级为页面内通知；
+            // 其他平台保留自动请求作为兜底。
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+            if (!isIOS) {
+                await Notification.requestPermission();
+            }
 
             // 仍无权限，降级为页面内通知
             if (Notification.permission !== 'granted') {
@@ -3088,6 +3396,208 @@ class ChatClient {
         }
     }
 
+    // 屏幕截图：调用浏览器原生屏幕捕获，截取一帧并作为图片消息发送到当前聊天
+    async captureScreenshot() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+            this.showError('当前浏览器不支持屏幕截图，请使用 Chrome / Edge 浏览器');
+            return;
+        }
+        if (!this.currentRoomId) {
+            this.showError('请先选择聊天对象，再进行截图发送');
+            return;
+        }
+        let stream = null;
+        try {
+            // 弹出系统选择框：屏幕 / 窗口 / 标签页
+            stream = await navigator.mediaDevices.getDisplayMedia({
+                video: {cursor: 'always'},
+                audio: false,
+            });
+
+            const video = document.createElement('video');
+            video.srcObject = stream;
+            video.playsInline = true;
+            video.muted = true;
+            await new Promise((resolve) => {
+                video.onloadedmetadata = resolve;
+                setTimeout(resolve, 8000); // 超时兜底，避免一直等待
+            });
+            await Promise.race([
+                video.play().catch(() => {
+                }),
+                new Promise(resolve => setTimeout(resolve, 5000)),
+            ]);
+            // 等待一帧渲染完成后再绘制，避免截到黑帧
+            await new Promise(resolve => setTimeout(resolve, 120));
+
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth || window.screen.width || 1280;
+            canvas.height = video.videoHeight || window.screen.height || 720;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0);
+
+            // 释放屏幕共享（停止屏幕占用提示）
+            stream.getTracks().forEach(t => t.stop());
+            stream = null;
+
+            // 打开区域选择浮层：鼠标拖拽自定义截图范围
+            const blob = await this._openScreenshotCropper(canvas);
+            if (blob) {
+                // 作为图片消息发送到当前聊天
+                await this.sendImageFromClipboard(blob);
+            }
+        } catch (e) {
+            // 用户取消选择或浏览器拒绝
+            console.warn('截图取消或失败:', e);
+        } finally {
+            if (stream) {
+                try {
+                    stream.getTracks().forEach(t => t.stop());
+                } catch (ignore) {
+                }
+            }
+        }
+    }
+
+    // 截图区域选择浮层：把截取的全屏图铺满视口，鼠标拖拽框选范围，返回裁剪后的 PNG blob（取消返回 null）
+    _openScreenshotCropper(sourceCanvas) {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.id = 'screenshotCropOverlay';
+            overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:999999;'
+                + 'background:rgba(0,0,0,0.6);cursor:crosshair;user-select:none;-webkit-user-drag:none;';
+            document.body.appendChild(overlay);
+
+            const img = new Image();
+            img.src = sourceCanvas.toDataURL('image/png');
+            img.onload = () => {
+                const vw = window.innerWidth, vh = window.innerHeight;
+                const iw = img.naturalWidth, ih = img.naturalHeight;
+                const scale = Math.min(vw / iw, vh / ih);
+                const dispW = Math.round(iw * scale), dispH = Math.round(ih * scale);
+                const offsetX = Math.round((vw - dispW) / 2), offsetY = Math.round((vh - dispH) / 2);
+                const sf = 1 / scale; // 原始像素 / 显示像素
+
+                const imgEl = document.createElement('img');
+                imgEl.src = img.src;
+                imgEl.style.cssText = 'position:absolute;left:' + offsetX + 'px;top:' + offsetY + 'px;'
+                    + 'width:' + dispW + 'px;height:' + dispH + 'px;pointer-events:none;';
+                overlay.appendChild(imgEl);
+
+                const selRect = document.createElement('div');
+                selRect.style.cssText = 'position:absolute;display:none;border:2px solid #409eff;'
+                    + 'background:rgba(64,158,255,0.15);z-index:2;pointer-events:none;';
+                overlay.appendChild(selRect);
+
+                const hint = document.createElement('div');
+                hint.style.cssText = 'position:absolute;top:12px;left:50%;transform:translateX(-50%);color:#fff;'
+                    + 'background:rgba(0,0,0,0.6);padding:6px 14px;border-radius:6px;font-size:13px;z-index:3;pointer-events:none;white-space:nowrap;';
+                hint.textContent = '按住鼠标左键拖拽选择截图区域，Esc 取消';
+                overlay.appendChild(hint);
+
+                const toolbar = document.createElement('div');
+                toolbar.style.cssText = 'position:absolute;display:none;z-index:3;gap:8px;align-items:center;';
+                toolbar.innerHTML = '<button style="padding:6px 18px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">✓ 发送</button>'
+                    + '<button style="padding:6px 18px;background:rgba(255,255,255,0.92);color:#333;border:none;border-radius:6px;cursor:pointer;font-size:13px;">取消</button>';
+                overlay.appendChild(toolbar);
+                const sendBtn = toolbar.querySelector('button:first-child');
+                const cancelBtn = toolbar.querySelector('button:last-child');
+
+                let drawing = false;
+                let startX = 0, startY = 0;
+                let sel = null; // {x,y,w,h} 视口坐标
+                const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+                const cleanup = () => {
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                    document.removeEventListener('keydown', onKey);
+                    window.removeEventListener('resize', onResize);
+                    if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+                };
+
+                const onMove = (e) => {
+                    if (!drawing) return;
+                    const x1 = clamp(e.clientX, offsetX, offsetX + dispW);
+                    const y1 = clamp(e.clientY, offsetY, offsetY + dispH);
+                    const x = Math.min(startX, x1), y = Math.min(startY, y1);
+                    const w = Math.abs(x1 - startX), h = Math.abs(y1 - startY);
+                    sel = {x: x, y: y, w: w, h: h};
+                    selRect.style.display = 'block';
+                    selRect.style.left = x + 'px';
+                    selRect.style.top = y + 'px';
+                    selRect.style.width = w + 'px';
+                    selRect.style.height = h + 'px';
+                    // 工具栏跟随选区边缘
+                    let tx = x + w + 6, ty = y;
+                    if (tx + 130 > vw) tx = Math.max(4, x - 136);
+                    if (ty + 90 > vh) ty = Math.max(4, y + h - 90);
+                    toolbar.style.left = tx + 'px';
+                    toolbar.style.top = ty + 'px';
+                    toolbar.style.display = 'flex';
+                };
+
+                const onDown = (e) => {
+                    if (e.button !== 0) return;
+                    if (e.target && e.target.closest && e.target.closest('button')) return; // 工具栏按钮不触发选区
+                    e.preventDefault();
+                    drawing = true;
+                    startX = e.clientX; startY = e.clientY;
+                    sel = null;
+                    selRect.style.display = 'none';
+                    toolbar.style.display = 'none';
+                };
+
+                const onUp = (e) => {
+                    if (!drawing) return;
+                    drawing = false;
+                    onMove(e);
+                    if (!sel || sel.w < 4 || sel.h < 4) {
+                        hint.textContent = '拖拽范围太小，请重新框选';
+                        setTimeout(() => { hint.textContent = '按住鼠标左键拖拽选择截图区域，Esc 取消'; }, 1500);
+                    }
+                };
+
+                const onKey = (e) => {
+                    if (e.key === 'Escape') { cleanup(); resolve(null); }
+                };
+
+                const onResize = () => { cleanup(); resolve(null); };
+
+                const finish = (send) => {
+                    if (send && sel && sel.w >= 4 && sel.h >= 4) {
+                        const ox = clamp(sel.x - offsetX, 0, dispW);
+                        const oy = clamp(sel.y - offsetY, 0, dispH);
+                        const ow = Math.min(sel.w, dispW - ox);
+                        const oh = Math.min(sel.h, dispH - oy);
+                        const cropCanvas = document.createElement('canvas');
+                        cropCanvas.width = Math.max(1, Math.round(ow * sf));
+                        cropCanvas.height = Math.max(1, Math.round(oh * sf));
+                        cropCanvas.getContext('2d').drawImage(
+                            sourceCanvas,
+                            Math.round(ox * sf), Math.round(oy * sf),
+                            cropCanvas.width, cropCanvas.height,
+                            0, 0, cropCanvas.width, cropCanvas.height
+                        );
+                        cropCanvas.toBlob((blob) => { cleanup(); resolve(blob); }, 'image/png');
+                    } else {
+                        cleanup();
+                        resolve(null);
+                    }
+                };
+
+                sendBtn.addEventListener('click', () => finish(true));
+                cancelBtn.addEventListener('click', () => finish(false));
+                overlay.addEventListener('mousedown', onDown);
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+                document.addEventListener('keydown', onKey);
+                window.addEventListener('resize', onResize);
+            };
+            img.onerror = () => { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); resolve(null); };
+        });
+    }
+
 
     // 加载聊天室
     async loadChatRooms() {
@@ -3496,6 +4006,17 @@ class ChatClient {
 
 
     // 初始化直达底部按钮
+    // 🔧 动态把「回到底部」按钮放在输入区上方，始终与输入区保持 12px 间距，避免被遮挡
+    _positionScrollToBottomBtn() {
+        const container = document.getElementById('scrollToBottomContainer');
+        if (!container) return;
+        const inputArea = document.querySelector('.chat-input-area');
+        if (!inputArea) return;
+        const inputTop = inputArea.getBoundingClientRect().top;
+        const offset = Math.max(12, window.innerHeight - inputTop + 12);
+        container.style.bottom = offset + 'px';
+    }
+
     initScrollToBottomButton() {
         const container = document.getElementById('scrollToBottomContainer');
         const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
@@ -3514,6 +4035,9 @@ class ChatClient {
 
         // 更新按钮显示状态（基于滚动方向）
         const updateButtonVisibility = () => {
+            // 每次显示状态变化时重新定位（输入区高度可能因输入/表情面板变化）
+            this._positionScrollToBottomBtn();
+
             const scrollTop = messagesList.scrollTop;
             const scrollHeight = messagesList.scrollHeight;
             const clientHeight = messagesList.clientHeight;
@@ -3592,6 +4116,13 @@ class ChatClient {
                 this.markMessagesAsRead(this.currentRoomId);
             }
         });
+
+        // 窗口尺寸变化 / 输入框高度变化（多行输入/表情面板）时重新定位，避免按钮被输入区遮挡
+        window.addEventListener('resize', () => this._positionScrollToBottomBtn());
+        const msgInput = document.getElementById('messageInput');
+        if (msgInput) {
+            msgInput.addEventListener('input', () => this._positionScrollToBottomBtn());
+        }
 
         // 保存引用
         this.scrollToBottomContainer = container;
@@ -4261,7 +4792,12 @@ class ChatClient {
             let taskStatusRaw = '';
             let taskAssignee = '';
             const statusMapPreview = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成', 'overdue': '已逾期'};
-            const statusColorPreview = {'todo': '#909399', 'in_progress': '#E6A23C', 'done': '#67C23A', 'overdue': '#F56C6C'};
+            const statusColorPreview = {
+                'todo': '#909399',
+                'in_progress': '#E6A23C',
+                'done': '#67C23A',
+                'overdue': '#F56C6C'
+            };
             try {
                 const taskData = typeof message.content === 'string' ? JSON.parse(message.content) : (message.task_data || {});
                 taskTitle = taskData.title || taskData.task_title || '';
@@ -4274,7 +4810,7 @@ class ChatClient {
             // 使用 innerHTML 的标记，后面会在渲染时检测
             const escTitle = this.escapeHtml(taskTitle || '任务卡片');
             const statusBg = statusColorPreview[taskStatusRaw] || '#909399';
-            previewContent =`
+            previewContent = `
                     <div class="forward-task-card-preview" title="任务卡片" style="padding:6px 8px;border-left:3px solid #409EFF;display:flex;align-items:center;gap:8px;">
                         <div style="font-weight:500;font-size:13px;color:#303133;display:flex;align-items:center;gap:6px;margin-bottom:4px;">
                             <i class="fas fa-tasks" style="color:#409EFF;"></i> 
@@ -4583,7 +5119,10 @@ class ChatClient {
             case 'task_card':
                 let taskData = originalMessage.task_data || null;
                 if (!taskData && originalMessage.content) {
-                    try { taskData = JSON.parse(originalMessage.content); } catch (_) {}
+                    try {
+                        taskData = JSON.parse(originalMessage.content);
+                    } catch (_) {
+                    }
                 }
                 return {
                     content: taskData ? JSON.stringify(taskData) : (originalMessage.content || '{}'),
@@ -4750,7 +5289,7 @@ class ChatClient {
 
 
     // 🔧 新增：根据引用消息类型生成 HTML
-    renderQuotedContent(type, content, fileInfo = null, messageId = null, message= null) {
+    renderQuotedContent(type, content, fileInfo = null, messageId = null, message = null) {
         const escape = (str) => this.escapeHtml(str || '');
 
         // 生成点击跳转的处理函数，如果 messageId 存在则跳转，否则阻止冒泡
@@ -4851,7 +5390,12 @@ class ChatClient {
                 let qTaskAssignee = '';
                 let qTaskStatusRaw = '';
                 const qStatusMap = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成', 'overdue': '已逾期'};
-                const qStatusColors = {'todo': '#909399', 'in_progress': '#E6A23C', 'done': '#67C23A', 'overdue': '#F56C6C'};
+                const qStatusColors = {
+                    'todo': '#909399',
+                    'in_progress': '#E6A23C',
+                    'done': '#67C23A',
+                    'overdue': '#F56C6C'
+                };
                 try {
                     const tcData = (typeof content === 'string' && (content.startsWith('{') || content.startsWith('['))) ? JSON.parse(content) : (message?.task_data || {});
                     qTaskTitle = tcData.title || tcData.task_title || content || '[任务卡片]';
@@ -5087,7 +5631,8 @@ class ChatClient {
                             if (parsed && parsed.title !== undefined) {
                                 taskData = parsed;
                             }
-                        } catch (_) {}
+                        } catch (_) {
+                        }
                     }
                     if (taskData) {
                         this.renderTaskCardInChat(taskData, container);
@@ -5280,7 +5825,9 @@ class ChatClient {
                         </div>
                         <div class="profile-info-item">
                             <label>部门:</label>
-                            <span>${userData.org_departments && userData.org_departments.length ? userData.org_departments.map(function(d){return '<i class="fas fa-sitemap" style="color:#e6a23c;font-size:11px;margin-right:4px;"></i>' + chatClient._escape(d.full_path || d.name)}).join('<br>') : (userData.department_info?.name ? (userData.department_info.name + (userData.department_info.type === 'legacy' ? '' : '')) : '未设置')}</span>
+                            <span>${userData.org_departments && userData.org_departments.length ? userData.org_departments.map(function (d) {
+            return '<i class="fas fa-sitemap" style="color:#e6a23c;font-size:11px;margin-right:4px;"></i>' + chatClient._escape(d.full_path || d.name)
+        }).join('<br>') : (userData.department_info?.name ? (userData.department_info.name + (userData.department_info.type === 'legacy' ? '' : '')) : '未设置')}</span>
                         </div>
                         <div class="profile-info-item">
                             <label>职位:</label>
@@ -5425,7 +5972,9 @@ class ChatClient {
     openNotifications() {
         // 更新侧边栏激活状态
         this.currentRoomId = null;
-        document.querySelectorAll('.chat-item.cursor-pointer').forEach(function(el) { el.classList.remove('active'); });
+        document.querySelectorAll('.chat-item.cursor-pointer').forEach(function (el) {
+            el.classList.remove('active');
+        });
         // 收起移动端侧边栏
         if (window.innerWidth <= 768) {
             document.querySelector('.sidebar').classList.remove('show');
@@ -5466,28 +6015,42 @@ class ChatClient {
         try {
             var url = '/api/oa/notifications/?page=1&page_size=50';
             if (filter) url += '&read_filter=' + filter;
-            var resp = await fetch(url, { headers: TokenManager.getHeaders() });
+            var resp = await fetch(url, {headers: TokenManager.getHeaders()});
             var raw = await resp.json();
             var data = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
             var rows = data.results || [];
 
-            var typeIcon2 = function(t) {
-                var map = { 'approval': 'fa-check-double', 'attendance': 'fa-clock', 'task': 'fa-tasks', 'collab': 'fa-users', 'system': 'fa-bell' };
+            var typeIcon2 = function (t) {
+                var map = {
+                    'approval': 'fa-check-double',
+                    'attendance': 'fa-clock',
+                    'task': 'fa-tasks',
+                    'collab': 'fa-users',
+                    'system': 'fa-bell'
+                };
                 return map[t] || 'fa-bell';
             };
-            var typeColor2 = function(t) {
-                var map = { 'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'system': '#909399' };
+            var typeColor2 = function (t) {
+                var map = {
+                    'approval': '#409eff',
+                    'attendance': '#67c23a',
+                    'task': '#e6a23c',
+                    'collab': '#9b59b6',
+                    'system': '#909399'
+                };
                 return map[t] || '#909399';
             };
-            var formatTime2 = function(iso) {
+            var formatTime2 = function (iso) {
                 if (!iso) return '';
                 var d = new Date(iso);
-                var pad = function(n) { return String(n).padStart(2, '0'); };
-                return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+                var pad = function (n) {
+                    return String(n).padStart(2, '0');
+                };
+                return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
             };
-            var escapeHtml2 = function(text) {
+            var escapeHtml2 = function (text) {
                 if (!text) return '';
-                return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+                return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             };
 
             var filterBar = '<div style="display:flex;gap:0;padding:8px 16px;border-bottom:1px solid var(--border-color,#ebeef5);">'
@@ -5502,7 +6065,7 @@ class ChatClient {
             }
 
             var self = this;
-            container.innerHTML = filterBar + rows.map(function(n) {
+            container.innerHTML = filterBar + rows.map(function (n) {
                 var icon = typeIcon2(n.type);
                 var color = typeColor2(n.type);
                 var cls = n.is_read ? '' : 'notif-item-unread';
@@ -5516,15 +6079,19 @@ class ChatClient {
                     + '<span style="font-size:11px;color:var(--text-light,#909399);flex-shrink:0;margin-left:8px;">' + formatTime2(n.created_at) + '</span></div>'
                     + '<div style="font-size:13px;color:var(--text-secondary,#606266);margin-top:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">' + escapeHtml2(n.content) + '</div>' + detailBtn + '</div>' + dotHtml + '</div>';
             }).join('');
-        } catch(e) {
+        } catch (e) {
             container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-light);"><i class="fas fa-exclamation-circle" style="font-size:36px;"></i><p style="margin-top:8px;">加载失败</p></div>';
         }
     }
 
     async _markNotifRead(id) {
         try {
-            await fetch('/api/oa/notifications/' + id + '/mark-read/', { method: 'POST', headers: TokenManager.getHeaders() });
-        } catch(e) {}
+            await fetch('/api/oa/notifications/' + id + '/mark-read/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders()
+            });
+        } catch (e) {
+        }
         if (window.WorkNotif && window.WorkNotif.refreshCount) {
             window.WorkNotif.refreshCount();
         }
@@ -5536,7 +6103,8 @@ class ChatClient {
                 await fetch('/api/oa/notifications/' + id + '/mark-read/', {
                     method: 'POST', headers: TokenManager.getHeaders()
                 });
-            } catch(e) {}
+            } catch (e) {
+            }
             if (window.WorkNotif && window.WorkNotif.refreshCount) {
                 window.WorkNotif.refreshCount();
             }
@@ -5790,7 +6358,9 @@ class ChatClient {
     openOrgView() {
         // 隐藏消息区域，显示组织架构视图
         this.currentRoomId = null;
-        document.querySelectorAll('.chat-item.cursor-pointer').forEach(function(el) { el.classList.remove('active'); });
+        document.querySelectorAll('.chat-item.cursor-pointer').forEach(function (el) {
+            el.classList.remove('active');
+        });
         if (window.innerWidth <= 768) {
             var sidebar = document.querySelector('.sidebar');
             if (sidebar) sidebar.classList.remove('show');
@@ -5823,14 +6393,18 @@ class ChatClient {
     }
 
     /** 控制聊天输入区域和头部操作按钮的显隐 */
-    _setChatControlsVisible(visible, limit=3) {
+    _setChatControlsVisible(visible, limit = 3) {
         var inputArea = document.querySelector('.chat-input-area');
         if (inputArea) inputArea.style.display = visible ? '' : 'none';
         // 隐藏/显示通话和更多操作按钮
         var headerRight = document.querySelector('.header-right');
         if (headerRight) {
             var btns = headerRight.querySelectorAll('.btn-icon');
-            btns.forEach(function(b, key) { if (key<limit) {b.style.display = visible ? '' : 'none'; }});
+            btns.forEach(function (b, key) {
+                if (key < limit) {
+                    b.style.display = visible ? '' : 'none';
+                }
+            });
         }
     }
 
@@ -5843,7 +6417,10 @@ class ChatClient {
             var resp = await fetch('/api/org/org-chart/', {
                 headers: TokenManager.getHeaders()
             });
-            if (!resp.ok) { body.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>加载失败</p></div>'; return; }
+            if (!resp.ok) {
+                body.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>加载失败</p></div>';
+                return;
+            }
             var data = await resp.json();
             var chartData = data.org_chart || [];
             if (!chartData.length) {
@@ -5852,7 +6429,7 @@ class ChatClient {
             }
             this._orgMembersCache = {};
             if (!this._orgViewHandler) {
-                this._orgViewHandler = function(e) {
+                this._orgViewHandler = function (e) {
                     var toggle = e.target.closest('.toggle-icon');
                     if (toggle) {
                         e.stopPropagation();
@@ -5889,15 +6466,15 @@ class ChatClient {
             var foldBtn = document.getElementById('orgViewFoldBtn');
             this._orgIsFolded = false;
             if (foldBtn) {
-                foldBtn.onclick = function() {
+                foldBtn.onclick = function () {
                     chatClient._orgIsFolded = !chatClient._orgIsFolded;
                     var expanded = !chatClient._orgIsFolded;
                     var bodyEl = document.getElementById('orgViewBody');
                     if (bodyEl) {
-                        bodyEl.querySelectorAll('.dept-tree-node > .dept-tree-children').forEach(function(el) {
+                        bodyEl.querySelectorAll('.dept-tree-node > .dept-tree-children').forEach(function (el) {
                             el.classList.toggle('collapsed', !expanded);
                         });
-                        bodyEl.querySelectorAll('.toggle-icon i').forEach(function(icon) {
+                        bodyEl.querySelectorAll('.toggle-icon i').forEach(function (icon) {
                             var node = icon.closest('.dept-tree-node');
                             if (node) {
                                 var kids = node.children;
@@ -5950,7 +6527,9 @@ class ChatClient {
         var container = document.getElementById('orgDeptMembers_' + deptId);
         if (!container) return;
         // 高亮当前行
-        document.querySelectorAll('#orgViewBody .dept-tree-node').forEach(function(r) { r.classList.remove('active'); });
+        document.querySelectorAll('#orgViewBody .dept-tree-node').forEach(function (r) {
+            r.classList.remove('active');
+        });
         var deptNode = nodeEl.closest('.dept-tree-node');
         if (deptNode) deptNode.classList.add('active');
 
@@ -5965,7 +6544,10 @@ class ChatClient {
             var resp = await fetch('/api/org/departments/' + deptId + '/members/?page_size=100', {
                 headers: TokenManager.getHeaders()
             });
-            if (!resp.ok) { container.innerHTML = '<div class="empty-state" style="padding:16px;"><p>加载失败</p></div>'; return; }
+            if (!resp.ok) {
+                container.innerHTML = '<div class="empty-state" style="padding:16px;"><p>加载失败</p></div>';
+                return;
+            }
             var data = await resp.json();
             var members = data.results || [];
             var self = this;
@@ -5973,7 +6555,7 @@ class ChatClient {
             var currentUserType = this.currentUser.user_type;
             var canChat = currentUserType === 'admin' || currentUserType === 'super_admin';
             var html = '<div style="padding:4px 12px 8px 44px;">';
-            members.forEach(function(m) {
+            members.forEach(function (m) {
                 var isOwner = currentUserId === m.id;
                 html += '<div class="org-member-item" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:default;">';
                 if (m.avatar) {
@@ -6010,7 +6592,10 @@ class ChatClient {
             var resp = await fetch('/api/chat/rooms/?user_id=' + userId, {
                 headers: TokenManager.getHeaders()
             });
-            if (!resp.ok) { this.showError('启动聊天失败'); return; }
+            if (!resp.ok) {
+                this.showError('启动聊天失败');
+                return;
+            }
             var data = await resp.json();
             var rooms = data.results || data || [];
             if (rooms.length) {
@@ -6020,7 +6605,7 @@ class ChatClient {
                 var createResp = await fetch('/api/chat/rooms/', {
                     method: 'POST',
                     headers: TokenManager.getHeaders(),
-                    body: JSON.stringify({ room_type: 'private', member_ids: [userId] })
+                    body: JSON.stringify({room_type: 'private', member_ids: [userId]})
                 });
                 if (createResp.ok) {
                     var newRoom = await createResp.json();
@@ -6055,8 +6640,12 @@ class ChatClient {
         if (!dd) return;
         var isOpen = dd.classList.contains('show');
         // 关闭所有 tenant dropdown
-        document.querySelectorAll('.tenant-dropdown').forEach(function(d) { d.classList.remove('show'); });
-        document.querySelectorAll('.tenant-switcher-arrow').forEach(function(a) { a.classList.remove('open'); });
+        document.querySelectorAll('.tenant-dropdown').forEach(function (d) {
+            d.classList.remove('show');
+        });
+        document.querySelectorAll('.tenant-switcher-arrow').forEach(function (a) {
+            a.classList.remove('open');
+        });
         if (!isOpen) {
             this.renderTenantDropdown();
             dd.classList.add('show');
@@ -6072,8 +6661,8 @@ class ChatClient {
             return;
         }
         var self = this;
-        var roleMap = { 'owner': '企业所有者', 'admin': '企业管理员', 'dept_admin': '部门管理员', 'member': '成员' };
-        list.innerHTML = tenantManager.tenants.map(function(t) {
+        var roleMap = {'owner': '企业所有者', 'admin': '企业管理员', 'dept_admin': '部门管理员', 'member': '成员'};
+        list.innerHTML = tenantManager.tenants.map(function (t) {
             var isActive = tenantManager.activeTenant && t.id === tenantManager.activeTenant.id;
             return '<div class="tenant-dropdown-item' + (isActive ? ' active' : '') + '">'
                 + '<div class="td-icon"><i class="fas fa-building"></i></div>'
@@ -6273,11 +6862,15 @@ class ChatClient {
 
         // 隐藏通知消息列表（如果打开）
         var notifContainer = document.getElementById('notificationMessages');
-        if (notifContainer) { notifContainer.style.display = 'none'; }
+        if (notifContainer) {
+            notifContainer.style.display = 'none';
+        }
 
         // 隐藏组织架构视图（如果打开）
         var orgView = document.getElementById('orgViewContainer');
-        if (orgView) { orgView.classList.add('hidden'); }
+        if (orgView) {
+            orgView.classList.add('hidden');
+        }
 
         // 🔧 新增：进入聊天室时清除未读@提及标记
         const targetRoom = this.chatRooms.find(r => r.id === parseInt(roomId));
@@ -6394,7 +6987,11 @@ class ChatClient {
                 var headerRight = document.querySelector('.header-right');
                 if (headerRight) {
                     var btns = headerRight.querySelectorAll('.btn-icon');
-                    btns.forEach(function(b, key) { if (key < 2) {b.style.display = 'none'; }});
+                    btns.forEach(function (b, key) {
+                        if (key < 2) {
+                            b.style.display = 'none';
+                        }
+                    });
                 }
             }
             // 清除该聊天室的未读数
@@ -7063,6 +7660,12 @@ class ChatClient {
             });
         }
 
+        // 截图按钮
+        const screenshotBtn = document.getElementById('screenshotBtn');
+        if (screenshotBtn) {
+            screenshotBtn.addEventListener('click', () => this.captureScreenshot());
+        }
+
         // 图片/视频输入
         const imageInput = document.getElementById('imageInput');
         if (imageInput) {
@@ -7696,19 +8299,24 @@ class ChatClient {
             var tenantEl = document.getElementById('settingsTenantDisplay');
             if (tenantEl && window.tenantManager && tenantManager.activeTenant) {
                 var t = tenantManager.activeTenant;
-                var roleMap = { 'owner': '企业所有者', 'admin': '企业管理员', 'dept_admin': '部门管理员', 'member': '成员' };
+                var roleMap = {
+                    'owner': '企业所有者',
+                    'admin': '企业管理员',
+                    'dept_admin': '部门管理员',
+                    'member': '成员'
+                };
                 tenantEl.textContent = (t.short_name || t.name) + ' · ' + (roleMap[t.role] || '成员');
             }
 
             // 从 /api/auth/me/ 获取 supervisor / org_departments
-            var resp = await fetch('/api/auth/me/', { headers: TokenManager.getHeaders() });
+            var resp = await fetch('/api/auth/me/', {headers: TokenManager.getHeaders()});
             if (resp.ok) {
                 var me = await resp.json();
                 // 部门（逐级链式显示，多部门分行）
                 var deptEl = document.getElementById('settingsDeptDisplay');
                 if (deptEl) {
                     if (me.org_departments && me.org_departments.length) {
-                        deptEl.innerHTML = me.org_departments.map(function(d) {
+                        deptEl.innerHTML = me.org_departments.map(function (d) {
                             return '<div style="padding:2px 0;"><i class="fas fa-sitemap" style="color:#e6a23c;font-size:11px;margin-right:4px;"></i>' + chatClient._escape(d.full_path || d.name) + '</div>';
                         }).join('');
                     } else {
@@ -7776,12 +8384,19 @@ class ChatClient {
         if (!imageUrl) return;
         var list = this._collectImageList();
         if (!list.length) return;
-        var idx = list.findIndex(function(i) { return i.url === imageUrl; });
+        // 兼容相对/绝对 URL（imageEl.src 是绝对地址，file_info.url 可能是相对地址）
+        var idx = list.findIndex(function (i) {
+            try {
+                return new URL(i.url, window.location.origin).href === new URL(imageUrl, window.location.origin).href;
+            } catch (e) {
+                return i.url === imageUrl;
+            }
+        });
         if (idx < 0) idx = 0;
         var overlay = document.createElement('div');
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;z-index:10000;background:rgba(0,0,0,0.85);';
         var pd = list.length <= 1 ? 'opacity:0.2;cursor:default;pointer-events:none;' : '';
-        overlay.innerHTML = '<span onclick="chatClient._chatPreviewClose()" style="position:fixed;top:20px;right:30px;color:#fff;font-size:32px;cursor:pointer;z-index:10001;"><i class="fas fa-times"></i></span>'
+        overlay.innerHTML = '<span onclick="chatClient._chatPreviewClose()" style="position:fixed;top:max(20px, env(safe-area-inset-top, 0px));right:30px;color:#fff;font-size:32px;cursor:pointer;z-index:10001;"><i class="fas fa-times"></i></span>'
             + '<span onclick="chatClient._chatPreviewDir(-1)" id="chatPrev" style="position:fixed;left:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + pd + '"><i class="fas fa-chevron-left"></i></span>'
             + '<span onclick="chatClient._chatPreviewDir(1)" id="chatNext" style="position:fixed;right:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + pd + '"><i class="fas fa-chevron-right"></i></span>'
             + '<img id="chatMainImg" src="' + list[idx].url + '" style="max-width:90vw;max-height:90vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);transition:opacity 0.15s;">'
@@ -7790,39 +8405,122 @@ class ChatClient {
         this._chatPreviewList = list;
         this._chatPreviewIdx = idx;
         this._chatOverlay = overlay;
-        if (idx <= 0) { var p = document.getElementById('chatPrev'); if (p) p.style.opacity = '0.2'; }
-        if (idx >= list.length - 1) { var n = document.getElementById('chatNext'); if (n) n.style.opacity = '0.2'; }
+        if (idx <= 0) {
+            var p = document.getElementById('chatPrev');
+            if (p) p.style.opacity = '0.2';
+        }
+        if (idx >= list.length - 1) {
+            var n = document.getElementById('chatNext');
+            if (n) n.style.opacity = '0.2';
+        }
         var self = this;
-        var kh = function(e) {
-            if (e.key === 'ArrowLeft') { self._chatPreviewDir(-1); e.preventDefault(); }
-            else if (e.key === 'ArrowRight') { self._chatPreviewDir(1); e.preventDefault(); }
-            else if (e.key === 'Escape') { self._chatPreviewClose(); e.preventDefault(); }
+        var kh = function (e) {
+            if (e.key === 'ArrowLeft') {
+                self._chatPreviewDir(-1);
+                e.preventDefault();
+            } else if (e.key === 'ArrowRight') {
+                self._chatPreviewDir(1);
+                e.preventDefault();
+            } else if (e.key === 'Escape') {
+                self._chatPreviewClose();
+                e.preventDefault();
+            }
         };
         this._chatKeyHandler = kh;
         document.addEventListener('keydown', kh);
-        overlay.addEventListener('click', function(e) { if (e.target === overlay) self._chatPreviewClose(); });
+
+        // 🔧 触摸滑动：左右滑动切换图片（移动端）
+        var touchStartX = null, touchStartY = null, swiped = false;
+        overlay.addEventListener('touchstart', function (e) {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            swiped = false;
+        }, {passive: true});
+        overlay.addEventListener('touchmove', function (e) {
+            if (touchStartX !== null) {
+                var dx = e.touches[0].clientX - touchStartX;
+                var dy = e.touches[0].clientY - touchStartY;
+                if (Math.abs(dx) > 30 || Math.abs(dy) > 30) swiped = true;
+            }
+        }, {passive: true});
+        overlay.addEventListener('touchend', function (e) {
+            if (touchStartX !== null) {
+                var endX = e.changedTouches[0].clientX;
+                var endY = e.changedTouches[0].clientY;
+                var dx = endX - touchStartX, dy = endY - touchStartY;
+                if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+                    self._chatPreviewDir(dx < 0 ? 1 : -1);  // 左滑下一张，右滑上一张
+                }
+            }
+            touchStartX = null;
+        }, {passive: true});
+
+        // 🔧 点击图片切换预览模式（再点一次退出）；点击背景也退出
+        overlay.addEventListener('click', function (e) {
+            if (swiped) {
+                swiped = false;
+                return;
+            }  // 刚滑动过，忽略本次点击
+            if (e.target === overlay) self._chatPreviewClose();
+        });
+        var mainImg = document.getElementById('chatMainImg');
+        if (mainImg) {
+            mainImg.addEventListener('click', function (e) {
+                e.stopPropagation();
+                if (swiped) {
+                    swiped = false;
+                    return;
+                }
+                self._chatPreviewClose();
+            });
+        }
     }
 
     _chatPreviewDir(dir) {
         if (!this._chatPreviewList || !this._chatPreviewList.length) return;
         var len = this._chatPreviewList.length;
-        if (dir < 0 && this._chatPreviewIdx <= 0) { this._chatShowTip('已是第一张'); return; }
-        if (dir > 0 && this._chatPreviewIdx >= len - 1) { this._chatShowTip('已是最后一张'); return; }
+        if (dir < 0 && this._chatPreviewIdx <= 0) {
+            this._chatShowTip('已是第一张');
+            return;
+        }
+        if (dir > 0 && this._chatPreviewIdx >= len - 1) {
+            this._chatShowTip('已是最后一张');
+            return;
+        }
         this._chatPreviewIdx += dir;
         var img = document.getElementById('chatMainImg');
         var item = this._chatPreviewList[this._chatPreviewIdx];
-        if (img) { img.style.opacity = '0'; var self = this; setTimeout(function() { img.src = item.url; img.style.opacity = '1'; }, 100); }
+        if (img) {
+            img.style.opacity = '0';
+            var self = this;
+            setTimeout(function () {
+                img.src = item.url;
+                img.style.opacity = '1';
+            }, 100);
+        }
         var ct = document.getElementById('chatPageCounter');
         if (ct) ct.textContent = (this._chatPreviewIdx + 1) + ' / ' + this._chatPreviewList.length;
         var p = document.getElementById('chatPrev');
         var n = document.getElementById('chatNext');
-        if (p) { p.style.opacity = this._chatPreviewIdx <= 0 ? '0.2' : '1'; p.style.cursor = this._chatPreviewIdx <= 0 ? 'default' : 'pointer'; }
-        if (n) { n.style.opacity = this._chatPreviewIdx >= this._chatPreviewList.length - 1 ? '0.2' : '1'; n.style.cursor = this._chatPreviewIdx >= this._chatPreviewList.length - 1 ? 'default' : 'pointer'; }
+        if (p) {
+            p.style.opacity = this._chatPreviewIdx <= 0 ? '0.2' : '1';
+            p.style.cursor = this._chatPreviewIdx <= 0 ? 'default' : 'pointer';
+        }
+        if (n) {
+            n.style.opacity = this._chatPreviewIdx >= this._chatPreviewList.length - 1 ? '0.2' : '1';
+            n.style.cursor = this._chatPreviewIdx >= this._chatPreviewList.length - 1 ? 'default' : 'pointer';
+        }
     }
 
     _chatPreviewClose() {
-        if (this._chatKeyHandler) { document.removeEventListener('keydown', this._chatKeyHandler); this._chatKeyHandler = null; }
-        if (this._chatOverlay) { this._chatOverlay.remove(); this._chatOverlay = null; }
+        if (this._chatKeyHandler) {
+            document.removeEventListener('keydown', this._chatKeyHandler);
+            this._chatKeyHandler = null;
+        }
+        if (this._chatOverlay) {
+            this._chatOverlay.remove();
+            this._chatOverlay = null;
+        }
         this._chatPreviewList = null;
     }
 
@@ -7837,9 +8535,10 @@ class ChatClient {
         tip.textContent = msg;
         tip.style.opacity = '1';
         clearTimeout(tip._t);
-        tip._t = setTimeout(function() { tip.style.opacity = '0'; }, 1500);
+        tip._t = setTimeout(function () {
+            tip.style.opacity = '0';
+        }, 1500);
     }
-
 
 
     // 下载图片
@@ -9297,15 +9996,21 @@ class ChatClient {
         if (!membersContainer) return;
 
         // 批量获取成员的企业角色和部门信息
-        var memberIds = room.members.map(function(m) { return m.id; });
+        var memberIds = room.members.map(function (m) {
+            return m.id;
+        });
         var memberMap = {};
         try {
             // 调用 me API 获取当前用户的 org 信息
             // 对每个成员，调用 profile API 获取 org_departments
-            var promises = memberIds.map(function(uid) {
+            var promises = memberIds.map(function (uid) {
                 return fetch('/api/auth/' + uid + '/profile/', {
                     headers: TokenManager.getHeaders()
-                }).then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; });
+                }).then(function (r) {
+                    return r.ok ? r.json() : null;
+                }).catch(function () {
+                    return null;
+                });
             });
             var profiles = await Promise.all(promises);
             for (var i = 0; i < memberIds.length; i++) {
@@ -9325,7 +10030,7 @@ class ChatClient {
         });
 
         let html = '<div class="member-grid">';
-        sortedMembers.forEach(function(member) {
+        sortedMembers.forEach(function (member) {
             var isCreator = member.id === room.creator
             var isMember = self.currentUser?.id != room.creator;
             var profile = memberMap[member.id];
@@ -9333,7 +10038,9 @@ class ChatClient {
             var posName = '';
             if (profile) {
                 if (profile.org_departments && profile.org_departments.length) {
-                    deptNames = profile.org_departments.map(function(d) { return d.full_path || d.name; });
+                    deptNames = profile.org_departments.map(function (d) {
+                        return d.full_path || d.name;
+                    });
                     if (profile.org_departments[0].position) posName = profile.org_departments[0].position;
                 }
                 if (!deptNames.length && profile.department_info) deptNames = [profile.department_info.name || ''];
@@ -9348,7 +10055,9 @@ class ChatClient {
                 + '</div>'
                 + '<div class="member-grid-name">' + chatClient._escape(member.real_name || member.username) + '</div>'
                 + (posName ? '<div style="font-size:10px;color:#409eff;margin-top:1px;">' + chatClient._escape(posName) + '</div>' : '')
-                + (deptNames && deptNames.length ? '<div style="font-size:11px;color:var(--text-light,#909399);margin-top:2px;line-height:1.5;">' + deptNames.map(function(n){return '<div><i class="fas fa-angle-right" style="font-size:9px;margin-right:2px;color:#c0c4cc;"></i>' + chatClient._escape(n) + '</div>';}).join('') + '</div>' : '')
+                + (deptNames && deptNames.length ? '<div style="font-size:11px;color:var(--text-light,#909399);margin-top:2px;line-height:1.5;">' + deptNames.map(function (n) {
+                    return '<div><i class="fas fa-angle-right" style="font-size:9px;margin-right:2px;color:#c0c4cc;"></i>' + chatClient._escape(n) + '</div>';
+                }).join('') + '</div>' : '')
                 + (isCreator ? '<div class="member-grid-tag">群主</div>' : '')
                 + (!isCreator && !isMember ? '<button class="btn-remove" onclick="chatClient.removeGroupMember(' + roomId + ', ' + member.id + ')" title="移除成员">×</button>' : '')
                 + '</div>';
@@ -9723,6 +10432,20 @@ class ChatClient {
         }
     }
 
+    showInfo(message) {
+        console.log('显示信息:', message);
+        const successDiv = document.createElement('div');
+        successDiv.className = 'toast toast-info';
+        successDiv.textContent = message;
+        document.body.appendChild(successDiv);
+
+        setTimeout(() => {
+            if (successDiv.parentNode) {
+                successDiv.parentNode.removeChild(successDiv);
+            }
+        }, 3000);
+    }
+
     // 更新连接状态
     updateConnectionStatus(isConnected, elementId = 'userStatus') {
         const userStatus = document.getElementById(elementId);
@@ -9873,6 +10596,15 @@ class ChatClient {
 
     // 添加角标管理方法
     updateAppBadge(count) {
+        // 0. 同步聊天未读数给 Service Worker（SW 汇总聊天+工作通知未读来更新图标徽章，
+        // 后台被挂起时由 SW 在收到推送时自增保证实时，这里用精确值覆盖）
+        try {
+            if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({type: 'chat-badge', count: count});
+            }
+        } catch (e) {
+        }
+
         // 1. 使用 Badging API (Chrome 81+, Edge 81+)
         if ('setAppBadge' in navigator) {
             if (count > 0) {
@@ -9983,7 +10715,12 @@ class ChatClient {
                 let qTaskAssignee = '';
                 let qTaskStatusRaw = '';
                 const qStatusMap = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成', 'overdue': '已逾期'};
-                const qStatusColors = {'todo': '#909399', 'in_progress': '#E6A23C', 'done': '#67C23A', 'overdue': '#F56C6C'};
+                const qStatusColors = {
+                    'todo': '#909399',
+                    'in_progress': '#E6A23C',
+                    'done': '#67C23A',
+                    'overdue': '#F56C6C'
+                };
                 qTaskTitle = tcData.title || tcData.task_title || content || '[任务卡片]';
                 qTaskStatusRaw = tcData.status || '';
                 qTaskStatus = qStatusMap[tcData.status] || '';
@@ -10009,8 +10746,6 @@ class ChatClient {
                 quoteSender.textContent = `${message.sender?.real_name || message.sender?.username || message.sender_name || '未知用户'}：`
                 quoteContent.textContent = message.content.substring(0, 100) + (message.content.length > 100 ? '...' : '');
             }
-
-
 
 
             // 自动聚焦输入框
@@ -10158,7 +10893,6 @@ class ChatClient {
                     </div>
                 `;
             }
-
 
 
             menu.innerHTML = menuHtml;
@@ -11756,7 +12490,30 @@ class ChatClient {
                     height: {ideal: 720}
                 } : false
             };
-            this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+            // 🔧 发起通话前先确保推送通知已订阅（后台/锁屏也能收到来电/消息推送）
+            if ('Notification' in window && Notification.permission !== 'granted') {
+                try {
+                    await Notification.requestPermission();
+                } catch (e) {
+                }
+            }
+            this.ensurePushSubscribed();
+
+            try {
+                this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+            } catch (e) {
+                console.error('❌ 获取媒体失败:', e);
+                if (e && (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError')) {
+                    // PWA 不是原生 App，手机设置里没有本应用；权限由浏览器管理
+                    this.showError('无法使用摄像头/麦克风：请在浏览器地址栏点击锁图标 → 网站设置 → 允许摄像头和麦克风。');
+                } else {
+                    this.showError('无法获取摄像头/麦克风权限：' + (e && (e.message || e.name) || e));
+                }
+                this.callState = 'idle';
+                this.isCallInProgress = false;
+                this.endCall();
+                return;
+            }
             console.log('✅ 获取本地媒体流成功');
 
             // 🔧 2. 初始化 UI 元素
@@ -11960,10 +12717,12 @@ class ChatClient {
                 return server;
             });
 
-            // 🔧 添加 STUN 服务器作为备用
+            // 🔧 添加 STUN 服务器作为备用（含国内可达的，国内设备连不上 Google STUN）
             iceServers.push(
                 {urls: 'stun:stun.l.google.com:19302'},
-                {urls: 'stun:stun1.l.google.com:19302'}
+                {urls: 'stun:stun1.l.google.com:19302'},
+                {urls: 'stun:stun.miwifi.com:3478'},
+                {urls: 'stun:stun.qq.com:3478'}
             );
 
             // console.log('🔧 ICE Servers 配置:', JSON.stringify(iceServers, null, 2));
@@ -11978,7 +12737,9 @@ class ChatClient {
             return {
                 iceServers: [
                     {urls: 'stun:stun.l.google.com:19302'},
-                    {urls: 'stun:stun1.l.google.com:19302'}
+                    {urls: 'stun:stun1.l.google.com:19302'},
+                    {urls: 'stun:stun.miwifi.com:3478'},
+                    {urls: 'stun:stun.qq.com:3478'}
                 ],
                 expiresAt: 0
             };
@@ -12007,6 +12768,70 @@ class ChatClient {
         }
         this.pendingIceCandidates = [];
         console.log('✅ ICE候选队列已清空，共处理:', this.pendingIceCandidates.length);
+    }
+
+    // 🔧 统一处理 PeerConnection 状态变化：
+    // 移动端网络抖动时 connectionState 会短暂变为 disconnected / failed，
+    // 之前直接挂断导致“双方都没挂断却自动挂断”。现在改为：
+    //   - disconnected：等待自动恢复，稍后未恢复再重启 ICE；
+    //   - failed / closed：先重启 ICE，仍失败才挂断。
+    _handlePeerConnectionState(state) {
+        console.log('🔗 [PeerConnection State]:', state);
+
+        if (state === 'connected') {
+            console.log('✅ PeerConnection 已连接，音视频应该可以传输');
+            return;
+        }
+
+        if (state === 'disconnected') {
+            console.warn('⚠️ PeerConnection disconnected，等待自动恢复（不挂断）...');
+            this._scheduleIceRecoveryCheck();
+            return;
+        }
+
+        if (state === 'failed' || state === 'closed') {
+            if (this.callState === 'idle') return;
+            console.warn(`⚠️ PeerConnection ${state}，尝试重启 ICE 恢复...`);
+            this._tryRestartIce();
+        }
+    }
+
+    // 尝试重启 ICE（移动端网络切换/抖动时恢复连接）
+    _tryRestartIce() {
+        if (this.iceRestartTimer) clearTimeout(this.iceRestartTimer);
+        try {
+            if (this.peerConnection && this.peerConnection.canTrickleIceCandidates) {
+                console.warn('🔄 执行 ICE Restart...');
+                this.peerConnection.restartIce();
+            }
+        } catch (e) {
+            console.warn('⚠️ ICE Restart 失败:', e);
+        }
+
+        this.iceRestartTimer = setTimeout(() => {
+            if (this.callState === 'idle' || !this.peerConnection) return;
+            const conn = this.peerConnection.connectionState;
+            const ice = this.peerConnection.iceConnectionState;
+            if (conn === 'failed' || conn === 'closed' || ice === 'failed') {
+                console.error('❌ ICE Restart 后仍未恢复，结束通话');
+                this.showError('网络连接失败，请检查网络后重试');
+                this.endCall();
+            }
+        }, 10000);
+    }
+
+    // 短暂掉线后仍未恢复则重启 ICE
+    _scheduleIceRecoveryCheck() {
+        if (this.iceRecoveryTimer) clearTimeout(this.iceRecoveryTimer);
+        this.iceRecoveryTimer = setTimeout(() => {
+            if (this.callState === 'idle' || !this.peerConnection) return;
+            const conn = this.peerConnection.connectionState;
+            const ice = this.peerConnection.iceConnectionState;
+            if (conn === 'disconnected' || conn === 'failed' || ice === 'failed') {
+                console.warn('🔄 检测到连接仍未恢复，尝试 ICE Restart...');
+                this._tryRestartIce();
+            }
+        }, 4000);
     }
 
 
@@ -12141,36 +12966,15 @@ class ChatClient {
                     ? '网络连接失败。请检查：\n1. 是否在同一网络环境\n2. 防火墙/路由器是否阻止了 UDP 端口\n3. 尝试切换到 WiFi 或移动数据'
                     : '网络连接失败。请检查：\n1. TURN 服务器是否正常运行\n2. 防火墙是否允许 UDP/TCP 端口 3478/5349\n3. 尝试刷新页面后重试';
 
-                this.showError(errorMessage);
-                this.endCall();
+                // 移动端网络抖动时 failed 也可能是暂时的，先尝试重启 ICE 恢复
+                this._tryRestartIce();
             }
         };
 
         // 🔧 新增：监听 PeerConnection 整体状态
         this.peerConnection.onconnectionstatechange = () => {
-            const state = this.peerConnection.connectionState;
-            console.log('🔗 [PeerConnection State]:', state);
-
-            if (state === 'connected') {
-                console.log('✅ PeerConnection 已连接，音视频应该可以传输');
-            }
-
-            if (state === 'failed' || state === 'disconnected' || state === 'closed') {
-                console.warn('⚠️ PeerConnection 状态异常:', state);
-
-                // 🔧 关键修复：只有在非 idle 状态下才显示错误并结束通话
-                if (this.callState !== 'idle') {
-                    // 🔧 新增：区分是 ICE 失败还是其他原因
-                    const iceState = this.peerConnection.iceConnectionState;
-                    if (iceState === 'failed') {
-                        // ICE 失败已经在 oniceconnectionstatechange 中处理了，这里不再重复
-                        console.log('⏭️ ICE 失败已由 oniceconnectionstatechange 处理');
-                    } else {
-                        this.showError(`通话连接断开 (${state})`);
-                        this.endCall();
-                    }
-                }
-            }
+            // 🔧 不再对 disconnected 直接挂断；交给统一处理：断线等待恢复、失败先重启 ICE
+            this._handlePeerConnectionState(this.peerConnection.connectionState);
         };
 
         // 🔧 关键修复：接收远程媒体
@@ -12409,29 +13213,8 @@ class ChatClient {
 
         // 🔧 新增：监听 PeerConnection 整体状态
         this.peerConnection.onconnectionstatechange = () => {
-            const state = this.peerConnection.connectionState;
-            console.log('🔗 [PeerConnection State]:', state);
-
-            if (state === 'connected') {
-                console.log('✅ PeerConnection 已连接，音视频应该可以传输');
-            }
-
-            if (state === 'failed' || state === 'disconnected' || state === 'closed') {
-                console.warn('⚠️ PeerConnection 状态异常:', state);
-
-                // 🔧 关键修复：只有在非 idle 状态下才显示错误并结束通话
-                if (this.callState !== 'idle') {
-                    // 🔧 新增：区分是 ICE 失败还是其他原因
-                    const iceState = this.peerConnection.iceConnectionState;
-                    if (iceState === 'failed') {
-                        // ICE 失败已经在 oniceconnectionstatechange 中处理了，这里不再重复
-                        console.log('⏭️ ICE 失败已由 oniceconnectionstatechange 处理');
-                    } else {
-                        this.showError(`通话连接断开 (${state})`);
-                        this.endCall();
-                    }
-                }
-            }
+            // 🔧 不再对 disconnected 直接挂断；交给统一处理：断线等待恢复、失败先重启 ICE
+            this._handlePeerConnectionState(this.peerConnection.connectionState);
         };
 
         // 🔧 关键修复：接收远程媒体
@@ -12885,24 +13668,15 @@ class ChatClient {
             }
 
             if (state === 'failed') {
-                console.error('❌ ICE 连接失败');
-                this.showError('网络连接失败，请检查防火墙或切换网络');
-                this.endCall();
+                console.error('❌ ICE 连接失败，尝试重启 ICE 恢复...');
+                this._tryRestartIce();
             }
         };
 
 
         this.peerConnection.onconnectionstatechange = () => {
-            const state = this.peerConnection.connectionState;
-            console.log('🔗 [PeerConnection State]:', state);
-
-            if (state === 'connected') {
-                console.log('✅ PeerConnection 已连接');
-            }
-
-            if (state === 'failed' || state === 'disconnected') {
-                console.warn('⚠️ PeerConnection 状态异常:', state);
-            }
+            // 接听方同样使用统一的恢复逻辑：断线不挂断、失败先重启 ICE
+            this._handlePeerConnectionState(this.peerConnection.connectionState);
         };
 
         console.log('✅ setupPeerConnectionForAnswer 初始化完成');
@@ -13052,7 +13826,7 @@ class ChatClient {
                 console.log('✅ 复用已有的 PeerConnection');
             }
 
-            // 🔧 关键修复2: 获取本地媒体流
+            // 🔧 关键修复2: 获取本地媒体流（接听前先确保推送通知已订阅）
             const constraints = {
                 audio: true,
                 video: this.callType === 'video' ? {
@@ -13061,7 +13835,27 @@ class ChatClient {
                     height: {ideal: 720}
                 } : false
             };
-            this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+            if ('Notification' in window && Notification.permission !== 'granted') {
+                try {
+                    await Notification.requestPermission();
+                } catch (e) {
+                }
+            }
+            this.ensurePushSubscribed();
+
+            try {
+                this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+            } catch (e) {
+                console.error('❌ 获取媒体失败:', e);
+                if (e && (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError')) {
+                    this.showError('无法使用摄像头/麦克风：请在浏览器地址栏点击锁图标 → 网站设置 → 允许摄像头和麦克风。');
+                } else {
+                    this.showError('无法获取摄像头/麦克风权限：' + (e && (e.message || e.name) || e));
+                }
+                this.closeIncomingCallModal();
+                this.endCall();
+                return;
+            }
 
             // 🔧 关键修复：不在这里记录 callStartTime，等 ICE 连接成功后再记录
             // this.callStartTime = Date.now();  // ❌ 删除这行
@@ -13582,6 +14376,14 @@ class ChatClient {
         this.isRemoteDescriptionSet = false;
         this.iceCandidatesCollected = [];
         this.iceTimeoutTimer = null;
+        if (this.iceRestartTimer) {
+            clearTimeout(this.iceRestartTimer);
+            this.iceRestartTimer = null;
+        }
+        if (this.iceRecoveryTimer) {
+            clearTimeout(this.iceRecoveryTimer);
+            this.iceRecoveryTimer = null;
+        }
         this.processedSignals = new Set();
 
         this.updateCallUI('idle');
@@ -14556,21 +15358,18 @@ const versionManager = new VersionManager();
 let chatClient = null;
 
 
-document
-    .addEventListener(
-        'DOMContentLoaded'
-        , () => {
-            console
-                .log(
-                    'DOM 加载完成，创建 ChatClient 实例'
-                )
-            ;
-            chatClient = new ChatClient();
-            window
-                .chatClient = chatClient;
-        }
-    )
-;
+document.addEventListener(
+    'DOMContentLoaded', () => {
+        console
+            .log(
+                'DOM 加载完成，创建 ChatClient 实例'
+            )
+        ;
+        chatClient = new ChatClient();
+        window
+            .chatClient = chatClient;
+    }
+);
 
 // 如果页面已经加载完成
 if (document.readyState === 'complete') {

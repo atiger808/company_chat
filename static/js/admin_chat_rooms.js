@@ -197,16 +197,20 @@ class AdminChatRoomsClient {
         const messagesList = document.getElementById('messagesHistoryList');
         if (!messagesList) return;
 
-        // 使用事件委托处理动态生成的语音播放按钮
-        messagesList.addEventListener('click', (e) => {
-
-            // 处理图片预览点击
-            const imageEl = e.target.closest('.message-image-img');
-            if (imageEl) {
-                e.stopPropagation();
-                this.previewImage(imageEl.src);
-            }
-        });
+        // 🔧 关键修复：事件委托只绑定一次。renderRoomHistory 每次渲染都会调用本方法，
+        // 若重复绑定会导致一次点击触发多次 previewImage、创建多个覆盖层与键盘监听，
+        // 造成「首次预览正常、再进另一个聊天室预览时切换错乱」。
+        if (!this._imageClickBound) {
+            this._imageClickBound = true;
+            messagesList.addEventListener('click', (e) => {
+                // 处理图片预览点击
+                const imageEl = e.target.closest('.message-image-img');
+                if (imageEl) {
+                    e.stopPropagation();
+                    this.previewImage(imageEl.src);
+                }
+            });
+        }
 
         document.querySelectorAll('.video-play-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -1544,13 +1548,18 @@ class AdminChatRoomsClient {
     previewImage(imageUrl) {
         if (!imageUrl) return;
         const imageList = this._collectImageList();
-        let currentIndex = imageList.findIndex(item => item.url === imageUrl);
-        if (currentIndex === -1) currentIndex = 0;
         if (!imageList.length) return;
+        // 兼容相对/绝对 URL（imageEl.src 是绝对地址，file_info.url 可能是相对地址），
+        // 否则 findIndex 永远匹配不到，预览会从第一张开始，导致左右切换看起来不正常。
+        let currentIndex = imageList.findIndex(item => {
+            try { return new URL(item.url, window.location.origin).href === new URL(imageUrl, window.location.origin).href; }
+            catch (e) { return item.url === imageUrl; }
+        });
+        if (currentIndex === -1) currentIndex = 0;
         var overlay = document.createElement('div');
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;z-index:10000;background:rgba(0,0,0,0.85);';
         var prevDisplay = imageList.length <= 1 ? 'opacity:0.2;cursor:default;pointer-events:none;' : '';
-        overlay.innerHTML = '<span onclick="this.parentNode.remove()" style="position:fixed;top:20px;right:30px;color:#fff;font-size:32px;cursor:pointer;z-index:10001;"><i class="fas fa-times"></i></span>'
+        overlay.innerHTML = '<span onclick="this.parentNode.remove()" style="position:fixed;top:max(20px, env(safe-area-inset-top, 0px));right:30px;color:#fff;font-size:32px;cursor:pointer;z-index:10001;"><i class="fas fa-times"></i></span>'
             + '<span onclick="adminChatRoomsClient._adminPreviewNav(-1)" id="adminPrevBtn" style="position:fixed;left:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + prevDisplay + '"><i class="fas fa-chevron-left"></i></span>'
             + '<span onclick="adminChatRoomsClient._adminPreviewNav(1)" id="adminNextBtn" style="position:fixed;right:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + prevDisplay + '"><i class="fas fa-chevron-right"></i></span>'
             + '<img id="adminPreviewMainImg" src="' + imageList[currentIndex].url + '" style="max-width:90vw;max-height:90vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);">'
@@ -1566,9 +1575,46 @@ class AdminChatRoomsClient {
             else if (e.key === 'Escape') { self._adminPreviewCleanup(); e.preventDefault(); }
         };
         document.addEventListener('keydown', this._adminPreviewKeyHandler);
+
+        // 🔧 触摸滑动：左右滑动切换图片（移动端）
+        var touchStartX = null, touchStartY = null, swiped = false;
+        overlay.addEventListener('touchstart', function(e) {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            swiped = false;
+        }, {passive: true});
+        overlay.addEventListener('touchmove', function(e) {
+            if (touchStartX !== null) {
+                var dx = e.touches[0].clientX - touchStartX;
+                var dy = e.touches[0].clientY - touchStartY;
+                if (Math.abs(dx) > 30 || Math.abs(dy) > 30) swiped = true;
+            }
+        }, {passive: true});
+        overlay.addEventListener('touchend', function(e) {
+            if (touchStartX !== null) {
+                var endX = e.changedTouches[0].clientX;
+                var endY = e.changedTouches[0].clientY;
+                var dx = endX - touchStartX, dy = endY - touchStartY;
+                if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+                    self._adminPreviewNav(dx < 0 ? 1 : -1);  // 左滑下一张，右滑上一张
+                }
+            }
+            touchStartX = null;
+        }, {passive: true});
+
+        // 🔧 点击图片切换预览模式（再点一次退出）；点击背景也退出
         overlay.addEventListener('click', function(e) {
+            if (swiped) { swiped = false; return; }  // 刚滑动过，忽略本次点击
             if (e.target === overlay) self._adminPreviewCleanup();
         });
+        var mainImg = document.getElementById('adminPreviewMainImg');
+        if (mainImg) {
+            mainImg.addEventListener('click', function(e) {
+                e.stopPropagation();
+                if (swiped) { swiped = false; return; }
+                self._adminPreviewCleanup();
+            });
+        }
     }
 
     _adminPreviewNav(dir) {

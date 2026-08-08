@@ -2129,7 +2129,7 @@ class CloudApp {
         var overlay = document.createElement('div');
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;z-index:10000;background:rgba(0,0,0,0.85);';
         var pd = list.length <= 1 ? 'opacity:0.2;cursor:default;pointer-events:none;' : '';
-        overlay.innerHTML = '<span onclick="cloudApp._cloudImgClose()" style="position:fixed;top:20px;right:30px;color:#fff;font-size:32px;cursor:pointer;z-index:10001;"><i class="fas fa-times"></i></span>'
+        overlay.innerHTML = '<span onclick="cloudApp._cloudImgClose()" style="position:fixed;top:max(20px, env(safe-area-inset-top, 0px));right:30px;color:#fff;font-size:32px;cursor:pointer;z-index:10001;"><i class="fas fa-times"></i></span>'
             + '<span onclick="cloudApp._cloudImgNav(-1)" id="cloudImgPrev" style="position:fixed;left:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + pd + '"><i class="fas fa-chevron-left"></i></span>'
             + '<span onclick="cloudApp._cloudImgNav(1)" id="cloudImgNext" style="position:fixed;right:20px;top:50%;transform:translateY(-50%);z-index:10001;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(0,0,0,0.35);color:#fff;font-size:28px;cursor:pointer;' + pd + '"><i class="fas fa-chevron-right"></i></span>'
             + '<img id="cloudImgMain" src="' + list[startIdx].url + '" style="max-width:90vw;max-height:90vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);">'
@@ -2146,7 +2146,46 @@ class CloudApp {
         };
         this._cloudKeyHandler = kh;
         document.addEventListener('keydown', kh);
-        overlay.addEventListener('click', function(e) { if (e.target === overlay) self._cloudImgClose(); });
+
+        // 🔧 触摸滑动：左右滑动切换图片（移动端）
+        var touchStartX = null, touchStartY = null, swiped = false;
+        overlay.addEventListener('touchstart', function(e) {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            swiped = false;
+        }, {passive: true});
+        overlay.addEventListener('touchmove', function(e) {
+            if (touchStartX !== null) {
+                var dx = e.touches[0].clientX - touchStartX;
+                var dy = e.touches[0].clientY - touchStartY;
+                if (Math.abs(dx) > 30 || Math.abs(dy) > 30) swiped = true;
+            }
+        }, {passive: true});
+        overlay.addEventListener('touchend', function(e) {
+            if (touchStartX !== null) {
+                var endX = e.changedTouches[0].clientX;
+                var endY = e.changedTouches[0].clientY;
+                var dx = endX - touchStartX, dy = endY - touchStartY;
+                if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+                    self._cloudImgNav(dx < 0 ? 1 : -1);  // 左滑下一张，右滑上一张
+                }
+            }
+            touchStartX = null;
+        }, {passive: true});
+
+        // 🔧 点击图片切换预览模式（再点一次退出）；点击背景也退出
+        overlay.addEventListener('click', function(e) {
+            if (swiped) { swiped = false; return; }  // 刚滑动过，忽略本次点击
+            if (e.target === overlay) self._cloudImgClose();
+        });
+        var mainImg = document.getElementById('cloudImgMain');
+        if (mainImg) {
+            mainImg.addEventListener('click', function(e) {
+                e.stopPropagation();
+                if (swiped) { swiped = false; return; }
+                self._cloudImgClose();
+            });
+        }
     }
 
     _cloudImgNav(dir) {
@@ -3022,7 +3061,7 @@ class CloudApp {
         }
 
         try {
-            const response = await fetch(`/api/auth/search_users/?q=${encodeURIComponent(keyword)}`, {
+            const response = await fetch(`/api/cloud/search-users/?q=${encodeURIComponent(keyword)}`, {
                 headers: TokenManager.getHeaders()
             });
             if (!response.ok) throw new Error('搜索失败');
@@ -3061,7 +3100,7 @@ class CloudApp {
                 <img src="${user.avatar_url || '/static/images/default-avatar.png'}" class="user-avatar">
                 <div class="user-info">
                     <div class="user-name">${this.escapeHtml(user.real_name || user.username)}</div>
-                    <div class="user-dept">${user.department_info?.name || ''}</div>
+                    <div class="user-dept">${this.escapeHtml([user.position || '', user.department_name || user.department || (user.department_info && user.department_info.name) || ''].filter(Boolean).join(' · '))}</div>
                 </div>
                 <i class="fas fa-plus-circle add-icon" data-user-id="${user.id}" title="添加协作者"></i>
             </div>
@@ -6732,7 +6771,7 @@ class CloudApp {
                 return;
             }
             try {
-                const res = await fetch(`/api/auth/search_users/?q=${encodeURIComponent(keyword)}`, {headers: TokenManager.getHeaders()});
+                const res = await fetch(`/api/cloud/search-users/?q=${encodeURIComponent(keyword)}`, {headers: TokenManager.getHeaders()});
                 const data = await res.json();
                 const users = data.results || [];
                 const resultsDiv = document.getElementById('memberSearchResults');
@@ -6744,6 +6783,7 @@ class CloudApp {
                         <img src="${u.avatar_url || '/static/images/default-avatar.png'}" class="user-avatar">
                         <div class="user-info">
                             <div class="user-name">${this.escapeHtml(u.real_name || u.username)}</div>
+                            <div style="font-size:11px;color:#909399;">${this.escapeHtml([u.position || '', u.department_name || u.department || (u.department_info && u.department_info.name) || ''].filter(Boolean).join(' · '))}</div>
                         </div>
                     </div>
                 `).join('');
@@ -6773,12 +6813,13 @@ class CloudApp {
             return;
         }
         const permission = document.getElementById('memberPermissionSelect').value;
+        const sendWorkNotify = document.getElementById('sendWorkNotifyCheckbox')?.checked ?? true;
         try {
             this.showLoading();
             const res = await fetch(`/api/cloud/shared-folders/${this.currentManageSharedFolderId}/add_member/`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json', ...TokenManager.getHeaders()},
-                body: JSON.stringify({user_id: this.tempAddMemberId, permission: permission})
+                body: JSON.stringify({user_id: this.tempAddMemberId, permission: permission, send_work_notify: sendWorkNotify})
             });
             if (!res.ok) {
                 const err = await res.json();
@@ -6811,14 +6852,20 @@ class CloudApp {
             let html = '';
             members.forEach(m => {
                 const isOwner = m.is_owner;
+                const notifyOn = m.notify_private_chat !== false;
                 html += `
                 <div class="collab-manage-item" style="margin-bottom: 8px;">
                     <div class="collab-details" style="flex:1;">
                         <div class="collab-name">
-                            ${this.escapeHtml(m.real_name)} 
+                            ${this.escapeHtml(m.real_name)}
                             ${isOwner ? '<span class="badge badge-success" style="font-size:10px; margin-left:5px;">所有者</span>' : ''}
                        </div>
                     </div>
+                    <span style="font-size:11px; color:#909399; margin-right:6px;" title="是否以私聊消息形式通知该成员">私聊</span>
+                    <label class="switch" style="margin-right: 10px;${isOwner ? 'pointer-events:none; opacity:.5;' : ''}" title="是否以私聊消息形式通知该成员">
+                        <input type="checkbox" ${notifyOn ? 'checked' : ''} ${isOwner ? 'disabled' : ''} onchange="cloudApp.toggleMemberPrivateNotify('${m.id}', this.checked)">
+                        <span class="slider"></span>
+                    </label>
                     <select class="collab-permission" ${isOwner ? 'disabled' : ''} onchange="cloudApp.updateSharedFolderPermission('${m.id}', this.value)">
                         <option value="read" ${m.permission === 'read' ? 'selected' : ''}>只读</option>
                         <option value="write" ${m.permission === 'write' ? 'selected' : ''}>可编辑</option>
@@ -6849,6 +6896,27 @@ class CloudApp {
                 throw new Error(err.error || err.detail || err.message || '更新失败');
             }
             this.showSuccess('更新成功', '权限已更新');
+        } catch (e) {
+            this.showError('更新失败', e.message);
+            await this.loadSharedFolderMembers(this.currentManageSharedFolderId); // 失败时恢复原状
+        }
+    }
+
+    /**
+     * 🔧 切换成员私聊通知开关（决定是否以私聊消息形式通知该成员）
+     */
+    async toggleMemberPrivateNotify(userId, checked) {
+        try {
+            const res = await fetch(`/api/cloud/shared-folders/${this.currentManageSharedFolderId}/update_member/`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', ...TokenManager.getHeaders()},
+                body: JSON.stringify({user_id: userId, notify_private_chat: checked})
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.error || err.detail || err.message || '更新失败');
+            }
+            this.showSuccess('设置已保存', checked ? '已开启私聊通知' : '已关闭私聊通知');
         } catch (e) {
             this.showError('更新失败', e.message);
             await this.loadSharedFolderMembers(this.currentManageSharedFolderId); // 失败时恢复原状

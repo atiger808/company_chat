@@ -13,7 +13,29 @@ from loguru import logger
 import os
 import uuid
 
-from .models import AttendanceRecord, ApprovalRequest, ApprovalLog, ApprovalNode, ApprovalAssignee, WorkNotification, ApprovalCarbonCopy, ApprovalDeptConfig, AttendanceConfig
+from .models import AttendanceRecord, ApprovalRequest, ApprovalType, ApprovalLog, ApprovalNode, ApprovalAssignee, WorkNotification, ApprovalCarbonCopy, ApprovalDeptConfig, AttendanceConfig
+from .type_utils import ensure_builtin_types, resolve_approval_type, collect_form_data, validate_form_data
+
+
+def _approval_type_label(approval):
+    """审批类型展示名（动态类型表解析，兼容历史数据）"""
+    t = resolve_approval_type(approval.approval_type, approval.tenant)
+    return t.name if t else approval.approval_type
+
+
+def _threshold_field_label(config):
+    """阈值字段展示名：内置字段走映射，自定义类型回退到 schema 字段 label"""
+    if not config or not config.threshold_field:
+        return ''
+    field_map = dict(ApprovalDeptConfig.THRESHOLD_FIELD_CHOICES)
+    if config.threshold_field in field_map:
+        return field_map[config.threshold_field]
+    t = resolve_approval_type(config.approval_type, config.tenant)
+    if t:
+        for f in (t.form_schema or []):
+            if f.get('key') == config.threshold_field:
+                return f.get('label') or config.threshold_field
+    return config.threshold_field
 from .serializers import (
     AttendanceRecordSerializer,
     AttendanceClockSerializer,
@@ -59,6 +81,16 @@ def send_work_notification(user_id, title, content, notification_type='system', 
                 }
             }
         )
+        # Web Push：无论在线与否都推送，保证回到主屏幕 / 锁屏 / 关闭 App 时也能收到工作通知。
+        # urgent=True → urgency=high：即时送达，避免 iOS 批量延迟。
+        try:
+            from django.conf import settings as dj_settings
+            if dj_settings.PUSH_ENABLED:
+                from chat.push_utils import build_work_push_payload
+                from chat.tasks import send_push_task
+                send_push_task.delay(user_id, build_work_push_payload(note, related_url), ttl=43200, urgent=True)
+        except Exception as e:
+            logger.warning(f'Web Push 工作通知失败: {e}')
         return note
     except CustomUser.DoesNotExist:
         logger.error(f'用户{user_id}不存在')
@@ -127,7 +159,7 @@ class AttendanceViewSet(viewsets.ViewSet):
         try:
             record = AttendanceRecord.objects.select_related('user__department').get(id=pk)
             if request.user.user_type not in ['super_admin', 'admin'] and record.user != request.user:
-                return Response({'error': '无权查看'}, status=403)
+                return Response({'error': '暂无查看权限'}, status=403)
             data = AttendanceRecordSerializer(record, context={'request': request}).data
             return Response({'encrypt': True, 'data': encrypt_data(data)})
         except AttendanceRecord.DoesNotExist:
@@ -303,7 +335,7 @@ class AttendanceViewSet(viewsets.ViewSet):
         try:
             record = AttendanceRecord.objects.get(id=pk)
             if request.user.user_type not in ['super_admin', 'admin'] and record.user != request.user:
-                return Response({'error': '无权查看'}, status=403)
+                return Response({'error': '暂无查看权限'}, status=403)
 
             # 如果已有BD09坐标，直接返回
             if record.bd09_latitude is not None and record.bd09_longitude is not None:
@@ -698,6 +730,163 @@ class AttendanceViewSet(viewsets.ViewSet):
         return Response({'encrypt': True, 'data': encrypt_data(result)})
 
 
+class ApprovalTypeViewSet(viewsets.ViewSet):
+    """审批类型管理（内置 + 企业自定义）"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def list(self, request):
+        """返回当前企业可用审批类型：全局内置 + 当前企业自定义（含 form_schema）。
+
+        ?scope=manage：类型管理用，包含未启用的自定义类型（保证可重新编辑/启用）。
+        默认仅返回启用类型（供新建审批选择）。
+        """
+        ensure_builtin_types()
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        scope = request.query_params.get('scope', '')
+        if scope == 'manage':
+            # 类型管理：内置 + 当前企业全部自定义（含未启用）
+            qs = ApprovalType.objects.all()
+            if tenant:
+                qs = qs.filter(Q(tenant=tenant) | Q(tenant__isnull=True)).order_by('-tenant_id', 'sort_order', 'id')
+            else:
+                qs = qs.filter(tenant__isnull=True).order_by('sort_order', 'id')
+        else:
+            qs = ApprovalType.objects.filter(enabled=True)
+            if tenant:
+                qs = qs.filter(Q(tenant=tenant) | Q(tenant__isnull=True)).order_by('-tenant_id', 'sort_order', 'id')
+            else:
+                qs = qs.filter(tenant__isnull=True).order_by('sort_order', 'id')
+        data = [{
+            'id': t.id,
+            'code': t.code,
+            'name': t.name,
+            'icon': t.icon,
+            'color': t.color,
+            'description': t.description or '',
+            'is_builtin': t.is_builtin,
+            'form_schema': t.form_schema or [],
+            'sort_order': t.sort_order,
+            'enabled': t.enabled,
+        } for t in qs]
+        return Response({'results': data, 'count': len(data)})
+
+    @staticmethod
+    def _validate_schema(schema):
+        """校验 form_schema 结构，返回错误字符串或 None"""
+        if not isinstance(schema, list):
+            return '表单字段定义必须为数组'
+        seen_keys = set()
+        for f in schema:
+            if not isinstance(f, dict):
+                return '字段定义格式错误'
+            if not f.get('key') or not f.get('label'):
+                return '每个字段必须包含 key 和 label'
+            if f['key'] in seen_keys:
+                return f'字段编码(key)「{f["key"]}」存在重复'
+            seen_keys.add(f['key'])
+            ftype = f.get('type')
+            if ftype not in dict(ApprovalType.FIELD_TYPES):
+                return f'字段类型 {ftype} 不支持'
+            if ftype in ('select', 'radio', 'checkbox') and not f.get('options'):
+                return f'字段 {f.get("label")} 需要配置选项'
+        return None
+
+    @staticmethod
+    def _normalize_schema(schema):
+        """规范 form_schema：options 统一为数组，补齐 required/placeholder 等默认值"""
+        if not isinstance(schema, list):
+            return schema
+        for f in schema:
+            if not isinstance(f, dict):
+                continue
+            opts = f.get('options')
+            if isinstance(opts, str):
+                f['options'] = [s.strip() for s in opts.replace('，', ',').split(',') if s.strip()]
+            if not isinstance(f.get('options'), list):
+                f['options'] = []
+            f.setdefault('required', False)
+            f.setdefault('placeholder', '')
+        return schema
+
+    @staticmethod
+    def _admin(request):
+        return request.user.user_type in ('super_admin', 'admin')
+
+    def create(self, request):
+        if not self._admin(request):
+            return Response({'error': '仅企业超级管理员或管理员可操作'}, status=403)
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        if not tenant:
+            return Response({'error': '未找到所属企业'}, status=400)
+        code = (request.data.get('code') or '').strip()
+        name = (request.data.get('name') or '').strip()
+        if not code or not name:
+            return Response({'error': '类型编码和名称不能为空'}, status=400)
+        if ApprovalType.objects.filter(tenant=tenant, code=code).exists():
+            return Response({'error': '该企业下已存在此编码的审批类型'}, status=400)
+        schema = self._normalize_schema(request.data.get('form_schema', []) or [])
+        err = self._validate_schema(schema)
+        if err:
+            return Response({'error': err}, status=400)
+        t = ApprovalType.objects.create(
+            tenant=tenant, code=code, name=name,
+            icon=(request.data.get('icon') or 'fa-file-lines'),
+            color=(request.data.get('color') or '#409EFF'),
+            description=(request.data.get('description') or ''),
+            enabled=bool(request.data.get('enabled', True)),
+            form_schema=schema,
+            sort_order=int(request.data.get('sort_order') or 0),
+        )
+        return Response({'message': '创建成功', 'code': t.code}, status=201)
+
+    def update(self, request, pk=None):
+        if not self._admin(request):
+            return Response({'error': '仅企业超级管理员或管理员可操作'}, status=403)
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        try:
+            t = ApprovalType.objects.get(pk=pk)
+        except ApprovalType.DoesNotExist:
+            return Response({'error': '类型不存在'}, status=404)
+        if t.is_builtin or (tenant and t.tenant_id != tenant.id):
+            return Response({'error': '无权限修改该类型'}, status=403)
+        if 'code' in request.data and (request.data.get('code') or '').strip() != t.code:
+            new_code = (request.data.get('code') or '').strip()
+            if ApprovalType.objects.filter(tenant=t.tenant_id, code=new_code).exclude(pk=t.pk).exists():
+                return Response({'error': '该编码已存在'}, status=400)
+            t.code = new_code
+        if 'name' in request.data and (request.data.get('name') or '').strip():
+            t.name = request.data['name'].strip()
+        if 'icon' in request.data:
+            t.icon = request.data.get('icon') or t.icon
+        if 'color' in request.data:
+            t.color = request.data.get('color') or t.color
+        if 'description' in request.data:
+            t.description = request.data.get('description') or ''
+        if 'enabled' in request.data:
+            t.enabled = bool(request.data.get('enabled'))
+        if 'form_schema' in request.data:
+            schema = self._normalize_schema(request.data.get('form_schema') or [])
+            err = self._validate_schema(schema)
+            if err:
+                return Response({'error': err}, status=400)
+            t.form_schema = schema
+        t.save()
+        return Response({'message': '更新成功'})
+
+    def destroy(self, request, pk=None):
+        if not self._admin(request):
+            return Response({'error': '仅企业超级管理员或管理员可操作'}, status=403)
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        try:
+            t = ApprovalType.objects.get(pk=pk)
+        except ApprovalType.DoesNotExist:
+            return Response({'error': '类型不存在'}, status=404)
+        if t.is_builtin or (tenant and t.tenant_id != tenant.id):
+            return Response({'error': '内置类型不可删除或无权限'}, status=403)
+        t.delete()
+        return Response({'message': '删除成功'})
+
+
 class ApprovalViewSet(viewsets.ViewSet):
     """OA审批视图集"""
     permission_classes = [permissions.IsAuthenticated]
@@ -800,13 +989,13 @@ class ApprovalViewSet(viewsets.ViewSet):
                 Q(cc_user=request.user) | Q(cc_department__manager=request.user) | Q(cc_department__deputy_managers=request.user)
             ).exists()
             can_view = (
-                request.user.user_type == 'super_admin'
+                request.user.user_type in ['super_admin', 'admin']
                 or approval.applicant == request.user
                 or self._check_user_can_view(approval, request.user)
                 or is_cc
             )
             if not can_view:
-                return Response({'error': '无权查看'}, status=403)
+                return Response({'error': '暂无查看权限'}, status=403)
             data = ApprovalRequestSerializer(approval, context={'request': request}).data
             # 查询该审批类型是否需要手写签名：以审批所属企业为准（审批在哪家企业发起，
             # 就应用该企业的配置，子公司专属配置优先于集团默认配置）。
@@ -817,44 +1006,52 @@ class ApprovalViewSet(viewsets.ViewSet):
             except Exception as e:
                 logger.warning(f'解析审批签名配置失败: {e}')
                 data['require_signature'] = False
+
+            # 标注最终审批人的配置来源（优先使用节点固化的来源；历史数据缺失时实时解析兜底）
+            try:
+                tenant = approval.tenant or getattr(request, 'tenant', None) or request.user.get_active_tenant()
+                _, fa_source, fa_source_label = self._resolve_final_approver(tenant, approval.approval_type)
+                if fa_source:
+                    for n in (data.get('approval_nodes') or []):
+                        if n.get('is_final_approver') and not n.get('final_approver_source'):
+                            n['final_approver_source'] = fa_source
+                            n['final_approver_source_label'] = fa_source_label
+            except Exception as e:
+                logger.warning(f'标注最终审批人配置来源失败: {e}')
+
             return Response({'encrypt': True, 'data': encrypt_data(data)})
         except ApprovalRequest.DoesNotExist:
             return Response({'error': '审批不存在'}, status=404)
 
     def create(self, request):
-        serializer = ApprovalCreateSerializer(data=request.data)
+        serializer = ApprovalCreateSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
 
         approval_type = serializer.validated_data['approval_type']
         department_id = serializer.validated_data.get('department_id')
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+
+        # 统一 form_data：内置类型镜像 legacy 字段，自定义类型按 schema 校验
+        form_data = collect_form_data(
+            serializer.validated_data,
+            serializer.validated_data.get('form_data') or {},
+            approval_type,
+        )
+        type_obj = resolve_approval_type(approval_type, tenant)
+        if type_obj and not type_obj.is_builtin:
+            verr = validate_form_data(type_obj.form_schema or [], form_data)
+            if verr:
+                return Response({'error': '表单校验失败', 'fields': verr}, status=400)
 
         # 审批人自动根据所选部门和审批类型生成
         approver_nodes = serializer.validated_data.get('approver_nodes', [])
         if not approver_nodes:
-            # Gather threshold values from form data
-            threshold_values = {}
-            duration = serializer.validated_data.get('duration')
-            if duration:
-                threshold_values['duration'] = float(duration)
-            amount = serializer.validated_data.get('amount')
-            if amount:
-                try:
-                    threshold_values['amount'] = float(amount)
-                except (ValueError, TypeError):
-                    pass
-            recruit_data = serializer.validated_data.get('recruit_data', {})
-            if recruit_data and isinstance(recruit_data, dict):
-                hc = recruit_data.get('headcount', 0)
-                if hc:
-                    try:
-                        threshold_values['headcount'] = float(hc)
-                    except (ValueError, TypeError):
-                        pass
+            threshold_values = self._gather_threshold_values(serializer.validated_data, form_data)
             approver_nodes = self._auto_determine_approvers(
-                request.user, request.tenant,
+                request.user, tenant,
                 approval_type=approval_type,
                 department_id=department_id,
-                threshold_values=threshold_values if threshold_values else None,
+                threshold_values=threshold_values or None,
             )
 
         # 所属部门
@@ -884,6 +1081,7 @@ class ApprovalViewSet(viewsets.ViewSet):
                 expense_date=serializer.validated_data.get('expense_date'),
                 attachments=serializer.validated_data.get('attachments', []),
                 recruit_data=serializer.validated_data.get('recruit_data', {}),
+                form_data=form_data,
                 sign_type=serializer.validated_data.get('sign_type', 'countersign'),
                 approval_mode=serializer.validated_data.get('approval_mode', 'sequential'),
             )
@@ -939,6 +1137,9 @@ class ApprovalViewSet(viewsets.ViewSet):
                     )
                     ApprovalAssignee.objects.create(node=node, user=admin)
 
+            # 若配置了最终审批人，标记对应节点
+            self._mark_final_approver_node(approval, request)
+
             # 如果是顺序审批，只激活第一个审批人节点（order=1跳过发起人节点）
             if approval.approval_mode == 'sequential':
                 approval.current_node_order = 1
@@ -954,7 +1155,7 @@ class ApprovalViewSet(viewsets.ViewSet):
             send_work_notification(
                 user_id=asgn.user.id,
                 title='审批待处理',
-                content=f'{request.user.real_name or request.user.username} 提交了{approval.get_approval_type_display()}申请：“{approval.title}”',
+                content=f'{request.user.real_name or request.user.username} 提交了{_approval_type_label(approval)}申请：“{approval.title}”',
                 notification_type='approval',
                 related_url='/oa/approval/',
                 extra_data={'approval_id': approval.id, 'action': 'pending'},
@@ -1074,6 +1275,66 @@ class ApprovalViewSet(viewsets.ViewSet):
                 return self._get_final_approval_dept(parent, approval_type, traverse_parent=True)
         return None
 
+    def _final_approver_source_label(self, config):
+        """最终审批人配置来源展示文案"""
+        if config and config.sub_tenant_id:
+            return '子公司自定义配置'
+        try:
+            if config and config.tenant and config.tenant.sub_tenants.exists():
+                return '集团默认配置'
+        except Exception:
+            pass
+        return '默认配置'
+
+    def _resolve_final_approver(self, tenant, approval_type):
+        """解析配置的最终审批人及其来源（允许置空）
+
+        返回 (user, source, source_label)：
+        source ∈ ('sub' 子公司自定义配置, 'default' 集团/企业默认配置, None)
+        优先级：集团子公司自定义配置 > 集团默认配置；
+        子公司配置存在但未设置最终审批人时，回退到集团默认配置的最终审批人。
+        """
+        if not tenant or not approval_type:
+            return None, None, ''
+        config = self._get_config_for_tenant(tenant, approval_type)
+        if not config:
+            return None, None, ''
+        if config.final_approver_id:
+            source = 'sub' if config.sub_tenant_id else 'default'
+            return config.final_approver, source, self._final_approver_source_label(config)
+        # 子公司专属配置未设置最终审批人：回退到集团默认配置
+        if config.sub_tenant_id:
+            default_config = ApprovalDeptConfig.objects.filter(
+                tenant=config.tenant_id,
+                approval_type=approval_type,
+                sub_tenant__isnull=True
+            ).order_by('-updated_at').first()
+            if default_config and default_config.final_approver_id:
+                return default_config.final_approver, 'default', self._final_approver_source_label(default_config)
+        return None, None, ''
+
+    def _get_final_approver(self, tenant, approval_type):
+        """获取配置的最终审批人（允许置空）"""
+        user, _, _ = self._resolve_final_approver(tenant, approval_type)
+        return user
+
+    def _mark_final_approver_node(self, approval, request):
+        """若该审批类型配置了最终审批人，则将对应审批节点标记为最终审批人（供前端流程标识），并固化配置来源"""
+        try:
+            tenant = approval.tenant or getattr(request, 'tenant', None) or request.user.get_active_tenant()
+            final_user, final_source, _ = self._resolve_final_approver(tenant, approval.approval_type)
+            if not final_user:
+                return
+            match = approval.approval_nodes.filter(
+                user=final_user, node_type='user'
+            ).order_by('-order').first()
+            if match:
+                match.is_final_approver = True
+                match.final_approver_source = final_source or ''
+                match.save(update_fields=['is_final_approver', 'final_approver_source'])
+        except Exception as e:
+            logger.warning(f'标记最终审批人节点失败: {e}')
+
     def _get_config_for_tenant(self, tenant, approval_type, traverse_parent=True):
         """获取审批配置，支持子企业专属配置和向父级集团回溯
 
@@ -1157,9 +1418,16 @@ class ApprovalViewSet(viewsets.ViewSet):
                         })
         return result
 
-    def _gather_threshold_values(self, validated_data):
-        """从校验后的数据中提取阈值字段值用于自动审批链"""
+    def _gather_threshold_values(self, validated_data, form_data=None):
+        """收集用于阈值判断的数字字段：form_data（自定义/镜像）+ legacy（内置兜底）"""
         threshold_values = {}
+        fd = form_data or {}
+        for k, v in fd.items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                try:
+                    threshold_values[k] = float(v)
+                except (ValueError, TypeError):
+                    pass
         duration = validated_data.get('duration')
         if duration:
             try:
@@ -1183,36 +1451,54 @@ class ApprovalViewSet(viewsets.ViewSet):
         return threshold_values if threshold_values else None
 
     def _create_cc_records(self, approval, request, user_ids=None, dept_ids=None):
-        """创建抄送记录（支持抄送用户和部门，部门抄送自动通知部门负责人）"""
+        """创建抄送记录（支持抄送用户和部门，部门抄送自动通知部门负责人；幂等去重）"""
         user_ids = user_ids or []
         dept_ids = dept_ids or []
         from accounts.models import CustomUser, Department
 
-        # 抄送用户
+        # 抄送用户（get_or_create 去重，避免同一抄送人重复创建/重复通知）
+        seen_users = set()
         if user_ids:
             cc_users = CustomUser.objects.filter(id__in=user_ids, is_active=True).exclude(id=request.user.id)
             for cc_user in cc_users:
-                ApprovalCarbonCopy.objects.create(request=approval, cc_type='user', cc_user=cc_user)
+                if cc_user.id in seen_users:
+                    continue
+                seen_users.add(cc_user.id)
+                _, created = ApprovalCarbonCopy.objects.get_or_create(
+                    request=approval, cc_type='user', cc_user=cc_user,
+                    defaults={'cc_department': None},
+                )
+                if not created:
+                    continue
                 send_work_notification(
                     user_id=cc_user.id,
                     title='审批抄送通知',
-                    content=f'{request.user.real_name or request.user.username} 提交了{approval.get_approval_type_display()}申请：“{approval.title}”，请知悉',
+                    content=f'{request.user.real_name or request.user.username} 提交了{_approval_type_label(approval)}申请：“{approval.title}”，请知悉',
                     notification_type='approval',
                     related_url='/oa/approval/',
                     extra_data={'approval_id': approval.id, 'action': 'cc'},
                 )
 
-        # 抄送部门：通知该部门的主负责人和副负责人
+        # 抄送部门：通知该部门的主负责人和副负责人（get_or_create 去重）
+        seen_depts = set()
         if dept_ids:
             depts = Department.objects.filter(id__in=dept_ids, is_active=True)
             for dept in depts:
-                ApprovalCarbonCopy.objects.create(request=approval, cc_type='department', cc_department=dept)
+                if dept.id in seen_depts:
+                    continue
+                seen_depts.add(dept.id)
+                _, created = ApprovalCarbonCopy.objects.get_or_create(
+                    request=approval, cc_type='department', cc_department=dept,
+                    defaults={'cc_user': None},
+                )
+                if not created:
+                    continue
                 # 通知部门负责人
                 if dept.manager and dept.manager.id != request.user.id:
                     send_work_notification(
                         user_id=dept.manager.id,
                         title='审批抄送通知',
-                        content=f'{request.user.real_name or request.user.username} 提交了{approval.get_approval_type_display()}申请：“{approval.title}”（抄送部门：{dept.name}），请知悉',
+                        content=f'{request.user.real_name or request.user.username} 提交了{_approval_type_label(approval)}申请：“{approval.title}”（抄送部门：{dept.name}），请知悉',
                         notification_type='approval',
                         related_url='/oa/approval/',
                         extra_data={'approval_id': approval.id, 'action': 'cc'},
@@ -1223,7 +1509,7 @@ class ApprovalViewSet(viewsets.ViewSet):
                         send_work_notification(
                             user_id=dm.id,
                             title='审批抄送通知',
-                            content=f'{request.user.real_name or request.user.username} 提交了{approval.get_approval_type_display()}申请：“{approval.title}”（抄送部门：{dept.name}），请知悉',
+                            content=f'{request.user.real_name or request.user.username} 提交了{_approval_type_label(approval)}申请：“{approval.title}”（抄送部门：{dept.name}），请知悉',
                             notification_type='approval',
                             related_url='/oa/approval/',
                             extra_data={'approval_id': approval.id, 'action': 'cc'},
@@ -1351,6 +1637,20 @@ class ApprovalViewSet(viewsets.ViewSet):
                 for l in level4:
                     l['_threshold_level'] = True
                 all_approvers.extend(level4)
+
+        # Level 5: 最终审批人（配置里指定，追加到审批链最后一级；子公司配置 > 集团默认配置）
+        final_approver, final_source, final_source_label = self._resolve_final_approver(tenant, approval_type)
+        if final_approver:
+            if final_approver.id not in seen_ids and final_approver.id != user.id and final_approver.is_active:
+                seen_ids.add(final_approver.id)
+                all_approvers.append({
+                    'type': 'user', 'id': final_approver.id,
+                    'label': f'{final_approver.real_name or final_approver.username}',
+                    'user_position': final_approver.position or '',
+                    '_final_approver': True,
+                    '_final_approver_source': final_source,
+                    '_final_approver_source_label': final_source_label,
+                })
 
         if not all_approvers:
             return self._fallback_approvers(user, tenant)
@@ -1533,7 +1833,7 @@ class ApprovalViewSet(viewsets.ViewSet):
             send_work_notification(
                 user_id=approval.applicant.id,
                 title='审批已通过',
-                content=f'您的{approval.get_approval_type_display()}申请“{approval.title}”已通过 [{timestamp}]',
+                content=f'您的{_approval_type_label(approval)}申请“{approval.title}”已通过 [{timestamp}]',
                 notification_type='approval',
                 related_url='/oa/approval/',
                 extra_data={'approval_id': approval.id, 'action': 'approved'},
@@ -1605,7 +1905,7 @@ class ApprovalViewSet(viewsets.ViewSet):
         send_work_notification(
             user_id=approval.applicant.id,
             title='审批已驳回',
-            content=f'您的{approval.get_approval_type_display()}申请“{approval.title}”已被驳回 [{timestamp}]' + (f' 原因：{comment}' if comment else ''),
+            content=f'您的{_approval_type_label(approval)}申请“{approval.title}”已被驳回 [{timestamp}]' + (f' 原因：{comment}' if comment else ''),
             notification_type='approval',
             related_url='/oa/approval/',
             extra_data={'approval_id': approval.id, 'action': 'rejected', 'comment': comment},
@@ -1673,7 +1973,7 @@ class ApprovalViewSet(viewsets.ViewSet):
         send_work_notification(
             user_id=approval.applicant.id,
             title=f'审批{action_label}',
-            content=f'您的{approval.get_approval_type_display()}申请“{approval.title}”已被审批人{action_label} [{timestamp}]' + (f' 意见：{comment}' if comment else ''),
+            content=f'您的{_approval_type_label(approval)}申请“{approval.title}”已被审批人{action_label} [{timestamp}]' + (f' 意见：{comment}' if comment else ''),
             notification_type='approval',
             related_url='/oa/approval/',
             extra_data={'approval_id': approval.id, 'action': action, 'comment': comment},
@@ -1686,10 +1986,15 @@ class ApprovalViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'])
     def draft(self, request):
         """保存审批草稿"""
-        serializer = ApprovalDraftSerializer(data=request.data)
+        serializer = ApprovalDraftSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         from accounts.models import Department
         department_id = serializer.validated_data.get('department_id')
+        approval_type = serializer.validated_data.get('approval_type', 'other')
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        form_data = collect_form_data(serializer.validated_data,
+                                      serializer.validated_data.get('form_data') or {},
+                                      approval_type)
         department = None
         if department_id:
             try:
@@ -1700,10 +2005,10 @@ class ApprovalViewSet(viewsets.ViewSet):
             department = request.user.department
         approval = ApprovalRequest.objects.create(
             applicant=request.user,
-            tenant=getattr(request, 'tenant', None) or request.user.get_active_tenant(),
+            tenant=tenant,
             status='draft',
             department=department,
-            approval_type=serializer.validated_data.get('approval_type', 'other'),
+            approval_type=approval_type,
             title=serializer.validated_data.get('title', '未命名草稿'),
             content=serializer.validated_data.get('content', ''),
             start_date=serializer.validated_data.get('start_date'),
@@ -1714,6 +2019,7 @@ class ApprovalViewSet(viewsets.ViewSet):
             expense_date=serializer.validated_data.get('expense_date'),
             attachments=serializer.validated_data.get('attachments', []),
             recruit_data=serializer.validated_data.get('recruit_data', {}),
+            form_data=form_data,
             sign_type=serializer.validated_data.get('sign_type', 'countersign'),
             approval_mode=serializer.validated_data.get('approval_mode', 'sequential'),
         )
@@ -1721,10 +2027,10 @@ class ApprovalViewSet(viewsets.ViewSet):
         approver_nodes = serializer.validated_data.get('approver_nodes', [])
         if not approver_nodes:
             approver_nodes = self._auto_determine_approvers(
-                request.user, getattr(request, 'tenant', None) or request.user.get_active_tenant(),
-                approval_type=serializer.validated_data.get('approval_type', ''),
+                request.user, tenant,
+                approval_type=approval_type,
                 department_id=serializer.validated_data.get('department_id'),
-                threshold_values=self._gather_threshold_values(serializer.validated_data),
+                threshold_values=self._gather_threshold_values(serializer.validated_data, form_data),
             )
         from accounts.models import CustomUser, Department
         # 创建发起人节点
@@ -1760,6 +2066,8 @@ class ApprovalViewSet(viewsets.ViewSet):
                         ApprovalAssignee.objects.create(node=node, user=au)
                 except Department.DoesNotExist:
                     pass
+        # 若配置了最终审批人，标记对应节点
+        self._mark_final_approver_node(approval, request)
         # 草稿也保存抄送人
         cc_user_ids = serializer.validated_data.get('cc_users', [])
         cc_dept_ids = serializer.validated_data.get('cc_departments', [])
@@ -1817,7 +2125,7 @@ class ApprovalViewSet(viewsets.ViewSet):
             return Response({'error': '仅草稿、已撤回或已驳回的审批可以重新编辑'}, status=400)
         if approval.applicant != request.user:
             return Response({'error': '只能编辑自己的审批'}, status=403)
-        serializer = ApprovalDraftSerializer(data=request.data)
+        serializer = ApprovalDraftSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         # 更新字段
         from accounts.models import Department
@@ -1835,6 +2143,12 @@ class ApprovalViewSet(viewsets.ViewSet):
                 setattr(approval, field, val)
         if serializer.validated_data.get('attachments') is not None:
             approval.attachments = serializer.validated_data['attachments']
+        if serializer.validated_data.get('recruit_data') is not None:
+            approval.recruit_data = serializer.validated_data['recruit_data']
+        form_data = collect_form_data(serializer.validated_data,
+                                      serializer.validated_data.get('form_data') or {},
+                                      approval.approval_type)
+        approval.form_data = form_data
         approval.status = 'pending'
         approval.save()
         # 重建审批人节点（根据所选部门自动生成）
@@ -1844,7 +2158,7 @@ class ApprovalViewSet(viewsets.ViewSet):
                 request.user, request.tenant or request.user.get_active_tenant(),
                 approval_type=approval.approval_type,
                 department_id=department_id or getattr(approval.department, 'id', None),
-                threshold_values=self._gather_threshold_values(serializer.validated_data),
+                threshold_values=self._gather_threshold_values(serializer.validated_data, form_data),
             )
         from oa.models import ApprovalAssignee
         ApprovalAssignee.objects.filter(node__request=approval).delete()
@@ -1883,6 +2197,8 @@ class ApprovalViewSet(viewsets.ViewSet):
                         ApprovalAssignee.objects.create(node=node, user=au)
                 except Department.DoesNotExist:
                     pass
+        # 若配置了最终审批人，标记对应节点
+        self._mark_final_approver_node(approval, request)
         # 顺序审批重置到第一个节点
         if approval.approval_mode == 'sequential':
             approval.current_node_order = 1
@@ -1906,7 +2222,7 @@ class ApprovalViewSet(viewsets.ViewSet):
             send_work_notification(
                 user_id=asgn.user.id,
                 title='审批待处理',
-                content=f'{request.user.real_name or request.user.username} 提交了{approval.get_approval_type_display()}申请：“{approval.title}”',
+                content=f'{request.user.real_name or request.user.username} 提交了{_approval_type_label(approval)}申请：“{approval.title}”',
                 notification_type='approval',
                 related_url='/oa/approval/',
                 extra_data={'approval_id': approval.id, 'action': 'pending'},
@@ -1955,7 +2271,7 @@ class ApprovalViewSet(viewsets.ViewSet):
             return Response({'error': '仅草稿、已撤回或已驳回的审批可以更新'}, status=400)
         if approval.applicant != request.user:
             return Response({'error': '只能更新自己的草稿'}, status=403)
-        serializer = ApprovalDraftSerializer(data=request.data)
+        serializer = ApprovalDraftSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         from accounts.models import Department, CustomUser
         department_id = serializer.validated_data.get('department_id')
@@ -1976,6 +2292,10 @@ class ApprovalViewSet(viewsets.ViewSet):
             approval.recruit_data = serializer.validated_data['recruit_data']
         if serializer.validated_data.get('attachments') is not None:
             approval.attachments = serializer.validated_data['attachments']
+        form_data = collect_form_data(serializer.validated_data,
+                                      serializer.validated_data.get('form_data') or {},
+                                      approval.approval_type)
+        approval.form_data = form_data
         # 重新编辑时保存为草稿
         if approval.status in ('cancelled', 'rejected'):
             approval.status = 'draft'
@@ -1986,7 +2306,7 @@ class ApprovalViewSet(viewsets.ViewSet):
                 request.user, request.tenant or request.user.get_active_tenant(),
                 approval_type=approval.approval_type,
                 department_id=department_id or getattr(approval.department, 'id', None),
-                threshold_values=self._gather_threshold_values(serializer.validated_data),
+                threshold_values=self._gather_threshold_values(serializer.validated_data, form_data),
             )
         from oa.models import ApprovalAssignee
         ApprovalAssignee.objects.filter(node__request=approval).delete()
@@ -2024,6 +2344,8 @@ class ApprovalViewSet(viewsets.ViewSet):
                         ApprovalAssignee.objects.create(node=node, user=au)
                 except Department.DoesNotExist:
                     pass
+        # 若配置了最终审批人，标记对应节点
+        self._mark_final_approver_node(approval, request)
         # 顺序审批重置到第一个节点
         if approval.approval_mode == 'sequential':
             approval.current_node_order = 1
@@ -2074,27 +2396,41 @@ class ApprovalViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def org_departments(self, request):
-        """获取当前企业的组织架构部门（链式结构，集团可查看子企业部门）"""
-        from accounts.models import Department
+        """获取组织架构部门（链式结构）。
+
+        ?scope=all：返回当前用户所属的所有企业下的所有部门（供自定义类型"部门"字段选择）。
+        默认：当前企业（集团管理员额外含子企业部门）。
+        """
+        from accounts.models import Department, Tenant
         tenant = getattr(request, 'tenant', None)
         if tenant is None:
             tenant = request.user.get_active_tenant()
         user = request.user
-        # 集团企业：包含子企业部门（标记所属企业以便区分）
-        tenant_ids = [tenant.id]
-        try:
-            sub_ids = list(tenant.sub_tenants.filter(is_active=True).values_list('id', flat=True))
-            if user.user_type in ('super_admin', 'admin') and sub_ids:
-                tenant_ids.extend(sub_ids)
-        except Exception:
-            pass
+        scope = request.query_params.get('scope', '')
+        if scope == 'all':
+            # 当前用户所属的所有企业（多企业隔离原则：只取用户所属企业的部门）
+            tenant_ids = list(Tenant.objects.filter(
+                memberships__user=user, memberships__is_active=True
+            ).distinct().values_list('id', flat=True))
+            if not tenant_ids and tenant:
+                tenant_ids = [tenant.id]
+        else:
+            tenant_ids = [tenant.id] if tenant else []
+            try:
+                sub_ids = list(tenant.sub_tenants.filter(is_active=True).values_list('id', flat=True))
+                if user.user_type in ('super_admin', 'admin') and sub_ids:
+                    tenant_ids.extend(sub_ids)
+            except Exception:
+                pass
+        if not tenant_ids:
+            return Response({'results': []})
         depts = Department.objects.filter(tenant_id__in=tenant_ids, is_active=True).values(
             'id', 'name', 'parent_id', 'full_path', 'tenant_id')
         dept_list = list(depts)
-        # 添加 tenant_name 信息
+        # 多企业时用企业名作前缀，便于区分
         tenant_names = {}
         if len(tenant_ids) > 1:
-            for t in type(tenant).objects.filter(id__in=tenant_ids):
+            for t in Tenant.objects.filter(id__in=tenant_ids):
                 tenant_names[t.id] = t.short_name or t.name
             for d in dept_list:
                 tn = tenant_names.get(d['tenant_id'], '')
@@ -2187,6 +2523,18 @@ class ApprovalViewSet(viewsets.ViewSet):
                     threshold_values[key] = float(val)
                 except ValueError:
                     pass
+        # 自定义类型：接收 form_data JSON，收集数字字段用于阈值预览
+        fd_raw = request.query_params.get('form_data', '')
+        if fd_raw:
+            try:
+                import json as _json
+                fd = _json.loads(fd_raw)
+                if isinstance(fd, dict):
+                    for k, v in fd.items():
+                        if isinstance(v, (int, float)) and not isinstance(v, bool):
+                            threshold_values[str(k)] = float(v)
+            except Exception:
+                pass
 
         chain = self._auto_determine_approvers(
             request.user, request.user.get_active_tenant(),
@@ -2218,7 +2566,7 @@ class ApprovalViewSet(viewsets.ViewSet):
             config = self._get_config_for_tenant(tenant, approval_type)
             if config and config.threshold_enabled and config.threshold_department:
                 dept_map['threshold'] = config.threshold_department.name
-                dept_map['threshold_field'] = config.get_threshold_field_display()
+                dept_map['threshold_field'] = _threshold_field_label(config)
                 dept_map['threshold_value'] = config.threshold_value
             # 是否要求手写签名
             dept_map['require_signature'] = bool(config and config.require_signature)
@@ -2230,11 +2578,22 @@ class ApprovalViewSet(viewsets.ViewSet):
 
         for item in chain:
             is_threshold = item.pop('_threshold_level', False)
-            level_label = '阈值审批' if is_threshold else f'第{level}级'
+            is_final_approver = item.pop('_final_approver', False)
+            final_source = item.pop('_final_approver_source', '')
+            final_source_label = item.pop('_final_approver_source_label', '')
+            if is_final_approver:
+                level_label = '最终审批人'
+            elif is_threshold:
+                level_label = '阈值审批'
+            else:
+                level_label = f'第{level}级'
             result.append({
                 **item,
                 'level': level,
                 'level_label': level_label,
+                'is_final_approver': is_final_approver,
+                'final_approver_source': final_source,
+                'final_approver_source_label': final_source_label,
             })
             level += 1
         # 添加部门信息
@@ -2311,6 +2670,18 @@ class ApprovalViewSet(viewsets.ViewSet):
             ).distinct()
             approver_users = list(valid_approvers.values_list('id', flat=True))
 
+        # 最终审批人（可选，允许置空；必须是当前企业成员）
+        final_approver_id = request.data.get('final_approver')
+        final_approver_obj = None
+        if final_approver_id:
+            final_approver_obj = CustomUser.objects.filter(
+                id=final_approver_id, is_active=True,
+                tenant_memberships__tenant=tenant,
+                tenant_memberships__is_active=True
+            ).first()
+            if not final_approver_obj:
+                return Response({'error': '最终审批人必须是当前企业成员'}, status=400)
+
         # Sub-tenant config (集团模式下为子公司配置，存放到集团 config_tenant 下)
         sub_tenant_id = request.data.get('sub_tenant_id')
         sub_tenant_obj = None
@@ -2342,6 +2713,7 @@ class ApprovalViewSet(viewsets.ViewSet):
         defaults['cc_departments'] = cc_departments
         defaults['cc_users'] = cc_users
         defaults['approver_users'] = approver_users
+        defaults['final_approver'] = final_approver_obj
         sign_type = request.data.get('sign_type', '').strip()
         if sign_type in ('countersign', 'orsign'):
             defaults['default_sign_type'] = sign_type

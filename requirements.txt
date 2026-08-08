@@ -89,3 +89,4 @@ vine==5.1.0
 wcwidth==0.6.0
 whitenoise==6.11.0
 zope.interface==8.0.1
+pywebpush==2.2.1

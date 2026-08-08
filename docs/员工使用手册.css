@@ -1,0 +1,119 @@
+/* 员工使用手册 PDF 打印样式 */
+@page {
+    size: A4;
+    margin: 1.6cm 1.5cm 1.8cm 1.5cm;
+    @bottom-center {
+        content: "企业协同办公平台 · 员工使用手册";
+        font-size: 8pt;
+        color: #999;
+    }
+    @bottom-right {
+        content: counter(page) " / " counter(pages);
+        font-size: 8pt;
+        color: #999;
+    }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    font-family: "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.7;
+    color: #2c3e50;
+    margin: 0;
+    padding: 0;
+}
+
+/* 封面标题 */
+h1.title {
+    font-size: 24pt;
+    color: #1f3a5f;
+    text-align: center;
+    margin: 1.2cm 0 0.2cm;
+    border: none;
+}
+blockquote {
+    background: #f4f8fd;
+    border-left: 4px solid #409EFF;
+    margin: 0.4cm 0 0.6cm;
+    padding: 0.5cm 0.6cm;
+    border-radius: 4px;
+    color: #34495e;
+    font-size: 10pt;
+}
+
+/* 页脚注释 */
+blockquote p { margin: 0.15cm 0; }
+
+h1 {
+    font-size: 16pt;
+    color: #1f3a5f;
+    border-bottom: 2px solid #409EFF;
+    padding-bottom: 6px;
+    margin: 0.8cm 0 0.4cm;
+    page-break-after: avoid;
+}
+h2 {
+    font-size: 13pt;
+    color: #2c5f8f;
+    margin: 0.6cm 0 0.25cm;
+    page-break-after: avoid;
+}
+h3 {
+    font-size: 11pt;
+    color: #34495e;
+    margin: 0.4cm 0 0.2cm;
+    page-break-after: avoid;
+}
+p { margin: 0.2cm 0; }
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.3cm 0 0.4cm;
+    font-size: 9.5pt;
+    page-break-inside: auto;
+}
+th, td {
+    border: 1px solid #cfd8e3;
+    padding: 5px 8px;
+    text-align: left;
+    vertical-align: top;
+}
+th {
+    background: #eef4fb;
+    color: #1f3a5f;
+    font-weight: 600;
+}
+tr { page-break-inside: avoid; }
+
+ul, ol { margin: 0.15cm 0 0.3cm; padding-left: 0.8cm; }
+li { margin: 0.1cm 0; }
+
+strong { color: #1f3a5f; }
+code {
+    background: #f0f3f7;
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 9pt;
+    color: #c0392b;
+}
+a { color: #409EFF; text-decoration: none; }
+
+/* 目录页 */
+nav#TOC {
+    background: #f8fafc;
+    border: 1px solid #e0e6ee;
+    border-radius: 6px;
+    padding: 0.5cm 0.7cm;
+    margin-bottom: 0.6cm;
+    page-break-after: always;
+}
+nav#TOC ul { list-style: none; padding-left: 0; }
+nav#TOC > ul > li { margin: 0.12cm 0; }
+nav#TOC ul ul { padding-left: 0.5cm; }
+
+/* 保持表格行不跨页、标题不孤立 */
+h1, h2, h3 { -webkit-column-break-after: avoid; page-break-after: avoid; }

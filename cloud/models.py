@@ -84,6 +84,15 @@ class Folder(models.Model):
             models.Index(fields=['owner', 'deleted_at', 'permanently_deleted']),
         ]
 
+    def save(self, *args, **kwargs):
+        # 🔧 多企业隔离：创建时若未指定企业，自动归属所有者的活跃企业
+        if not self.tenant and self.owner_id:
+            try:
+                self.tenant = self.owner.get_active_tenant()
+            except Exception:
+                pass
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.name
 
@@ -301,6 +310,12 @@ class CloudFile(models.Model):
             self.supported_formats['pdf']
 
     def save(self, *args, **kwargs):
+        # 🔧 多企业隔离：创建时若未指定企业，自动归属所有者的活跃企业
+        if not self.tenant and self.owner_id:
+            try:
+                self.tenant = self.owner.get_active_tenant()
+            except Exception:
+                pass
         # 仅在首次创建或尚未确定是否为文档时自动识别文档类型
         if not self.is_document:
             ext = self.get_extension()
@@ -476,6 +491,15 @@ class FileShare(models.Model):
         indexes = [models.Index(fields=['tenant'])]
         ordering = ['-created_at']
 
+    def save(self, *args, **kwargs):
+        # 🔧 多企业隔离：创建时若未指定企业，自动归属分享者的活跃企业
+        if not self.tenant and self.owner_id:
+            try:
+                self.tenant = self.owner.get_active_tenant()
+            except Exception:
+                pass
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f'{self.share_code} - {self.owner.username}'
 
@@ -566,6 +590,9 @@ class FileOperationLog(models.Model):
         ('remove_all_collaborators', '移除所有协作者'),
         ('version_download', '版本下载'),
         ('restore_version', '恢复版本'),
+
+        ('add_folder_member', '添加共享文件夹成员'),
+        ('remove_folder_member', '移除共享文件夹成员'),
     ]
 
     file = models.ForeignKey(
@@ -755,6 +782,13 @@ class FolderCollaboration(models.Model):
     )
 
     is_active = models.BooleanField(default=True, verbose_name='是否有效')
+
+    notify_private_chat = models.BooleanField(
+        default=True,
+        verbose_name='是否通过私聊通知',
+        help_text='该成员加入时是否以私聊消息形式通知'
+    )
+
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>组织架构 - 义乌吉通集团</title>
-    <link rel="stylesheet" href="/static/css/org.css?v=20260731-09c0a6d">
+    <link rel="stylesheet" href="/static/css/org.css?v=20260807-8591e09">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
     <style>
@@ -434,7 +434,7 @@
         </button>
         <div style="position:relative;display:flex;align-items:center;gap:4px;">
             <div class="user-avatar-wrap" id="orgUserAvatarWrap" onclick="toggleOrgUserMenu(event)">
-                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260731-09c0a6d" alt="头像">
+                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260807-8591e09" alt="头像">
             </div>
             <i class="fas fa-chevron-down" style="font-size:10px;color:rgba(255,255,255,0.7);cursor:pointer;" onclick="toggleOrgUserMenu(event)"></i>
             <!-- 用户下拉菜单 -->
@@ -466,11 +466,25 @@
 
                 <div class="dd-divider"></div>
 
+                <div class="dd-item" id="adminConsoleBtn" style="display:none;" onclick="event.stopPropagation();window.location.href='/control/'">
+                    <i class="fas fa-shield-alt"></i> 管理控制台
+                </div>
+
                 <div class="dd-item danger" onclick="event.stopPropagation();orgApp.logout()">
                     <i class="fas fa-sign-out-alt"></i> 退出登录
                 </div>
             </div>
         </div>
+        <!-- 仅管理员/超级管理员显示「管理控制台」 -->
+        <script>
+            (function () {
+                var t = localStorage.getItem('user_type');
+                if (t === 'admin' || t === 'super_admin') {
+                    var b = document.getElementById('adminConsoleBtn');
+                    if (b) b.style.display = 'flex';
+                }
+            })();
+        </script>
     </div>
 </div>
 
@@ -558,15 +572,15 @@
     </main>
 </div>
 
-<script src="/static/js/dist/spark-md5.min.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/encrypts.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/utils.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/api.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/tenant.js?v=20260731-09c0a6e"></script>
-<script src="/static/js/notifications.js?v=20260731-09c0a6d"></script>
-<script src="/static/js/org.js?v=20260731-09c0a6d"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260807-8591e09"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260807-8591e09"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260807-8591e09"></script>
+<script src="/static/js/encrypts.js?v=20260807-8591e09"></script>
+<script src="/static/js/utils.js?v=20260807-8591e09"></script>
+<script src="/static/js/api.js?v=20260807-8591e09"></script>
+<script src="/static/js/tenant.js?v=20260807-8591e09"></script>
+<script src="/static/js/notifications.js?v=20260807-8591e09"></script>
+<script src="/static/js/org.js?v=20260807-8591e09"></script>
 <script>
     // ────────── 顶栏逻辑 ──────────
 

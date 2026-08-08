@@ -6969,76 +6969,112 @@ body.pwa-mode .chat-input-area {
 }
 
 
-/* ==================== iOS PWA 专用样式 ==================== */
-/* 修复安全区域 */
-@supports (-webkit-touch-callout: none) {
-    /* iPhone X 及以上机型 */
-    @media (min-aspect-ratio: 4/3) {
-        /* 侧边栏顶部修复 - 关键修复 */
-        .sidebar-header {
-            padding-top: calc(20px + env(safe-area-inset-top));
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            z-index: 100;
-            background: var(--bg-primary);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        }
+/* ==================== PWA standalone 统一适配（唯一入口） ==================== */
+/* 顶栏保持在 flex 流内（不再 position:fixed），避免遮住侧边栏头像和聊天头部按钮 */
+@media all and (display-mode: standalone) {
+    /* 安全区变量 */
+    :root {
+        --sa-top: env(safe-area-inset-top, 0px);
+        --sa-bottom: env(safe-area-inset-bottom, 0px);
+    }
 
-        /* 聊天头部修复 */
-        .chat-header {
-            padding-top: calc(20px + env(safe-area-inset-top));
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            z-index: 100;
-            background: var(--bg-primary);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        }
-
-        /* 修复侧边栏高度 */
-        .sidebar {
-            height: calc(100vh - env(safe-area-inset-top));
-            top: env(safe-area-inset-top);
-        }
-
-        /* 修复聊天容器 */
-        .chat-main {
-            padding-top: calc(60px + env(safe-area-inset-top));
+    /* 动态视口高度：iOS16.4+ 用 dvh，旧 iOS 回落 vh */
+    body, .chat-container, body.pwa-mode .chat-container {
+        height: 100dvh;
+        min-height: 100dvh;
+    }
+    @supports not (height: 100dvh) {
+        body, .chat-container, body.pwa-mode .chat-container {
+            height: 100vh;
+            min-height: 100vh;
         }
     }
+
+    /* 顶栏：左右两栏 header 高度完全一致，且同一水平线。
+       关键：固定相同高度（安全区 + 52px），内容垂直居中。
+       直接用 env() 计算高度（不经过自定义属性，避免部分 iOS 上 env() 在 var() 中不解析导致高度失效）；
+       max-height + flex:none 防止内容把高度撑大（这是 iOS 上顶栏占比过大/错位的根因之一）。 */
+    .sidebar-header, .chat-header,
+    body.pwa-mode .sidebar-header, body.pwa-mode .chat-header {
+        position: static !important;
+        /* 顶部最小留白 48px，确保内容不与状态栏(WiFi/电量/刘海)重叠，
+           即使部分设备 env(safe-area-inset-top) 返回 0 也生效；
+           内容在剩余可见区域内垂直居中 */
+        height: calc(max(env(safe-area-inset-top, 0px), 48px) + 52px) !important;
+        min-height: 0 !important;
+        max-height: calc(max(env(safe-area-inset-top, 0px), 48px) + 52px) !important;
+        padding: max(env(safe-area-inset-top, 0px), 48px) 16px 0 !important;
+        box-sizing: border-box !important;
+        flex: none !important;
+        flex-wrap: nowrap !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+    }
+
+    /* 左侧信息收缩，保证右侧按钮不溢出 */
+    .header-left { min-width: 0; flex: 1; }
+    .chat-details { min-width: 0; }
+    .chat-title { max-width: none; }
+
+    /* 侧边栏顶部内容不换行、按钮不压缩。
+       注意：logo 不能设 overflow:hidden，否则会裁掉其内部的企业切换下拉菜单（#globalTenantDropdown）。 */
+    .sidebar-header .logo { min-width: 0; }
+    .sidebar-header .user-actions { flex-shrink: 0; }
+
+    /* 底部输入区安全区 */
+    .chat-input-area {
+        padding-bottom: calc(var(--sa-bottom) + 8px);
+    }
+    body.pwa-mode .chat-input-area {
+        padding-bottom: calc(var(--sa-bottom) + 8px) !important;
+    }
+
+    /* 侧边栏平铺到顶部（top:0），避免被移动端 .sidebar{top:env(safe-area-inset-top)}
+       规则往下推 47px 造成顶部空隙，从而与右侧 chat-header 不在同一水平线 */
+    .sidebar { height: 100% !important; top: 0 !important; }
+    /* 底部安全区加在侧边栏底部栏上，而非顶部的 user-profile（否则 profile 底部会留白） */
+    .sidebar-bottom-bar { padding-bottom: max(8px, var(--sa-bottom)); }
 }
 
-/* PWA standalone 模式专用修复 */
-@media all and (display-mode: standalone) {
-    /* 确保侧边栏顶部完全铺满 */
-    .sidebar-header {
-        padding-top: max(20px, env(safe-area-inset-top));
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        z-index: 100;
-        background: var(--primary-color);
-    }
+/* ===== 兜底：只要 JS 判定为 PWA（body.pwa-mode）就强制左右顶栏等高同线 =====
+   部分 iOS 版本可能不匹配 display-mode 媒体查询，此时仍依赖 JS 加的 pwa-mode 类生效。 */
+body.pwa-mode .sidebar-header,
+body.pwa-mode .chat-header {
+    position: static !important;
+    height: calc(max(env(safe-area-inset-top, 0px), 48px) + 52px) !important;
+    min-height: 0 !important;
+    max-height: calc(max(env(safe-area-inset-top, 0px), 48px) + 52px) !important;
+    padding: max(env(safe-area-inset-top, 0px), 48px) 16px 0 !important;
+    box-sizing: border-box !important;
+    flex: none !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+}
 
-    /* 确保聊天区域不被遮挡 */
-    .chat-main {
-        padding-top: calc(60px + env(safe-area-inset-top));
-    }
+/* 兜底：侧边栏同样平铺到顶部，避免 safe-area 下推造成顶部空隙 */
+body.pwa-mode .sidebar {
+    top: 0 !important;
+    height: 100% !important;
+}
 
-    /* 修复侧边栏高度 */
-    .sidebar {
-        height: calc(100vh - env(safe-area-inset-top));
-        top: env(safe-area-inset-top);
+/* 窄屏（手机）压缩聊天头部：保证头像与所有按钮都在屏内可见 */
+@media (max-width: 480px) {
+    .chat-header {
+        padding-left: 12px;
+        padding-right: 8px;
     }
-
-    /* 修复整体布局 */
-    .chat-container {
-        height: 100vh;
-        min-height: 100vh;
+    .header-left {
+        gap: 10px;
+        min-width: 0;
+        flex: 1;
+    }
+    .header-right {
+        gap: 4px;
+    }
+    .header-right .btn-icon {
+        width: 32px;
+        height: 32px;
+        font-size: 14px;
     }
 }
 
@@ -7574,7 +7610,8 @@ body.pwa-mode .chat-input-area {
 @media (max-width: 768px) {
     .scroll-to-bottom-container {
         right: 18px;
-        bottom: 100px;
+        /* 按钮要高于输入区顶部（输入区≈108px+底部安全区），否则会被遮挡 */
+        bottom: calc(140px + env(safe-area-inset-bottom, 0px));
         width: 52px;
         height: 52px;
     }
@@ -7596,7 +7633,7 @@ body.pwa-mode .chat-input-area {
 @media (max-width: 480px) {
     .scroll-to-bottom-container {
         right: 16px;
-        bottom: 200px;
+        bottom: calc(160px + env(safe-area-inset-bottom, 0px));
         width: 48px;
         height: 48px;
     }
@@ -10786,3 +10823,150 @@ body.pwa-mode .chat-input-area {
 [data-theme="dark"] .org-view-body .org-back-btn:hover { background: #2d2d2d; }
 [data-theme="dark"] .org-view-body .org-member-item .chat-btn { background: #1a2740; color: #5cabff; }
 [data-theme="dark"] .org-view-body .org-member-item .chat-btn:hover { background: #1a3050; }
+
+
+/* ==================== PWA 移动端引导横幅 ==================== */
+.pwa-guide-banner {
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    z-index: 10000;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.16);
+    padding: 10px 12px;
+    transform: translateY(130%);
+    opacity: 0;
+    transition: transform 0.3s ease, opacity 0.3s ease;
+    max-width: 420px;
+    max-height: calc(100vh - 40px);
+    overflow: hidden;
+    margin: 0 auto;
+}
+
+.pwa-guide-banner.show {
+    transform: translateY(0);
+    opacity: 1;
+}
+
+.pwa-guide-inner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.pwa-guide-icon {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #409EFF, #337ECC);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 15px;
+}
+
+.pwa-guide-text {
+    flex: 1;
+    min-width: 0;
+}
+
+.pwa-guide-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 1px;
+}
+
+.pwa-guide-desc {
+    font-size: 11px;
+    color: var(--text-light);
+    line-height: 1.4;
+}
+
+.pwa-guide-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.pwa-guide-btn {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    border: none;
+    border-radius: 6px;
+    background: var(--primary-color);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.pwa-guide-btn:active {
+    background: var(--primary-dark);
+}
+
+/* 安装按钮（绿色，区分于开启通知） */
+.pwa-guide-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.pwa-install-btn {
+    background: #67C23A;
+}
+
+.pwa-install-btn:active {
+    background: #529b2e;
+}
+
+.pwa-perm-btn {
+    background: #9b59b6;
+}
+
+.pwa-perm-btn:active {
+    background: #7d3c98;
+}
+
+.pwa-guide-close {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    width: 20px;
+    height: 20px;
+    border: none;
+    background: transparent;
+    color: var(--text-light);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+@media (max-width: 480px) {
+    .pwa-guide-banner {
+        left: 8px;
+        right: 8px;
+        padding: 8px 10px;
+    }
+    .pwa-guide-desc {
+        display: none;
+    }
+    .pwa-guide-steps {
+        display: none;
+    }
+    .pwa-guide-btn {
+        padding: 6px 10px;
+        font-size: 12px;
+    }
+}

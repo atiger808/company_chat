@@ -1,5 +1,10 @@
 from django.contrib import admin
-from .models import AttendanceRecord, ApprovalRequest, ApprovalLog, ApprovalNode, ApprovalAssignee, WorkNotification, ApprovalCarbonCopy, ApprovalDeptConfig
+from .models import (
+    AttendanceRecord, ApprovalRequest, ApprovalLog,
+    ApprovalNode, ApprovalAssignee, WorkNotification,
+    ApprovalCarbonCopy, ApprovalDeptConfig,
+    ApprovalType,
+)
 
 
 @admin.register(AttendanceRecord)
@@ -12,7 +17,8 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
 
 @admin.register(ApprovalRequest)
 class ApprovalRequestAdmin(admin.ModelAdmin):
-    list_display = ['id', 'applicant', 'title', 'approval_type', 'status', 'sign_type', 'approval_mode', 'updated_at', 'created_at']
+    list_display = ['id', 'applicant', 'title', 'approval_type', 'status', 'sign_type', 'approval_mode', 'updated_at',
+                    'created_at']
     list_filter = ['status', 'approval_type', 'sign_type', 'approval_mode']
     search_fields = ['id', 'title', 'applicant__username', 'applicant__real_name']
     list_per_page = 20
@@ -58,7 +64,17 @@ class ApprovalCarbonCopyAdmin(admin.ModelAdmin):
 
 @admin.register(ApprovalDeptConfig)
 class ApprovalDeptConfigAdmin(admin.ModelAdmin):
-    list_display = ['id', 'tenant', 'approval_type', 'require_signature', 'threshold_enabled', 'threshold_field', 'department', 'updated_at', 'created_at']
+    list_display = ['id', 'tenant', 'sub_tenant', 'approval_type', 'require_signature', 'final_approver',
+                    'threshold_enabled', 'threshold_field', 'department', 'updated_at', 'created_at']
     list_filter = ['approval_type', 'require_signature', 'threshold_enabled', 'threshold_field']
     search_fields = ['tenant__name', 'department__name']
+    list_per_page = 20
+
+
+
+@admin.register(ApprovalType)
+class ApprovalTypeAdmin(admin.ModelAdmin):
+    list_display = ['id', 'code', 'name', 'icon', 'color', 'enabled', 'is_builtin', 'sort_order', 'updated_at', 'created_at']
+    list_filter = ['enabled', 'is_builtin']
+    search_fields = ['code', 'name', 'tenant__name']
     list_per_page = 20
