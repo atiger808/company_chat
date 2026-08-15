@@ -73,6 +73,9 @@ $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/cloud/cloud_sett
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/tasks/tasks.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/oa/approval.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/oa/attendance.html" ${VERSION}
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/oa/subsidy.html" ${VERSION}
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/oa/subsidy-pay.html" ${VERSION}
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/oa/subsidy-verify.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/org/org.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/org/org_mobile.html" ${VERSION}
 
@@ -81,6 +84,7 @@ $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/org/org_mobile.h
 # 5. 重启服务
 echo "🔄 重启服务..."
 sudo systemctl restart company_chat && echo "⚠️ daphne 服务未运行或名称不匹配（company_chat）"
+sudo /usr/bin/bash /www/yue/celery_company_chat.sh && echo "⚠️ celery 服务未运行或名称不匹配（celery_company_chat）"
 
 echo "Nginx 配置重载..."
 sudo systemctl reload nginx && echo "⚠️ Nginx 服务未运行或名称不匹配（nginx）"

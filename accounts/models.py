@@ -377,6 +377,14 @@ class CustomUser(AbstractUser):
     )
     bio = models.TextField(max_length=500, blank=True, null=True, verbose_name='个人简介')
 
+    # ============ 收款账号（普惠补贴发放用） ============
+    payee_name = models.CharField(max_length=50, blank=True, default='', verbose_name='收款人真实姓名')
+    bank_card = models.CharField(max_length=40, blank=True, default='', verbose_name='银行卡号')
+    alipay_account = models.CharField(max_length=100, blank=True, default='', verbose_name='支付宝账号')
+    wechat_account = models.CharField(max_length=100, blank=True, default='', verbose_name='微信账号')
+    alipay_qr = models.CharField(max_length=500, blank=True, default='', verbose_name='支付宝收款码')
+    wechat_qr = models.CharField(max_length=500, blank=True, default='', verbose_name='微信收款码')
+
     # 在线状态
     is_online = models.BooleanField(default=False, verbose_name='在线状态')
     last_seen = models.DateTimeField(null=True, blank=True, verbose_name='最后在线时间')

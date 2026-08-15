@@ -34,6 +34,13 @@
         css += '.notif-item-icon.attendance { background:#67c23a; }';
         css += '.notif-item-icon.task { background:#e6a23c; }';
         css += '.notif-item-icon.collab { background:#9b59b6; }';
+        css += '.notif-item-icon.subsidy { background:#16a085; }';
+        css += '.notif-item-icon.subsidy_apply { background:#16a085; }';
+        css += '.notif-item-icon.subsidy_result { background:#67c23a; }';
+        css += '.notif-item-icon.subsidy_withdraw { background:#e6a23c; }';
+        css += '.notif-item-icon.subsidy_withdraw_result { background:#16a085; }';
+        css += '.notif-item-icon.hr { background:#6c5ce7; }';
+        css += '.notif-item-icon.daily { background:#409eff; }';
         css += '.notif-item-icon.system { background:#909399; }';
         css += '.notif-item-body { flex:1; min-width:0; }';
         css += '.notif-item-title { font-size:14px; font-weight:500; color:var(--text-primary,#303133); margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }';
@@ -154,11 +161,11 @@
     }
 
     function typeIcon(t) {
-        return { 'approval': 'fas fa-check-double', 'attendance': 'fas fa-clock', 'task': 'fas fa-tasks', 'collab': 'fas fa-users', 'system': 'fas fa-bell' }[t] || 'fas fa-bell';
+        return { 'approval': 'fas fa-check-double', 'attendance': 'fas fa-clock', 'task': 'fas fa-tasks', 'collab': 'fas fa-users', 'subsidy': 'fas fa-hand-holding-usd', 'subsidy_apply': 'fas fa-file-invoice', 'subsidy_result': 'fas fa-clipboard-check', 'subsidy_withdraw': 'fas fa-money-check-alt', 'subsidy_withdraw_result': 'fas fa-wallet', 'daily': 'fas fa-calendar-day', 'hr': 'fas fa-user-tie', 'system': 'fas fa-bell' }[t] || 'fas fa-bell';
     }
 
     function typeColor(t) {
-        return { 'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'system': '#909399' }[t] || '#909399';
+        return { 'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'subsidy': '#16a085', 'subsidy_apply': '#16a085', 'subsidy_result': '#67c23a', 'subsidy_withdraw': '#e6a23c', 'subsidy_withdraw_result': '#16a085', 'daily': '#409eff', 'hr': '#6c5ce7', 'system': '#909399' }[t] || '#909399';
     }
 
     function escapeHtml(text) {
@@ -166,8 +173,29 @@
         return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
+    // 通知跳转 URL：老数据 related_url 可能不带对象 id（如 /oa/approval/），
+    // 用 extra_data 中的对象 id 拼装，确保跳转后页面能自动打开对应详情。
+    function notifJumpUrl(n) {
+        var u = (n && n.related_url) || '';
+        var ed = (n && n.extra_data) || {};
+        // console.log('n::',n);
+        if (n && n.type === 'approval' && ed.approval_id && u.indexOf('approval_id') === -1) {
+            u = '/oa/approval/?approval_id=' + ed.approval_id;
+        } else if (n && n.type === 'subsidy' && ed.application_id && u.indexOf('application_id') === -1) {
+            u = '/oa/subsidy/?application_id=' + ed.application_id;
+        } else if (n && n.type === 'task' && ed.task_id && u.indexOf('task_id') === -1) {
+            u = '/tasks/?task_id=' + ed.task_id;
+        } else if (n && n.type === 'daily') {
+            u = '/oa/work-calendar/';
+        }
+        return u;
+    }
+
     window.WorkNotif = {
         _nFilter: '',
+        _page: 1,
+        _hasMore: false,
+        _loadingMore: false,
 
         async toggle() {
             var dd = document.getElementById('notifDropdown');
@@ -211,37 +239,92 @@
         async loadList() {
             var list = document.getElementById('notifList');
             if (!list) return;
+            this._page = 1;
+            this._hasMore = false;
             try {
-                var url = OA_API_URL + '/notifications/?page=1&page_size=50';
-                if (this._nFilter) url += '&read_filter=' + this._nFilter;
-                var data = await apiGet(url);
+                var data = await this._fetchPage(1);
                 var rows = data.results || [];
-                var filterHtml = '<div class="notif-filter-bar">'
-                    + '<button class="notif-filter-btn' + (this._nFilter === '' ? ' active' : '') + '" data-filter="" onclick="event.stopPropagation();WorkNotif.setFilter(\'\')">全部</button>'
-                    + '<button class="notif-filter-btn' + (this._nFilter === 'unread' ? ' active' : '') + '" data-filter="unread" onclick="event.stopPropagation();WorkNotif.setFilter(\'unread\')">未读</button>'
-                    + '<button class="notif-filter-btn' + (this._nFilter === 'read' ? ' active' : '') + '" data-filter="read" onclick="event.stopPropagation();WorkNotif.setFilter(\'read\')">已读</button>'
-                    + '</div>';
+                var totalPages = data.total_pages || 1;
+                this._hasMore = this._page < totalPages;
+                var filterHtml = this._filterHtml();
                 if (!rows.length) {
                     list.innerHTML = filterHtml + '<div class="notif-empty"><i class="fas fa-bell-slash"></i><p>暂无通知</p></div>';
                     return;
                 }
-                list.innerHTML = filterHtml + rows.map(function(n) {
-                    var icon = typeIcon(n.type);
-                    var color = typeColor(n.type);
-                    var cls = n.is_read ? '' : 'unread';
-                    var dotHtml = n.is_read ? '' : '<span style="position:absolute;top:20px;right:12px;width:8px;height:8px;border-radius:50%;background:#409eff;"></span>';
-                    var u = n.related_url || '';
-                    var detailBtn = u ? '<span class="notif-detail-btn" onclick="event.stopPropagation();WorkNotif.goDetail(' + n.id + ',\'' + u + '\')">查看详情 <i class="fas fa-arrow-right" style="font-size:10px;"></i></span>' : '';
-                    return '<div class="notif-item ' + cls + '" onclick="event.stopPropagation();WorkNotif.markRead(' + n.id + ')" style="position:relative">'
-                        + '<div class="notif-item-icon ' + n.type + '" style="background:' + color + ';"><i class="' + icon + '"></i></div>'
-                        + '<div class="notif-item-body">'
-                        + '<div class="notif-item-title" style="font-weight:' + (n.is_read ? '400' : '600') + '">' + escapeHtml(n.title) + '</div>'
-                        + '<div class="notif-item-content">' + escapeHtml(n.content) + '</div>'
-                        + '<div class="notif-item-time">' + formatTime(n.created_at) + '</div>' + detailBtn + '</div>' + dotHtml + '</div>';
-                }).join('');
+
+                list.innerHTML = filterHtml + this._renderRows(rows) + this._moreHtml();
             } catch(e) {
-                list.innerHTML = '<div class="notif-empty"><i class="fas fa-exclamation-circle"></i><p>加载失败</p></div>';
+                list.innerHTML = this._filterHtml() + '<div class="notif-empty"><i class="fas fa-exclamation-circle"></i><p>加载失败</p></div>';
             }
+        },
+
+        async loadMore() {
+            if (this._loadingMore) return;
+            this._loadingMore = true;
+            var list = document.getElementById('notifList');
+            var btn = document.getElementById('notifMoreBtn');
+            if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 加载中...';
+            try {
+                var next = this._page + 1;
+                var data = await this._fetchPage(next);
+                this._page = next;
+                var rows = data.results || [];
+                var totalPages = data.total_pages || 1;
+                this._hasMore = this._page < totalPages;
+                var wrap = document.getElementById('notifMoreWrap');
+                if (rows.length) {
+                    var html = this._renderRows(rows) + this._moreHtml();
+                    if (wrap) wrap.outerHTML = html;
+                    else list.innerHTML += html;
+                } else {
+                    this._hasMore = false;
+                    if (wrap) wrap.outerHTML = '<div id="notifMoreWrap" style="text-align:center;padding:12px;color:var(--text-light,#909399);font-size:12px;">已加载全部</div>';
+                }
+            } catch(e) {
+                if (btn) btn.innerHTML = '加载更多 <i class="fas fa-chevron-down"></i>';
+            } finally {
+                this._loadingMore = false;
+            }
+        },
+
+        _fetchPage(page) {
+            var url = OA_API_URL + '/notifications/?page=' + page + '&page_size=50';
+            if (this._nFilter) url += '&read_filter=' + this._nFilter;
+            return apiGet(url);
+        },
+
+        _filterHtml() {
+            return '<div class="notif-filter-bar">'
+                + '<button class="notif-filter-btn' + (this._nFilter === '' ? ' active' : '') + '" data-filter="" onclick="event.stopPropagation();WorkNotif.setFilter(\'\')">全部</button>'
+                + '<button class="notif-filter-btn' + (this._nFilter === 'unread' ? ' active' : '') + '" data-filter="unread" onclick="event.stopPropagation();WorkNotif.setFilter(\'unread\')">未读</button>'
+                + '<button class="notif-filter-btn' + (this._nFilter === 'read' ? ' active' : '') + '" data-filter="read" onclick="event.stopPropagation();WorkNotif.setFilter(\'read\')">已读</button>'
+                + '</div>';
+        },
+
+        _renderRows(rows) {
+            return rows.map(function(n) {
+                var icon = typeIcon(n.type);
+                var color = typeColor(n.type);
+                var cls = n.is_read ? '' : 'unread';
+                var dotHtml = n.is_read ? '' : '<span style="position:absolute;top:20px;right:12px;width:8px;height:8px;border-radius:50%;background:#409eff;"></span>';
+                var u = notifJumpUrl(n);
+                var detailBtn = u ? '<span class="notif-detail-btn" onclick="event.stopPropagation();WorkNotif.goDetail(' + n.id + ',\'' + u + '\')">查看详情 <i class="fas fa-arrow-right" style="font-size:10px;"></i></span>' : '';
+                return '<div class="notif-item ' + cls + '" onclick="event.stopPropagation();WorkNotif.markRead(' + n.id + ')" style="position:relative">'
+                    + '<div class="notif-item-icon ' + n.type + '" style="background:' + color + ';"><i class="' + icon + '"></i></div>'
+                    + '<div class="notif-item-body">'
+                    + '<div class="notif-item-title" style="font-weight:' + (n.is_read ? '400' : '600') + '">' + escapeHtml(n.title) + '</div>'
+                    + '<div class="notif-item-content">' + escapeHtml(n.content) + '</div>'
+                    + '<div class="notif-item-time">' + formatTime(n.created_at) + '</div>' + detailBtn + '</div>' + dotHtml + '</div>';
+            }).join('');
+        },
+
+        _moreHtml() {
+            if (this._hasMore) {
+                return '<div id="notifMoreWrap" style="text-align:center;padding:12px;">'
+                    + '<button id="notifMoreBtn" onclick="event.stopPropagation();WorkNotif.loadMore()" style="display:inline-flex;align-items:center;gap:6px;padding:6px 20px;border:1px solid var(--border-color,#dcdfe6);border-radius:16px;background:var(--bg-secondary,#f5f7fa);color:var(--primary-color,#409eff);font-size:13px;cursor:pointer;">加载更多 <i class="fas fa-chevron-down" style="font-size:11px;"></i></button>'
+                    + '</div>';
+            }
+            return '<div id="notifMoreWrap" style="text-align:center;padding:12px;color:var(--text-light,#909399);font-size:12px;">已加载全部</div>';
         },
 
         async markRead(id) {

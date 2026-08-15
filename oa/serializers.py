@@ -2,7 +2,8 @@ from rest_framework import serializers
 from .models import (
     AttendanceRecord, ApprovalRequest, ApprovalLog, ApprovalNode,
     ApprovalAssignee, ApprovalCarbonCopy, ApprovalDeptConfig,
-    AttendanceConfig,
+    AttendanceConfig, SubsidyApplication, SubsidyPayment, SubsidyConfig,
+    SubsidyWallet, SubsidyWithdrawal,
 )
 from .type_utils import resolve_approval_type
 
@@ -159,6 +160,8 @@ class ApprovalRequestSerializer(serializers.ModelSerializer):
     logs = serializers.SerializerMethodField()
     approval_nodes = serializers.SerializerMethodField()
     cc_users = serializers.SerializerMethodField()
+    related_approvals = serializers.SerializerMethodField()
+    related_approval_list = serializers.SerializerMethodField()
 
     class Meta:
         model = ApprovalRequest
@@ -174,6 +177,8 @@ class ApprovalRequestSerializer(serializers.ModelSerializer):
             'attachments', 'sign_type', 'sign_type_display',
             'approval_mode', 'approval_mode_display', 'current_node_order',
             'approver', 'approver_name', 'approver_comment',
+            'related_approvals', 'related_approval_list',
+            'purchase_items', 'expense_items', 'leave_type', 'trip_data',
             'created_at', 'updated_at', 'logs', 'approval_nodes', 'cc_users',
         ]
         read_only_fields = [
@@ -260,6 +265,8 @@ class ApprovalRequestSerializer(serializers.ModelSerializer):
                               if str(oo.get('value') if isinstance(oo, dict) else oo) == str(x)), None)
                     labels.append(o.get('label') if isinstance(o, dict) and o.get('label') else (o if o else str(x)))
                 result[key] = ', '.join(labels)
+            elif ftype == 'expense_type' and isinstance(val, str):
+                result[key] = dict(ApprovalRequest.EXPENSE_TYPE_CHOICES).get(val, val)
         return result
 
     def get_cc_users(self, obj):
@@ -299,6 +306,25 @@ class ApprovalRequestSerializer(serializers.ModelSerializer):
                     'department_id': cc.cc_department.id,
                 })
         return result
+
+    def get_related_approvals(self, obj):
+        return list(obj.related_approvals.values_list('id', flat=True))
+
+    def get_related_approval_list(self, obj):
+        out = []
+        for r in obj.related_approvals.all()[:50]:
+            t = resolve_approval_type(r.approval_type, r.tenant)
+            out.append({
+                'id': r.id,
+                'title': r.title,
+                'approval_type': r.approval_type,
+                'approval_type_display': t.name if t else r.approval_type,
+                'status': r.status,
+                'status_display': r.get_status_display(),
+                'amount': float(r.amount) if r.amount else None,
+                'created_at': r.created_at.isoformat() if r.created_at else '',
+            })
+        return out
 
     def get_logs(self, obj):
         logs = list(obj.logs.select_related('operator').all())
@@ -449,6 +475,11 @@ class ApprovalCreateSerializer(serializers.Serializer):
     approver_nodes = serializers.ListField(child=serializers.DictField(), required=False, default=[])
     cc_users = serializers.ListField(child=serializers.IntegerField(), required=False, default=[])
     cc_departments = serializers.ListField(child=serializers.IntegerField(), required=False, default=[])
+    related_approvals = serializers.ListField(child=serializers.IntegerField(), required=False, default=[])
+    purchase_items = serializers.JSONField(required=False, default=list)
+    expense_items = serializers.JSONField(required=False, default=list)
+    leave_type = serializers.CharField(required=False, allow_blank=True, default='')
+    trip_data = serializers.JSONField(required=False, default=dict)
 
     def validate_approval_type(self, value):
         request = self.context.get('request') if hasattr(self, 'context') else None
@@ -488,6 +519,11 @@ class ApprovalDraftSerializer(serializers.Serializer):
     approver_nodes = serializers.ListField(child=serializers.DictField(), required=False, default=[])
     cc_users = serializers.ListField(child=serializers.IntegerField(), required=False, default=[])
     cc_departments = serializers.ListField(child=serializers.IntegerField(), required=False, default=[])
+    related_approvals = serializers.ListField(child=serializers.IntegerField(), required=False, default=[])
+    purchase_items = serializers.JSONField(required=False, default=list)
+    expense_items = serializers.JSONField(required=False, default=list)
+    leave_type = serializers.CharField(required=False, allow_blank=True, default='')
+    trip_data = serializers.JSONField(required=False, default=dict)
 
     def validate_approval_type(self, value):
         request = self.context.get('request') if hasattr(self, 'context') else None
@@ -656,3 +692,266 @@ class AttendanceConfigSerializer(serializers.ModelSerializer):
         if obj.department and obj.department.full_path:
             return obj.department.full_path
         return obj.department.name if obj.department else ''
+
+
+class SubsidyConfigSerializer(serializers.ModelSerializer):
+    """普惠补贴配置序列化器"""
+    sub_tenant_name = serializers.SerializerMethodField()
+    department_name = serializers.SerializerMethodField()
+    department_path = serializers.SerializerMethodField()
+    verifier_ids = serializers.SerializerMethodField()
+    verifiers = serializers.SerializerMethodField()
+    payment_staff_ids = serializers.SerializerMethodField()
+    payment_staff = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SubsidyConfig
+        fields = [
+            'id', 'tenant', 'sub_tenant', 'sub_tenant_name',
+            'department', 'department_name', 'department_path',
+            'enabled', 'special_rate', 'ordinary_rate', 'max_invoices',
+            'show_invoice_header', 'tax_rate_threshold',
+            'min_withdraw_amount', 'default_ocr_version', 'invoice_verify_enabled',
+            'invoice_header_name', 'invoice_header_tax_no', 'invoice_header_address',
+            'invoice_header_phone', 'invoice_header_bank', 'invoice_header_bank_account',
+            'invoice_header_bank_name', 'company_name', 'company_tax_no',
+            'invoice_header_show',
+            'verifier_ids', 'verifiers', 'payment_staff_ids', 'payment_staff',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['tenant', 'created_at', 'updated_at']
+
+    def get_sub_tenant_name(self, obj):
+        return obj.sub_tenant.short_name or obj.sub_tenant.name if obj.sub_tenant else ''
+
+    def get_department_name(self, obj):
+        return obj.department.name if obj.department else ''
+
+    def get_department_path(self, obj):
+        if obj.department and obj.department.full_path:
+            return obj.department.full_path
+        return obj.department.name if obj.department else ''
+
+    def get_verifier_ids(self, obj):
+        return list(obj.verifiers.values_list('id', flat=True))
+
+    def get_verifiers(self, obj):
+        return [{
+            'id': u.id,
+            'name': u.real_name or u.username,
+            'avatar': u.get_avatar_url() if hasattr(u, 'get_avatar_url') else '',
+            'position': u.position or '',
+        } for u in obj.verifiers.all()]
+
+    def get_payment_staff_ids(self, obj):
+        return list(obj.payment_staff.values_list('id', flat=True))
+
+    def get_payment_staff(self, obj):
+        return [{
+            'id': u.id,
+            'name': u.real_name or u.username,
+            'avatar': u.get_avatar_url() if hasattr(u, 'get_avatar_url') else '',
+            'position': u.position or '',
+        } for u in obj.payment_staff.all()]
+
+
+class SubsidyApplicationSerializer(serializers.ModelSerializer):
+    invoice_type_display = serializers.SerializerMethodField()
+    status_display = serializers.SerializerMethodField()
+    applicant_name = serializers.SerializerMethodField()
+    applicant_avatar = serializers.SerializerMethodField()
+    verified_by_name = serializers.SerializerMethodField()
+    verified_by_avatar = serializers.SerializerMethodField()
+    applicant_payment = serializers.SerializerMethodField()
+    applicant_department = serializers.SerializerMethodField()
+    applicant_position = serializers.SerializerMethodField()
+    invoice_verify_status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SubsidyApplication
+        fields = [
+            'id', 'application_no', 'applicant', 'applicant_name', 'applicant_avatar',
+            'invoice_number', 'invoice_type', 'invoice_type_display',
+            'invoice_code', 'invoice_amount', 'invoice_date', 'tax_rate', 'invoice_issuer',
+            'invoice_file', 'invoice_original_name', 'invoice_image',
+            'buyer_name', 'buyer_tax_no', 'seller_name', 'seller_tax_no', 'drawer',
+            'payment_voucher', 'payment_voucher_name',
+            'payment_proof', 'payment_proof_name',
+            'subsidy_rate', 'subsidy_amount', 'status', 'status_display',
+            'reject_reason', 'verified_by', 'verified_by_name', 'verified_by_avatar', 'verified_at',
+            'applicant_payment', 'applicant_department', 'applicant_position',
+            'invoice_verify_status',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'application_no', 'subsidy_rate', 'subsidy_amount', 'status',
+            'reject_reason', 'verified_by', 'verified_at', 'created_at', 'updated_at',
+            'invoice_image',
+        ]
+        extra_kwargs = {
+            'invoice_number': {'required': True, 'allow_blank': False},
+        }
+
+    def get_invoice_type_display(self, obj):
+        return obj.get_invoice_type_display()
+
+    def get_status_display(self, obj):
+        return obj.get_status_display()
+
+    def get_applicant_name(self, obj):
+        return obj.applicant.real_name or obj.applicant.username if obj.applicant else ''
+
+    def get_applicant_avatar(self, obj):
+        return obj.applicant.get_avatar_url() if hasattr(obj.applicant, 'get_avatar_url') else ''
+
+    def get_verified_by_name(self, obj):
+        return obj.verified_by.real_name or obj.verified_by.username if obj.verified_by else ''
+
+    def get_verified_by_avatar(self, obj):
+        return obj.verified_by.get_avatar_url() if obj.verified_by and hasattr(obj.verified_by, 'get_avatar_url') else ''
+
+    def get_applicant_payment(self, obj):
+        u = obj.applicant
+        if not u:
+            return {}
+        return {
+            'payee_name': u.payee_name or '',
+            'bank_card': u.bank_card or '',
+            'alipay_account': u.alipay_account or '',
+            'wechat_account': u.wechat_account or '',
+            'alipay_qr': u.alipay_qr or '',
+            'wechat_qr': u.wechat_qr or '',
+        }
+
+    def get_applicant_department(self, obj):
+        u = obj.applicant
+        if not u:
+            return ''
+        try:
+            from org.models import UserDepartment
+            rec = UserDepartment.objects.filter(user=u, is_primary=True).select_related('department').first()
+            if rec and rec.department:
+                return rec.department.name
+        except Exception:
+            pass
+        return u.department.name if u.department else ''
+
+    def get_applicant_position(self, obj):
+        return obj.applicant.position if obj.applicant and obj.applicant.position else ''
+
+    def get_invoice_verify_status(self, obj):
+        rec = obj.invoice_verify_records.first()
+        if not rec:
+            return None
+        return {
+            'result': rec.result,
+            'result_display': rec.get_result_display(),
+            'message': rec.message,
+            'verified_at': rec.verified_at.isoformat() if rec.verified_at else '',
+        }
+
+
+class SubsidyPaymentSerializer(serializers.ModelSerializer):
+    application_no = serializers.SerializerMethodField()
+    invoice_type_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SubsidyPayment
+        fields = ['id', 'application', 'application_no', 'invoice_type_display', 'amount', 'note', 'paid_at']
+
+    def get_application_no(self, obj):
+        if obj.application:
+            return obj.application.application_no
+        if obj.withdrawal:
+            return f'提现 #{obj.withdrawal.id}'
+        return ''
+
+    def get_invoice_type_display(self, obj):
+        return obj.application.get_invoice_type_display() if obj.application else ''
+
+
+class SubsidyWalletSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SubsidyWallet
+        fields = ['id', 'balance', 'total_in', 'total_out', 'updated_at']
+
+
+class SubsidyWithdrawalSerializer(serializers.ModelSerializer):
+    status_display = serializers.SerializerMethodField()
+    user_name = serializers.SerializerMethodField()
+    user_avatar = serializers.SerializerMethodField()
+    user_department = serializers.SerializerMethodField()
+    user_position = serializers.SerializerMethodField()
+    payment = serializers.SerializerMethodField()
+    remaining_balance = serializers.SerializerMethodField()
+    applicant_payment = serializers.SerializerMethodField()
+    paid_by_name = serializers.SerializerMethodField()
+    paid_by_avatar = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SubsidyWithdrawal
+        fields = [
+            'id', 'user', 'user_name', 'user_avatar', 'user_department', 'user_position',
+            'amount', 'status', 'status_display', 'reject_reason',
+            'payment_voucher', 'payment_voucher_name',
+            'paid_by', 'paid_by_name', 'paid_by_avatar', 'paid_at', 'requested_at', 'note',
+            'payment', 'remaining_balance', 'applicant_payment',
+        ]
+        read_only_fields = fields
+
+    def get_status_display(self, obj):
+        return obj.get_status_display()
+
+    def get_user_name(self, obj):
+        return obj.user.real_name or obj.user.username if obj.user else ''
+
+    def get_user_avatar(self, obj):
+        return obj.user.get_avatar_url() if obj.user and hasattr(obj.user, 'get_avatar_url') else ''
+
+    def get_user_department(self, obj):
+        u = obj.user
+        if not u:
+            return ''
+        try:
+            from org.models import UserDepartment
+            rec = UserDepartment.objects.filter(user=u, is_primary=True).select_related('department').first()
+            if rec and rec.department:
+                return rec.department.name
+        except Exception:
+            pass
+        return u.department.name if u.department else ''
+
+    def get_user_position(self, obj):
+        return obj.user.position if obj.user and obj.user.position else ''
+
+    def get_payment(self, obj):
+        p = getattr(obj, 'payment', None)
+        if not p:
+            return None
+        return {'id': p.id, 'amount': float(p.amount), 'paid_at': p.paid_at.isoformat() if p.paid_at else ''}
+
+    def get_paid_by_name(self, obj):
+        return obj.paid_by.real_name or obj.paid_by.username if obj.paid_by else ''
+
+    def get_paid_by_avatar(self, obj):
+        return obj.paid_by.get_avatar_url() if obj.paid_by and hasattr(obj.paid_by, 'get_avatar_url') else ''
+
+    def get_remaining_balance(self, obj):
+        try:
+            w = SubsidyWallet.objects.filter(user=obj.user, tenant=obj.tenant).first()
+            return float(w.balance) if w else 0
+        except Exception:
+            return 0
+
+    def get_applicant_payment(self, obj):
+        u = obj.user
+        if not u:
+            return {}
+        return {
+            'payee_name': u.payee_name or '',
+            'bank_card': u.bank_card or '',
+            'alipay_account': u.alipay_account or '',
+            'wechat_account': u.wechat_account or '',
+            'alipay_qr': u.alipay_qr or '',
+            'wechat_qr': u.wechat_qr or '',
+        }

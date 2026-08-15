@@ -9,6 +9,7 @@ class ApprovalApp {
         this.searchKeyword = '';
         this.statusFilter = '';
         this.typeFilter = '';
+        this.scopeFilter = '';  // 我发起的(mine) / 抄送我的(cc)
         this.fileMaxSizeMB = localStorage.getItem('file_max_size') || 50;
         this._rejectId = null;
         this._attachmentFiles = [];
@@ -185,6 +186,14 @@ class ApprovalApp {
             console.warn('获取当前用户失败，使用本地 user_type:', isAdmin ? '管理员' : '非管理员');
         }
         this._ccTab = 'users';
+        // 从工作通知跳转：自动打开对应审批详情模态框
+        try {
+            const qp = new URLSearchParams(window.location.search);
+            const approvalId = qp.get('approval_id');
+            if (approvalId) {
+                setTimeout(function () { approvalApp.showDetail(parseInt(approvalId, 10)); }, 300);
+            }
+        } catch (e) { /* ignore */ }
     }
 
     _isAdminFromStorage() {
@@ -243,13 +252,14 @@ class ApprovalApp {
         return html;
     }
 
-    // 字段类型变化时刷新单位下拉选项（amount→币种，number→数量单位）
+    // 字段类型变化时刷新单位下拉选项与选项输入占位（amount→币种，number→数量单位，struct_table→列定义）
     _onSchemaFieldTypeChange(sel) {
         const row = sel.closest('.tm-field-row');
         if (!row) return;
         const unitSel = row.querySelector('[data-f="unit"]');
-        if (!unitSel) return;
-        unitSel.innerHTML = this._schemaUnitOptions(sel.value, unitSel.value);
+        if (unitSel) unitSel.innerHTML = this._schemaUnitOptions(sel.value, unitSel.value);
+        const optSel = row.querySelector('[data-f="options"]');
+        if (optSel) optSel.placeholder = this._schemaOptionsPlaceholder(sel.value);
     }
 
     // ===== 审批类型（动态自定义） =====
@@ -350,7 +360,8 @@ class ApprovalApp {
     }
 
     _hideBuiltinFields() {
-        ['dateRow', 'amountGroup', 'expenseRow', 'recruitForm'].forEach(id => {
+        ['dateRow', 'amountGroup', 'expenseRow', 'recruitForm',
+         'leaveTypeRow', 'tripInfoRow', 'purchaseItemsRow', 'expenseItemsRow'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.style.display = 'none';
         });
@@ -409,13 +420,13 @@ class ApprovalApp {
                     html += '<input type="datetime-local" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(val) + '">';
                     break;
                 case 'number':
-                    html += '<div style="display:flex;align-items:center;gap:6px;"><input type="number" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(val) + '" placeholder="' + self._escape(placeholder) + '" style="flex:1;">'
+                    html += '<div style="display:flex;align-items:center;gap:6px;"><input type="number" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(val) + '" placeholder="' + self._escape(placeholder) + '" oninput="approvalApp._onDynNumericChange()" style="flex:1;">'
                         + (f.unit ? '<span style="font-size:12px;color:#909399;white-space:nowrap;flex-shrink:0;">' + self._escape(self._unitLabel(f.unit)) + '</span>' : '') + '</div>';
                     break;
                 case 'amount':
                     html += '<div style="display:flex;align-items:center;gap:6px;">'
                         + (f.unit ? '<span style="font-size:15px;font-weight:600;color:#e6a23c;white-space:nowrap;flex-shrink:0;">' + self._escape(self._unitSymbol(f.unit)) + '</span>' : '<i class="fas fa-yen-sign" style="color:#e6a23c;"></i>')
-                        + '<input type="number" step="0.01" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(val) + '" placeholder="0.00" style="flex:1;">'
+                        + '<input type="number" step="0.01" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(val) + '" placeholder="0.00" oninput="approvalApp._onDynNumericChange()" style="flex:1;">'
                         + (f.unit ? '<span style="font-size:12px;color:#909399;white-space:nowrap;flex-shrink:0;">' + self._escape(self._unitLabel(f.unit)) + '</span>' : '') + '</div>';
                     break;
                 case 'attachment':
@@ -432,6 +443,18 @@ class ApprovalApp {
                         + '<div class="dyn-user-results" id="dynUserRes_' + self._escape(key) + '" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:#fff;border:1px solid #dcdfe6;border-radius:6px;max-height:160px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);"></div>'
                         + '</div><div class="dyn-user-tags" id="dynUserTags_' + self._escape(key) + '"></div></div>';
                     break;
+                case 'expense_type':
+                    // 费用类型选择：原生 select 隐藏存值，自定义下拉展示（已选仅名称，下拉项带小字提示）
+                    html += '<div class="exp-select-field">'
+                        + '<select class="form-select exp-select-native" data-k="' + self._escape(key) + '">' + self._expenseTypeOptionHtml(val) + '</select>'
+                        + '</div>';
+                    break;
+                case 'struct_table': {
+                    html += '<div class="dyn-struct-table" data-struct-key="' + self._escape(key) + '">'
+                        + '<div class="dyn-struct-rows"></div>'
+                        + '<button type="button" class="btn btn-sm btn-secondary dyn-struct-add" onclick="approvalApp._addDynStructRow(\'' + self._escape(key) + '\')"><i class="fas fa-plus"></i> 添加明细</button></div>';
+                    break;
+                }
                 default:
                     html += '<input type="text" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(val) + '" placeholder="' + self._escape(placeholder) + '">';
             }
@@ -452,7 +475,101 @@ class ApprovalApp {
                 // 始终加载部门下拉（新建审批无值也要渲染选项）
                 this._loadDynDeptOptions(f.key, values[f.key]);
             }
+            if (f.type === 'struct_table') {
+                this._dynStructCols = this._dynStructCols || {};
+                this._dynStructCols[f.key] = f.columns || [];
+                this._renderDynStructRows(f.key, values[f.key], f.columns || []);
+            }
+            if (f.type === 'expense_type') {
+                let target = null;
+                container.querySelectorAll('select[data-k]').forEach(function (s) {
+                    if (s.getAttribute('data-k') === f.key) target = s;
+                });
+                this._buildExpenseSelect(target);
+            }
         });
+    }
+
+    // 费用类型选择：选项与内置报销一致（名称 + 括号提示）
+    // 费用类型数据源（value, 名称, 提示内容）
+    _getExpenseTypeList() {
+        return [
+            ['travel', '差旅费', '出差机票、火车票、住宿费'],
+            ['office', '办公费', '办公家具、文具用品、公司用车油费、打印机耗材、电脑配件、纸张类、桶装水、水电费、办公软件、行业会员费等'],
+            ['meals', '业务招待费', '招待餐费、招待住宿、伴手礼、等招待相关的费用'],
+            ['transport', '交通费', '市内打车、公交车、油费'],
+            ['communication', '通讯费', '电话费、宽带费'],
+            ['equipment', '设备采购', '电脑、服务器、空调等固定资产'],
+            ['training', '培训费', '讲课费、场地费、和培训相关的吃住行等费用'],
+            ['welfare', '员工福利费', '员工活动餐费、过年过节福利用品及费用'],
+            ['professional_service', '专业服务费', '咨询费、审计费、律师费、资产评估费等'],
+            ['advertising', '广告宣传费', '广告策划宣传等'],
+            ['other_expense', '其他', '']
+        ];
+    }
+
+    _getExpenseTypeInfo(value) {
+        const list = this._getExpenseTypeList();
+        for (let i = 0; i < list.length; i++) {
+            if (list[i][0] === value) return {name: list[i][1], hint: list[i][2]};
+        }
+        return null;
+    }
+
+    // 费用类型选择：下拉仅显示类型名称，选择后以弹窗形式提示费用说明
+    _expenseTypeOptionHtml(selected) {
+        let html = '<option value="">请选择</option>';
+        this._getExpenseTypeList().forEach(function (o) {
+            html += '<option value="' + o[0] + '"' + (String(selected) === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
+        });
+        return html;
+    }
+
+    // 结构化明细：回填已有行
+    _renderDynStructRows(key, rows, columns) {
+        const tbl = document.querySelector('.dyn-struct-table[data-struct-key="' + key + '"]');
+        if (!tbl) return;
+        const rowsEl = tbl.querySelector('.dyn-struct-rows');
+        if (!rowsEl) return;
+        rowsEl.innerHTML = '';
+        (rows || []).forEach(function (row) {
+            if (typeof row !== 'object') return;
+            approvalApp._appendDynStructRow(tbl, row, columns);
+        });
+    }
+
+    _appendDynStructRow(tbl, row, columns) {
+        const rowsEl = tbl.querySelector('.dyn-struct-rows');
+        if (!rowsEl || !columns || !columns.length) return;
+        row = row || {};
+        const wrap = document.createElement('div');
+        wrap.className = 'dyn-struct-row';
+        wrap.innerHTML = '<div class="dyn-struct-fields">'
+            + columns.map(function (c) {
+                const val = row[c.key] !== undefined ? row[c.key] : '';
+                const inputAttrs = c.type === 'amount'
+                    ? 'type="number" step="0.01" placeholder="0.00"'
+                    : 'type="text"';
+                return '<div class="dyn-struct-field">'
+                    + '<label>' + approvalApp._escape(c.label || c.key) + '</label>'
+                    + '<input ' + inputAttrs + ' class="form-input dyn-struct-input" data-c="' + approvalApp._escape(c.key) + '" value="' + approvalApp._escape(val) + '">'
+                    + '</div>';
+            }).join('')
+            + '</div>'
+            + '<button type="button" class="dyn-struct-del" title="删除此行" onclick="approvalApp._removeDynStructRow(this)"><i class="fas fa-times"></i></button>';
+        rowsEl.appendChild(wrap);
+    }
+
+    _addDynStructRow(key) {
+        const tbl = document.querySelector('.dyn-struct-table[data-struct-key="' + key + '"]');
+        if (!tbl) return;
+        this._dynStructCols = this._dynStructCols || {};
+        this._appendDynStructRow(tbl, {}, this._dynStructCols[key] || []);
+    }
+
+    _removeDynStructRow(btn) {
+        const row = btn.closest('.dyn-struct-row');
+        if (row) row.remove();
     }
 
     _collectDynamicFormData() {
@@ -487,6 +604,21 @@ class ApprovalApp {
                 id: u.id,
                 name: u.name
             }));
+        });
+        // 结构化明细：收集每个明细表的行（至少填写一列才保留）
+        container.querySelectorAll('.dyn-struct-table').forEach(function (tbl) {
+            const key = tbl.getAttribute('data-struct-key');
+            if (!key) return;
+            const rows = [];
+            tbl.querySelectorAll('.dyn-struct-row').forEach(function (rowEl) {
+                const obj = {};
+                rowEl.querySelectorAll('.dyn-struct-input').forEach(function (input) {
+                    obj[input.getAttribute('data-c')] = input.value.trim();
+                });
+                const hasVal = Object.keys(obj).some(function (k) { return obj[k] !== ''; });
+                if (hasVal) rows.push(obj);
+            });
+            if (rows.length) data[key] = rows;
         });
         return data;
     }
@@ -677,6 +809,30 @@ class ApprovalApp {
                 // 数字：带单位后缀（个/天/小时/件/套…）
                 const lb = self._unitLabel(f.unit);
                 v = v + (lb ? ' ' + lb : '');
+            } else if (f.type === 'expense_type' && typeof v === 'string') {
+                // 费用类型：key → 中文名（后端 form_data_display 已解析时走上方 display 分支）
+                const expMap = {travel: '差旅费', office: '办公费', meals: '业务招待费', transport: '交通费', communication: '通讯费', equipment: '设备采购', training: '培训费', welfare: '员工福利费', professional_service: '专业服务费', advertising: '广告宣传费', other_expense: '其他'};
+                v = expMap[v] || v;
+            } else if (f.type === 'struct_table' && Array.isArray(v)) {
+                // 结构化明细：渲染为表格
+                const cols = f.columns || [];
+                if (cols.length) {
+                    let tbl = '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:4px;">'
+                        + '<tr>' + cols.map(function (c) { return '<th style="border:1px solid #dcdfe6;padding:4px 6px;background:#f5f7fa;">' + self._escape(c.label || c.key) + '</th>'; }).join('') + '</tr>';
+                    v.forEach(function (row) {
+                        if (typeof row !== 'object') return;
+                        tbl += '<tr>' + cols.map(function (c) {
+                            let cv = row[c.key];
+                            if (c.type === 'amount' && cv !== undefined && cv !== null && cv !== '') cv = Number(cv).toFixed(2);
+                            if (cv === undefined || cv === null) cv = '-';
+                            return '<td style="border:1px solid #dcdfe6;padding:4px 6px;">' + self._escape(String(cv)) + '</td>';
+                        }).join('') + '</tr>';
+                    });
+                    tbl += '</table>';
+                    v = tbl;
+                } else {
+                    v = JSON.stringify(v);
+                }
             } else if (typeof v === 'object') {
                 v = JSON.stringify(v);
             }
@@ -744,17 +900,19 @@ class ApprovalApp {
             this._manageTypes = Array.isArray(data) ? data : (data.results || []);
             const types = this._manageTypes;
             const cur = this._typeManageEditingType;
-            list.innerHTML = types.filter(function (t) {
-                return !t.is_builtin;
-            }).map(function (t) {
+            // 内置 + 自定义类型均展示，支持启用/禁用开关；内置类型其它字段锁定
+            list.innerHTML = types.map(function (t) {
                 var active = (cur && cur.id === t.id) ? ' active' : '';
+                var tag = t.is_builtin
+                    ? '<span style="font-size:11px;color:#909399;background:#f0f2f5;border-radius:4px;padding:1px 6px;flex-shrink:0;">内置</span>'
+                    : '<span class="tm-fields">' + (t.form_schema || []).length + ' 字段</span>';
                 return '<div class="config-list-item' + active + '" data-id="' + t.id + '" onclick="approvalApp._editTypeManage(' + t.id + ')">'
                     + '<i class="fas ' + (t.icon || 'fa-file-lines') + '" style="color:' + t.color + ';width:16px;text-align:center;"></i>'
                     + '<span style="flex:1;">' + this._escape(t.name) + '</span>'
-                    + (t.enabled ? '<span class="tm-status on">启用</span>' : '<span class="tm-status">停用</span>')
-                    + '<span class="tm-fields">' + (t.form_schema || []).length + ' 字段</span>'
+                    + tag
+                    + '<label class="oa-switch" onclick="event.stopPropagation()" title="打开后该类型在新建审批和顶部筛选中显示"><input type="checkbox"' + (t.enabled ? ' checked' : '') + ' onchange="approvalApp._toggleTypeEnabled(' + t.id + ', this.checked)"><span class="oa-switch-slider"></span></label>'
                     + '</div>';
-            }, this).join('') || '<div style="padding:12px;color:#909399;font-size:13px;">暂无自定义类型，点击右上角「新建类型」</div>';
+            }, this).join('') || '<div style="padding:12px;color:#909399;font-size:13px;">暂无审批类型</div>';
         } catch (e) {
             console.error('加载类型列表失败:', e);
         }
@@ -791,11 +949,19 @@ class ApprovalApp {
             ['text', '单行文本'], ['textarea', '多行文本'], ['number', '数字'],
             ['date', '日期'], ['datetime', '日期时间'], ['amount', '金额'],
             ['select', '下拉选择'], ['radio', '单选'], ['checkbox', '多选'],
-            ['attachment', '附件'], ['department', '部门选择'], ['user', '成员选择']
+            ['attachment', '附件'], ['department', '部门选择'], ['user', '成员选择'],
+            ['expense_type', '费用类型选择'], ['struct_table', '结构化数据明细']
         ];
         return types.map(function (t) {
             return '<option value="' + t[0] + '"' + (sel === t[0] ? ' selected' : '') + '>' + t[1] + '</option>';
         }).join('');
+    }
+
+    // schema 编辑器：options 输入框占位提示随字段类型变化
+    _schemaOptionsPlaceholder(type) {
+        if (type === 'struct_table') return '列定义：key:名称:类型|key2:名称2（如 name:项目名称:amount|remark:备注，类型 text/number/amount）';
+        if (['select', 'radio', 'checkbox'].indexOf(type) !== -1) return '选项（逗号分隔，下拉/单选/多选用）';
+        return '选项（下拉/单选/多选 或 结构化明细 使用）';
     }
 
     _renderTypeManageForm(type) {
@@ -808,42 +974,59 @@ class ApprovalApp {
             return;
         }
         this._typeManageEditingType = type;
+        // 内置类型：名称/编码/图标/颜色/说明/表单字段全部锁定，仅启用开关可操作
+        const locked = type.is_builtin ? ' disabled' : '';
         const schema = type.form_schema || [];
         let fieldRows = schema.map(function (f, i) {
+            const ftype = f.type || 'text';
+            // options 输入框：struct_table 回填列定义（key:名称:类型|...），其余回填 options
+            let optsVal = '';
+            if (ftype === 'struct_table') {
+                optsVal = (f.columns || []).map(function (c) {
+                    return (c.key || '') + ':' + (c.label || c.key || '') + ':' + (c.type || 'text');
+                }).join('|');
+            } else {
+                optsVal = Array.isArray(f.options) ? f.options.map(function (o) {
+                    return typeof o === 'object' ? o.value : o;
+                }).join(',') : (f.options || '');
+            }
+            const optsPlaceholder = this._schemaOptionsPlaceholder(ftype);
             return '<div class="tm-field-row" style="border:1px solid #dcdfe6;border-radius:8px;padding:8px;margin-bottom:8px;background:#fafbfc;">'
                 + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
                 + '<input type="text" class="form-input" data-f="label" placeholder="字段名称" value="' + this._escape(f.label || '') + '" style="flex:1;min-width:70px;">'
                 + '<input type="text" class="form-input" data-f="key" placeholder="字段key" value="' + this._escape(f.key || '') + '" style="width:90px;">'
-                + '<select class="form-select" data-f="type" style="width:108px;" onchange="approvalApp._onSchemaFieldTypeChange(this)">' + this._fieldTypeOptions(f.type || 'text') + '</select>'
+                + '<select class="form-select" data-f="type" style="width:128px;" onchange="approvalApp._onSchemaFieldTypeChange(this)">' + this._fieldTypeOptions(ftype) + '</select>'
                 + '<label style="font-size:12px;"><input type="checkbox" data-f="required"' + (f.required ? ' checked' : '') + '> 必填</label>'
                 + '<button type="button" class="btn btn-sm btn-danger" onclick="approvalApp._removeSchemaField(this)"><i class="fas fa-times"></i></button>'
                 + '</div>'
                 + '<div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
                 + '<input type="text" class="form-input" data-f="placeholder" placeholder="占位提示" value="' + this._escape(f.placeholder || '') + '" style="flex:1;min-width:70px;">'
-                + '<input type="text" class="form-input" data-f="options" placeholder="选项（逗号分隔，下拉/单选/多选用）" value="' + this._escape(Array.isArray(f.options) ? f.options.map(function (o) {
-                    return typeof o === 'object' ? o.value : o;
-                }).join(',') : (f.options || '')) + '" style="flex:2;min-width:80px;">'
-                + '<select class="form-select" data-f="unit" style="width:110px;" title="金额/数字字段可设置单位">' + this._schemaUnitOptions(f.type || 'text', f.unit || (f.type === 'amount' ? 'cny' : '')) + '</select>'
+                + '<input type="text" class="form-input" data-f="options" placeholder="' + this._escape(optsPlaceholder) + '" value="' + this._escape(optsVal) + '" style="flex:2;min-width:80px;">'
+                + '<select class="form-select" data-f="unit" style="width:110px;" title="金额/数字字段可设置单位">' + this._schemaUnitOptions(ftype, f.unit || (ftype === 'amount' ? 'cny' : '')) + '</select>'
                 + '</div></div>';
         }, this).join('');
         wrap.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">'
-            + '<div><label style="font-size:12px;">类型名称</label><input type="text" id="tmName" class="form-input" value="' + this._escape(type.name || '') + '"></div>'
-            + '<div><label style="font-size:12px;">类型编码（英文，唯一）</label><input type="text" id="tmCode" class="form-input" value="' + this._escape(type.code || '') + '"' + (type.is_builtin ? ' disabled' : '') + '></div>'
+            + '<div><label style="font-size:12px;">类型名称</label><input type="text" id="tmName" class="form-input" value="' + this._escape(type.name || '') + '"' + locked + '></div>'
+            + '<div><label style="font-size:12px;">类型编码（英文，唯一）</label><input type="text" id="tmCode" class="form-input" value="' + this._escape(type.code || '') + '"' + locked + '></div>'
             + '</div>'
             + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;">'
             + '<div><label style="font-size:12px;">图标</label>'
             + '<div style="display:flex;gap:6px;align-items:center;">'
             + '<span id="tmIconPreview" style="width:34px;height:34px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:#f0f2f5;border-radius:8px;color:#409EFF;font-size:15px;"><i class="fas ' + this._escape(type.icon || 'fa-file-lines') + '"></i></span>'
-            + '<input type="text" id="tmIcon" class="form-input" value="' + this._escape(type.icon || 'fa-file-lines') + '" style="flex:1;min-width:0;">'
-            + '<button type="button" class="btn btn-sm btn-secondary" onclick="approvalApp._openIconPicker()"><i class="fas fa-th-large"></i> 选择</button>'
+            + '<input type="text" id="tmIcon" class="form-input" value="' + this._escape(type.icon || 'fa-file-lines') + '"' + locked + ' style="flex:1;min-width:0;">'
+            + '<button type="button" class="btn btn-sm btn-secondary" onclick="approvalApp._openIconPicker()"' + locked + '><i class="fas fa-th-large"></i> 选择</button>'
             + '</div></div>'
-            + '<div><label style="font-size:12px;">颜色</label><input type="color" id="tmColor" value="' + this._escape(type.color || '#409EFF') + '" style="height:34px;width:100%;border:none;"></div>'
-            + '<div style="display:flex;align-items:flex-end;padding-bottom:6px;"><label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="tmEnabled"' + (type.enabled !== false ? ' checked' : '') + '> 启用</label></div>'
+            + '<div><label style="font-size:12px;">颜色</label><input type="color" id="tmColor" value="' + this._escape(type.color || '#409EFF') + '"' + locked + ' style="height:34px;width:100%;border:none;"></div>'
+            + '<div style="display:flex;align-items:flex-end;padding-bottom:6px;gap:6px;">'
+            + '<label style="font-size:12px;white-space:nowrap;">启用开关</label>'
+            + '<label class="oa-switch" title="打开后该类型在新建审批和顶部筛选中显示"><input type="checkbox" id="tmEnabled"' + (type.enabled !== false ? ' checked' : '') + ' onchange="approvalApp._updateTypeEnabledLabel()"><span class="oa-switch-slider"></span></label>'
+            + '<span id="tmEnabledLabel" style="font-size:12px;white-space:nowrap;color:' + (type.enabled !== false ? '#67c23a' : '#909399') + ';">' + (type.enabled !== false ? '启用' : '禁用') + '</span>'
             + '</div>'
-            + '<div class="form-group" style="margin-bottom:10px;"><label style="font-size:12px;">说明</label><input type="text" id="tmDesc" class="form-input" value="' + this._escape(type.description || '') + '"></div>'
+            + '</div>'
+            + '<div class="form-group" style="margin-bottom:10px;"><label style="font-size:12px;">说明</label><input type="text" id="tmDesc" class="form-input" value="' + this._escape(type.description || '') + '"' + locked + '></div>'
             + '<div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0 6px;">'
             + '<label style="font-size:13px;font-weight:600;"><i class="fas fa-clipboard-list"></i> 表单字段</label>'
-            + '<button type="button" class="btn btn-sm btn-secondary" onclick="approvalApp._addSchemaField()"><i class="fas fa-plus"></i> 添加字段</button></div>'
+            + '<button type="button" class="btn btn-sm btn-secondary" onclick="approvalApp._addSchemaField()"' + locked + '><i class="fas fa-plus"></i> 添加字段</button></div>'
             + '<div id="tmSchemaFields">' + fieldRows + '</div>'
             + '<div style="display:flex;justify-content:space-between;margin-top:12px;">'
             + (type.is_builtin ? '' : '<button type="button" class="btn btn-danger" onclick="approvalApp._deleteType()"><i class="fas fa-trash"></i> 删除类型</button>')
@@ -862,13 +1045,13 @@ class ApprovalApp {
         row.innerHTML = '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
             + '<input type="text" class="form-input" data-f="label" placeholder="字段名称" style="flex:1;min-width:70px;">'
             + '<input type="text" class="form-input" data-f="key" placeholder="字段key" style="width:90px;">'
-            + '<select class="form-select" data-f="type" style="width:108px;" onchange="approvalApp._onSchemaFieldTypeChange(this)">' + this._fieldTypeOptions('text') + '</select>'
+            + '<select class="form-select" data-f="type" style="width:128px;" onchange="approvalApp._onSchemaFieldTypeChange(this)">' + this._fieldTypeOptions('text') + '</select>'
             + '<label style="font-size:12px;"><input type="checkbox" data-f="required"> 必填</label>'
             + '<button type="button" class="btn btn-sm btn-danger" onclick="approvalApp._removeSchemaField(this)"><i class="fas fa-times"></i></button>'
             + '</div>'
             + '<div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
             + '<input type="text" class="form-input" data-f="placeholder" placeholder="占位提示" style="flex:1;min-width:70px;">'
-            + '<input type="text" class="form-input" data-f="options" placeholder="选项（逗号分隔）" style="flex:2;min-width:80px;">'
+            + '<input type="text" class="form-input" data-f="options" placeholder="' + this._escape(this._schemaOptionsPlaceholder('text')) + '" style="flex:2;min-width:80px;">'
             + '<select class="form-select" data-f="unit" style="width:110px;" title="金额/数字字段可设置单位">' + this._schemaUnitOptions('text', '') + '</select>'
             + '</div>';
         container.appendChild(row);
@@ -895,7 +1078,20 @@ class ApprovalApp {
             if (placeholder) field.placeholder = placeholder;
             if (unit && (type === 'amount' || type === 'number')) field.unit = unit;
             else if (type === 'amount') field.unit = 'cny'; // 金额未选时默认人民币元
-            if (['select', 'radio', 'checkbox'].indexOf(type) !== -1 && optsRaw.trim()) {
+            if (type === 'struct_table' && optsRaw.trim()) {
+                // 列定义：key:名称:类型|key2:名称2（类型 text/number/amount，缺省 text）
+                field.columns = optsRaw.split('|').map(function (s) {
+                    const parts = s.split(':');
+                    const ck = (parts[0] || '').trim();
+                    const cl = (parts[1] || ck || '').trim();
+                    const ct = (parts[2] || '').trim();
+                    return {
+                        key: ck,
+                        label: cl,
+                        type: (ct === 'number' || ct === 'amount') ? ct : 'text'
+                    };
+                }).filter(function (c) { return c.key; });
+            } else if (['select', 'radio', 'checkbox'].indexOf(type) !== -1 && optsRaw.trim()) {
                 field.options = optsRaw.split(/[,，]/).map(function (s) {
                     return s.trim();
                 }).filter(Boolean);
@@ -908,6 +1104,24 @@ class ApprovalApp {
     async _saveType() {
         const t = this._typeManageEditingType;
         if (!t) return;
+        // 内置类型：仅可切换启用/禁用，其它字段锁定
+        if (t.is_builtin) {
+            try {
+                const r = await fetch(OA_API_URL + '/approval/types/' + t.id + '/', {
+                    method: 'PATCH',
+                    headers: TokenManager.getHeaders(),
+                    body: JSON.stringify({enabled: document.getElementById('tmEnabled').checked})
+                });
+                const rd = await r.json().catch(function () { return {}; });
+                if (!r.ok) throw new Error(rd.error || '保存失败');
+                this.showToast('内置类型启用状态已更新', false);
+                await this._loadTypeManageList();
+                await this._loadApprovalTypes();
+            } catch (e) {
+                this.showAlert('保存失败', e.message || '请重试');
+            }
+            return;
+        }
         const schema = this._collectTypeSchema();
         // 校验字段 key 不重复（避免保存后提交/回显错乱）
         const keyMap = {};
@@ -963,6 +1177,35 @@ class ApprovalApp {
             await this._loadApprovalTypes();
         } catch (e) {
             this.showAlert('保存失败', e.message || '请重试');
+        }
+    }
+
+    // 类型列表快捷启用/禁用开关：保存 enabled 并同步刷新新建审批与顶部筛选
+    async _toggleTypeEnabled(id, checked) {
+        try {
+            const r = await fetch(OA_API_URL + '/approval/types/' + id + '/', {
+                method: 'PATCH',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify({enabled: !!checked})
+            });
+            const rd = await r.json().catch(function () { return {}; });
+            if (!r.ok) throw new Error(rd.error || '操作失败');
+            this.showToast(checked ? '该审批类型已启用' : '该审批类型已禁用', false);
+            await this._loadTypeManageList();
+            await this._loadApprovalTypes();
+        } catch (e) {
+            this.showToast('切换失败：' + (e.message || '请重试'), true);
+            await this._loadTypeManageList();
+        }
+    }
+
+    // 类型表单启用开关标签实时联动
+    _updateTypeEnabledLabel() {
+        const cb = document.getElementById('tmEnabled');
+        const lb = document.getElementById('tmEnabledLabel');
+        if (cb && lb) {
+            lb.textContent = cb.checked ? '启用' : '禁用';
+            lb.style.color = cb.checked ? '#67c23a' : '#909399';
         }
     }
 
@@ -1089,6 +1332,7 @@ class ApprovalApp {
             if (this.searchKeyword) url += '&search=' + encodeURIComponent(this.searchKeyword);
             if (this.statusFilter) url += '&status=' + this.statusFilter;
             if (this.typeFilter) url += '&type=' + this.typeFilter;
+            if (this.scopeFilter) url += '&scope=' + this.scopeFilter;
             const data = await this.apiGet(url);
             this._renderList(data, container);
             this._renderPagination(data, pagination);
@@ -1179,11 +1423,22 @@ class ApprovalApp {
     }
 
     filterByStatus(btn, status) {
-        document.querySelectorAll('.filter-btn').forEach(function (b) {
+        document.querySelectorAll('.filter-btn:not(.filter-scope-btn)').forEach(function (b) {
             b.classList.remove('active');
         });
         btn.classList.add('active');
         this.statusFilter = status;
+        this.loadList(1);
+    }
+
+    // 我发起的 / 抄送我的 过滤（互斥，再次点击取消）
+    filterByScope(btn, scope) {
+        document.querySelectorAll('.filter-scope-btn').forEach(function (b) {
+            b.classList.remove('active');
+        });
+        var activate = this.scopeFilter !== scope;
+        this.scopeFilter = activate ? scope : '';
+        if (activate) btn.classList.add('active');
         this.loadList(1);
     }
 
@@ -1220,6 +1475,76 @@ class ApprovalApp {
         });
         this.onTypeChange();
         this._onDeptOrTypeChange();
+    }
+
+    // 费用类型选择：原生 select 转为自定义下拉。
+    // 已选（收起态）仅显示类型名称；展开下拉项显示「名称 + 小字浅色提示」。
+    _buildExpenseSelect(selectEl) {
+        if (!selectEl || selectEl._expWrap) return;
+        const self = this;
+        const wrap = document.createElement('div');
+        wrap.className = 'exp-select-wrap';
+        const val = selectEl.value || '';
+        const info = this._getExpenseTypeInfo(val);
+        wrap.innerHTML = '<div class="exp-select" tabindex="0" role="listbox">'
+            + '<span class="exp-select-value">' + this._escape(info ? info.name : '请选择') + '</span>'
+            + '<i class="fas fa-chevron-down exp-select-arrow"></i></div>'
+            + '<div class="exp-select-drop" style="display:none;">'
+            + '<div class="exp-select-option" data-val=""><span class="exp-opt-name">请选择</span></div>'
+            + this._getExpenseTypeList().map(function (o) {
+                return '<div class="exp-select-option" data-val="' + o[0] + '">'
+                    + '<span class="exp-opt-name">' + o[1] + '</span>'
+                    + (o[2] ? '<span class="exp-opt-hint">（' + o[2] + '）</span>' : '')
+                    + '</div>';
+            }).join('')
+            + '</div>';
+        selectEl.style.display = 'none';
+        selectEl.parentNode.insertBefore(wrap, selectEl);
+        const valueEl = wrap.querySelector('.exp-select-value');
+        const drop = wrap.querySelector('.exp-select-drop');
+        const sync = function () {
+            const cur = self._getExpenseTypeInfo(selectEl.value || '');
+            valueEl.textContent = cur ? cur.name : '请选择';
+            drop.querySelectorAll('.exp-select-option').forEach(function (opt) {
+                opt.classList.toggle('active', opt.getAttribute('data-val') === (selectEl.value || ''));
+            });
+        };
+        selectEl._expWrap = wrap;
+        wrap._syncExp = sync;
+        if (!this._expSelectDocBound) {
+            this._expSelectDocBound = true;
+            document.addEventListener('click', function () {
+                document.querySelectorAll('.exp-select-drop').forEach(function (d) {
+                    d.style.display = 'none';
+                });
+            });
+        }
+        wrap.querySelector('.exp-select').addEventListener('click', function (e) {
+            e.stopPropagation();
+            const isOpen = drop.style.display === 'block';
+            document.querySelectorAll('.exp-select-drop').forEach(function (d) {
+                d.style.display = 'none';
+            });
+            if (!isOpen) {
+                sync();
+                drop.style.display = 'block';
+            }
+        });
+        drop.querySelectorAll('.exp-select-option').forEach(function (opt) {
+            opt.addEventListener('click', function (e) {
+                e.stopPropagation();
+                selectEl.value = opt.getAttribute('data-val');
+                sync();
+                drop.style.display = 'none';
+                selectEl.dispatchEvent(new Event('change', {bubbles: true}));
+            });
+        });
+    }
+
+    // 同步内置费用类型下拉的收起态显示（表单重置/回填后调用）
+    _syncExpenseTypeDisplay() {
+        const sel = document.getElementById('newExpenseType');
+        if (sel && sel._expWrap && sel._expWrap._syncExp) sel._expWrap._syncExp();
     }
 
     onTypeChange() {
@@ -1317,12 +1642,26 @@ class ApprovalApp {
         document.getElementById('expenseRow').style.display = isExpense ? 'grid' : 'none';
         document.getElementById('expenseTypeGroup').style.display = isExpense ? '' : 'none';
         document.getElementById('expenseDateGroup').style.display = isExpense ? '' : 'none';
+        // 同步费用类型自定义下拉的收起态显示
+        this._syncExpenseTypeDisplay();
         // 金额行：报销/采购显示
         var amountGroup = document.getElementById('amountGroup');
         if (amountGroup) amountGroup.style.display = (isExpense || type === 'purchase') ? '' : 'none';
         // 招聘需求表单
         var rForm = document.getElementById('recruitForm');
         if (rForm) rForm.style.display = isRecruit ? 'block' : 'none';
+        // 请假类型
+        var leaveRow = document.getElementById('leaveTypeRow');
+        if (leaveRow) leaveRow.style.display = type === 'leave' ? 'block' : 'none';
+        // 出差信息
+        var tripRow = document.getElementById('tripInfoRow');
+        if (tripRow) tripRow.style.display = type === 'trip' ? 'block' : 'none';
+        // 采购物项
+        var purchaseRow = document.getElementById('purchaseItemsRow');
+        if (purchaseRow) purchaseRow.style.display = type === 'purchase' ? 'block' : 'none';
+        // 报销项目
+        var expenseItemsRow = document.getElementById('expenseItemsRow');
+        if (expenseItemsRow) expenseItemsRow.style.display = type === 'expense' ? 'block' : 'none';
         // Auto-set title if recruit
         if (isRecruit) {
             var titleInput = document.getElementById('newApprovalTitle');
@@ -1338,6 +1677,147 @@ class ApprovalApp {
         var val = document.getElementById('recruitStaffingType').value;
         var row = document.getElementById('recruitStaffingRemarkRow');
         if (row) row.style.display = val === 'supplement' ? 'block' : 'none';
+    }
+
+    // ===== 采购物项 =====
+    _addPurchaseItem(item) {
+        item = item || {};
+        var body = document.getElementById('purchaseItemsBody');
+        if (!body) return;
+        var row = document.createElement('tr');
+        row.innerHTML = '<td style="padding:4px;border:1px solid var(--border-color,#dcdfe6);"><input class="form-input pi-name" value="' + this._escape(item.name || '') + '" placeholder="商品名称" style="min-width:100px;"></td>'
+            + '<td style="padding:4px;border:1px solid var(--border-color,#dcdfe6);"><input type="number" class="form-input pi-qty" value="' + (item.qty || '') + '" min="0" step="1" oninput="approvalApp._recalcPurchaseTotal()" style="width:100%;"></td>'
+            + '<td style="padding:4px;border:1px solid var(--border-color,#dcdfe6);"><input type="number" class="form-input pi-price" value="' + (item.price || '') + '" min="0" step="0.01" oninput="approvalApp._recalcPurchaseTotal()" style="width:100%;"></td>'
+            + '<td style="padding:4px;border:1px solid var(--border-color,#dcdfe6);"><span class="pi-total" style="color:#e6a23c;">0.00</span></td>'
+            + '<td style="padding:4px;border:1px solid var(--border-color,#dcdfe6);"><input class="form-input pi-remark" value="' + this._escape(item.remark || '') + '" placeholder="备注" style="min-width:80px;"></td>'
+            + '<td style="padding:4px;border:1px solid var(--border-color,#dcdfe6);text-align:center;"><button type="button" class="btn btn-sm btn-danger" onclick="approvalApp._removePurchaseItem(this)"><i class="fas fa-times"></i></button></td>';
+        body.appendChild(row);
+        this._recalcPurchaseTotal();
+    }
+    _removePurchaseItem(btn) {
+        var tr = btn.closest('tr');
+        if (tr) tr.remove();
+        this._recalcPurchaseTotal();
+    }
+    _collectPurchaseItems() {
+        var items = [];
+        document.querySelectorAll('#purchaseItemsBody tr').forEach(function (tr) {
+            var name = (tr.querySelector('.pi-name') || {}).value || '';
+            var qty = parseFloat((tr.querySelector('.pi-qty') || {}).value) || 0;
+            var price = parseFloat((tr.querySelector('.pi-price') || {}).value) || 0;
+            var remark = (tr.querySelector('.pi-remark') || {}).value || '';
+            if (name || qty || price) items.push({name: name, qty: qty, price: price, total: +((qty * price).toFixed(2)), remark: remark});
+        });
+        return items;
+    }
+    _recalcPurchaseTotal() {
+        var total = 0;
+        document.querySelectorAll('#purchaseItemsBody tr').forEach(function (tr) {
+            var qty = parseFloat((tr.querySelector('.pi-qty') || {}).value) || 0;
+            var price = parseFloat((tr.querySelector('.pi-price') || {}).value) || 0;
+            var t = qty * price;
+            var totalEl = tr.querySelector('.pi-total');
+            if (totalEl) totalEl.textContent = t.toFixed(2);
+            total += t;
+        });
+        var el = document.getElementById('purchaseTotal');
+        if (el) el.textContent = total.toFixed(2);
+        var amount = document.getElementById('newAmount');
+        if (amount) amount.value = total ? total.toFixed(2) : '';
+        // 明细变动使总金额变化，需刷新审批链以联动阈值审批
+        this._debouncedChainRefresh();
+        return total;
+    }
+
+    // ===== 报销项目 =====
+    _addExpenseItem(item) {
+        item = item || {};
+        var body = document.getElementById('expenseItemsBody');
+        if (!body) return;
+        var row = document.createElement('tr');
+        row.innerHTML = '<td style="padding:4px;border:1px solid var(--border-color,#dcdfe6);"><input class="form-input ei-name" value="' + this._escape(item.name || '') + '" placeholder="项目名称" style="min-width:100px;"></td>'
+            + '<td style="padding:4px;border:1px solid var(--border-color,#dcdfe6);"><input type="number" class="form-input ei-amount" value="' + (item.amount || '') + '" min="0" step="0.01" oninput="approvalApp._recalcExpenseTotal()" style="width:100%;"></td>'
+            + '<td style="padding:4px;border:1px solid var(--border-color,#dcdfe6);"><input class="form-input ei-remark" value="' + this._escape(item.remark || '') + '" placeholder="备注" style="min-width:80px;"></td>'
+            + '<td style="padding:4px;border:1px solid var(--border-color,#dcdfe6);text-align:center;"><button type="button" class="btn btn-sm btn-danger" onclick="approvalApp._removeExpenseItem(this)"><i class="fas fa-times"></i></button></td>';
+        body.appendChild(row);
+        this._recalcExpenseTotal();
+    }
+    _removeExpenseItem(btn) {
+        var tr = btn.closest('tr');
+        if (tr) tr.remove();
+        this._recalcExpenseTotal();
+    }
+    _collectExpenseItems() {
+        var items = [];
+        document.querySelectorAll('#expenseItemsBody tr').forEach(function (tr) {
+            var name = (tr.querySelector('.ei-name') || {}).value || '';
+            var amount = parseFloat((tr.querySelector('.ei-amount') || {}).value) || 0;
+            var remark = (tr.querySelector('.ei-remark') || {}).value || '';
+            if (name || amount) items.push({name: name, amount: amount, remark: remark});
+        });
+        return items;
+    }
+    _recalcExpenseTotal() {
+        var total = 0;
+        document.querySelectorAll('#expenseItemsBody tr').forEach(function (tr) {
+            total += parseFloat((tr.querySelector('.ei-amount') || {}).value) || 0;
+        });
+        var el = document.getElementById('expenseTotal');
+        if (el) el.textContent = total.toFixed(2);
+        var amount = document.getElementById('newAmount');
+        if (amount) amount.value = total ? total.toFixed(2) : '';
+        // 明细变动使总金额变化，需刷新审批链以联动阈值审批
+        this._debouncedChainRefresh();
+        return total;
+    }
+
+    // ===== 出差/请假 =====
+    _updateTripDuration() {
+        var days = document.getElementById('tripDays') ? document.getElementById('tripDays').value : '';
+        var dur = document.getElementById('newDuration');
+        if (dur && days) dur.value = days;
+    }
+    _collectLeaveType() {
+        var checked = document.querySelector('input[name="leaveType"]:checked');
+        return checked ? checked.value : '';
+    }
+    _collectTripData() {
+        return {
+            reason: document.getElementById('tripReason') ? document.getElementById('tripReason').value : '',
+            place: document.getElementById('tripPlace') ? document.getElementById('tripPlace').value : '',
+            days: document.getElementById('tripDays') ? document.getElementById('tripDays').value : '',
+            amount: document.getElementById('tripAmount') ? document.getElementById('tripAmount').value : '',
+            remark: document.getElementById('tripRemark') ? document.getElementById('tripRemark').value : ''
+        };
+    }
+    _clearTypeRows() {
+        var pb = document.getElementById('purchaseItemsBody'); if (pb) pb.innerHTML = '';
+        var eb = document.getElementById('expenseItemsBody'); if (eb) eb.innerHTML = '';
+        document.querySelectorAll('input[name="leaveType"]').forEach(function (r) { r.checked = false; });
+        ['tripReason', 'tripPlace', 'tripDays', 'tripAmount', 'tripRemark'].forEach(function (id) {
+            var el = document.getElementById(id); if (el) el.value = '';
+        });
+    }
+    _loadTypeDataIntoForm(d) {
+        if (d.purchase_items && d.purchase_items.length) {
+            var self = this;
+            d.purchase_items.forEach(function (it) { self._addPurchaseItem(it); });
+        }
+        if (d.expense_items && d.expense_items.length) {
+            var self2 = this;
+            d.expense_items.forEach(function (it) { self2._addExpenseItem(it); });
+        }
+        if (d.leave_type) {
+            var radio = document.querySelector('input[name="leaveType"][value="' + this._escape(d.leave_type) + '"]');
+            if (radio) radio.checked = true;
+        }
+        if (d.trip_data && typeof d.trip_data === 'object') {
+            if (document.getElementById('tripReason')) document.getElementById('tripReason').value = d.trip_data.reason || '';
+            if (document.getElementById('tripPlace')) document.getElementById('tripPlace').value = d.trip_data.place || '';
+            if (document.getElementById('tripDays')) document.getElementById('tripDays').value = d.trip_data.days || '';
+            if (document.getElementById('tripAmount')) document.getElementById('tripAmount').value = d.trip_data.amount || '';
+            if (document.getElementById('tripRemark')) document.getElementById('tripRemark').value = d.trip_data.remark || '';
+        }
     }
 
     _typeIcon(type) {
@@ -1459,18 +1939,14 @@ class ApprovalApp {
     async openCreateModal() {
         var self = this;
         document.getElementById('createApprovalForm').reset();
+        // 内置费用类型下拉：首次构建自定义下拉，重置后同步收起态显示
+        this._buildExpenseSelect(document.getElementById('newExpenseType'));
+        this._syncExpenseTypeDisplay();
         document.querySelectorAll('.type-card').forEach(function (c) {
             c.classList.remove('selected');
         });
-        document.getElementById('expenseTypeGroup').style.display = 'none';
-        document.getElementById('expenseDateGroup').style.display = 'none';
-        document.getElementById('expenseRow').style.display = 'none';
-        var ar = document.getElementById('amountGroup');
-        if (ar) ar.style.display = 'none';
-        var dr = document.getElementById('dateRow');
-        if (dr) dr.style.display = 'none';
-        // Reset recruit form
-        document.getElementById('recruitForm').style.display = 'none';
+        // 隐藏所有内置类型专属表单（含请假类型/出差/采购物项/报销项目等）
+        this._hideBuiltinFields();
         var recruitInputs = document.querySelectorAll('#recruitForm input, #recruitForm textarea, #recruitForm select');
         recruitInputs.forEach(function (el) {
             if (el.type === 'text' || el.tagName === 'TEXTAREA') el.value = '';
@@ -1478,6 +1954,7 @@ class ApprovalApp {
             else if (el.tagName === 'SELECT') el.selectedIndex = 0;
         });
         document.getElementById('recruitStaffingRemarkRow').style.display = 'none';
+        this._clearTypeRows();
         document.getElementById('attachmentPreview').innerHTML = '';
         document.getElementById('attachmentPreview').style.display = 'none';
         this._attachmentFiles = [];
@@ -1500,9 +1977,8 @@ class ApprovalApp {
         var sab = document.getElementById('submitApprovalBtn');
         if (sab) sab.innerHTML = '<i class="fas fa-paper-plane"></i> 提交审批';
 
-        // Set defaults: countersign & sequential
-        document.getElementById('newSignType').value = 'countersign';
-        document.getElementById('newApprovalMode').value = 'sequential';
+        // 固定为会签 + 顺序审批，不可修改
+        this._lockApprovalDefaults();
 
         // Init CC display
         this._ccUsers = [];
@@ -1522,6 +1998,25 @@ class ApprovalApp {
         setTimeout(function () {
             self._initCcSearch();
         }, 100);
+        // Init 关联审批 search
+        this._relatedApprovals = [];
+        this._renderRelApprovalTags();
+        setTimeout(function () {
+            self._initRelApprovalSearch();
+        }, 100);
+    }
+
+    // 明细/动态字段金额变化后防抖刷新审批链（联动阈值审批）
+    _debouncedChainRefresh() {
+        if (this._chainRefreshTimer) clearTimeout(this._chainRefreshTimer);
+        this._chainRefreshTimer = setTimeout(function () {
+            approvalApp._loadApprovalChainPreview();
+        }, 300);
+    }
+
+    // 自定义类型动态数字/金额字段输入时刷新审批链（联动阈值审批）
+    _onDynNumericChange() {
+        this._debouncedChainRefresh();
     }
 
     async _loadApprovalChainPreview() {
@@ -1719,18 +2214,12 @@ class ApprovalApp {
         }
     }
 
-    async _loadConfigDefaults() {
-        var type = this._currentCcType;
-        this._ccUsers = [];
-        this._ccDepartments = [];
-        if (!type) {
-            this._renderCcTags();
-            return;
-        }
+    // 解析当前用户企业/审批类型匹配到的配置（优先子企业专属，再集团默认）
+    async _resolveApprovalConfig(type) {
+        if (!type) return null;
         try {
             var data = await this.apiGet(OA_API_URL + '/approval/dept-configs/');
             var configs = data.results || [];
-            // 根据当前用户企业匹配配置：优先子企业专属配置，再找集团默认配置
             var activeTenant = null;
             try {
                 activeTenant = JSON.parse(localStorage.getItem('active_tenant'));
@@ -1747,23 +2236,58 @@ class ApprovalApp {
                     defaultCfg = c;
                 }
             });
-            if (!cfg) cfg = defaultCfg;
+            return cfg || defaultCfg;
+        } catch (e) {
+            console.error('解析审批配置失败:', e);
+            return null;
+        }
+    }
+
+    // 重新编辑时：将当前抄送项中匹配配置默认抄送人/部门的项标记为不可删除
+    async _lockConfigCcDefaults() {
+        var type = document.getElementById('newApprovalType') ? document.getElementById('newApprovalType').value : '';
+        if (!type) return;
+        var cfg = await this._resolveApprovalConfig(type);
+        if (!cfg) return;
+        var userIds = (cfg.cc_user_details || []).map(function (u) {
+            return u.id;
+        });
+        var deptIds = (cfg.cc_department_details || []).map(function (d) {
+            return d.id;
+        });
+        (this._ccUsers || []).forEach(function (u) {
+            if (userIds.indexOf(u.id) !== -1) u.locked = true;
+        });
+        (this._ccDepartments || []).forEach(function (d) {
+            if (deptIds.indexOf(d.id) !== -1) d.locked = true;
+        });
+        this._renderCcTags();
+    }
+
+    async _loadConfigDefaults() {
+        var type = this._currentCcType;
+        this._ccUsers = [];
+        this._ccDepartments = [];
+        if (!type) {
+            this._renderCcTags();
+            return;
+        }
+        try {
+            var cfg = await this._resolveApprovalConfig(type);
             if (!cfg) {
                 this._renderCcTags();
                 return;
             }
-            // Apply sign_type and approval_mode defaults from config
-            var signTypeSel = document.getElementById('newSignType');
-            if (signTypeSel && cfg.default_sign_type) signTypeSel.value = cfg.default_sign_type;
-            var apprModeSel = document.getElementById('newApprovalMode');
-            if (apprModeSel && cfg.default_approval_mode) apprModeSel.value = cfg.default_approval_mode;
+            // 审批方式/审批模式固定为会签+顺序审批，不受配置影响（不可修改）
+            this._lockApprovalDefaults();
+            // 配置中的默认抄送人/部门自动带入，且不可删除（locked）
             if (cfg.cc_user_details && cfg.cc_user_details.length) {
                 cfg.cc_user_details.forEach(function (u) {
                     if (!this._ccUsers) this._ccUsers = [];
                     if (!this._ccUsers.some(function (x) {
                         return x.id === u.id;
                     })) {
-                        this._ccUsers.push({id: u.id, name: u.name, avatar: u.avatar || ''});
+                        this._ccUsers.push({id: u.id, name: u.name, avatar: u.avatar || '', locked: true});
                     }
                 }, this);
             }
@@ -1773,13 +2297,27 @@ class ApprovalApp {
                     if (!this._ccDepartments.some(function (x) {
                         return x.id === d.id;
                     })) {
-                        this._ccDepartments.push({id: d.id, name: d.name});
+                        this._ccDepartments.push({id: d.id, name: d.name, locked: true});
                     }
                 }, this);
             }
             this._renderCcTags();
         } catch (e) {
             console.error('加载审批配置默认值失败:', e);
+        }
+    }
+
+    // 审批方式/审批模式固定为 会签 + 顺序审批，不可修改
+    _lockApprovalDefaults() {
+        var signTypeSel = document.getElementById('newSignType');
+        if (signTypeSel) {
+            signTypeSel.value = 'countersign';
+            signTypeSel.disabled = true;
+        }
+        var apprModeSel = document.getElementById('newApprovalMode');
+        if (apprModeSel) {
+            apprModeSel.value = 'sequential';
+            apprModeSel.disabled = true;
         }
     }
 
@@ -1845,6 +2383,115 @@ class ApprovalApp {
                 dd.style.display = 'none';
             }
         });
+    }
+
+    // ===== 关联审批选择器 =====
+    _initRelApprovalSearch() {
+        var self = this;
+        var input = document.getElementById('relApprovalSearch');
+        if (!input) return;
+        input.oninput = function () {
+            clearTimeout(self._relSearchTimer);
+            var val = input.value.trim();
+            if (!val) {
+                document.getElementById('relApprovalDropdown').style.display = 'none';
+                return;
+            }
+            self._relSearchTimer = setTimeout(function () {
+                self._searchRelApprovals(val);
+            }, 300);
+        };
+        // 聚焦时若未输入，默认加载当前用户的审批列表
+        input.onfocus = function () {
+            if (!input.value.trim()) {
+                self._loadDefaultRelApprovals();
+            } else {
+                self._searchRelApprovals(input.value.trim());
+            }
+        };
+        document.addEventListener('click', function (e) {
+            var dd = document.getElementById('relApprovalDropdown');
+            if (dd && !e.target.closest('#relApprovalSearch') && !e.target.closest('#relApprovalDropdown')) {
+                dd.style.display = 'none';
+            }
+        });
+    }
+
+    async _loadDefaultRelApprovals() {
+        try {
+            var data = await this.apiGet(OA_API_URL + '/approval/?page=1&page_size=10');
+            this._renderRelApprovalDropdown(data.results || []);
+        } catch (e) {
+            var dd = document.getElementById('relApprovalDropdown');
+            if (dd) dd.style.display = 'none';
+        }
+    }
+
+    async _searchRelApprovals(keyword) {
+        try {
+            var data = await this.apiGet(OA_API_URL + '/approval/?search=' + encodeURIComponent(keyword) + '&page_size=20');
+            this._renderRelApprovalDropdown(data.results || []);
+        } catch (e) {
+            var dd = document.getElementById('relApprovalDropdown');
+            if (dd) dd.style.display = 'none';
+        }
+    }
+
+    _renderRelApprovalDropdown(list) {
+        var dd = document.getElementById('relApprovalDropdown');
+        if (!dd) return;
+        if (!list.length) {
+            dd.innerHTML = '<div style="padding:8px 12px;color:#909399;font-size:13px;">暂无审批可关联</div>';
+            dd.style.display = 'block';
+            return;
+        }
+        var self = this;
+        var selectedIds = {};
+        (this._relatedApprovals || []).forEach(function (r) { selectedIds[r.id] = true; });
+        var statusMap = {draft: '草稿', pending: '待审批', approved: '已通过', rejected: '已驳回', deferred: '暂缓', processing: '办理中', cancelled: '已撤回'};
+        dd.innerHTML = list.map(function (r) {
+            if (selectedIds[r.id]) return '';
+            var cls = 'cursor:pointer;';
+            return '<div class="rel-approval-item" style="display:flex;align-items:center;gap:8px;padding:8px 12px;' + cls + '" onclick="approvalApp._addRelApproval(' + r.id + ',\'' + self._escape(r.title) + '\',\'' + self._escape(r.approval_type_display || r.approval_type) + '\',\'' + (statusMap[r.status] || r.status || '') + '\')">'
+                + '<i class="fas fa-file-alt" style="color:#16a085;"></i>'
+                + '<div style="flex:1;min-width:0;">'
+                + '<div style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape(r.title) + '</div>'
+                + '<div style="font-size:11px;color:#909399;">' + self._escape(r.approval_type_display || r.approval_type) + ' · ' + (statusMap[r.status] || r.status || '') + ' · 更新 ' + self._formatTime(r.updated_at || r.created_at) + '</div>'
+                + '</div>'
+                + '</div>';
+        }).join('') || '<div style="padding:8px 12px;color:#909399;font-size:13px;">暂无审批可关联</div>';
+        dd.style.display = 'block';
+    }
+
+    _addRelApproval(id, title, typeDisplay, status) {
+        if (!this._relatedApprovals) this._relatedApprovals = [];
+        if (this._relatedApprovals.some(function (r) { return r.id === id; })) return;
+        this._relatedApprovals.push({id: id, title: title, type: typeDisplay, status: status || ''});
+        this._renderRelApprovalTags();
+        document.getElementById('relApprovalDropdown').style.display = 'none';
+        document.getElementById('relApprovalSearch').value = '';
+    }
+
+    _removeRelApproval(idx) {
+        this._relatedApprovals.splice(idx, 1);
+        this._renderRelApprovalTags();
+    }
+
+    _renderRelApprovalTags() {
+        var container = document.getElementById('relApprovalTags');
+        if (!container) return;
+        if (!this._relatedApprovals || !this._relatedApprovals.length) {
+            container.innerHTML = '';
+            return;
+        }
+        var self = this;
+        container.innerHTML = this._relatedApprovals.map(function (r, i) {
+            return '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 8px;background:#e8f6f3;border:1px solid #b2e0d8;border-radius:14px;font-size:12px;margin:2px;max-width:220px;">'
+                + '<i class="fas fa-link" style="font-size:10px;color:#16a085;"></i>'
+                + '<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape(r.title) + '</span>'
+                + '<i class="fas fa-times" style="cursor:pointer;color:#909399;font-size:11px;" onclick="approvalApp._removeRelApproval(' + i + ')"></i>'
+                + '</span>';
+        }).join('');
     }
 
     async _searchCcUsers(keyword) {
@@ -1929,6 +2576,12 @@ class ApprovalApp {
 
     _removeCcUser(id) {
         if (!this._ccUsers) return;
+        var target = null;
+        for (var i = 0; i < this._ccUsers.length; i++) {
+            if (this._ccUsers[i].id === id) { target = this._ccUsers[i]; break; }
+        }
+        // 默认抄送人不可删除
+        if (target && target.locked) return;
         this._ccUsers = this._ccUsers.filter(function (u) {
             return u.id !== id;
         });
@@ -1937,6 +2590,12 @@ class ApprovalApp {
 
     _removeCcDept(id) {
         if (!this._ccDepartments) return;
+        var target = null;
+        for (var i = 0; i < this._ccDepartments.length; i++) {
+            if (this._ccDepartments[i].id === id) { target = this._ccDepartments[i]; break; }
+        }
+        // 默认抄送部门不可删除
+        if (target && target.locked) return;
         this._ccDepartments = this._ccDepartments.filter(function (d) {
             return d.id !== id;
         });
@@ -1948,23 +2607,29 @@ class ApprovalApp {
         if (!container) return;
         var self = this;
         var html = '';
+        // 默认（配置带入）项不可删除：虚线边框 + 锁图标
+        var lockedBorder = 'border:1px dashed #c0c4cc;';
         // Department tags
         if (this._ccDepartments && this._ccDepartments.length) {
             html += this._ccDepartments.map(function (d) {
-                return '<span class="cc-tag cc-tag-dept" style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#e8f4fd;border-radius:14px;font-size:12px;margin:2px;">'
+                return '<span class="cc-tag cc-tag-dept" style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#e8f4fd;border-radius:14px;font-size:12px;margin:2px;' + (d.locked ? lockedBorder : '') + '">'
                     + '<i class="fas fa-building" style="font-size:11px;color:#409eff;"></i>'
                     + '<span>' + self._escape(d.name) + '</span>'
-                    + '<i class="fas fa-times" style="cursor:pointer;font-size:11px;color:#909399;" onclick="approvalApp._removeCcDept(' + d.id + ')"></i>'
+                    + (d.locked
+                        ? '<i class="fas fa-lock" style="font-size:10px;color:#c0c4cc;" title="默认抄送部门，不可删除"></i>'
+                        : '<i class="fas fa-times" style="cursor:pointer;font-size:11px;color:#909399;" onclick="approvalApp._removeCcDept(' + d.id + ')"></i>')
                     + '</span>';
             }).join('');
         }
         // User tags
         if (this._ccUsers && this._ccUsers.length) {
             html += this._ccUsers.map(function (u) {
-                return '<span class="cc-tag" style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#f3e8ff;border-radius:14px;font-size:12px;margin:2px;">'
+                return '<span class="cc-tag" style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#f3e8ff;border-radius:14px;font-size:12px;margin:2px;' + (u.locked ? lockedBorder : '') + '">'
                     + '<img src="' + (u.avatar || '/static/images/default-avatar.png') + '" style="width:18px;height:18px;border-radius:50%;object-fit:cover;">'
                     + '<span>' + self._escape(u.name) + '</span>'
-                    + '<i class="fas fa-times" style="cursor:pointer;font-size:11px;color:#909399;" onclick="approvalApp._removeCcUser(' + u.id + ')"></i>'
+                    + (u.locked
+                        ? '<i class="fas fa-lock" style="font-size:10px;color:#c0c4cc;" title="默认抄送人，不可删除"></i>'
+                        : '<i class="fas fa-times" style="cursor:pointer;font-size:11px;color:#909399;" onclick="approvalApp._removeCcUser(' + u.id + ')"></i>')
                     + '</span>';
             }).join('');
         }
@@ -2129,7 +2794,13 @@ class ApprovalApp {
             approver_nodes: this._approverNodes,
             cc_users: ccIds,
             cc_departments: ccDeptIds,
+            related_approvals: (this._relatedApprovals || []).map(function (r) { return r.id; }),
         };
+        // 内置类型结构化数据
+        if (type === 'purchase') data.purchase_items = this._collectPurchaseItems();
+        if (type === 'expense') data.expense_items = this._collectExpenseItems();
+        if (type === 'leave') data.leave_type = this._collectLeaveType();
+        if (type === 'trip') data.trip_data = this._collectTripData();
         // Include recruit_data if recruit type
         if (type === 'recruit') {
             var rd = this._gatherRecruitData();
@@ -2203,7 +2874,12 @@ class ApprovalApp {
             cc_departments: (this._ccDepartments || []).map(function (d) {
                 return d.id;
             }),
+            related_approvals: (this._relatedApprovals || []).map(function (r) { return r.id; }),
         };
+        if (f.approval_type === 'purchase') data.purchase_items = this._collectPurchaseItems();
+        if (f.approval_type === 'expense') data.expense_items = this._collectExpenseItems();
+        if (f.approval_type === 'leave') data.leave_type = this._collectLeaveType();
+        if (f.approval_type === 'trip') data.trip_data = this._collectTripData();
         if (f.approval_type === 'recruit') {
             var rd = this._gatherRecruitData();
             if (rd) data.recruit_data = rd;
@@ -2282,9 +2958,10 @@ class ApprovalApp {
             if (d.duration) document.getElementById('newDuration').value = d.duration;
             if (d.amount) document.getElementById('newAmount').value = d.amount;
             if (d.expense_type) document.getElementById('newExpenseType').value = d.expense_type;
+            this._syncExpenseTypeDisplay();
             if (d.expense_date) document.getElementById('newExpenseDate').value = d.expense_date;
-            document.getElementById('newSignType').value = d.sign_type || 'orsign';
-            document.getElementById('newApprovalMode').value = d.approval_mode || 'parallel';
+            // 审批方式/模式固定为会签+顺序审批，历史草稿也强制这两个值
+            this._lockApprovalDefaults();
             if (d.attachments && d.attachments.length) {
                 this._attachmentFiles = d.attachments.map(function (u) {
                     if (typeof u === 'object' && u !== null) {
@@ -2307,6 +2984,15 @@ class ApprovalApp {
                 }, this);
             }
             this._renderCcTags();
+            // 配置默认抄送人/部门不可删除
+            await this._lockConfigCcDefaults();
+            // 加载关联审批
+            this._relatedApprovals = (d.related_approval_list || []).map(function (ra) {
+                return {id: ra.id, title: ra.title, type: ra.approval_type_display || ra.approval_type, status: ra.status_display || ''};
+            });
+            this._renderRelApprovalTags();
+            // 加载内置类型结构化数据（采购物项/报销项目/请假类型/出差信息）
+            this._loadTypeDataIntoForm(d);
             // 加载招聘需求数据
             if (d.approval_type === 'recruit' && d.recruit_data) {
                 var rd = d.recruit_data;
@@ -2982,9 +3668,34 @@ class ApprovalApp {
 
     // ==================== 详情 ====================
 
+    async _openRelatedApproval(id) {
+        // 在独立的新模态框中打开关联审批，保持当前详情不关闭
+        var overlayId = 'relApprovalModal_' + id + '_' + Date.now();
+        var overlay = document.createElement('div');
+        overlay.id = overlayId;
+        overlay.className = 'modal';
+        overlay.style.cssText = 'z-index:2500;';
+        overlay.innerHTML = '<div class="modal-content" style="max-width:800px;">'
+            + '<div class="modal-header"><h3><i class="fas fa-link" style="color:#16a085;"></i> 关联审批详情</h3>'
+            + '<span class="approval-detail-subtitle" style="font-size:12px;color:var(--text-light,#909399);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px;flex:1;margin-left:8px;"></span>'
+            + '<div style="display:flex;align-items:center;gap:6px;"><button class="close-btn" onclick="approvalApp.closeModal(\'' + overlayId + '\')">&times;</button></div></div>'
+            + '<div class="modal-body" style="max-height:70vh;overflow-y:auto;"></div>'
+            + '<div class="modal-footer"><button class="btn btn-secondary" onclick="approvalApp.closeModal(\'' + overlayId + '\')">关闭</button></div>'
+            + '</div>';
+        document.body.appendChild(overlay);
+        this._detailModalId = overlayId;
+        try {
+            await this.showDetail(id);
+        } finally {
+            this._detailModalId = null;
+        }
+    }
+
     async showDetail(id) {
         try {
             const d = await this.apiGet(OA_API_URL + '/approval/' + id + '/');
+            // 支持在新模态框中打开（关联审批查看时保持当前详情不关闭）
+            var modalId = this._detailModalId || 'approvalDetailModal';
             const statusMap = {
                 'draft': '草稿',
                 'pending': '待审批',
@@ -3102,6 +3813,60 @@ class ApprovalApp {
                 html += '</div></div>';
             }
 
+            // 关联审批展示（报销关联采购等）
+            if (d.related_approval_list && d.related_approval_list.length) {
+                var relStatusMap = {draft: '草稿', pending: '待审批', approved: '已通过', rejected: '已驳回', deferred: '暂缓', processing: '办理中', cancelled: '已撤回'};
+                html += '<div class="detail-item full-width"><label><i class="fas fa-link" style="color:#16a085;"></i> 关联审批</label><div style="display:flex;flex-wrap:wrap;gap:6px;">';
+                d.related_approval_list.forEach(function (ra) {
+                    var rsc = relStatusMap[ra.status] || ra.status || '';
+                    html += '<a href="javascript:void(0)" onclick="approvalApp._openRelatedApproval(' + ra.id + ')" style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:#e8f6f3;border:1px solid #b2e0d8;border-radius:14px;font-size:12px;color:#0f766e;text-decoration:none;cursor:pointer;" title="点击查看关联审批">'
+                        + '<i class="fas fa-link" style="font-size:11px;"></i>'
+                        + approvalApp._escape(ra.title)
+                        + ' <span style="font-size:10px;color:#909399;">' + approvalApp._escape(ra.approval_type_display || ra.approval_type) + ' · ' + approvalApp._escape(rsc) + '</span>'
+                        + '</a>';
+                });
+                html += '</div></div>';
+            }
+
+            // 请假类型
+            if (d.approval_type === 'leave' && d.leave_type) {
+                html += '<div class="detail-item full-width"><label><i class="fas fa-bed" style="color:#409eff;"></i> 请假类型</label><span>' + this._escape(d.leave_type) + '</span></div>';
+            }
+            // 出差信息
+            if (d.approval_type === 'trip' && d.trip_data && typeof d.trip_data === 'object') {
+                var td = d.trip_data;
+                var tripParts = [];
+                if (td.reason) tripParts.push('事由：' + td.reason);
+                if (td.place) tripParts.push('地点：' + td.place);
+                if (td.days) tripParts.push('天数：' + td.days + ' 天');
+                if (td.amount) tripParts.push('金额：¥' + td.amount);
+                if (td.remark) tripParts.push('备注：' + td.remark);
+                if (tripParts.length) html += '<div class="detail-item full-width"><label><i class="fas fa-plane" style="color:#16a085;"></i> 出差信息</label><span>' + this._escape(tripParts.join('；')) + '</span></div>';
+            }
+            // 采购物项
+            if (d.approval_type === 'purchase' && d.purchase_items && d.purchase_items.length) {
+                var pit = d.purchase_items;
+                html += '<div class="detail-item full-width"><label><i class="fas fa-cart-plus" style="color:#e6a23c;"></i> 采购物项</label><div style="overflow-x:auto;">'
+                    + '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:6px;"><thead><tr style="background:var(--bg-secondary,#f5f7fa);"><th style="padding:5px;border:1px solid var(--border-color,#dcdfe6);">商品名称</th><th style="padding:5px;border:1px solid var(--border-color,#dcdfe6);">数量</th><th style="padding:5px;border:1px solid var(--border-color,#dcdfe6);">单价(¥)</th><th style="padding:5px;border:1px solid var(--border-color,#dcdfe6);">总价(¥)</th><th style="padding:5px;border:1px solid var(--border-color,#dcdfe6);">备注</th></tr></thead><tbody>';
+                pit.forEach(function (it) {
+                    html += '<tr><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);">' + approvalApp._escape(it.name || '') + '</td><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);">' + (it.qty || 0) + '</td><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);">' + (it.price != null ? it.price : '-') + '</td><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);font-weight:600;">' + (it.total != null ? Number(it.total).toFixed(2) : '0.00') + '</td><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);">' + approvalApp._escape(it.remark || '') + '</td></tr>';
+                });
+                var pTotal = pit.reduce(function (s, it) { return s + (parseFloat(it.total) || 0); }, 0);
+                html += '<tr style="background:var(--bg-secondary,#f5f7fa);"><td colspan="3" style="padding:5px;border:1px solid var(--border-color,#dcdfe6);text-align:right;"><b>采购总金额</b></td><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);font-weight:700;color:#e6a23c;">' + pTotal.toFixed(2) + '</td><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);"></td></tr>';
+                html += '</tbody></table></div></div>';
+            }
+            // 报销项目
+            if (d.approval_type === 'expense' && d.expense_items && d.expense_items.length) {
+                var eit = d.expense_items;
+                html += '<div class="detail-item full-width"><label><i class="fas fa-receipt" style="color:#67c23a;"></i> 报销项目</label><div style="overflow-x:auto;">'
+                    + '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:6px;"><thead><tr style="background:var(--bg-secondary,#f5f7fa);"><th style="padding:5px;border:1px solid var(--border-color,#dcdfe6);">项目名称</th><th style="padding:5px;border:1px solid var(--border-color,#dcdfe6);">金额(¥)</th><th style="padding:5px;border:1px solid var(--border-color,#dcdfe6);">备注</th></tr></thead><tbody>';
+                eit.forEach(function (it) {
+                    html += '<tr><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);">' + approvalApp._escape(it.name || '') + '</td><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);">' + (it.amount != null ? Number(it.amount).toFixed(2) : '0.00') + '</td><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);">' + approvalApp._escape(it.remark || '') + '</td></tr>';
+                });
+                var eTotal = eit.reduce(function (s, it) { return s + (parseFloat(it.amount) || 0); }, 0);
+                html += '<tr style="background:var(--bg-secondary,#f5f7fa);"><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);text-align:right;"><b>报销总金额</b></td><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);font-weight:700;color:#67c23a;">' + eTotal.toFixed(2) + '</td><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);"></td></tr>';
+                html += '</tbody></table></div></div>';
+            }
             // 招聘需求详情展示
             if (d.approval_type === 'recruit' && d.recruit_data) {
                 var rd = d.recruit_data;
@@ -3229,10 +3994,12 @@ class ApprovalApp {
                 html += '</div></div>';
             }
 
-            document.getElementById('approvalDetailBody').innerHTML = html;
+            var detailContainer = document.getElementById(modalId);
+            var bodyEl = detailContainer ? detailContainer.querySelector('.modal-body') : null;
+            if (bodyEl) bodyEl.innerHTML = html;
 
             // 设置副标题（截取过长标题）
-            var subEl = document.getElementById('approvalDetailSubtitle');
+            var subEl = detailContainer ? detailContainer.querySelector('.approval-detail-subtitle') : null;
             if (subEl) {
                 var titleText = d.title || '';
                 subEl.textContent = titleText.length > 30 ? titleText.substring(0, 27) + '...' : titleText;
@@ -3263,7 +4030,7 @@ class ApprovalApp {
             }
 
             // 底部按钮 — 根据角色显示
-            const footer = document.getElementById('approvalDetailFooter');
+            const footer = detailContainer ? detailContainer.querySelector('.modal-footer') : null;
             if (d.status === 'pending') {
                 var btns = '';
                 if (isActiveApprover || isSuperAdmin) {
@@ -3275,15 +4042,15 @@ class ApprovalApp {
                 if (isApplicant) {
                     btns += ' <button class="btn btn-secondary" onclick="approvalApp.cancelApproval(' + d.id + ')"><i class="fas fa-undo"></i> 撤销</button>';
                 }
-                btns += ' <button class="btn btn-secondary" onclick="approvalApp.closeModal(\'approvalDetailModal\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
+                btns += ' <button class="btn btn-secondary" onclick="approvalApp.closeModal(\'' + modalId + '\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
                 footer.innerHTML = btns;
             } else if (d.status === 'cancelled') {
                 var btns = '';
                 if (isApplicant) {
-                    btns += '<button class="btn btn-primary" onclick="approvalApp.closeModal(\'approvalDetailModal\');setTimeout(function(){approvalApp.reEdit(' + d.id + ')},200)"><i class="fas fa-edit"></i> 重新编辑</button>'
+                    btns += '<button class="btn btn-primary" onclick="approvalApp.closeModal(\'' + modalId + '\');setTimeout(function(){approvalApp.reEdit(' + d.id + ')},200)"><i class="fas fa-edit"></i> 重新编辑</button>'
                         + ' <button class="btn btn-danger" onclick="approvalApp.deleteDraft(' + d.id + ')"><i class="fas fa-trash"></i> 删除</button>';
                 }
-                btns += ' <button class="btn btn-secondary" onclick="approvalApp.closeModal(\'approvalDetailModal\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
+                btns += ' <button class="btn btn-secondary" onclick="approvalApp.closeModal(\'' + modalId + '\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
                 footer.innerHTML = btns;
             } else if (d.status === 'deferred' || d.status === 'processing') {
                 var btns = '';
@@ -3296,32 +4063,35 @@ class ApprovalApp {
                 if (isApplicant) {
                     btns += ' <button class="btn btn-secondary" onclick="approvalApp.cancelApproval(' + d.id + ')"><i class="fas fa-undo"></i> 撤销</button>';
                 }
-                btns += ' <button class="btn btn-secondary" onclick="approvalApp.closeModal(\'approvalDetailModal\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
+                btns += ' <button class="btn btn-secondary" onclick="approvalApp.closeModal(\'' + modalId + '\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
                 footer.innerHTML = btns;
             } else if (d.status === 'rejected') {
                 var btns = '';
                 if (isApplicant) {
-                    btns += '<button class="btn btn-primary" onclick="approvalApp.closeModal(\'approvalDetailModal\');setTimeout(function(){approvalApp.reEdit(' + d.id + ')},200)"><i class="fas fa-edit"></i> 继续编辑</button>';
+                    btns += '<button class="btn btn-primary" onclick="approvalApp.closeModal(\'' + modalId + '\');setTimeout(function(){approvalApp.reEdit(' + d.id + ')},200)"><i class="fas fa-edit"></i> 继续编辑</button>';
                 }
-                btns += ' <button class="btn btn-secondary" onclick="approvalApp.closeModal(\'approvalDetailModal\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
+                btns += ' <button class="btn btn-secondary" onclick="approvalApp.closeModal(\'' + modalId + '\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
                 footer.innerHTML = btns;
             } else if (d.status === 'draft') {
                 var btns = '';
                 if (isApplicant) {
-                    btns += '<button class="btn btn-primary" onclick="approvalApp.closeModal(\'approvalDetailModal\');setTimeout(function(){approvalApp.reEdit(' + d.id + ')},200)"><i class="fas fa-edit"></i> 继续编辑</button>'
+                    btns += '<button class="btn btn-primary" onclick="approvalApp.closeModal(\'' + modalId + '\');setTimeout(function(){approvalApp.reEdit(' + d.id + ')},200)"><i class="fas fa-edit"></i> 继续编辑</button>'
                         + ' <button class="btn btn-danger" onclick="approvalApp.deleteDraft(' + d.id + ')"><i class="fas fa-trash"></i> 删除</button>';
                 }
-                btns += ' <button class="btn btn-secondary" onclick="approvalApp.closeModal(\'approvalDetailModal\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
+                btns += ' <button class="btn btn-secondary" onclick="approvalApp.closeModal(\'' + modalId + '\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
                 footer.innerHTML = btns;
             } else {
-                footer.innerHTML = '<button class="btn btn-secondary" onclick="approvalApp.closeModal(\'approvalDetailModal\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
+                footer.innerHTML = '<button class="btn btn-secondary" onclick="approvalApp.closeModal(\'' + modalId + '\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
             }
 
 
-            document.getElementById('approvalDetailModal').style.display = 'flex';
-            setTimeout(function () {
-                document.getElementById('approvalDetailModal').classList.add('show');
-            }, 10);
+            var detailEl = document.getElementById(modalId);
+            if (detailEl) {
+                detailEl.style.display = 'flex';
+                setTimeout(function () {
+                    detailEl.classList.add('show');
+                }, 10);
+            }
         } catch (e) {
             console.error('加载详情失败:', e);
             this.showToast(e.message || '加载详情失败', true)
@@ -3577,50 +4347,85 @@ class ApprovalApp {
 
     // ==================== 打印 ====================
     _printDetail() {
-        if (!this._printStyle) {
-            this._printStyle = document.createElement('style');
-            this._printStyle.textContent = '@media print{'
-                + '@page{margin:12mm 15mm;}'
-                + 'body{font-family:"Microsoft YaHei","PingFang SC","Helvetica Neue",Arial,sans-serif;color:#333;background:#fff;font-size:14px;line-height:1.6;}'
-                + '.oa-container,#createApprovalModal,#rejectModal{display:none!important;}'
-                + '#approvalDetailModal{position:static!important;display:block!important;background:none!important;backdrop-filter:none!important;opacity:1!important;}'
-                + '.modal-content{box-shadow:none!important;max-width:100%!important;border-radius:0!important;padding:0;border:none!important;overflow:visible!important;}'
-                + '.modal-header,.modal-footer{display:none!important;}'
-                + '.modal-body{padding:0!important;}'
-                + '.detail-grid{display:block!important;}'
-                + '.detail-item{display:flex;padding:6px 0;border-bottom:1px solid #eee;page-break-inside:avoid;}'
-                + '.detail-item label{width:100px;min-width:100px;font-size:12px;color:#888;font-weight:600;padding-right:12px;flex-shrink:0;}'
-                + '.detail-item span{flex:1;font-size:14px;color:#333;}'
-                + '.detail-item.full-width{display:block;}'
-                + '.detail-item.full-width label{display:block;width:auto;margin-bottom:4px;}'
-                + '.detail-item.full-width span{display:block;}'
-                + '.approval-timeline{margin-top:16px;page-break-inside:avoid;}'
-                + '.timeline-item{padding:6px 0 6px 20px;border-left:2px solid #ddd;margin-left:4px;page-break-inside:avoid;}'
-                + '.timeline-item::before{left:-6px;top:10px;width:10px;height:10px;}'
-                + '.timeline-header{font-size:13px;font-weight:600;color:#333;}'
-                + '.timeline-time{font-size:11px;color:#999;}'
-                + '.timeline-comment{font-size:12px;color:#666;padding:6px 10px;background:#f8f8f8;border-radius:4px;margin-top:4px;}'
-                + 'h4{font-size:15px;margin:20px 0 12px!important;padding-top:16px;border-top:2px solid #333;}'
-                + 'h4 i{display:none;}'
-                + '.status-badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:12px;}'
-                + '.status-badge.normal{background:#f0f9eb;color:#67c23a;}'
-                + '.status-badge.late{background:#fef0f0;color:#f56c6c;}'
-                + '.badge-info{background:#e3f2fd;color:#1976d2;}'
-                + '.badge-default{background:#f5f5f5;color:#999;}'
-                + '.status-badge.deferred{background:#fdf6ec;color:#e6a23c;}'
-                + '.status-badge.processing{background:#f3e8ff;color:#9b59b6;}'
-                + 'img[onclick]{max-width:120px!important;max-height:120px!important;}'
-                + 'a[href]{color:#409eff!important;text-decoration:underline!important;}'
-                + '.btn{display:none!important;}'
-                + '.detail-item a[target="_blank"]{display:inline-flex!important;align-items:center;padding:4px 8px;background:#f5f7fa;border-radius:4px;font-size:11px;color:#666!important;text-decoration:none!important;max-width:180px;}'
-                + '.detail-item a[target="_blank"] i{color:#409eff!important;margin-right:4px;}'
-                + '.detail-item a[target="_blank"] span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
-                + '}';
-            document.head.appendChild(this._printStyle);
+        var modalId = this._detailModalId || 'approvalDetailModal';
+        var modal = document.getElementById(modalId);
+        if (!modal) return;
+        var bodyEl = modal.querySelector('.modal-body');
+        if (!bodyEl || !bodyEl.innerHTML.trim()) {
+            this.showToast('没有可打印的审批内容', true);
+            return;
         }
-        setTimeout(function () {
-            window.print();
-        }, 300);
+        // 用独立隐藏iframe承载打印内容，避免打印整个页面时等待无关资源（字体/CDN/其他弹窗图片）导致一直加载
+        var old = document.getElementById('approvalPrintFrame');
+        if (old && old.parentNode) old.parentNode.removeChild(old);
+
+        var iframe = document.createElement('iframe');
+        iframe.id = 'approvalPrintFrame';
+        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+        document.body.appendChild(iframe);
+
+        var css = '@page{margin:12mm 15mm;}'
+            + '*{box-sizing:border-box;}'
+            + 'body{font-family:"Microsoft YaHei","PingFang SC","Helvetica Neue",Arial,sans-serif;color:#333;background:#fff;font-size:14px;line-height:1.6;}'
+            + 'i{display:none!important;}'
+            + '.detail-grid{display:block!important;}'
+            + '.detail-item{display:flex;padding:6px 0;border-bottom:1px solid #eee;page-break-inside:avoid;}'
+            + '.detail-item label{width:110px;min-width:110px;font-size:12px;color:#888;font-weight:600;padding-right:12px;flex-shrink:0;}'
+            + '.detail-item span{flex:1;font-size:14px;color:#333;}'
+            + '.detail-item.full-width{display:block;}'
+            + '.detail-item.full-width label{display:block;width:auto;margin-bottom:4px;}'
+            + '.detail-item.full-width span{display:block;}'
+            + '.approval-timeline{margin-top:16px;page-break-inside:avoid;}'
+            + '.timeline-item{padding:6px 0 6px 20px;border-left:2px solid #ddd;margin-left:4px;page-break-inside:avoid;}'
+            + '.timeline-item::before{left:-6px;top:10px;width:10px;height:10px;}'
+            + '.timeline-header{font-size:13px;font-weight:600;color:#333;}'
+            + '.timeline-time{font-size:11px;color:#999;}'
+            + '.timeline-comment{font-size:12px;color:#666;padding:6px 10px;background:#f8f8f8;border-radius:4px;margin-top:4px;}'
+            + 'h4{font-size:15px;margin:20px 0 12px!important;padding-top:16px;border-top:2px solid #333;}'
+            + '.status-badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:12px;}'
+            + '.status-badge.normal{background:#f0f9eb;color:#67c23a;}'
+            + '.status-badge.late{background:#fef0f0;color:#f56c6c;}'
+            + '.badge-info{background:#e3f2fd;color:#1976d2;}'
+            + '.badge-default{background:#f5f5f5;color:#999;}'
+            + '.status-badge.deferred{background:#fdf6ec;color:#e6a23c;}'
+            + '.status-badge.processing{background:#f3e8ff;color:#9b59b6;}'
+            + 'img[onclick],img[alt="审批人签名"]{max-width:120px!important;max-height:120px!important;}'
+            + 'a[href]{color:#409eff!important;text-decoration:underline!important;}'
+            + '.btn{display:none!important;}'
+            + 'video,audio{display:none!important;}'
+            + '.detail-item a[target="_blank"]{display:inline-flex!important;align-items:center;padding:4px 8px;background:#f5f7fa;border-radius:4px;font-size:11px;color:#666!important;text-decoration:none!important;max-width:180px;}'
+            + '.detail-item a[target="_blank"] i{display:inline!important;color:#409eff!important;margin-right:4px;}'
+            + '.detail-item a[target="_blank"] span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}';
+
+        var doc = iframe.contentDocument;
+        doc.open();
+        doc.write('<html><head><meta charset="utf-8"><title>审批详情打印</title><style>' + css + '</style></head><body>' + bodyEl.innerHTML + '</body></html>');
+        doc.close();
+
+        // 图片加载失败时直接隐藏，避免打印预览一直等待
+        var imgs = doc.getElementsByTagName('img');
+        for (var i = 0; i < imgs.length; i++) {
+            imgs[i].onerror = function () { this.style.display = 'none'; };
+        }
+
+        var printed = false;
+        function doPrint() {
+            if (printed) return;
+            printed = true;
+            try {
+                iframe.contentWindow.focus();
+                iframe.contentWindow.print();
+            } catch (e) {}
+            setTimeout(function () {
+                if (iframe && iframe.parentNode) iframe.parentNode.removeChild(iframe);
+            }, 3000);
+        }
+        // 等资源加载完再打印；超时强制打印，避免卡死
+        var force = setTimeout(doPrint, 1200);
+        iframe.onload = function () {
+            clearTimeout(force);
+            setTimeout(doPrint, 150);
+        };
     }
 
     // ==================== 审批操作 ====================

@@ -3,7 +3,12 @@ from .models import (
     AttendanceRecord, ApprovalRequest, ApprovalLog,
     ApprovalNode, ApprovalAssignee, WorkNotification,
     ApprovalCarbonCopy, ApprovalDeptConfig,
-    ApprovalType,
+    ApprovalType, SubsidyApplication,
+    SubsidyPayment, SubsidyConfig,
+    SubsidyWithdrawal, SubsidyWallet,
+    SubsidyInvoiceVerifyRecord,
+    DailyDigestConfig,
+
 )
 
 
@@ -78,3 +83,54 @@ class ApprovalTypeAdmin(admin.ModelAdmin):
     list_filter = ['enabled', 'is_builtin']
     search_fields = ['code', 'name', 'tenant__name']
     list_per_page = 20
+
+
+@admin.register(SubsidyApplication)
+class SubsidyApplicationAdmin(admin.ModelAdmin):
+    list_display = ['id', 'applicant', 'tenant', 'invoice_type', 'tax_rate', 'invoice_number', 'invoice_original_name', 'buyer_name', 'seller_name', 'invoice_date', 'invoice_amount', 'verified_at', 'verified_by', 'updated_at', 'created_at']
+    list_filter = ['status', 'invoice_type', 'tax_rate']
+    search_fields = ['application_no', 'invoice_number', 'buyer_name', 'seller_name', 'invoice_code', 'invoice_original_name', 'applicant__username', 'applicant__real_name', 'tenant__name']
+    list_per_page = 20
+
+
+@admin.register(SubsidyPayment)
+class SubsidyPaymentAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user', 'tenant', 'amount', 'paid_at']
+    search_fields = ['user__username', 'user__real_name', 'tenant__name', 'note']
+    list_per_page = 20
+
+@admin.register(SubsidyConfig)
+class SubsidyConfigAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'sub_tenant', 'department', 'enabled', 'special_rate', 'ordinary_rate', 'updated_at', 'created_at']
+    list_filter = ['enabled', ]
+    search_fields = ['verifiers__username', 'verifiers__real_name', 'tenant__name']
+    list_per_page = 20
+
+@admin.register(SubsidyWithdrawal)
+class SubsidyWithdrawalAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user', 'tenant', 'amount', 'status', 'paid_at', 'requested_at']
+    list_filter = ['status', ]
+    search_fields = ['user__username', 'user__real_name', 'tenant__name', 'note']
+    list_per_page = 20
+
+@admin.register(SubsidyWallet)
+class SubsidyWalletAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user', 'tenant', 'balance', 'total_in', 'total_out', 'updated_at', 'created_at']
+    search_fields = ['user__username', 'user__real_name', 'tenant__name']
+    list_per_page = 20
+
+@admin.register(SubsidyInvoiceVerifyRecord)
+class SubsidyInvoiceVerifyRecordAdmin(admin.ModelAdmin):
+    list_display = ['id', 'invoice_md5', 'result', 'message', 'verified_by', 'verified_at']
+    search_fields = ['id', 'invoice_md5', 'result', 'message', 'verified_by__username', 'verified_by__real_name']
+    list_filter = ['result']
+    list_per_page = 20
+
+@admin.register(DailyDigestConfig)
+class DailyDigestConfigAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'enabled', 'auto_send', 'send_time', 'last_sent_date', 'updated_at']
+    search_fields = ['id', 'tenant__name']
+    list_filter = ['enabled', 'auto_send']
+    list_per_page = 20
+
+

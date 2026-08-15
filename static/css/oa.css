@@ -224,7 +224,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     gap: 16px;
 }
 .config-sidebar {
-    flex: 0 0 180px;
+    flex: 0 0 240px;
     border-right: 1px solid var(--border-color, #dcdfe6);
     padding-right: 12px;
 }
@@ -940,6 +940,49 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     background: #2d2d2d;
 }
 
+/* ==================== 深色模式：OA 卡片/配置面板等亮色元素暗化 ==================== */
+[data-theme="dark"] .oa-card {
+  background: #1e1e1e !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+}
+[data-theme="dark"] .config-sidebar,
+[data-theme="dark"] .config-main {
+  background: #1e1e1e !important;
+}
+[data-theme="dark"] .config-type-card {
+  background: #2d2d2d;
+  border-color: #444;
+  color: var(--text-primary, #e0e0e0);
+}
+[data-theme="dark"] .config-type-card:hover {
+  background: #333;
+}
+[data-theme="dark"] .config-type-card.active {
+  background: #1f3a5f;
+  border-color: var(--primary-color, #409eff);
+}
+[data-theme="dark"] .config-list-item {
+  color: var(--text-primary, #e0e0e0);
+}
+[data-theme="dark"] .config-list-item:hover {
+  background: #333;
+}
+[data-theme="dark"] .tm-field-row {
+  background: #252525 !important;
+  border-color: #444 !important;
+}
+[data-theme="dark"] .subsidy-detail-invoice {
+  background: #252525 !important;
+  border-color: #333 !important;
+}
+[data-theme="dark"] .dyn-struct-row {
+  background: #252525 !important;
+  border-color: #444 !important;
+}
+[data-theme="dark"] .modal-body {
+  color: var(--text-primary, #e0e0e0);
+}
+
 /* ==================== 提示对话框 ==================== */
 .confirm-dialog {
     position: fixed;
@@ -1650,4 +1693,200 @@ input[type="date"].date-styled::-webkit-calendar-picker-indicator:hover {
   font-size: 11px;
   color: #909399;
   flex-shrink: 0;
+}
+
+/* 审批类型启用/禁用开关 */
+.oa-switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.oa-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.oa-switch-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: #dcdfe6;
+  border-radius: 22px;
+  transition: background 0.2s;
+}
+.oa-switch-slider::before {
+  content: "";
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 2px;
+  top: 2px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.oa-switch input:checked + .oa-switch-slider {
+  background: #409eff;
+}
+.oa-switch input:checked + .oa-switch-slider::before {
+  transform: translateX(18px);
+}
+.oa-switch.disabled input {
+  cursor: not-allowed;
+}
+.oa-switch.disabled .oa-switch-slider {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* ============ 费用类型自定义下拉（已选仅名称，下拉项带小字提示） ============ */
+.exp-select-field,
+.exp-select-wrap {
+  position: relative;
+  width: 100%;
+}
+.exp-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color, #dcdfe6);
+  border-radius: 6px;
+  font-size: 14px;
+  background: #fff;
+  color: var(--text-primary, #303133);
+  cursor: pointer;
+  min-height: 38px;
+  transition: border-color 0.2s;
+  user-select: none;
+}
+.exp-select:hover {
+  border-color: #c0c4cc;
+}
+.exp-select-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.exp-select-arrow {
+  font-size: 12px;
+  color: #909399;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+.exp-select-drop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 300;
+  background: #fff;
+  border: 1px solid #dcdfe6;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.exp-select-option {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary, #303133);
+}
+.exp-select-option:hover {
+  background: #f5f7fa;
+}
+.exp-select-option.active {
+  background: #ecf5ff;
+  color: #409eff;
+}
+.exp-opt-hint {
+  font-size: 12px;
+  color: #909399;
+  margin-left: 4px;
+}
+
+/* ============ 自定义审批类型：结构化明细 struct_table ============ */
+.dyn-struct-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dyn-struct-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  padding: 12px;
+  border: 1px solid var(--border-color, #e4e7ed);
+  border-radius: 8px;
+  background: #fafbfc;
+}
+.dyn-struct-fields {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.dyn-struct-field {
+  flex: 1 1 150px;
+  min-width: 0;
+}
+.dyn-struct-field label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-light, #909399);
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dyn-struct-field .form-input {
+  width: 100%;
+  min-width: 0;
+}
+.dyn-struct-del {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: #fef0f0;
+  color: #f56c6c;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+.dyn-struct-del:hover {
+  background: #fde2e2;
+  transform: scale(1.05);
+}
+.dyn-struct-add {
+  margin-top: 6px;
+}
+@media (max-width: 768px) {
+  .dyn-struct-row {
+    align-items: flex-start;
+    padding: 10px;
+  }
+  .dyn-struct-field {
+    flex: 1 1 100%;
+  }
+  .dyn-struct-del {
+    margin-top: 24px;
+  }
 }

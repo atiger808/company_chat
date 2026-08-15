@@ -648,9 +648,13 @@ class ChatClient {
                     this.showInfo('通知权限已被拒绝：请在浏览器地址栏点锁图标 → 网站设置 → 通知 → 允许，才能收到推送。');
                 }, 1500);
             } else if (!(window.PushNotifier && window.PushNotifier.supported())) {
-                setTimeout(() => {
-                    this.showInfo('当前浏览器不支持消息推送，请用 Chrome / Edge / 夸克 打开后安装。');
-                }, 1500);
+                // 只提示一次，之后不再提示（避免每次进入/刷新都弹）
+                if (!localStorage.getItem('push_unsupported_notified')) {
+                    localStorage.setItem('push_unsupported_notified', '1');
+                    setTimeout(() => {
+                        this.showInfo('当前浏览器不支持消息推送，请用 Chrome / Edge / 夸克 打开后安装。');
+                    }, 1500);
+                }
             }
 
             // 🔧 关键修复：加载系统配置（使用 FrontendConfigManager）
@@ -764,6 +768,15 @@ class ChatClient {
                 approvalBtn.addEventListener('click', (e) => {
                     e.preventDefault();
                     window.location.href = '/oa/approval/';
+                });
+            }
+
+            const subsidyBtn = document.getElementById('subsidyBtn');
+            if (subsidyBtn) {
+                subsidyBtn.style.display = 'flex';
+                subsidyBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    window.location.href = '/oa/subsidy/';
                 });
             }
 
@@ -2131,11 +2144,10 @@ class ChatClient {
         // 已安装为 App（standalone）则不显示安装引导
         const isStandalone = window.navigator.standalone === true ||
             (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
-        // 已授权通知：无需再引导（即使之前关闭过横幅也不打扰）
+        // 已授权通知：无需再引导
         if ('Notification' in window && Notification.permission === 'granted') return;
-        // 未授权通知时：即使之前关闭过横幅也要重新出现（否则用户永远无法重新授权/订阅，收不到推送）
-        // 已关闭过：改为只在用户明确拒绝过（denied）时不再打扰
-        if (localStorage.getItem('pwaGuideShown') && 'Notification' in window && Notification.permission === 'denied') return;
+        // 已关闭过 / 点击过安装 / 授权过摄像头麦克风：刷新后不再显示，避免打扰用户
+        if (localStorage.getItem('pwaGuideShown')) return;
         // 桌面大屏：安装入口在右上角菜单，不弹横幅
         if (window.innerWidth > 768) return;
 
@@ -2162,7 +2174,7 @@ class ChatClient {
             } else {
                 // 统一入口：有 beforeinstallprompt 走原生安装弹窗；无则点按后经 _promptInstall() 给平台化引导
                 installBtn.style.display = 'inline-block';
-                installBtn.onclick = () => this._promptInstall();
+                installBtn.onclick = () => { this._promptInstall(); this._persistPwaGuideDismissed(); };
                 if (this.deferredInstallPrompt) {
                     if (stepsEl) stepsEl.innerHTML = '<span>① 点击下方「安装应用」</span><span>② 再开启通知</span>';
                 } else if (browser === 'ios-safari') {
@@ -2260,6 +2272,13 @@ class ChatClient {
         }
         const permBtn = document.getElementById('pwaGuidePerms');
         if (permBtn) permBtn.style.display = 'none';
+        // 授权完成后关闭横幅并记忆，刷新后不再显示
+        this._persistPwaGuideDismissed();
+    }
+
+    // 🔧 关闭引导横幅并持久化，刷新后不再显示
+    _persistPwaGuideDismissed() {
+        localStorage.setItem('pwaGuideShown', '1');
         const banner = document.getElementById('pwaGuideBanner');
         if (banner) banner.classList.remove('show');
     }
@@ -2810,14 +2829,14 @@ class ChatClient {
             this.showNotification('📋 您有一个新任务', {
                 body: task.title,
                 icon: task.creator_info?.avatar_url || '/static/images/default-avatar.png',
-                data: {url: '/tasks/'}
+                data: {url: '/tasks/?task_id=' + task.id}
             });
         }
 
         // 2. 在聊天室渲染“任务卡片” (如果关联了当前聊天室)
         if (task.related_chat_room_id == this.currentRoomId && event_type === 'assigned') {
             const cardHtml = `
-            <div class="message-task-card" style="border: 1px solid #dcdfe6; border-radius: 8px; padding: 12px; margin-top: 8px; background: #f5f7fa; cursor: pointer; max-width: 300px;" onclick="window.open('/tasks/', '_blank')">
+            <div class="message-task-card" style="border: 1px solid #dcdfe6; border-radius: 8px; padding: 12px; margin-top: 8px; background: #f5f7fa; cursor: pointer; max-width: 300px;" onclick="window.open('/tasks/?task_id=${task.id}', '_blank')">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <span style="font-weight: bold; color: #303133;"><i class="fas fa-tasks"></i> 任务卡片</span>
                     <span style="font-size: 12px; padding: 2px 8px; border-radius: 4px; color: white; background: #409EFF;">待处理</span>
@@ -2924,7 +2943,7 @@ class ChatClient {
                     
                     <!-- 卡片底部 -->
                     <div style="padding: 8px 16px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;"
-                        onclick="window.open('/tasks/', '_blank')">
+                        onclick="window.open('/tasks/?task_id=${task.id}', '_blank')">
                         点击查看详情 <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
                     </div>
                 </div>
@@ -2988,7 +3007,7 @@ class ChatClient {
 
                 <!-- 卡片底部 -->
                 <div style="padding: 8px 16px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;"
-                    onclick="window.open('/tasks/', '_blank')">
+                    onclick="window.open('/tasks/?task_id=${task.id}', '_blank')">
                     点击查看详情 <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
                 </div>
             </div>
@@ -6020,25 +6039,14 @@ class ChatClient {
             var data = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
             var rows = data.results || [];
 
+            // 与顶部工作通知面板保持一致：优先用 notifications.js 的全局图标/配色，缺失时本地兜底
             var typeIcon2 = function (t) {
-                var map = {
-                    'approval': 'fa-check-double',
-                    'attendance': 'fa-clock',
-                    'task': 'fa-tasks',
-                    'collab': 'fa-users',
-                    'system': 'fa-bell'
-                };
-                return map[t] || 'fa-bell';
+                if (typeof typeIcon === 'function') return typeIcon(t);
+                return 'fas ' + ({'approval': 'fa-check-double', 'attendance': 'fa-clock', 'task': 'fa-tasks', 'collab': 'fa-users', 'subsidy': 'fa-hand-holding-usd', 'subsidy_apply': 'fa-file-invoice', 'subsidy_result': 'fa-clipboard-check', 'subsidy_withdraw': 'fa-money-check-alt', 'subsidy_withdraw_result': 'fa-wallet', 'daily': 'fa-calendar-day', 'hr': 'fa-user-tie', 'system': 'fa-bell'}[t] || 'fa-bell');
             };
             var typeColor2 = function (t) {
-                var map = {
-                    'approval': '#409eff',
-                    'attendance': '#67c23a',
-                    'task': '#e6a23c',
-                    'collab': '#9b59b6',
-                    'system': '#909399'
-                };
-                return map[t] || '#909399';
+                if (typeof typeColor === 'function') return typeColor(t);
+                return {'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'subsidy': '#16a085', 'subsidy_apply': '#16a085', 'subsidy_result': '#67c23a', 'subsidy_withdraw': '#e6a23c', 'subsidy_withdraw_result': '#16a085', 'daily': '#409eff', 'hr': '#6c5ce7', 'system': '#909399'}[t] || '#909399';
             };
             var formatTime2 = function (iso) {
                 if (!iso) return '';
@@ -6073,7 +6081,7 @@ class ChatClient {
                 var u = (n.related_url || '');
                 var detailBtn = u ? '<span onclick="event.stopPropagation();chatClient._clickNotification(' + n.id + ',\'' + u + '\',' + (n.is_read ? 'true' : 'false') + ')" style="display:inline-block;margin-top:6px;padding:2px 10px;font-size:11px;color:var(--primary-color,#409eff);background:#ecf5ff;border-radius:4px;cursor:pointer;">查看详情 <i class="fas fa-arrow-right" style="font-size:10px;"></i></span>' : '';
                 return '<div class="notif-chat-item ' + cls + '" onclick="chatClient._markNotifRead(' + n.id + ')" style="position:relative;display:flex;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border-color,#f0f0f0);cursor:pointer;transition:background 0.15s;">'
-                    + '<div style="width:40px;height:40px;border-radius:50%;background:' + color + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff;font-size:16px;"><i class="fas ' + icon + '"></i></div>'
+                    + '<div style="width:40px;height:40px;border-radius:50%;background:' + color + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff;font-size:16px;"><i class="' + icon + '"></i></div>'
                     + '<div style="flex:1;min-width:0;">'
                     + '<div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:14px;font-weight:' + (n.is_read ? '400' : '600') + ';color:var(--text-primary,#303133);">' + escapeHtml2(n.title) + '</span>'
                     + '<span style="font-size:11px;color:var(--text-light,#909399);flex-shrink:0;margin-left:8px;">' + formatTime2(n.created_at) + '</span></div>'

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """OA 审批类型解析与表单数据校验（供 views / serializers 复用，避免循环导入）"""
-from .models import ApprovalType
+from .models import ApprovalType, ApprovalRequest
 
 # 内置审批类型（ensure_builtin_types 播种到 ApprovalType）
 BUILTIN_TYPES = [
@@ -92,6 +92,13 @@ def validate_form_data(schema, form_data):
             continue
         if value in (None, ''):
             continue
+        if ftype == 'expense_type':
+            valid_keys = [c[0] for c in ApprovalRequest.EXPENSE_TYPE_CHOICES]
+            if str(value) not in valid_keys:
+                errors[key] = f'{f.get("label") or key}的费用类型不在可选范围内'
+        elif ftype == 'struct_table':
+            if not isinstance(value, list):
+                errors[key] = f'{f.get("label") or key}明细格式错误'
         if ftype in ('select', 'radio', 'checkbox'):
             options = [str(o.get('value')) if isinstance(o, dict) else str(o) for o in (f.get('options') or [])]
             vals = value if isinstance(value, list) else [value]

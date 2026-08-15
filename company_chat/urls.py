@@ -63,6 +63,10 @@ urlpatterns = [
     # OA办公页面路由
     path('oa/attendance/', TemplateView.as_view(template_name='oa/attendance.html'), name='oa-attendance'),
     path('oa/approval/', TemplateView.as_view(template_name='oa/approval.html'), name='oa-approval'),
+    path('oa/subsidy/', TemplateView.as_view(template_name='oa/subsidy.html'), name='oa-subsidy'),
+    path('oa/subsidy-verify/', TemplateView.as_view(template_name='oa/subsidy-verify.html'), name='oa-subsidy-verify'),
+    path('oa/subsidy-pay/', TemplateView.as_view(template_name='oa/subsidy-pay.html'), name='oa-subsidy-pay'),
+    path('oa/work-calendar/', TemplateView.as_view(template_name='oa/work-calendar.html'), name='oa-work-calendar'),
 
     # 组织架构页面路由
     path('org/', TemplateView.as_view(template_name='org/org.html'), name='org'),

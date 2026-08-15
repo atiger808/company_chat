@@ -5979,7 +5979,7 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                 .filter(file_tenant_q) \
                 .values_list('file_id', flat=True)
 
-            logger.info(f'collab_file_ids (shared with me): {list(collab_file_ids)}')
+            # logger.info(f'collab_file_ids (shared with me): {len(collab_file_ids)}')
 
             # 🔧 关键修复：构建联合查询条件 (Q 对象)
             # 条件 A: 当前用户是所有者

@@ -558,6 +558,7 @@ class UserDetailSerializer(serializers.ModelSerializer):
             'position', 'avatar', 'avatar_url', 'gender', 'bio', 'user_type',
             'is_online', 'last_seen', 'date_joined', 'last_login', 'online_status', 'is_active',
             'tenant_info', 'org_departments', 'supervisor',
+            'payee_name', 'bank_card', 'alipay_account', 'wechat_account', 'alipay_qr', 'wechat_qr',
         ]
         read_only_fields = ['id', 'date_joined', 'last_login', 'user_type', 'username']  # 添加 username 为只读
 

@@ -130,7 +130,7 @@ class TaskViewSet(viewsets.ModelViewSet):
                 notification_type='task',
                 title=title,
                 content=content,
-                related_url='/tasks/',
+                related_url=f'/tasks/?task_id={task.id}',
                 extra_data={'task_id': task.id, 'event_type': event_type},
             )
         except CustomUser.DoesNotExist:

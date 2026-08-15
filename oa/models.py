@@ -1,3 +1,5 @@
+from datetime import time
+from decimal import Decimal
 from django.db import models
 from django.conf import settings
 from accounts.models import Department
@@ -79,6 +81,8 @@ class ApprovalType(models.Model):
         ('attachment', '附件'),
         ('department', '部门选择'),
         ('user', '成员选择'),
+        ('expense_type', '费用类型选择'),
+        ('struct_table', '结构化数据明细'),
     ]
 
     code = models.CharField(max_length=40, verbose_name='类型编码')
@@ -134,12 +138,15 @@ class ApprovalRequest(models.Model):
     ]
     EXPENSE_TYPE_CHOICES = [
         ('travel', '差旅费'),
-        ('office', '办公用品'),
-        ('meals', '餐饮费'),
+        ('office', '办公费'),
+        ('meals', '业务招待费'),
         ('transport', '交通费'),
         ('communication', '通讯费'),
         ('equipment', '设备采购'),
         ('training', '培训费'),
+        ('welfare', '员工福利费'),
+        ('professional_service', '专业服务费'),
+        ('advertising', '广告宣传费'),
         ('other_expense', '其他'),
     ]
 
@@ -207,6 +214,15 @@ class ApprovalRequest(models.Model):
         default='parallel',
         verbose_name='审批模式'
     )
+    # 关联审批（自关联，用于串联采购→报销等审批链路）
+    related_approvals = models.ManyToManyField(
+        'self', blank=True, symmetrical=False,
+        related_name='linked_by', verbose_name='关联审批')
+    # 内置类型结构化数据
+    purchase_items = models.JSONField(default=list, blank=True, verbose_name='采购物项')
+    expense_items = models.JSONField(default=list, blank=True, verbose_name='报销项目')
+    leave_type = models.CharField(max_length=30, blank=True, default='', verbose_name='请假类型')
+    trip_data = models.JSONField(default=dict, blank=True, verbose_name='出差信息')
     current_node_order = models.IntegerField(default=0, verbose_name='当前节点序号')
     approver = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -280,6 +296,13 @@ class WorkNotification(models.Model):
         ('attendance', '考勤通知'),
         ('task', '任务通知'),
         ('collab', '协作通知'),
+        ('subsidy', '补贴通知'),
+        ('subsidy_apply', '补贴申领待核验'),
+        ('subsidy_result', '补贴申领核验结果'),
+        ('subsidy_withdraw', '补贴提现待支付'),
+        ('subsidy_withdraw_result', '补贴提现结果'),
+        ('daily', '每日通知'),
+        ('hr', '人事通知'),
         ('system', '系统通知'),
     ]
 
@@ -294,7 +317,7 @@ class WorkNotification(models.Model):
                                 null=True, blank=True, related_name='notifications',
                                 verbose_name='所属企业')
     notification_type = models.CharField(
-        max_length=20,
+        max_length=40,
         choices=NOTIFICATION_TYPES,
         verbose_name='通知类型',
     )
@@ -585,3 +608,251 @@ class AttendanceConfig(models.Model):
         if self.department:
             parts.append(f'部门:{self.department.name}')
         return ' - '.join(parts)
+
+
+class SubsidyApplication(models.Model):
+    """员工消费普惠补贴申领单"""
+    INVOICE_TYPE_CHOICES = [
+        ('special', '增值税专用发票'),
+        ('ordinary', '增值税普通发票'),
+    ]
+    STATUS_CHOICES = [
+        ('pending', '待核验'),
+        ('approved', '已通过'),
+        ('rejected', '已驳回'),
+    ]
+
+    applicant = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='subsidy_applications', verbose_name='申请人')
+    tenant = models.ForeignKey(
+        'accounts.Tenant', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='subsidy_applications', verbose_name='所属企业')
+    application_no = models.CharField(max_length=40, unique=True, verbose_name='申领编号')
+    invoice_number = models.CharField(max_length=64, unique=True, null=True, blank=True, verbose_name='发票号码')
+    invoice_type = models.CharField(max_length=20, choices=INVOICE_TYPE_CHOICES, verbose_name='发票类型')
+    invoice_code = models.CharField(max_length=100, blank=True, default='', verbose_name='票据代码')
+    invoice_amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='开票金额(含税)')
+    invoice_date = models.DateField(null=True, blank=True, verbose_name='开票日期')
+    tax_rate = models.CharField(max_length=20, blank=True, default='', verbose_name='税率')
+    invoice_issuer = models.CharField(max_length=200, blank=True, default='', verbose_name='开票主体')
+    invoice_file = models.CharField(max_length=500, blank=True, default='', verbose_name='票据文件')
+    invoice_original_name = models.CharField(max_length=300, blank=True, default='', verbose_name='票据文件名')
+    invoice_image = models.CharField(max_length=500, blank=True, default='', verbose_name='票据图片(PDF转PNG)')
+    buyer_name = models.CharField(max_length=200, blank=True, default='', verbose_name='购买方名称')
+    buyer_tax_no = models.CharField(max_length=40, blank=True, default='', verbose_name='购买方纳税人识别号')
+    seller_name = models.CharField(max_length=200, blank=True, default='', verbose_name='销售方名称')
+    seller_tax_no = models.CharField(max_length=40, blank=True, default='', verbose_name='销售方纳税人识别号')
+    drawer = models.CharField(max_length=50, blank=True, default='', verbose_name='开票人')
+    payment_voucher = models.CharField(max_length=500, blank=True, default='', verbose_name='支付凭证(付款截图)')
+    payment_voucher_name = models.CharField(max_length=300, blank=True, default='', verbose_name='支付凭证文件名')
+    payment_proof = models.CharField(max_length=500, blank=True, default='', verbose_name='支付截图(申请人)')
+    payment_proof_name = models.CharField(max_length=300, blank=True, default='', verbose_name='支付截图文件名')
+    subsidy_rate = models.DecimalField(max_digits=5, decimal_places=4, verbose_name='补贴比例')
+    subsidy_amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='补贴金额')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True, verbose_name='核验状态')
+    reject_reason = models.TextField(blank=True, default='', verbose_name='驳回原因')
+    verified_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='verified_subsidy_applications', verbose_name='核验人')
+    verified_at = models.DateTimeField(null=True, blank=True, verbose_name='核验时间')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='申请时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        ordering = ['-updated_at']
+        verbose_name = '普惠补贴申领'
+        verbose_name_plural = '普惠补贴申领'
+
+    def __str__(self):
+        return f'{self.application_no} - {self.applicant}'
+
+
+class SubsidyPayment(models.Model):
+    """补贴发放记录（财务支付人员支付提现时生成，为实际资金支出流水）"""
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='subsidy_payments', verbose_name='员工')
+    tenant = models.ForeignKey(
+        'accounts.Tenant', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='subsidy_payments', verbose_name='所属企业')
+    application = models.ForeignKey(
+        SubsidyApplication, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='payments', verbose_name='对应申领')
+    withdrawal = models.OneToOneField(
+        'SubsidyWithdrawal', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='payment', verbose_name='对应提现')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='发放金额')
+    note = models.CharField(max_length=300, blank=True, default='', verbose_name='备注')
+    paid_at = models.DateTimeField(auto_now_add=True, verbose_name='发放时间')
+
+    class Meta:
+        ordering = ['-paid_at']
+        verbose_name = '补贴发放记录'
+        verbose_name_plural = '补贴发放记录'
+
+    def __str__(self):
+        return f'{self.user} - {self.amount}'
+
+
+class SubsidyWithdrawal(models.Model):
+    """提现申请（用户从钱包提现，待支付/已支付/已驳回）"""
+    STATUS_CHOICES = [
+        ('pending', '待支付'),
+        ('paid', '已支付'),
+        ('rejected', '已驳回'),
+    ]
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='subsidy_withdrawals', verbose_name='提现人')
+    tenant = models.ForeignKey(
+        'accounts.Tenant', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='subsidy_withdrawals', verbose_name='所属企业')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='提现金额')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True, verbose_name='状态')
+    reject_reason = models.TextField(blank=True, default='', verbose_name='驳回原因')
+    payment_voucher = models.CharField(max_length=500, blank=True, default='', verbose_name='支付凭证(付款截图)')
+    payment_voucher_name = models.CharField(max_length=300, blank=True, default='', verbose_name='支付凭证文件名')
+    paid_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='paid_subsidy_withdrawals', verbose_name='支付人员')
+    paid_at = models.DateTimeField(null=True, blank=True, verbose_name='支付时间')
+    requested_at = models.DateTimeField(auto_now_add=True, verbose_name='申请时间')
+    note = models.CharField(max_length=300, blank=True, default='', verbose_name='备注')
+
+    class Meta:
+        ordering = ['-requested_at']
+        verbose_name = '补贴提现申请'
+        verbose_name_plural = '补贴提现申请'
+
+    def __str__(self):
+        return f'{self.user} - {self.amount} ({self.get_status_display()})'
+
+
+class SubsidyWallet(models.Model):
+    """用户钱包（每企业一个），核验通过入账、提现扣减/驳回返还"""
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='subsidy_wallets', verbose_name='用户')
+    tenant = models.ForeignKey(
+        'accounts.Tenant', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='subsidy_wallets', verbose_name='所属企业')
+    balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'), verbose_name='可用余额')
+    total_in = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'), verbose_name='累计入账')
+    total_out = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'), verbose_name='累计提现')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        unique_together = ('user', 'tenant')
+        verbose_name = '用户钱包'
+        verbose_name_plural = '用户钱包'
+
+    def __str__(self):
+        return f'{self.user} - {self.balance}'
+
+
+class SubsidyInvoiceVerifyRecord(models.Model):
+    """发票验真记录（按发票文件 MD5 去重，防止重复验真）"""
+    RESULT_CHOICES = [
+        ('pass', '验真通过'),
+        ('fail', '验真失败'),
+        ('error', '验真异常'),
+    ]
+    application = models.ForeignKey(
+        SubsidyApplication, on_delete=models.CASCADE,
+        related_name='invoice_verify_records', verbose_name='对应申领')
+    invoice_md5 = models.CharField(max_length=64, db_index=True, verbose_name='发票文件MD5')
+    result = models.CharField(max_length=20, choices=RESULT_CHOICES, verbose_name='验真结果')
+    message = models.TextField(blank=True, default='', verbose_name='验真信息')
+    verify_data = models.JSONField(default=dict, blank=True, verbose_name='验真返回数据')
+    verified_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='subsidy_invoice_verify_records', verbose_name='验真操作人')
+    verified_at = models.DateTimeField(auto_now_add=True, verbose_name='验真时间')
+
+    class Meta:
+        ordering = ['-verified_at']
+        verbose_name = '发票验真记录'
+        verbose_name_plural = '发票验真记录'
+
+    def __str__(self):
+        return f'{self.invoice_md5[:10]} - {self.get_result_display()}'
+
+
+class SubsidyConfig(models.Model):
+    """普惠补贴配置（多层级：集团默认 → 子公司 → 部门）"""
+    tenant = models.ForeignKey(
+        'accounts.Tenant', on_delete=models.CASCADE,
+        related_name='subsidy_configs', verbose_name='所属企业')
+    sub_tenant = models.ForeignKey(
+        'accounts.Tenant', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='sub_subsidy_configs', verbose_name='子公司')
+    department = models.ForeignKey(
+        'accounts.Department', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='subsidy_configs', verbose_name='部门')
+    enabled = models.BooleanField(default=True, verbose_name='是否开启普惠补贴')
+    special_rate = models.DecimalField(max_digits=6, decimal_places=5, default=Decimal('0.0100'), verbose_name='专用发票补贴比例')
+    ordinary_rate = models.DecimalField(max_digits=6, decimal_places=5, default=Decimal('0.0050'), verbose_name='普通发票补贴比例')
+    max_invoices = models.PositiveIntegerField(default=10, verbose_name='一次上传最大票据数量')
+    show_invoice_header = models.BooleanField(default=False, verbose_name='是否显示发票抬头信息')
+    tax_rate_threshold = models.DecimalField(max_digits=6, decimal_places=5, default=Decimal('0.0600'), verbose_name='税率阈值(识别税率≥此阈值判定为专用发票)')
+    verifiers = models.ManyToManyField(
+        settings.AUTH_USER_MODEL, blank=True,
+        related_name='subsidy_verifier_configs', verbose_name='财务核验人员')
+    min_withdraw_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('0.00'),
+        verbose_name='提现最小额度')
+    payment_staff = models.ManyToManyField(
+        settings.AUTH_USER_MODEL, blank=True,
+        related_name='subsidy_payment_configs', verbose_name='财务支付人员')
+    default_ocr_version = models.CharField(
+        max_length=20, default='baidu_vat', verbose_name='默认OCR识别版本')
+    invoice_verify_enabled = models.BooleanField(default=False, verbose_name='开启发票验真')
+    # 发票抬头配置（供员工开票参考）
+    invoice_header_name = models.CharField(max_length=200, blank=True, default='', verbose_name='发票抬头名称')
+    invoice_header_tax_no = models.CharField(max_length=50, blank=True, default='', verbose_name='发票抬头税号')
+    invoice_header_address = models.CharField(max_length=300, blank=True, default='', verbose_name='发票抬头地址')
+    invoice_header_phone = models.CharField(max_length=50, blank=True, default='', verbose_name='发票抬头电话')
+    invoice_header_bank = models.CharField(max_length=100, blank=True, default='', verbose_name='发票抬头开户行')
+    invoice_header_bank_account = models.CharField(max_length=100, blank=True, default='', verbose_name='发票抬头开户账号')
+    invoice_header_bank_name = models.CharField(max_length=100, blank=True, default='', verbose_name='发票抬头开户银行')
+    company_name = models.CharField(max_length=200, blank=True, default='', verbose_name='企业主体名称')
+    company_tax_no = models.CharField(max_length=50, blank=True, default='', verbose_name='纳税人识别号')
+    # 发票抬头各字段显示开关（JSON：key→bool），配合 show_invoice_header 总开关使用
+    invoice_header_show = models.JSONField(default=dict, blank=True, verbose_name='发票抬头字段显示开关')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        unique_together = ('tenant', 'sub_tenant', 'department')
+        ordering = ['-id', '-updated_at']
+        verbose_name = '普惠补贴配置'
+        verbose_name_plural = '普惠补贴配置'
+
+    def __str__(self):
+        parts = [self.tenant.short_name or self.tenant.name]
+        if self.sub_tenant:
+            parts.append(f'子公司:{self.sub_tenant.short_name or self.sub_tenant.name}')
+        if self.department:
+            parts.append(f'部门:{self.department.name}')
+        return ' - '.join(parts)
+
+
+class DailyDigestConfig(models.Model):
+    """每日工作汇总通知配置（每个企业一条）"""
+    tenant = models.OneToOneField(
+        'accounts.Tenant', on_delete=models.CASCADE,
+        related_name='daily_digest_config', verbose_name='所属企业')
+    enabled = models.BooleanField(default=False, verbose_name='是否开启每日通知')
+    send_time = models.TimeField(default=time(9, 0), verbose_name='每日发送时间')
+    auto_send = models.BooleanField(default=False, verbose_name='自动发送（否=手动发送）')
+    last_sent_date = models.DateField(null=True, blank=True, verbose_name='最后发送日期')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '每日通知配置'
+        verbose_name_plural = '每日通知配置'
+
+    def __str__(self):
+        return f'{self.tenant} 每日通知配置'

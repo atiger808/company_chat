@@ -289,7 +289,7 @@ class AdminConsole {
      */
     async switchTab(tabName) {
         // 🔧 权限检查：普通管理员只能访问用户管理、操作日志和OA
-        if (!this.isSuperAdmin && tabName !== 'users' && tabName !== 'operation-logs' && tabName !== 'oa-attendance' && tabName !== 'oa-approval' && tabName !== 'chat' && tabName !== 'org') {
+        if (!this.isSuperAdmin && tabName !== 'users' && tabName !== 'operation-logs' && tabName !== 'oa-attendance' && tabName !== 'oa-approval' && tabName !== 'oa-subsidy' && tabName !== 'chat' && tabName !== 'org') {
             this.showError('权限不足', '您无权访问此功能');
             // 强制切回用户管理
             tabName = 'users';
@@ -321,6 +321,7 @@ class AdminConsole {
             'operation-logs': '操作日志',
             'oa-attendance': '考勤打卡',
             'oa-approval': 'OA审批',
+            'oa-subsidy': '普惠补贴',
             'org': '组织架构',
             'chat': '聊天',
         };
@@ -364,6 +365,7 @@ class AdminConsole {
                 break;
             case 'oa-attendance':
             case 'oa-approval':
+            case 'oa-subsidy':
                 // iframe 自动加载，无需额外操作
                 break;
         }
@@ -377,13 +379,13 @@ class AdminConsole {
      */
     setupPermissionUI() {
         // 🔧 隐藏/显示超级管理员专属菜单项（OA+组织架构+聊天对所有管理员开放）
-        const superAdminItems = document.querySelectorAll('.nav-item[data-tab]:not([data-tab="users"]):not([data-tab="org"]):not([data-tab="chat"]):not([data-tab="oa-attendance"]):not([data-tab="oa-approval"])');
+        const superAdminItems = document.querySelectorAll('.nav-item[data-tab]:not([data-tab="users"]):not([data-tab="org"]):not([data-tab="chat"]):not([data-tab="oa-attendance"]):not([data-tab="oa-approval"]):not([data-tab="oa-subsidy"])');
         superAdminItems.forEach(item => {
             item.style.display = this.isSuperAdmin ? '' : 'none';
         });
 
         // 🔧 隐藏/显示超级管理员专属内容区域（操作日志+OA+聊天+组织架构对所有管理员可见）
-        const superAdminTabs = document.querySelectorAll('.admin-tab:not(#usersTab):not(#operation-logsTab):not(#oa-attendanceTab):not(#oa-approvalTab):not(#chatTab):not(#orgTab)');
+        const superAdminTabs = document.querySelectorAll('.admin-tab:not(#usersTab):not(#operation-logsTab):not(#oa-attendanceTab):not(#oa-approvalTab):not(#oa-subsidyTab):not(#chatTab):not(#orgTab)');
         superAdminTabs.forEach(tab => {
             tab.style.display = this.isSuperAdmin ? '' : 'none';
         });
@@ -415,6 +417,10 @@ class AdminConsole {
         if (attTab) attTab.style.display = '';
         const appTab = document.getElementById('oa-approvalTab');
         if (appTab) appTab.style.display = '';
+        const subNav = document.querySelector('[data-tab="oa-subsidy"]');
+        if (subNav) subNav.style.display = '';
+        const subTab = document.getElementById('oa-subsidyTab');
+        if (subTab) subTab.style.display = '';
 
         // 🔧 如果普通管理员，确保只显示用户管理
         if (!this.isSuperAdmin) {
@@ -2180,6 +2186,7 @@ class AdminConsole {
                         break;
                     case 'oa-attendance':
                     case 'oa-approval':
+                    case 'oa-subsidy':
                         // iframe 自动加载，无需额外操作
                         break;
 

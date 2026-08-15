@@ -185,7 +185,7 @@ class AttendanceApp {
             if (tenantId) url += '&tenant_id=' + tenantId;
             if (deptId) url += '&org_dept_id=' + deptId;
             const data = await this.apiGet(url);
-            console.log(data);
+            // console.log(data);
             this._renderRecords(data, tbody);
             this._renderPagination(data, pagination);
         } catch (e) {
@@ -606,12 +606,18 @@ class AttendanceApp {
         var fieldHtml = fields.map(function(f, i) {
             return '<label style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--bg-secondary,#f5f7fa);border-radius:6px;cursor:pointer;"><input type="checkbox" class="ef-field-cb" data-key="' + f.key + '" checked> ' + f.label + '</label>';
         }).join('');
+        var isPrint = mode === 'print';
+        var footerBtns = '<button class="ef-cancel" style="padding:8px 20px;border:1px solid #dcdfe6;border-radius:6px;background:#fff;cursor:pointer;font-size:14px;">取消</button>';
+        if (isPrint) {
+            footerBtns += '<button class="ef-confirm" style="padding:8px 20px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;"><i class="fas fa-print"></i> 打印</button>';
+        } else {
+            footerBtns += '<button class="ef-cloud" style="padding:8px 20px;background:#16a085;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;"><i class="fas fa-cloud-upload-alt"></i> 保存到网盘</button>'
+                + '<button class="ef-confirm" style="padding:8px 20px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;"><i class="fas fa-download"></i> 导出到本地</button>';
+        }
         overlay.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:500px;width:90%;box-shadow:0 12px 48px rgba(0,0,0,0.18);">'
             + '<div style="padding:16px 20px;border-bottom:1px solid #ebeef5;"><h3 style="margin:0;font-size:16px;"><i class="fas fa-' + (mode==='print'?'print':'download') + '"></i> ' + (mode==='print'?'打印':'导出') + ' 考勤记录</h3></div>'
             + '<div style="padding:16px 20px;"><p style="margin:0 0 12px;font-size:14px;color:#606266;">选择表格字段：</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">' + fieldHtml + '</div></div>'
-            + '<div style="padding:12px 20px;border-top:1px solid #ebeef5;display:flex;gap:10px;justify-content:flex-end;">'
-            + '<button class="ef-cancel" style="padding:8px 20px;border:1px solid #dcdfe6;border-radius:6px;background:#fff;cursor:pointer;font-size:14px;">取消</button>'
-            + '<button class="ef-confirm" style="padding:8px 20px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;">' + (mode==='print'?'打印':'导出') + '</button></div></div>';
+            + '<div style="padding:12px 20px;border-top:1px solid #ebeef5;display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap;">' + footerBtns + '</div></div>';
         document.body.appendChild(overlay);
         overlay.querySelector('.ef-cancel').onclick = function() { overlay.remove(); };
         overlay.querySelector('.ef-confirm').onclick = function() {
@@ -619,8 +625,16 @@ class AttendanceApp {
             var selectedFields = Array.from(checked).map(function(cb) { return cb.dataset.key; });
             overlay.remove();
             if (!selectedFields.length) { self.showAlert('提示', '请至少选择一个字段'); return; }
-            if (mode === 'print') self._doPrintRecords(selectedFields);
-            else self._doExportRecords(selectedFields);
+            if (isPrint) self._doPrintRecords(selectedFields);
+            else self._doExportRecords(selectedFields, 'local');
+        };
+        var cloudBtn = overlay.querySelector('.ef-cloud');
+        if (cloudBtn) cloudBtn.onclick = function() {
+            var checked = overlay.querySelectorAll('.ef-field-cb:checked');
+            var selectedFields = Array.from(checked).map(function(cb) { return cb.dataset.key; });
+            overlay.remove();
+            if (!selectedFields.length) { self.showAlert('提示', '请至少选择一个字段'); return; }
+            self._doExportRecords(selectedFields, 'cloud');
         };
     }
 
@@ -684,12 +698,15 @@ class AttendanceApp {
             });
             html += '</tr>';
         });
-        html += '</tbody></table><div style="text-align:center;margin-top:20px;"><button onclick="window.print()" style="padding:8px 24px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;">打印</button></div></body></html>';
+        html += '</tbody></table><div style="text-align:center;margin-top:20px;">'
+            + '<button onclick="window.print()" style="padding:8px 24px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;">打印</button> '
+            + '<button onclick="window.close()" style="padding:8px 24px;background:#fff;color:#606266;border:1px solid #dcdfe6;border-radius:6px;cursor:pointer;font-size:14px;">返回 / 关闭</button>'
+            + '</div></body></html>';
         win.document.write(html);
         win.document.close();
     }
 
-    _doExportRecords(selectedFields) {
+    _doExportRecords(selectedFields, target) {
         var self = this;
         var token = localStorage.getItem('access_token');
         if (!token) { this.showAlert('提示', '登录已过期，请重新登录'); return; }
@@ -704,22 +721,38 @@ class AttendanceApp {
         var dateStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
         var timeStr = String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
         var filename = '考勤记录_' + dateStr + '_' + timeStr + '.csv';
-        fetch(url, {
-            headers: { 'Authorization': 'Bearer ' + token }
-        }).then(function(resp) {
-            if (!resp.ok) { throw new Error('导出失败 ' + resp.status); }
-            return resp.blob();
-        }).then(function(blob) {
-            var link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = filename;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(link.href);
-        }).catch(function(err) {
-            self.showAlert('错误', '导出失败：' + err.message);
-        });
+        if (target === 'cloud') {
+            fetch(url, {
+                headers: { 'Authorization': 'Bearer ' + token }
+            }).then(function(resp) {
+                if (!resp.ok) { throw new Error('导出失败 ' + resp.status); }
+                return resp.blob();
+            }).then(function(blob) {
+                var file = new File([blob], filename, {type: blob.type || 'text/csv'});
+                return Utils.uploadToCloud(file, null);
+            }).then(function() {
+                self.showAlert('成功', '已保存到网盘');
+            }).catch(function(err) {
+                self.showAlert('错误', '保存到网盘失败：' + err.message);
+            });
+        } else {
+            fetch(url, {
+                headers: { 'Authorization': 'Bearer ' + token }
+            }).then(function(resp) {
+                if (!resp.ok) { throw new Error('导出失败 ' + resp.status); }
+                return resp.blob();
+            }).then(function(blob) {
+                var link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = filename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(link.href);
+            }).catch(function(err) {
+                self.showAlert('错误', '导出失败：' + err.message);
+            });
+        }
     }
 
     // ==================== 优雅的提示对话框 ====================
@@ -1302,6 +1335,8 @@ class AttendanceApp {
             document.getElementById('calLateCount').textContent = summary.late || 0;
             document.getElementById('calMissCount').textContent = summary.miss_clock || 0;
             document.getElementById('calAbsentCount').textContent = summary.absent || 0;
+            document.getElementById('calLeaveCount').textContent = summary.leave || 0;
+            document.getElementById('calRestCount').textContent = summary.rest || 0;
             var weekDays = ['日', '一', '二', '三', '四', '五', '六'];
             var html = '';
             weekDays.forEach(function(wd) {
@@ -1325,6 +1360,8 @@ class AttendanceApp {
                 else if (status === 'miss_clock') { bgColor = '#fef0f0'; dotColor = '#f56c6c'; }
                 else if (status === 'absent') { bgColor = '#f5f5f5'; dotColor = '#909399'; textColor = '#bbb'; }
                 else if (status === 'future') { bgColor = '#fafafa'; textColor = '#ccc'; }
+                else if (status === 'leave') { bgColor = '#ecf5ff'; dotColor = '#409eff'; }
+                else if (status === 'rest') { bgColor = '#f0f2f5'; dotColor = '#a0a4ab'; textColor = '#999'; }
                 var tooltip = '';
                 if (info.clock_in && info.clock_out) {
                     tooltip = '上班:' + (info.clock_in.time || '') + ' 下班:' + (info.clock_out.time || '');

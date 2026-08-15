@@ -341,7 +341,7 @@ class TenantViewSet(viewsets.ModelViewSet):
         send_work_notification(
             user_id=user.id, title='加入企业通知',
             content=f'您已被 {operator_name} 邀请加入企业「{tenant.name}」',
-            notification_type='system',
+            notification_type='hr',
             related_url='/org/',
             extra_data={'tenant_id': tenant.id, 'tenant_name': tenant.name},
         )
@@ -367,7 +367,7 @@ class TenantViewSet(viewsets.ModelViewSet):
         send_work_notification(
             user_id=user_id, title='移出企业通知',
             content=f'您已被 {operator_name} 移出企业「{tenant.name}」',
-            notification_type='system',
+            notification_type='hr',
             extra_data={'tenant_id': tenant.id, 'tenant_name': tenant.name},
         )
         return Response({'message': '已移除'})
@@ -443,7 +443,7 @@ class TenantViewSet(viewsets.ModelViewSet):
         send_work_notification(
             user_id=user_id, title='企业角色变更通知',
             content=f'您的企业角色已被 {operator_name} 变更为「{role_map.get(role, role)}」',
-            notification_type='system',
+            notification_type='hr',
             extra_data={'tenant_id': tenant.id, 'role': role},
         )
         return Response({'message': '角色已更新'})
@@ -889,7 +889,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
             send_work_notification(
                 user_id=manager_id, title='部门负责人通知',
                 content=f'您已被 {operator_name} 设置为{base_info}',
-                notification_type='system', related_url='/org/',
+                notification_type='hr', related_url='/org/',
                 extra_data={'department_id': department.id, 'department_name': department.name, 'role': 'manager'},
             )
         # 通知新加入的副负责人
@@ -897,7 +897,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
             send_work_notification(
                 user_id=did, title='部门副负责人通知',
                 content=f'您已被 {operator_name} 设置为部门「{department.name}」副负责人',
-                notification_type='system', related_url='/org/',
+                notification_type='hr', related_url='/org/',
                 extra_data={'department_id': department.id, 'department_name': department.name, 'role': 'deputy'},
             )
         # 通知被移除的副负责人
@@ -905,7 +905,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
             send_work_notification(
                 user_id=did, title='移除副负责人通知',
                 content=f'您已被 {operator_name} 移除部门「{department.name}」副负责人职务',
-                notification_type='system', related_url='/org/',
+                notification_type='hr', related_url='/org/',
                 extra_data={'department_id': department.id, 'department_name': department.name, 'role': 'deputy_removed'},
             )
 
@@ -1027,7 +1027,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
             send_work_notification(
                 user_id=uid, title='加入部门通知',
                 content=f'您已被 {operator_name} 添加到部门「{department.name}」',
-                notification_type='system',
+                notification_type='hr',
                 related_url='/org/',
                 extra_data={'department_id': department.id, 'department_name': department.name},
             )
@@ -1056,7 +1056,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
             send_work_notification(
                 user_id=uid, title='移出部门通知',
                 content=f'您已被 {operator_name} 移出部门「{department.name}」',
-                notification_type='system',
+                notification_type='hr',
                 extra_data={'department_id': department.id, 'department_name': department.name},
             )
         return Response({'message': '已移除'})
@@ -1487,7 +1487,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
             send_work_notification(
                 user_id=uid, title='加入部门通知',
                 content=f'您已被 {operator_name} 同步到部门「{department.name}」',
-                notification_type='system',
+                notification_type='hr',
                 related_url='/org/',
                 extra_data={'department_id': department.id, 'department_name': department.name},
             )
@@ -1657,7 +1657,7 @@ class UserDepartmentViewSet(viewsets.GenericViewSet):
         send_work_notification(
             user_id=sup_id, title='汇报关系通知',
             content=f'{operator_name} 将 {user.real_name or user.username} 设置为您的下属（{rel.department.name}）',
-            notification_type='system', related_url='/org/',
+            notification_type='hr', related_url='/org/',
             extra_data={'user_id': user.id, 'department_id': dept_id},
         )
         return Response({'message': '直属上级已设置', 'created': created})

@@ -20,12 +20,23 @@ class TaskApp {
             window.location.href = this.chat_login_url;
             return;
         }
-        await this.loadCurrentUser();
-        await this.loadUsers();
-        await this.loadStats();
-        await this.loadTasks();
-        this.initTheme();
-        this.initSortable();
+        // 各初始化步骤独立容错：任一失败不阻断后续（含任务详情自动打开）
+        try { await this.loadCurrentUser(); } catch (e) { console.error('加载当前用户失败', e); }
+        try { await this.loadUsers(); } catch (e) { console.error('加载用户列表失败', e); }
+        try { await this.loadStats(); } catch (e) { console.error('加载统计失败', e); }
+        try { await this.loadTasks(); } catch (e) { console.error('加载任务失败', e); }
+
+        // 从工作通知/聊天室任务卡片跳转：自动打开对应任务详情
+        try {
+            const qp = new URLSearchParams(window.location.search);
+            const taskId = qp.get('task_id');
+            if (taskId) {
+                setTimeout(() => { taskApp.selectTask(parseInt(taskId, 10)); }, 200);
+            }
+        } catch (e) { console.warn('解析任务跳转参数失败', e); }
+
+        try { this.initTheme(); } catch (e) { console.warn('初始化主题失败', e); }
+        try { this.initSortable(); } catch (e) { console.warn('初始化看板拖拽失败', e); }
 
         // 全局点击关闭下拉菜单
         document.addEventListener('click', () => {
@@ -197,8 +208,16 @@ class TaskApp {
             if (res.ok) {
                 const task = await res.json();
                 this.renderTaskDetail(task);
+            } else {
+                const data = await res.json().catch(() => ({}));
+                const msg = (data && (data.detail || data.error)) || (res.status === 404 ? '该任务不存在或者已经删除' : '加载详情失败');
+                this.showToast(msg, 'error');
+                this.closeDetail();
             }
-        } catch (e) { console.error('加载详情失败', e); }
+        } catch (e) {
+            console.error('加载详情失败', e);
+            this.showToast('加载详情失败', 'error');
+        }
     }
 
     renderTaskDetail(task) {

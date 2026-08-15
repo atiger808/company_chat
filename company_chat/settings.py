@@ -120,8 +120,8 @@ if sys.platform == 'linux':
             'PASSWORD': config('DB_PASSWORD'),
             'HOST': config('DB_HOST'),
             'PORT': config('DB_PORT'),
-            'CONN_MAX_AGE': config('CONN_MAX_AGE', default=60, cast=int),
-            # 'CONN_MAX_AGE': 60,  # 连接最大存活时间（秒）
+            'CONN_MAX_AGE': config('CONN_MAX_AGE', default=0, cast=int),
+            # 'CONN_MAX_AGE': 60,  # 把 CONN_MAX_AGE 从 60 调小（0 或 30），减少每条连接在 Django 侧挂 60 秒的常驻占用。
             'CONN_HEALTH_CHECKS': True,  # 连接健康检查
             'OPTIONS': {
                 'connect_timeout': 10,
@@ -285,8 +285,8 @@ REST_FRAMEWORK = {
 
 # JWT 配置
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=2*24),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=7*24),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=14),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
 }
@@ -552,6 +552,39 @@ API_MODEL_MAP = {
     "/api/oa/approval/<int:pk>/re-edit/": "审批重新编辑",
     "/api/oa/approval/<int:pk>/delete-draft/": "删除审批草稿",
     "/api/oa/approval/<int:pk>/update-draft/": "更新审批草稿",
+    "/api/oa/subsidy/upload-invoice/": "补贴发票上传",
+    "/api/oa/subsidy/ocr-invoice/": "补贴票据OCR识别",
+    "/api/oa/subsidy/qr-scan/": "补贴票据二维码扫描",
+    "/api/oa/subsidy/ocr-status/": "补贴票据OCR识别状态",
+    "/api/oa/subsidy/invoice-preview/": "补贴票据预览",
+    "/api/oa/subsidy/upload-voucher/": "补贴支付凭证上传",
+    "/api/oa/subsidy/upload-proof/": "补贴支付截图上传",
+    "/api/oa/subsidy/payment-info/": "用户收款账号信息",
+    "/api/oa/subsidy/account/": "补贴账户",
+    "/api/oa/subsidy/wallet/": "补贴钱包",
+    "/api/oa/subsidy/withdraw/": "补贴提现",
+    "/api/oa/subsidy/withdrawals/": "我的提现记录",
+    "/api/oa/subsidy/withdrawals/all/": "提现支付列表",
+    "/api/oa/subsidy/withdrawals/export/": "提现申请导出",
+    "/api/oa/subsidy/withdrawals/<int:pk>/pay/": "提现支付",
+    "/api/oa/subsidy/withdrawals/<int:pk>/reject/": "提现驳回",
+    "/api/oa/subsidy/payments/": "补贴发放记录",
+    "/api/oa/subsidy/all/": "补贴申领核验列表",
+    "/api/oa/subsidy/export/": "补贴申领核验导出",
+    "/api/oa/subsidy/configs/": "补贴配置列表",
+    "/api/oa/subsidy/save-config/": "补贴配置保存",
+    "/api/oa/subsidy/delete-config/<int:pk>/": "补贴配置删除",
+    "/api/oa/subsidy/<int:pk>/re-submit/": "补贴申领重新提交",
+    "/api/oa/subsidy/<int:pk>/delete-my/": "补贴申领删除",
+    "/api/oa/subsidy/<int:pk>/verify/": "补贴申领核验",
+    "/api/oa/subsidy/<int:pk>/verify-invoice/": "补贴发票验真",
+    "/api/oa/subsidy/<int:pk>/invoice-verify-status/": "补贴发票验真状态",
+    "/api/oa/subsidy/<int:pk>/update-invoice-type/": "补贴发票类型修改",
+    "/api/oa/subsidy/": "员工普惠补贴",
+    "/api/oa/work-calendar/": "工作日历",
+    "/api/oa/work-calendar/day/": "工作日历-当日详情",
+    "/api/oa/work-calendar/digest-config/": "每日通知配置",
+    "/api/oa/work-calendar/digest-send/": "每日通知手动发送",
     "/api/oa/notifications/": "工作通知",
     "/api/oa/notifications/unread-count/": "通知未读数",
     "/api/oa/notifications/mark-all-read/": "通知全部已读",
@@ -597,6 +630,7 @@ API_MODEL_MAP = {
 EXLUDE_API_LOG = [
     "/api/chat/messages/mark_as_read/",  # 标记已读
     "/api/cloud/files/upload_chunk/",  # 文件分片上传
+    "/api/oa/subsidy/export/",  # 普惠补贴导出（二进制文件）
 ]
 API_METHOD_MAP = {
     'GET': '查询',
@@ -1052,6 +1086,10 @@ TURN_REALM = config('TURN_REALM')
 
 # 百度地图key
 BAIDU_MAP_SERVER_AK = config('BAIDU_MAP_SERVER_AK')
+
+# 百度OCR（票据识别）
+BAIDU_OCR_API_KEY = config('BAIDU_OCR_API_KEY', default='')
+BAIDU_OCR_SECRET_KEY = config('BAIDU_OCR_SECRET_KEY', default='')
 
 # ===== Web Push (VAPID) =====
 VAPID_PUBLIC_KEY = config('VAPID_PUBLIC_KEY', default='')

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>组织架构 - 义乌吉通集团</title>
-    <link rel="stylesheet" href="/static/css/org.css?v=20260807-8591e09">
+    <link rel="stylesheet" href="/static/css/org.css?v=20260815-3370f2c">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
     <style>
@@ -418,10 +418,13 @@
     </div>
 
     <div class="top-center">
-        <a href="/"><i class="fas fa-home"></i> 主页</a>
+<!--        <a href="/" class="btn-text"><i class="fas fa-home"></i> 主页</a>-->
         <a href="/chat/"><i class="fas fa-comments"></i> 聊天</a>
         <a href="/cloud/"><i class="fas fa-cloud"></i> 网盘</a>
-<!--        <a href="/tasks/"><i class="fas fa-tasks"></i> 任务</a>-->
+        <a href="/oa/approval/"><i class="fas fa-check-double"></i> OA审批</a>
+        <a href="/oa/attendance/"><i class="fas fa-clock"></i> 考勤</a>
+        <a href="/oa/subsidy/"><i class="fas fa-hand-holding-usd"></i> 普惠补贴</a>
+        <a href="/oa/work-calendar/"><i class="fas fa-calendar-alt"></i> 工作日历</a>
     </div>
 
     <div class="top-right">
@@ -434,7 +437,7 @@
         </button>
         <div style="position:relative;display:flex;align-items:center;gap:4px;">
             <div class="user-avatar-wrap" id="orgUserAvatarWrap" onclick="toggleOrgUserMenu(event)">
-                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260807-8591e09" alt="头像">
+                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260815-3370f2c" alt="头像">
             </div>
             <i class="fas fa-chevron-down" style="font-size:10px;color:rgba(255,255,255,0.7);cursor:pointer;" onclick="toggleOrgUserMenu(event)"></i>
             <!-- 用户下拉菜单 -->
@@ -444,6 +447,9 @@
                 </div>
                 <div class="dd-item" onclick="event.stopPropagation();window.location.href='/oa/approval/'">
                     <i class="fas fa-check-double"></i> OA审批
+                </div>
+                <div class="dd-item" onclick="event.stopPropagation();window.location.href='/oa/subsidy/'">
+                    <i class="fas fa-hand-holding-usd"></i> 普惠补贴
                 </div>
                 <div class="dd-divider"></div>
 
@@ -572,15 +578,15 @@
     </main>
 </div>
 
-<script src="/static/js/dist/spark-md5.min.js?v=20260807-8591e09"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260807-8591e09"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260807-8591e09"></script>
-<script src="/static/js/encrypts.js?v=20260807-8591e09"></script>
-<script src="/static/js/utils.js?v=20260807-8591e09"></script>
-<script src="/static/js/api.js?v=20260807-8591e09"></script>
-<script src="/static/js/tenant.js?v=20260807-8591e09"></script>
-<script src="/static/js/notifications.js?v=20260807-8591e09"></script>
-<script src="/static/js/org.js?v=20260807-8591e09"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260815-3370f2c"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260815-3370f2c"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260815-3370f2c"></script>
+<script src="/static/js/encrypts.js?v=20260815-3370f2c"></script>
+<script src="/static/js/utils.js?v=20260815-3370f2c"></script>
+<script src="/static/js/api.js?v=20260815-3370f2c"></script>
+<script src="/static/js/tenant.js?v=20260815-3370f2c"></script>
+<script src="/static/js/notifications.js?v=20260815-3370f2c"></script>
+<script src="/static/js/org.js?v=20260815-3370f2c"></script>
 <script>
     // ────────── 顶栏逻辑 ──────────
 

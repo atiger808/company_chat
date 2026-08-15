@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import AttendanceViewSet, ApprovalViewSet, ApprovalTypeViewSet, WorkNotificationViewSet
+from .views import AttendanceViewSet, ApprovalViewSet, ApprovalTypeViewSet, WorkNotificationViewSet, SubsidyViewSet, WorkCalendarViewSet
 
 urlpatterns = [
     # 考勤打卡
@@ -47,6 +47,45 @@ urlpatterns = [
     path('approval/<int:pk>/re-edit/', ApprovalViewSet.as_view({'post': 're_edit'}), name='approval-re-edit'),
     path('approval/<int:pk>/delete-draft/', ApprovalViewSet.as_view({'delete': 'delete_draft'}), name='approval-delete-draft'),
     path('approval/<int:pk>/update-draft/', ApprovalViewSet.as_view({'post': 'update_draft'}), name='approval-update-draft'),
+
+    # 财务服务 - 员工消费普惠补贴
+    path('subsidy/', SubsidyViewSet.as_view({'get': 'list', 'post': 'create'}), name='subsidy-list'),
+    path('subsidy/upload-invoice/', SubsidyViewSet.as_view({'post': 'upload_invoice'}), name='subsidy-upload-invoice'),
+    path('subsidy/upload-voucher/', SubsidyViewSet.as_view({'post': 'upload_voucher'}), name='subsidy-upload-voucher'),
+    path('subsidy/upload-proof/', SubsidyViewSet.as_view({'post': 'upload_proof'}), name='subsidy-upload-proof'),
+    path('subsidy/payment-info/', SubsidyViewSet.as_view({'get': 'payment_info', 'post': 'payment_info'}), name='subsidy-payment-info'),
+    path('subsidy/ocr-invoice/', SubsidyViewSet.as_view({'post': 'ocr_invoice'}), name='subsidy-ocr-invoice'),
+    path('subsidy/qr-scan/', SubsidyViewSet.as_view({'post': 'qr_scan'}), name='subsidy-qr-scan'),
+    path('subsidy/ocr-status/', SubsidyViewSet.as_view({'get': 'ocr_status'}), name='subsidy-ocr-status'),
+    path('subsidy/invoice-preview/', SubsidyViewSet.as_view({'get': 'invoice_preview'}), name='subsidy-invoice-preview'),
+    path('subsidy/account/', SubsidyViewSet.as_view({'get': 'account'}), name='subsidy-account'),
+    path('subsidy/wallet/', SubsidyViewSet.as_view({'get': 'wallet'}), name='subsidy-wallet'),
+    path('subsidy/withdraw/', SubsidyViewSet.as_view({'post': 'withdraw'}), name='subsidy-withdraw'),
+    path('subsidy/withdrawals/', SubsidyViewSet.as_view({'get': 'withdrawals'}), name='subsidy-withdrawals'),
+    path('subsidy/withdrawals/all/', SubsidyViewSet.as_view({'get': 'withdrawals_all'}), name='subsidy-withdrawals-all'),
+    path('subsidy/withdrawals/export/', SubsidyViewSet.as_view({'get': 'withdrawals_export'}), name='subsidy-withdrawals-export'),
+    path('subsidy/withdrawals/<int:pk>/', SubsidyViewSet.as_view({'get': 'withdraw_detail'}), name='subsidy-withdraw-detail'),
+    path('subsidy/withdrawals/<int:pk>/pay/', SubsidyViewSet.as_view({'post': 'withdraw_pay'}), name='subsidy-withdraw-pay'),
+    path('subsidy/withdrawals/<int:pk>/reject/', SubsidyViewSet.as_view({'post': 'withdraw_reject'}), name='subsidy-withdraw-reject'),
+    path('subsidy/payments/', SubsidyViewSet.as_view({'get': 'payments'}), name='subsidy-payments'),
+    path('subsidy/all/', SubsidyViewSet.as_view({'get': 'all'}), name='subsidy-all'),
+    path('subsidy/export/', SubsidyViewSet.as_view({'get': 'export'}), name='subsidy-export'),
+    path('subsidy/configs/', SubsidyViewSet.as_view({'get': 'configs'}), name='subsidy-configs'),
+    path('subsidy/save-config/', SubsidyViewSet.as_view({'post': 'save_config'}), name='subsidy-save-config'),
+    path('subsidy/delete-config/<int:pk>/', SubsidyViewSet.as_view({'delete': 'delete_config'}), name='subsidy-delete-config'),
+    path('subsidy/<int:pk>/', SubsidyViewSet.as_view({'get': 'retrieve'}), name='subsidy-detail'),
+    path('subsidy/<int:pk>/re-submit/', SubsidyViewSet.as_view({'post': 're_submit'}), name='subsidy-re-submit'),
+    path('subsidy/<int:pk>/delete-my/', SubsidyViewSet.as_view({'delete': 'delete_my'}), name='subsidy-delete-my'),
+    path('subsidy/<int:pk>/verify/', SubsidyViewSet.as_view({'post': 'verify'}), name='subsidy-verify'),
+    path('subsidy/<int:pk>/verify-invoice/', SubsidyViewSet.as_view({'post': 'verify_invoice'}), name='subsidy-verify-invoice'),
+    path('subsidy/<int:pk>/invoice-verify-status/', SubsidyViewSet.as_view({'get': 'invoice_verify_status'}), name='subsidy-invoice-verify-status'),
+    path('subsidy/<int:pk>/update-invoice-type/', SubsidyViewSet.as_view({'post': 'update_invoice_type'}), name='subsidy-update-invoice-type'),
+
+    # 工作日历 + 每日工作汇总通知
+    path('work-calendar/', WorkCalendarViewSet.as_view({'get': 'list'}), name='work-calendar'),
+    path('work-calendar/day/', WorkCalendarViewSet.as_view({'get': 'day'}), name='work-calendar-day'),
+    path('work-calendar/digest-config/', WorkCalendarViewSet.as_view({'get': 'digest_config', 'post': 'digest_config'}), name='work-calendar-digest-config'),
+    path('work-calendar/digest-send/', WorkCalendarViewSet.as_view({'post': 'digest_send'}), name='work-calendar-digest-send'),
 
     # 工作通知
     path('notifications/', WorkNotificationViewSet.as_view({'get': 'list'}), name='notification-list'),

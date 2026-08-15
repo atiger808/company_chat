@@ -3,6 +3,18 @@
 // 工具函数
 class Utils {
 
+    // HTML 转义
+    static escapeHtml(text) {
+        if (text === undefined || text === null) return '';
+        return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // 金额格式化：保留两位小数
+    static formatAmount(n) {
+        const num = Number(n);
+        if (isNaN(num)) return '0.00';
+        return num.toFixed(2);
+    }
 
     // 计算文件的 MD5 哈希值
     static async calculateFileHash(file) {
@@ -62,6 +74,96 @@ class Utils {
 
             reader.readAsArrayBuffer(file);
         });
+    }
+
+    // 计算单个 Blob 分片 MD5（小写十六进制）
+    static _blobMd5(blob) {
+        return new Promise((resolve, reject) => {
+            const spark = new SparkMD5.ArrayBuffer();
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                spark.append(e.target.result);
+                resolve(spark.end().toLowerCase());
+            };
+            reader.onerror = () => reject(new Error('读取文件分片失败'));
+            reader.readAsArrayBuffer(blob);
+        });
+    }
+
+    /**
+     * 分块上传文件到企业网盘（导出文件保存到网盘）
+     * 复用网盘的分片上传流程：init_upload → upload_chunk → merge_chunks
+     * @param {File} file - 要保存的文件（File/Blob 均可）
+     * @param {number|string|null} folderId - 目标文件夹ID，null 表示网盘根目录
+     * @param {string} description - 文件备注
+     * @param {string} tags - 文件标签
+     * @returns {Promise<Object>} 网盘文件信息
+     */
+    static async uploadToCloud(file, folderId = null, description = '', tags = '') {
+        if (!file || !file.size && file.size !== 0) throw new Error('没有要保存的文件');
+        const chunkSize = 5 * 1024 * 1024;
+        const fileSize = file.size;
+        const fileMd5 = await Utils.calculateFileMd5(file);
+        const totalChunks = Math.max(1, Math.ceil(fileSize / chunkSize));
+
+        // 1. 初始化上传会话
+        const initResp = await fetch('/api/cloud/files/init_upload/', {
+            method: 'POST',
+            headers: Object.assign({}, TokenManager.getHeaders(), {'Content-Type': 'application/json'}),
+            body: JSON.stringify({
+                file_name: file.name,
+                file_size: fileSize,
+                file_md5: fileMd5,
+                chunk_size: chunkSize,
+                folder: folderId || null,
+                description: description || '',
+                tags: tags || ''
+            })
+        });
+        if (!initResp.ok) throw new Error((await initResp.json().catch(() => ({}))).error || '初始化上传失败');
+        const initData = await initResp.json();
+        // 秒传：文件已存在
+        if (initData.status === 'quick_upload') return initData.file || initData;
+        if (!initData.session || !initData.session.id) throw new Error('上传会话创建失败');
+        const sessionId = initData.session.id;
+        const missing = (initData.missing_chunks && initData.missing_chunks.length)
+            ? initData.missing_chunks
+            : Array.from({length: totalChunks}, function (_, i) { return i; });
+
+        // 2. 上传缺失分片
+        for (let i = 0; i < missing.length; i++) {
+            const idx = Number(missing[i]);
+            if (isNaN(idx) || idx < 0) continue;
+            const start = idx * chunkSize;
+            const end = Math.min(start + chunkSize, fileSize);
+            const chunkBlob = file.slice(start, end);
+            const chunkMd5 = await Utils._blobMd5(chunkBlob);
+            const fd = new FormData();
+            fd.append('session_id', sessionId);
+            fd.append('chunk_index', idx);
+            fd.append('chunk_md5', chunkMd5);
+            fd.append('chunk', chunkBlob, 'chunk_' + idx);
+            const hd = TokenManager.getHeaders();
+            delete hd['Content-Type'];
+            delete hd['content-type'];
+            const resp = await fetch('/api/cloud/files/upload_chunk/', {method: 'POST', headers: hd, body: fd});
+            if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || ('分片 ' + idx + ' 上传失败'));
+        }
+
+        // 3. 合并分片完成上传
+        const mergeResp = await fetch('/api/cloud/files/merge_chunks/', {
+            method: 'POST',
+            headers: Object.assign({}, TokenManager.getHeaders(), {'Content-Type': 'application/json'}),
+            body: JSON.stringify({
+                session_id: sessionId,
+                folder: folderId || null,
+                description: description || null,
+                tags: tags || null
+            })
+        });
+        if (!mergeResp.ok) throw new Error((await mergeResp.json().catch(() => ({}))).error || '合并文件失败');
+        const mergeData = await mergeResp.json();
+        return mergeData.file || mergeData;
     }
 
 
