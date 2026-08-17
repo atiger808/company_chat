@@ -101,7 +101,7 @@ class SubsidyPaymentAdmin(admin.ModelAdmin):
 
 @admin.register(SubsidyConfig)
 class SubsidyConfigAdmin(admin.ModelAdmin):
-    list_display = ['id', 'tenant', 'sub_tenant', 'department', 'enabled', 'special_rate', 'ordinary_rate', 'updated_at', 'created_at']
+    list_display = ['id', 'tenant', 'sub_tenant', 'department', 'enabled', 'special_rate', 'ordinary_rate', 'tax_rate_threshold', 'updated_at', 'created_at']
     list_filter = ['enabled', ]
     search_fields = ['verifiers__username', 'verifiers__real_name', 'tenant__name']
     list_per_page = 20

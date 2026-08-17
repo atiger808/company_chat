@@ -644,6 +644,8 @@ class SubsidyApplication(models.Model):
     seller_name = models.CharField(max_length=200, blank=True, default='', verbose_name='销售方名称')
     seller_tax_no = models.CharField(max_length=40, blank=True, default='', verbose_name='销售方纳税人识别号')
     drawer = models.CharField(max_length=50, blank=True, default='', verbose_name='开票人')
+    # 调用百度OCR识别返回的原始JSON（words_result 等），便于后续追溯/复用
+    ocr_raw_data = models.JSONField(null=True, blank=True, default=dict, verbose_name='OCR识别原始返回')
     payment_voucher = models.CharField(max_length=500, blank=True, default='', verbose_name='支付凭证(付款截图)')
     payment_voucher_name = models.CharField(max_length=300, blank=True, default='', verbose_name='支付凭证文件名')
     payment_proof = models.CharField(max_length=500, blank=True, default='', verbose_name='支付截图(申请人)')
@@ -807,7 +809,8 @@ class SubsidyConfig(models.Model):
         settings.AUTH_USER_MODEL, blank=True,
         related_name='subsidy_payment_configs', verbose_name='财务支付人员')
     default_ocr_version = models.CharField(
-        max_length=20, default='baidu_vat', verbose_name='默认OCR识别版本')
+        max_length=20, default='paddle', verbose_name='默认OCR识别版本',
+        help_text='未配置时默认使用 PaddleOCR 本地识别')
     invoice_verify_enabled = models.BooleanField(default=False, verbose_name='开启发票验真')
     # 发票抬头配置（供员工开票参考）
     invoice_header_name = models.CharField(max_length=200, blank=True, default='', verbose_name='发票抬头名称')

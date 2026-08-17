@@ -182,8 +182,10 @@ class AttendanceApp {
             if (this.searchKeyword) url += '&search=' + encodeURIComponent(this.searchKeyword);
             var tenantId = document.getElementById('attendanceFilterTenant') ? document.getElementById('attendanceFilterTenant').value : '';
             var deptId = document.getElementById('attendanceFilterDepartment') ? document.getElementById('attendanceFilterDepartment').value : '';
+            var clockType = document.getElementById('attendanceFilterClockType') ? document.getElementById('attendanceFilterClockType').value : '';
             if (tenantId) url += '&tenant_id=' + tenantId;
             if (deptId) url += '&org_dept_id=' + deptId;
+            if (clockType) url += '&clock_type=' + clockType;
             const data = await this.apiGet(url);
             // console.log(data);
             this._renderRecords(data, tbody);
@@ -879,6 +881,8 @@ class AttendanceApp {
         if (tenantFilter) tenantFilter.value = '';
         var deptFilter = document.getElementById('attendanceFilterDepartment');
         if (deptFilter) deptFilter.value = '';
+        var clockTypeFilter = document.getElementById('attendanceFilterClockType');
+        if (clockTypeFilter) clockTypeFilter.value = '';
         this.loadRecords(1);
     }
 

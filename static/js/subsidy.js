@@ -535,7 +535,8 @@ class SubsidyApp {
         if (!card.fileUrl) return;
         card.status = 'ocr';
         this._renderInvoiceCards();
-        const version = document.getElementById('ocrVersion') ? document.getElementById('ocrVersion').value : 'paddle';
+        // 未手动选择过识别版本时留空，由后端按补贴配置默认版本解析（未配置则 PaddleOCR 本地识别）
+        const version = localStorage.getItem('subsidy_ocr_version') || '';
         try {
             const enq = await this.apiPost(SUBSIDY_API + '/ocr-invoice/', {
                 url: card.fileUrl,
@@ -611,6 +612,8 @@ class SubsidyApp {
         if (data.buyer_tax_no) card.buyerTaxNo = data.buyer_tax_no;
         if (data.invoice_issuer || data.seller_name) card.sellerName = data.invoice_issuer || data.seller_name;
         if (data.seller_tax_no) card.sellerTaxNo = data.seller_tax_no;
+        // 保留百度OCR返回的原始JSON，提交时随申领一并存入数据库
+        if (data.raw_data) card.ocrRawData = data.raw_data;
         card.status = 'ocr_ok';
         const got = [data.invoice_number, data.invoice_code, data.invoice_amount, data.invoice_date, data.tax_rate, data.buyer_name, data.seller_name, data.drawer].filter(Boolean).length;
         if (got) this.showToast('「' + card.fileName + '」识别成功，请校验信息是否正确', false);
@@ -848,7 +851,7 @@ class SubsidyApp {
         const sel = document.getElementById('ocrVersion');
         if (sel) localStorage.setItem('subsidy_ocr_version', sel.value);
     }
-
+1
     _showOcrLoading() {
         const overlay = document.getElementById('ocrLoadingOverlay');
         if (!overlay) return;
@@ -903,7 +906,8 @@ class SubsidyApp {
                 seller_tax_no: card.sellerTaxNo || '',
                 drawer: card.drawer || '',
                 payment_proof: this._paymentProof ? this._paymentProof.url : '',
-                payment_proof_name: this._paymentProof ? this._paymentProof.name : ''
+                payment_proof_name: this._paymentProof ? this._paymentProof.name : '',
+                ocr_raw_data: card.ocrRawData ? JSON.stringify(card.ocrRawData) : ''
             });
         }
         const btn = document.getElementById('submitSubsidyBtn');

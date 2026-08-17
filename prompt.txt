@@ -1293,7 +1293,56 @@
 
     OA审批页面新建审批模态框底部的附件选择项和关联审批选择项位置放到审批内容区域的最下面，方便用户操作；
 
+    OA审批页面做如下功能的补充和完善：
+    1.参考审批详情模态框头，将新建审批模态框也改为头部固定，下面内容区域可滚动，方便用户操作；
+    2.新建审批模态框里面的
+    OA审批里面所属部门选择默认都是该用户当前所属的主部门，下拉框里可供选择的部门范围如下：
+    超级管理员是所有部门,
+    管理员是自己所属的所有部门，
+    其他用户是自己所属的主部门；
+
+    3. 默认部门选择的都是当前用户所属的主部门，如果没有主部门，就默认选择当前用户所属部门最低级的部门，
+    如果没有所属部门，就给出提示：“当前用户没有所属部门，请联系管理员添加”，
+
+    新建审批模态框里面关联审批的渲染里每一项里面要加上该条审批的发起人名字，部门，职位等信息
+
+    工作日历里面工作汇总里面相关数量(也包括每日通知里面对应项的数量)做以下要求：
+    待处理审批项数量是统计该用户作为审批人且审批节点到自己并且没有处理的审批数量，
+    待核验发票数量是统计该用户作为财务核验人员待核验的发票数量，
+    待支付提现数量是统计该用户作为财务支付人员待支付的提现数量，
+    待处理任务数量是统计该用户作为任务执行人且任务状态为未完成的任务数量，
     按照以上要求完善对应的前后端相关逻辑；
+
+
+    08/17
+    1.考勤打卡增加打卡类型过滤
+
+    普惠补贴里面发票识别做如下补充和完善：
+    1.将调用百度接口识别返回的json字符串保存到数据库（SubsidyApplication模型单独定义一个字段用来存储返回的结果），方便后续使用；
+    2.完善发票信息提取逻辑，以下是分别百度增值税发票识别和百度通用文字识别返回的json结果，根据对应结果完善发票信息提取逻辑：
+    百度增值税发票识别返回结果（当前发票信息没有提取到税率）：{"words_result":{"PurchaserAddress":"","PurchaserBank":"","Password":"","CommodityVehicleType":[],"SellerRegisterNum":"91330100396319295P","SellerBank":"","CommodityNum":[{"row":"1","word":"1.0000000000000"}],"CommodityAmount":[{"row":"1","word":"2653.10"}],"InvoiceType":"电子发票(专用发票)","AmountInWords":"贰仟玖佰玖拾捌圆整","TotalTax":"344.90","MachineCode":"","City":"","InvoiceNumDigit":"","Checker":"","InvoiceCode":"","SellerAddress":"","CommodityPrice":[{"row":"1","word":"2653.1000000000000"}],"NoteDrawer":"陈叶芳","Province":"","InvoiceNum":"26337000000695148096","CommodityTaxRate":[{"row":"1","word":"13%"}],"ServiceType":"电器设备","InvoiceDate":"2026年08月15日","CommodityEndDate":[],"PurchaserRegisterNum":"91330782MAEKK29W4R","CommodityStartDate":[],"TotalAmount":"2653.10","SheetNum":"","CommodityPlateNum":[],"PurchaserName":"义乌市声澜科技有限责任公司","SellerName":"特斯拉汽车销售服务（杭州）有限公司","InvoiceNumConfirm":"26337000000695148096","Agent":"否","InvoiceTag":"其他","CommodityUnit":[{"row":"1","word":"个"}],"CheckCode":"","InvoiceTypeOrg":"电子发票(增值税专用发票)","Remarks":"SV18EE209E","Payee":"","CommodityTax":[{"row":"1","word":"344.90"}],"AmountInFiguers":"2998.00","CommodityName":[{"row":"1","word":"*交通运输设备*精品销售-3M膜"}],"CommodityType":[{"row":"1","word":"2122248-00-A"}],"OnlinePay":"","PassengerName":[],"PassengerIdNum":[],"PassengerDate":[],"PassengerDeparture":[],"PassengerArrival":[],"PassengerClass":[],"PassengerVehicleType":[],"TransportType":[],"TransportPlateNum":[],"TransportDeparture":[],"TransportArrival":[],"TransportCargoInfo":[]},"words_result_num":61,"log_id":2089253337708488200}，
+    百度通用文字识别返回结果：{"words_result":[{"words":"电子发票（增值税专用发票）"},{"words":"发票号码：26337000000695148096"},{"words":"税"},{"words":"开票日期：2026年08月15日"},{"words":"浙江省税务局"},{"words":"购买方信息"},{"words":"名称：义乌市声澜科技有限责任公司"},{"words":"销售方信息"},{"words":"名称：特斯拉汽车销售服务（杭州）有限公司"},{"words":"统一社会信用代码/纳税人识别号：91330782MAEKK29W4R"},{"words":"统一社会信用代码/纳税人识别号：91330100396319295P"},{"words":"项目名称"},{"words":"规格型号"},{"words":"单位"},{"words":"数量"},{"words":"单价"},{"words":"金额"},{"words":"税率/征收率"},{"words":"税额"},{"words":"*交通运输设备*精品销售2122248-00-A"},{"words":"个"},{"words":"1.00000000000002653.1000000000000"},{"words":"2653.10"},{"words":"13%"},{"words":"344.90"},{"words":"-3M膜"},{"words":"合计"},{"words":"￥2653.10"},{"words":"￥344.90"},{"words":"价税合计（大写）"},{"words":"×"},{"words":"贰仟玖佰玖拾捌圆整"},{"words":"(小写)￥2998.00"},{"words":"SV18EE209E"},{"words":"备注"},{"words":"开票人：陈叶芳"}],"words_result_num":36,"log_id":2089258141898325800}
+
+
+
+
+    以下是百度增值税发票验真接口文档地址：https://cloud.baidu.com/doc/OCR/s/cklbnrnwe，请仔细读取该文档内容，完善当前发票验证逻辑（目前发票的验真逻辑不符合百度增值税发票验真逻辑的要求，修复下）
+
+
+    企业聊天室页面做如下功能的补充和完善：
+    移动端特别安卓手机端，点击输入框进行输入文字时，手机系统的打字键盘会把输入框区域遮挡，导致用户不能看到自己输入的文字，修复下该问题，保证移动手机端在输入消息的时候，系统弹出的打字键盘不遮挡输入消息框；
+    按照以上要求完善对应的前后端相关逻辑；
+
+
+    惠普补贴页面默认的OCR识别版本是补贴配置里面的识别版本，如果没有配置识别版本，就默认使用PaddleOCR本地识别版本
+
+    企业聊天室页面安卓手机端（包括安卓浏览器端和添加到桌面后打开）消息输入框点击后被系统键盘遮挡，导致用户看不到自己输入的文字，修复下该问题，保证移动手机端在输入消息的时候，系统弹出的打字键盘不遮挡输入消息框，输入消息框在系统键盘的上部保证用户输入时能够看到输入的文字内容；
+
+
+
+
+
+
 
 
 

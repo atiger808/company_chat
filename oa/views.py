@@ -11,6 +11,7 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from loguru import logger
 import os
+import json
 import uuid
 import requests
 
@@ -113,6 +114,7 @@ class AttendanceViewSet(viewsets.ViewSet):
         page_size = int(request.query_params.get('page_size', 20))
         search = request.query_params.get('search', '').strip()
         status_filter = request.query_params.get('status', '').strip()
+        clock_type = request.query_params.get('clock_type', '').strip()
 
         if user.user_type in ['super_admin', 'admin']:
             qs = AttendanceRecord.objects.select_related('user__department').all()
@@ -131,6 +133,9 @@ class AttendanceViewSet(viewsets.ViewSet):
 
         if status_filter:
             qs = qs.filter(status=status_filter)
+
+        if clock_type:
+            qs = qs.filter(clock_type=clock_type)
 
         if search:
             qs = qs.filter(
@@ -2592,10 +2597,16 @@ class ApprovalViewSet(viewsets.ViewSet):
     def org_departments(self, request):
         """获取组织架构部门（链式结构）。
 
-        ?scope=all：返回当前用户所属的所有企业下的所有部门（供自定义类型"部门"字段选择）。
-        默认：当前企业（集团管理员额外含子企业部门）。
+        ?scope=all：返回当前用户所属的所有企业下的所有部门（供自定义类型"部门"字段选择，
+        非超管/管理员仅返回自己所属部门）。
+        默认：新建审批"所属部门"下拉框，按角色限定可选范围：
+          super_admin → 当前企业+子企业全部部门；
+          admin → 自己所属的所有部门；
+          其他用户 → 自己所属的主部门（无主部门时取最低级部门）。
+        返回 default_id：默认选中部门（主部门 → 无主部门时最低级部门 → 都没有则 None）。
         """
         from accounts.models import Department, Tenant
+        from org.models import UserDepartment
         tenant = getattr(request, 'tenant', None)
         if tenant is None:
             tenant = request.user.get_active_tenant()
@@ -2617,27 +2628,67 @@ class ApprovalViewSet(viewsets.ViewSet):
             except Exception:
                 pass
         if not tenant_ids:
-            return Response({'results': []})
-        depts = Department.objects.filter(tenant_id__in=tenant_ids, is_active=True).values(
-            'id', 'name', 'parent_id', 'full_path', 'tenant_id')
-        dept_list = list(depts)
+            return Response({'results': [], 'default_id': None})
+
+        depts = list(Department.objects.filter(tenant_id__in=tenant_ids, is_active=True).values(
+            'id', 'name', 'parent_id', 'full_path', 'tenant_id', 'level'))
+
+        default_id = None
+        if scope == 'all':
+            # 供自定义类型"部门"字段使用：非超管/管理员只返回自己所属部门
+            if user.user_type not in ('super_admin', 'admin') and depts:
+                user_dept_ids = list(UserDepartment.objects.filter(user=user).values_list('department_id', flat=True))
+                if user_dept_ids:
+                    depts = [d for d in depts if d['id'] in user_dept_ids]
+        else:
+            user_dept_ids = list(UserDepartment.objects.filter(user=user).values_list('department_id', flat=True))
+            if user.user_type == 'super_admin':
+                # 全部部门，不做限制
+                pass
+            elif user.user_type == 'admin':
+                # 自己所属的所有部门
+                depts = [d for d in depts if d['id'] in user_dept_ids]
+            else:
+                # 其他用户：仅主部门（无主部门时取最低级部门）
+                primary_ids = list(UserDepartment.objects.filter(
+                    user=user, is_primary=True).values_list('department_id', flat=True))
+                if primary_ids:
+                    depts = [d for d in depts if d['id'] in primary_ids]
+                elif user_dept_ids:
+                    deep_rel = (UserDepartment.objects.filter(user=user)
+                                .select_related('department')
+                                .order_by('-department__level', 'id').first())
+                    if deep_rel:
+                        depts = [d for d in depts if d['id'] == deep_rel.department_id]
+                    else:
+                        depts = []
+                else:
+                    depts = []
+            # 默认选中：主部门 → 最低级部门
+            if depts:
+                primary_rel = (UserDepartment.objects.filter(user=user, is_primary=True)
+                               .select_related('department').first())
+                if primary_rel and any(d['id'] == primary_rel.department_id for d in depts):
+                    default_id = primary_rel.department_id
+                else:
+                    deep_rel = (UserDepartment.objects.filter(
+                        user=user, department_id__in=[d['id'] for d in depts])
+                        .select_related('department')
+                        .order_by('-department__level', 'id').first())
+                    if deep_rel:
+                        default_id = deep_rel.department_id
+
         # 多企业时用企业名作前缀，便于区分
-        tenant_names = {}
-        if len(tenant_ids) > 1:
+        if len(tenant_ids) > 1 and depts:
+            tenant_names = {}
             for t in Tenant.objects.filter(id__in=tenant_ids):
                 tenant_names[t.id] = t.short_name or t.name
-            for d in dept_list:
+            for d in depts:
                 tn = tenant_names.get(d['tenant_id'], '')
                 if tn:
                     d['name'] = f'[{tn}] {d["name"]}'
                     d['_tenant_name'] = tn
-        # 管理员可看全部，普通用户只看自己的部门
-        if user.user_type not in ['super_admin', 'admin'] and dept_list:
-            from org.models import UserDepartment
-            user_dept_ids = list(UserDepartment.objects.filter(user=user).values_list('department_id', flat=True))
-            if user_dept_ids:
-                dept_list = [d for d in dept_list if d['id'] in user_dept_ids]
-        return Response({'results': dept_list})
+        return Response({'results': depts, 'default_id': default_id})
 
     @action(detail=False, methods=['get'])
     def geocode(self, request):
@@ -3243,6 +3294,45 @@ class WorkNotificationViewSet(viewsets.ViewSet):
         return Response({'message': 'ok'})
 
 
+def _parse_ocr_raw(raw):
+    """解析前端回传的 OCR 原始返回（JSON 字符串或 dict），供 SubsidyApplication.ocr_raw_data 存储"""
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+    return None
+
+
+def _baidu_invoice_type(invoice_type, ocr_raw_data=None):
+    """推导百度验真接口的发票种类代码（invoice_type）。
+
+    优先用 OCR 原始返回的发票类型文本判断：
+      电子发票/全电发票（专/普）→ elec_invoice_special / elec_invoice_normal（校验码可为空、金额填价税合计）；
+      纸质专票/普票 → special_vat_invoice / normal_invoice；
+    无 OCR 数据时按系统类型 special/ordinary 兜底为全电发票（当前以电子发票为主）。
+    """
+    org = ''
+    if ocr_raw_data and isinstance(ocr_raw_data, dict):
+        wr = ocr_raw_data.get('words_result') or {}
+        if isinstance(wr, dict):
+            org = str(wr.get('InvoiceTypeOrg') or wr.get('InvoiceType') or '')
+    if org:
+        if '专用' in org:
+            return 'elec_invoice_special' if ('电子发票' in org or '全电' in org) else 'special_vat_invoice'
+        if '普通' in org or '晋通' in org:
+            return 'elec_invoice_normal' if ('电子发票' in org or '全电' in org) else 'normal_invoice'
+    if invoice_type == 'special':
+        return 'elec_invoice_special'
+    if invoice_type == 'ordinary':
+        return 'elec_invoice_normal'
+    return ''
+
+
 class SubsidyViewSet(viewsets.ViewSet):
     """员工消费普惠补贴"""
     permission_classes = [permissions.IsAuthenticated]
@@ -3613,6 +3703,7 @@ class SubsidyViewSet(viewsets.ViewSet):
             return Response({'encrypt': True, 'data': encrypt_data({'task_id': '', 'result': cached, 'cached': True})})
         try:
             from .tasks import subsidy_ocr_task
+            logger.info(f'OCR任务入队 md5={md5[:8]} version={ocr_version} tax_rate_threshold={tax_rate_threshold} user={request.user}')
             task = subsidy_ocr_task.delay(image_path, ocr_version, cache_key, delete_after, tax_rate_threshold)
         except Exception as e:
             logger.error(f'OCR任务入队失败: {e}')
@@ -3861,6 +3952,7 @@ class SubsidyViewSet(viewsets.ViewSet):
             drawer=(request.data.get('drawer') or '').strip(),
             payment_proof=(request.data.get('payment_proof') or '').strip(),
             payment_proof_name=(request.data.get('payment_proof_name') or '').strip(),
+            ocr_raw_data=_parse_ocr_raw(request.data.get('ocr_raw_data')),
             subsidy_rate=rate, subsidy_amount=subsidy_amount, status='pending',
         )
         try:
@@ -3929,6 +4021,7 @@ class SubsidyViewSet(viewsets.ViewSet):
         app.drawer = (request.data.get('drawer') or '').strip()
         app.payment_proof = (request.data.get('payment_proof') or '').strip()
         app.payment_proof_name = (request.data.get('payment_proof_name') or '').strip()
+        app.ocr_raw_data = _parse_ocr_raw(request.data.get('ocr_raw_data')) or app.ocr_raw_data
         app.subsidy_rate = rate
         app.subsidy_amount = subsidy_amount
         app.status = 'pending'
@@ -4499,7 +4592,11 @@ class SubsidyViewSet(viewsets.ViewSet):
 
     @action(detail=True, methods=['post'])
     def verify_invoice(self, request, pk=None):
-        """发票验真（百度增值税发票验真；按发票文件MD5去重，防止重复验真）"""
+        """发票验真（百度增值税发票验真，参数化接口 vat_invoice_verification）。
+
+        凭发票代码/号码/开票日期/种类 + 校验码/金额与税务系统交叉核验；
+        按发票要素（号码+代码+日期）去重，防止重复查验触发次数限制。
+        """
         import hashlib
         try:
             app = SubsidyApplication.objects.get(id=pk)
@@ -4511,31 +4608,43 @@ class SubsidyViewSet(viewsets.ViewSet):
         config = self._get_subsidy_config(tenant, self._applicant_primary_dept_id(app.applicant))
         if config and not config.invoice_verify_enabled:
             return Response({'error': '未开启发票验真功能'}, status=400)
-        if not app.invoice_file:
-            return Response({'error': '无票据文件，无法验真'}, status=400)
-        path = self._resolve_media_path(app.invoice_file)
-        if not path:
-            return Response({'error': '票据文件不存在'}, status=404)
-        try:
-            with open(path, 'rb') as f:
-                image_data = f.read()
-        except Exception as e:
-            return Response({'error': f'读取票据失败: {e}'}, status=500)
-        if path.lower().endswith('.pdf'):
-            png = self._render_pdf_preview_png(image_data)
-            if not png:
-                return Response({'error': 'PDF渲染失败，无法验真'}, status=500)
-            image_data = png
-        md5 = hashlib.md5(image_data).hexdigest()
+        if not app.invoice_number:
+            return Response({'error': '缺少发票号码，无法验真'}, status=400)
+        # 按发票要素去重（号码+代码+日期），同一发票只查验一次
+        identity = f'{app.invoice_number}|{app.invoice_code}|{app.invoice_date}'
+        md5 = hashlib.md5(identity.encode('utf-8')).hexdigest()
         rec = SubsidyInvoiceVerifyRecord.objects.filter(invoice_md5=md5).first()
         if rec:
+            logger.info(f'[SubsidyInvoiceVerifyRecord] 重复查验 {md5}')
             return Response({'encrypt': True, 'data': encrypt_data({
                 'result': rec.result, 'result_display': rec.get_result_display(),
                 'message': rec.message, 'cached': True,
             })})
+        # 从 OCR 原始返回推导百度发票种类/校验码/专票不含税金额
+        raw = app.ocr_raw_data or {}
+        wr_raw = raw.get('words_result') if isinstance(raw, dict) else {}
+        if not isinstance(wr_raw, dict):
+            wr_raw = {}
+        baidu_type = _baidu_invoice_type(app.invoice_type, raw)
+        check_code = str(wr_raw.get('CheckCode') or '').strip()
+        total_amount = ''
+        if baidu_type in ('elec_invoice_special', 'elec_invoice_normal'):
+            # 全电发票（专/普）：金额填价税合计
+            total_amount = str(app.invoice_amount)
+        elif app.invoice_type == 'special':
+            # 纸质/电子专票：填不含税金额（OCR 的 TotalAmount）
+            total_amount = str(wr_raw.get('TotalAmount') or '').strip()
+        # 普通发票（纸质/电子普票）total_amount 可为空
         from utils.baidu_ocr import verify_vat_invoice
         try:
-            res = verify_vat_invoice(image_data)
+            res = verify_vat_invoice(
+                invoice_code=app.invoice_code or '',
+                invoice_num=app.invoice_number or '',
+                invoice_date=str(app.invoice_date) if app.invoice_date else '',
+                invoice_type=baidu_type,
+                check_code=check_code,
+                total_amount=total_amount,
+            )
         except Exception as e:
             return Response({'error': f'发票验真服务暂不可用：{e}'}, status=500)
         rec = SubsidyInvoiceVerifyRecord.objects.create(

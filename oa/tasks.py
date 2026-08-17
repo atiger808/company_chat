@@ -10,7 +10,7 @@ from datetime import time
 
 from company_chat.celery_app import app
 from django.utils import timezone
-from django.db.models import Q
+from django.db.models import Q, F
 from loguru import logger
 
 
@@ -89,6 +89,9 @@ def subsidy_ocr_task(self, image_path, ocr_version='baidu_vat', cache_key=None, 
         logger.info(f'异步OCR({ocr_version}) 结果: {result}')
         if not result:
             return {'error': '未能从票据中识别出有效信息，请更换更清晰的图片或手动填写'}
+        elif not result.get('invoice_number'):
+            return {'error': '未能从票据中识别出发票号码，请更换更清晰的图片或手动填写'}
+
         # 按税率阈值判定发票类型
         if tax_rate_threshold and tax_rate_threshold > 0:
             result = _apply_tax_rate_type(result, tax_rate_threshold)
@@ -164,12 +167,19 @@ def compute_user_work_summary(user, tenant=None):
         tenant = user.get_active_tenant()
     tenant_ids = _tenant_ids(tenant) if tenant else [None]
 
-    # 待处理审批：本人待审批（审批人待办）+ 本人发起且仍在审批中
-    assignee_ids = ApprovalAssignee.objects.filter(user=user, status='pending').values_list('node__request_id', flat=True).distinct()
-    pending_approvals = ApprovalRequest.objects.filter(
-        Q(id__in=list(assignee_ids), status__in=['pending', 'deferred', 'processing']) |
-        Q(applicant=user, status__in=['pending', 'deferred', 'processing'])
-    ).distinct().count()
+    # 待处理审批：该用户作为审批人，审批节点已到达自己且尚未处理
+    assignee_ids = ApprovalAssignee.objects.filter(
+        user=user, status='pending'
+    ).exclude(
+        node__request__applicant=user
+    ).filter(
+        Q(node__request__status__in=['pending', 'deferred', 'processing']) &
+        (
+            Q(node__request__approval_mode='parallel') |
+            Q(node__request__approval_mode='sequential', node__order__lte=F('node__request__current_node_order'))
+        )
+    ).values_list('node__request_id', flat=True).distinct()
+    pending_approvals = ApprovalRequest.objects.filter(id__in=list(assignee_ids)).distinct().count()
 
     # 待核验发票（仅超管/核验人员）
     pending_invoices = 0
@@ -181,8 +191,8 @@ def compute_user_work_summary(user, tenant=None):
     if _is_payment_staff(user, tenant):
         pending_withdrawals = SubsidyWithdrawal.objects.filter(tenant_id__in=tenant_ids, status='pending').count()
 
-    # 待处理任务
-    pending_tasks = Task.objects.filter(Q(assignee=user) | Q(creator=user), status__in=['todo', 'in_progress']).count()
+    # 待处理任务：该用户作为任务执行人且任务状态为未完成
+    pending_tasks = Task.objects.filter(assignee=user, status__in=['todo', 'in_progress']).count()
 
     # 今日漏打卡：休息日（星期日/法定节假日）或已批准的请假日期不提示未打卡；
     # 其余按用户所参照的考勤配置（部门>子公司>企业默认>父级回溯）判断上下班时间

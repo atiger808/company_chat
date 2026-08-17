@@ -2126,16 +2126,12 @@ class ApprovalApp {
         sel.innerHTML = '<option value="">加载中...</option>';
         try {
             var data = await this.apiGet(OA_API_URL + '/approval/org_departments/');
-            if (!data || !data.results) {
-                sel.innerHTML = '<option value="">请选择部门</option>';
+            if (!data || !data.results || !data.results.length) {
+                this._noDeptOptions(sel);
                 return;
             }
             var depts = data.results;
 
-            if (!depts.length) {
-                sel.innerHTML = '<option value="">请选择部门</option>';
-                return;
-            }
             var tree = {};
             depts.forEach(function (d) {
                 var pid = d.parent_id != null ? d.parent_id : 0;
@@ -2180,27 +2176,36 @@ class ApprovalApp {
             }
 
             sel.innerHTML = html;
+            sel.disabled = false;
+            var hint = document.getElementById('newDeptHint');
+            if (hint) hint.style.display = 'none';
             if (selectedId) {
                 sel.value = selectedId;
                 return;
             }
-            try {
-                var meRaw = await this.apiGet('/api/auth/me/');
-                if (meRaw && meRaw.org_departments && meRaw.org_departments.length) {
-                    var pdid = meRaw.org_departments[0].id;
-                    for (var i = 0; i < sel.options.length; i++) {
-                        if (parseInt(sel.options[i].value) === pdid) {
-                            sel.value = pdid;
-                            break;
-                        }
+            // 使用后端返回的默认部门（主部门 → 无主部门时最低级部门）
+            if (data.default_id != null) {
+                for (var i = 0; i < sel.options.length; i++) {
+                    if (parseInt(sel.options[i].value) === parseInt(data.default_id)) {
+                        sel.value = String(data.default_id);
+                        break;
                     }
                 }
-            } catch (e) {
             }
         } catch (e) {
             console.error('Load dept tree failed:', e);
-            sel.innerHTML = '<option value="">请选择部门</option>';
+            this._noDeptOptions(sel);
         }
+    }
+
+    // 无可用部门时的提示
+    _noDeptOptions(sel) {
+        if (sel) {
+            sel.innerHTML = '<option value="">无可用部门</option>';
+            sel.disabled = true;
+        }
+        var hint = document.getElementById('newDeptHint');
+        if (hint) hint.style.display = 'flex';
     }
 
     async _onDeptOrTypeChange() {
@@ -2446,27 +2451,43 @@ class ApprovalApp {
             return;
         }
         var self = this;
+        this._relSearchResults = list || [];
         var selectedIds = {};
         (this._relatedApprovals || []).forEach(function (r) { selectedIds[r.id] = true; });
         var statusMap = {draft: '草稿', pending: '待审批', approved: '已通过', rejected: '已驳回', deferred: '暂缓', processing: '办理中', cancelled: '已撤回'};
         dd.innerHTML = list.map(function (r) {
             if (selectedIds[r.id]) return '';
             var cls = 'cursor:pointer;';
-            return '<div class="rel-approval-item" style="display:flex;align-items:center;gap:8px;padding:8px 12px;' + cls + '" onclick="approvalApp._addRelApproval(' + r.id + ',\'' + self._escape(r.title) + '\',\'' + self._escape(r.approval_type_display || r.approval_type) + '\',\'' + (statusMap[r.status] || r.status || '') + '\')">'
+            // 发起人 / 部门 / 职位
+            var info = '';
+            if (r.applicant_name) info += '<span style="display:inline-flex;align-items:center;gap:3px;white-space:nowrap;"><i class="fas fa-user" style="color:#16a085;"></i> ' + self._escape(r.applicant_name) + '</span>';
+            if (r.department_name) info += '<span style="display:inline-flex;align-items:center;gap:3px;white-space:nowrap;"><i class="fas fa-building" style="color:#e6a23c;"></i> ' + self._escape(r.department_name) + '</span>';
+            if (r.applicant_position) info += '<span style="display:inline-flex;align-items:center;gap:3px;white-space:nowrap;"><i class="fas fa-id-badge" style="color:#409eff;"></i> ' + self._escape(r.applicant_position) + '</span>';
+            return '<div class="rel-approval-item" style="display:flex;align-items:center;gap:8px;padding:8px 12px;' + cls + '" onclick="approvalApp._addRelApproval(' + r.id + ')">'
                 + '<i class="fas fa-file-alt" style="color:#16a085;"></i>'
                 + '<div style="flex:1;min-width:0;">'
                 + '<div style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape(r.title) + '</div>'
-                + '<div style="font-size:11px;color:#909399;">' + self._escape(r.approval_type_display || r.approval_type) + ' · ' + (statusMap[r.status] || r.status || '') + ' · 更新 ' + self._formatTime(r.updated_at || r.created_at) + '</div>'
+                + '<div style="font-size:11px;color:#909399;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape(r.approval_type_display || r.approval_type) + ' · ' + (statusMap[r.status] || r.status || '') + ' · 更新 ' + self._formatTime(r.updated_at || r.created_at) + '</div>'
+                + (info ? '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:11px;color:#909399;margin-top:2px;">' + info + '</div>' : '')
                 + '</div>'
                 + '</div>';
         }).join('') || '<div style="padding:8px 12px;color:#909399;font-size:13px;">暂无审批可关联</div>';
         dd.style.display = 'block';
     }
 
-    _addRelApproval(id, title, typeDisplay, status) {
+    _addRelApproval(id) {
         if (!this._relatedApprovals) this._relatedApprovals = [];
         if (this._relatedApprovals.some(function (r) { return r.id === id; })) return;
-        this._relatedApprovals.push({id: id, title: title, type: typeDisplay, status: status || ''});
+        var src = (this._relSearchResults || []).filter(function (r) { return r.id === id; })[0] || {};
+        this._relatedApprovals.push({
+            id: id,
+            title: src.title || '',
+            type: src.approval_type_display || src.approval_type || '',
+            status: src.status || '',
+            applicant_name: src.applicant_name || '',
+            department_name: src.department_name || '',
+            applicant_position: src.applicant_position || ''
+        });
         this._renderRelApprovalTags();
         document.getElementById('relApprovalDropdown').style.display = 'none';
         document.getElementById('relApprovalSearch').value = '';
@@ -2486,10 +2507,15 @@ class ApprovalApp {
         }
         var self = this;
         container.innerHTML = this._relatedApprovals.map(function (r, i) {
-            return '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 8px;background:#e8f6f3;border:1px solid #b2e0d8;border-radius:14px;font-size:12px;margin:2px;max-width:220px;">'
+            var tip = '';
+            if (r.applicant_name) tip += '发起人：' + r.applicant_name;
+            if (r.department_name) tip += (tip ? ' · ' : '') + '部门：' + r.department_name;
+            if (r.applicant_position) tip += (tip ? ' · ' : '') + '职位：' + r.applicant_position;
+            return '<span title="' + self._escape(tip || '') + '" style="display:inline-flex;align-items:center;gap:5px;padding:3px 8px;background:#e8f6f3;border:1px solid #b2e0d8;border-radius:14px;font-size:12px;margin:2px;max-width:240px;">'
                 + '<i class="fas fa-link" style="font-size:10px;color:#16a085;"></i>'
-                + '<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape(r.title) + '</span>'
-                + '<i class="fas fa-times" style="cursor:pointer;color:#909399;font-size:11px;" onclick="approvalApp._removeRelApproval(' + i + ')"></i>'
+                + '<span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape(r.title) + '</span>'
+                + (r.applicant_name ? '<span style="color:#606266;font-size:11px;flex-shrink:0;">(' + self._escape(r.applicant_name) + ')</span>' : '')
+                + '<i class="fas fa-times" style="cursor:pointer;color:#909399;font-size:11px;flex-shrink:0;" onclick="approvalApp._removeRelApproval(' + i + ')"></i>'
                 + '</span>';
         }).join('');
     }

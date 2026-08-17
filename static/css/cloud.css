@@ -4375,3 +4375,12 @@ body {
 [data-theme="dark"] .log-file-name {
     color: var(--cloud-text-secondary, #a0a0a0);
 }
+
+[data-theme="dark"] #adminUsername{
+    color: #b0b0b0
+}
+
+
+
+
+

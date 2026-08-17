@@ -775,6 +775,7 @@ class SubsidyApplicationSerializer(serializers.ModelSerializer):
             'invoice_code', 'invoice_amount', 'invoice_date', 'tax_rate', 'invoice_issuer',
             'invoice_file', 'invoice_original_name', 'invoice_image',
             'buyer_name', 'buyer_tax_no', 'seller_name', 'seller_tax_no', 'drawer',
+            'ocr_raw_data',
             'payment_voucher', 'payment_voucher_name',
             'payment_proof', 'payment_proof_name',
             'subsidy_rate', 'subsidy_amount', 'status', 'status_display',

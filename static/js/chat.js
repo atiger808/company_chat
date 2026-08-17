@@ -8042,6 +8042,44 @@ class ChatClient {
                 }, 200); // 延迟确保点击事件先处理
             });
         }
+
+        // 🔧 修复移动端（尤其安卓）软键盘弹出遮挡输入框：用 visualViewport 实时把输入区顶到键盘上方
+        this.setupKeyboardReposition();
+    }
+
+    // 修复移动端软键盘遮挡输入框：安卓默认键盘是"覆盖"在布局视口上，
+    // 输入框 position:fixed;bottom:0 会藏在键盘后面。用 visualViewport 计算可见区域，
+    // 把输入区 bottom 动态设置为键盘占用高度，保证输入框始终在键盘上方可见。
+    setupKeyboardReposition() {
+        const vv = window.visualViewport;
+        const inputArea = document.querySelector('.chat-input-area');
+        const messageInput = document.getElementById('messageInput');
+        if (!vv || !inputArea) return;
+
+        const reposition = () => {
+            // 键盘弹出时 visualViewport 高度 < 布局视口高度，差值即键盘占用高度
+            const keyboardH = Math.max(0, window.innerHeight - (vv.offsetTop + vv.height));
+            if (keyboardH > 1) {
+                inputArea.style.setProperty('bottom', keyboardH + 'px', 'important');
+                // 键盘弹出后确保输入框在可视区域内（部分机型需延迟滚动）
+                if (messageInput && document.activeElement === messageInput) {
+                    clearTimeout(this._kbScrollTimer);
+                    this._kbScrollTimer = setTimeout(() => {
+                        messageInput.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+                    }, 120);
+                }
+            } else {
+                inputArea.style.setProperty('bottom', '0px', 'important');
+            }
+        };
+
+        vv.addEventListener('resize', reposition);
+        vv.addEventListener('scroll', reposition);
+        window.addEventListener('orientationchange', () => setTimeout(reposition, 300));
+        // 输入框聚焦时主动执行一次（部分机型 visualViewport resize 事件不触发）
+        if (messageInput) {
+            messageInput.addEventListener('focus', () => setTimeout(reposition, 200));
+        }
     }
 
     // 调整文本框高度

@@ -997,6 +997,9 @@
 /* ===== 响应式 ===== */
 @media (max-width: 768px) {
   .btn-text { display: none; }
+.top-bar-text {
+    display: none !important;
+}
 
   .org-layout {
     flex-direction: column;
