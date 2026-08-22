@@ -4,10 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>任务中心 - 义乌吉通集团</title>
-    <link rel="icon" type="image/svg+xml" href="/media/avatars/tasks-blue.svg?v=20260305-1">
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/tasks-blue.svg?v=20260820-d0a1b2c">
     <!-- 复用项目基础样式 -->
-    <link rel="stylesheet" href="/static/css/chat_auth.css?v=20260816-f56df66">
-    <link rel="stylesheet" href="/static/css/tasks.css?v=20260816-f56df66">
+    <link rel="stylesheet" href="/static/css/chat_auth.css?v=20260822-1491961">
+    <link rel="stylesheet" href="/static/css/tasks.css?v=20260822-1491961">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- 引入 SortableJS 用于看板拖拽 -->
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
@@ -47,7 +47,7 @@
             <span class="notif-badge hide" id="notifBadge">0</span>
         </div>
         <div class="user-info" id="currentUser" title="当前用户" onclick="taskApp.toggleUserDropdown(event)">
-            <img src="/static/images/default-avatar.png?v=20260816-f56df66" alt="头像" class="user-avatar">
+            <img src="/static/images/default-avatar.png?v=20260822-1491961" alt="头像" class="user-avatar">
             <span class="user-name btn-text">加载中...</span>
             <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
             <div class="user-dropdown" id="userDropdown" style="display:none;">
@@ -225,7 +225,22 @@
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                 <div class="form-group">
                     <label>执行人</label>
-                    <select id="taskAssignee" class="form-control"></select>
+                    <div class="assignee-picker">
+                        <input type="hidden" id="taskAssigneeId" value="">
+                        <div class="assignee-selected" id="taskAssigneeSelected" style="display:none;">
+                            <img id="taskAssigneeAvatar" class="assignee-avatar" src="/static/images/default-avatar.png?v=20260822-1491961" alt="头像">
+                            <div class="assignee-info">
+                                <div class="assignee-name" id="taskAssigneeName"></div>
+                                <div class="assignee-meta" id="taskAssigneeMeta"></div>
+                            </div>
+                            <button type="button" class="assignee-clear" title="取消选择" onclick="taskApp.clearAssignee(event)">&times;</button>
+                        </div>
+                        <div class="assignee-search">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="taskAssigneeSearchInput" class="form-control" placeholder="输入姓名/账号/部门/职位搜索用户...">
+                        </div>
+                        <div class="assignee-dropdown" id="taskAssigneeDropdown"></div>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>截止日期</label>
@@ -259,8 +274,16 @@
     </div>
 </div>
 
-<script src="/static/js/api.js?v=20260816-f56df66"></script>
-<script src="/static/js/tasks.js?v=20260816-f56df66"></script>
-<script src="/static/js/notifications.js?v=20260816-f56df66"></script>
+<script src="/static/js/utils.js?v=20260822-1491961"></script>
+<script src="/static/js/api.js?v=20260822-1491961"></script>
+<script src="/static/js/tasks.js?v=20260822-1491961"></script>
+<script src="/static/js/notifications.js?v=20260822-1491961"></script>
+
+<!-- 🔧 加密依赖：水印配置响应为加密包，需要 EncryptUtils 解密（缺此则水印静默不显示） -->
+<script src="/static/js/dist/crypto-js.min.js?v=20260822-1491961"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260822-1491961"></script>
+<script src="/static/js/encrypts.js?v=20260822-1491961"></script>
+<script src="/static/js/watermark.js?v=20260822-c2d3e4f"></script>
+<script>WatermarkManager.init();</script>
 </body>
 </html>

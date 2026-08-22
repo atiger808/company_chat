@@ -21,6 +21,7 @@ from django.views.generic import TemplateView
 from django.conf import settings
 from django.conf.urls.static import static
 from .views import service_worker_view, admin_console_view
+from oa.views import WatermarkViewSet, PrintLogViewSet
 import sys
 
 urlpatterns = [
@@ -40,6 +41,10 @@ urlpatterns = [
 
     # OA办公（考勤打卡+审批）
     path('api/oa/', include('oa.urls')),
+    # 企业水印配置（管理控制台维护 + 各页面加载渲染）
+    path('api/system/watermark-config/', WatermarkViewSet.as_view({'get': 'config', 'post': 'save_config'}), name='watermark-config'),
+    # 打印操作留痕
+    path('api/system/print-log/', PrintLogViewSet.as_view({'post': 'create'}), name='print-log'),
     path('api/org/', include('org.urls')),
     path('org/', TemplateView.as_view(template_name='org/org.html'), name='org'),
 

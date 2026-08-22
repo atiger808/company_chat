@@ -47,13 +47,9 @@ class SubsidyApp {
                 setTimeout(function () { subsidyApp._showDetail(parseInt(appId, 10)); }, 300);
             }
         } catch (e) {}
-        // 恢复用户上次选择的OCR识别版本
-        const savedOcr = localStorage.getItem('subsidy_ocr_version');
-        if (savedOcr) {
-            const ov = document.getElementById('ocrVersion');
-            if (ov && ov.querySelector('option[value="' + savedOcr + '"]')) ov.value = savedOcr;
-        }
         const ut = localStorage.getItem('user_type');
+        // OCR 下拉框先按角色做一次基础锁定（管理员可改/普通用户锁定）；配置默认版本由 _loadAccount 异步回填
+        this._applyOcrVersionPermission();
         // 补贴配置：仅超级管理员或财务核验人员可见（核验身份由 account 接口异步返回后更新）
         this._updateConfigBtnVisibility();
         // 从提现通知跳转：滚动到钱包卡片并刷新
@@ -199,6 +195,16 @@ class SubsidyApp {
         const map = {
             pending: '<span class="badge-info" style="font-size:11px;padding:2px 8px;border-radius:4px;">待核验</span>',
             approved: '<span class="status-badge normal" style="font-size:11px;padding:2px 8px;border-radius:4px;">已通过</span>',
+            rejected: '<span class="status-badge late" style="font-size:11px;padding:2px 8px;border-radius:4px;">已驳回</span>'
+        };
+        return map[status] || (status || '-');
+    }
+
+    // 提现申请状态徽标（待支付/已支付/已驳回）
+    _withdrawStatusBadge(status) {
+        const map = {
+            pending: '<span class="badge-info" style="font-size:11px;padding:2px 8px;border-radius:4px;">待支付</span>',
+            paid: '<span class="status-badge normal" style="font-size:11px;padding:2px 8px;border-radius:4px;">已支付</span>',
             rejected: '<span class="status-badge late" style="font-size:11px;padding:2px 8px;border-radius:4px;">已驳回</span>'
         };
         return map[status] || (status || '-');
@@ -849,9 +855,38 @@ class SubsidyApp {
     // ===== 票据OCR智能识别（支持多引擎） =====
     _onOcrVersionChange() {
         const sel = document.getElementById('ocrVersion');
-        if (sel) localStorage.setItem('subsidy_ocr_version', sel.value);
+        if (!sel) return;
+        // 非管理员以上用户不允许手动切换（兜底：忽略非法变更，恢复为配置默认版本）
+        const ut = localStorage.getItem('user_type');
+        if (ut !== 'super_admin' && ut !== 'admin') {
+            sel.value = this._defaultOcrVersion || 'paddle';
+            return;
+        }
+        localStorage.setItem('subsidy_ocr_version', sel.value);
     }
-1
+
+    // OCR 下拉框权限：仅管理员以上可切换；其余用户锁定为补贴配置的默认版本（未配置则 paddle）
+    _applyOcrVersionPermission() {
+        const sel = document.getElementById('ocrVersion');
+        if (!sel) return;
+        const ut = localStorage.getItem('user_type');
+        const isAdmin = (ut === 'super_admin' || ut === 'admin');
+        const target = isAdmin
+            ? (localStorage.getItem('subsidy_ocr_version') || this._defaultOcrVersion || 'paddle')
+            : (this._defaultOcrVersion || 'paddle');
+        if (sel.querySelector('option[value="' + target + '"]')) sel.value = target;
+        sel.disabled = !isAdmin;
+        sel.style.opacity = isAdmin ? '1' : '0.6';
+        sel.style.cursor = isAdmin ? 'pointer' : 'not-allowed';
+        const hint = document.getElementById('ocrHint');
+        if (hint) {
+            const labelMap = {baidu_vat: '百度增值税发票识别', baidu_general: '百度通用文字识别', paddle: 'PaddleOCR本地识别'};
+            hint.textContent = isAdmin
+                ? '识别版本可手动切换（默认为补贴配置）'
+                : '识别版本：' + (labelMap[this._defaultOcrVersion] || 'PaddleOCR本地识别');
+        }
+    }
+
     _showOcrLoading() {
         const overlay = document.getElementById('ocrLoadingOverlay');
         if (!overlay) return;
@@ -984,6 +1019,8 @@ class SubsidyApp {
         const d = this._paymentInfo || {};
         document.getElementById('piPayeeName').value = d.payee_name || '';
         document.getElementById('piBankCard').value = d.bank_card || '';
+        document.getElementById('piBankName').value = d.bank_name || '';
+        document.getElementById('piBankAddress').value = d.bank_address || '';
         document.getElementById('piAlipayAccount').value = d.alipay_account || '';
         document.getElementById('piWechatAccount').value = d.wechat_account || '';
         this._renderQrPreview('alipay', d.alipay_qr || '');
@@ -1050,6 +1087,8 @@ class SubsidyApp {
         const data = {
             payee_name: payee,
             bank_card: bank,
+            bank_name: document.getElementById('piBankName').value.trim(),
+            bank_address: document.getElementById('piBankAddress').value.trim(),
             alipay_account: alipay,
             wechat_account: wechat,
             alipay_qr: (this._paymentInfo && this._paymentInfo.alipay_qr) || '',
@@ -1209,9 +1248,9 @@ class SubsidyApp {
                 const idx = this._adminRecordIds.indexOf(id);
                 if (idx !== -1) {
                     navHtml = '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 12px;background:linear-gradient(90deg,#ecf5ff,#f0f9eb);border-radius:8px;margin-bottom:12px;">'
-                        + '<button class="btn btn-sm btn-secondary" onclick="subsidyApp._navDetail(-1)"' + (idx === 0 ? ' disabled' : '') + '><i class="fas fa-chevron-left"></i> 上一条</button>'
+                        + '<button class="btn btn-sm btn-secondary" onclick="subsidyApp._navDetail(-1)"><i class="fas fa-chevron-left"></i> 上一条</button>'
                         + '<span style="font-size:13px;color:#606266;font-weight:600;">' + (idx + 1) + ' / ' + this._adminRecordIds.length + '</span>'
-                        + '<button class="btn btn-sm btn-secondary" onclick="subsidyApp._navDetail(1)"' + (idx === this._adminRecordIds.length - 1 ? ' disabled' : '') + '>下一条 <i class="fas fa-chevron-right"></i></button>'
+                        + '<button class="btn btn-sm btn-secondary" onclick="subsidyApp._navDetail(1)">下一条 <i class="fas fa-chevron-right"></i></button>'
                         + '</div>';
                 }
             }
@@ -1309,12 +1348,22 @@ class SubsidyApp {
         }.bind(this));
     }
 
-    // 详情弹窗：上一条 / 下一条切换（核验列表上下文）
+    // 详情弹窗：上一条 / 下一条切换（到本页首/末条时给出提示，引导用户翻页）
     _navDetail(delta) {
         if (!this._adminRecordIds || !this._adminRecordIds.length) return;
         const idx = this._adminRecordIds.indexOf(this._detailId);
         if (idx === -1) return;
-        const next = this._adminRecordIds[(idx + delta + this._adminRecordIds.length) % this._adminRecordIds.length];
+        if (delta < 0 && idx === 0) {
+            const total = this._adminTotalPages || 1;
+            this.showToast('已经是本页第一条了，当前第 ' + this.adminPage + '/' + total + ' 页，如需查看更多请翻页', true);
+            return;
+        }
+        if (delta > 0 && idx === this._adminRecordIds.length - 1) {
+            const total = this._adminTotalPages || 1;
+            this.showToast('已经是本页最后一条了，当前第 ' + this.adminPage + '/' + total + ' 页，如需查看更多请翻页', true);
+            return;
+        }
+        const next = this._adminRecordIds[idx + delta];
         if (next == null) return;
         this._showDetail(next);
     }
@@ -1553,7 +1602,7 @@ class SubsidyApp {
                 ['申领金额', '¥' + this._fmtAmount(w.amount)],
                 ['剩余金额', '¥' + this._fmtAmount(w.remaining_balance)],
                 ['已支付金额', w.payment ? '¥' + this._fmtAmount(w.payment.amount) : '-'],
-                ['状态', this._statusBadge(w.status)],
+                ['状态', this._withdrawStatusBadge(w.status)],
                 ['支付人员', w.paid_by_name ? this._userCell(w.paid_by_name, w.paid_by_avatar) : '-'],
                 ['支付时间', this._fmtTime(w.paid_at)],
                 ['备注', this._escape(w.note || '-')],
@@ -1667,11 +1716,8 @@ class SubsidyApp {
             this._defaultOcrVersion = d.default_ocr_version || 'paddle';
             console.log('default_ocr_version::', d.default_ocr_version)
 
-            // 未手动选择过OCR版本时，使用配置的默认版本
-            if (!localStorage.getItem('subsidy_ocr_version')) {
-                const ov = document.getElementById('ocrVersion');
-                if (ov && ov.querySelector('option[value="' + this._defaultOcrVersion + '"]')) ov.value = this._defaultOcrVersion;
-            }
+            // OCR 识别版本按角色控制：仅管理员以上可手动选择，其余用户锁定为补贴配置的默认版本
+            this._applyOcrVersionPermission();
             // 核验人员身份确认后刷新补贴配置按钮可见性（普通管理员不显示）
             this._updateConfigBtnVisibility();
             // 财务核验 / 财务支付导航入口按角色显示
@@ -1768,6 +1814,7 @@ class SubsidyApp {
             const data = await this.apiGet(SUBSIDY_API + '/all/?' + this._adminQuery());
             this._renderAdmin(data);
         } catch (e) {
+            console.log('加载核验列表失败:::', e)
             this.showToast('加载核验列表失败', true);
         }
     }
@@ -1786,6 +1833,9 @@ class SubsidyApp {
 
     _renderAdmin(data) {
         const body = document.getElementById('adminListBody');
+        // 主补贴页不包含核验列表容器（核验列表在财务核验独立页），直接跳过避免报错
+        if (!body) return;
+        this._adminTotalPages = data.total_pages || 1;
         const list = data.results || [];
         // 记录当前核验列表的申领ID，供详情弹窗上一条/下一条切换
         this._adminRecordIds = list.map(function (r) { return r.id; });
@@ -1970,6 +2020,14 @@ class SubsidyApp {
             const data = await this.apiGet(SUBSIDY_API + '/all/?' + parts.join('&'));
             const list = data.results || [];
             if (!list.length) { this.showToast('暂无数据可打印', true); return; }
+            // 🔧 打印留痕 + 「允许打印」权限门：无权限则拦截
+            const printRes = (window.WatermarkManager && WatermarkManager.reportPrint)
+                ? await WatermarkManager.reportPrint({page: 'subsidy', target_type: 'subsidy_application', count: list.length})
+                : {allowed: true};
+            if (printRes && printRes.allowed === false) {
+                this.showToast('您没有打印权限，请联系管理员开通', true);
+                return;
+            }
             const now = new Date();
             const dateStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0')
                 + ' ' + String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
@@ -2026,6 +2084,9 @@ class SubsidyApp {
                 + '<button class="btn" style="background:#fff;color:#606266;border:1px solid #dcdfe6;" onclick="window.close()">返回 / 关闭</button>'
                 + '</div>'
                 + '</body></html>';
+            // 🔧 打印默认叠加水印（由管理控制台「打印时添加水印」开关控制）
+            const wm = (window.WatermarkManager && WatermarkManager.buildPrintWatermark) ? WatermarkManager.buildPrintWatermark() : null;
+            if (wm) html = html.replace('</head>', '<style>' + wm.css + '</style></head>').replace('</body>', wm.html + '</body>');
             win.document.write(html);
             win.document.close();
         } catch (e) {
@@ -2068,6 +2129,8 @@ class SubsidyApp {
                 let left = '<div style="flex:1;min-width:0;">'
                     + (p.payee_name ? '<div style="margin-bottom:4px;"><span style="color:#909399;">收款人：</span><b>' + this._escape(p.payee_name) + '</b></div>' : '')
                     + (p.bank_card ? '<div style="margin-bottom:4px;"><span style="color:#909399;">银行卡号：</span>' + this._escape(p.bank_card) + '</div>' : '')
+                    + (p.bank_name ? '<div style="margin-bottom:4px;"><span style="color:#909399;">开户银行：</span>' + this._escape(p.bank_name) + '</div>' : '')
+                    + (p.bank_address ? '<div style="margin-bottom:4px;"><span style="color:#909399;">开户银行地址：</span>' + this._escape(p.bank_address) + '</div>' : '')
                     + (p.alipay_account ? '<div style="margin-bottom:4px;"><span style="color:#909399;">支付宝账号：</span>' + this._escape(p.alipay_account) + '</div>' : '')
                     + (p.wechat_account ? '<div style="margin-bottom:4px;"><span style="color:#909399;">微信账号：</span>' + this._escape(p.wechat_account) + '</div>' : '')
                     + '</div>';
@@ -2422,6 +2485,7 @@ class SubsidyApp {
         document.getElementById('subsidyTaxRateThreshold').value = cfg.tax_rate_threshold != null ? (parseFloat(cfg.tax_rate_threshold) * 100) : 6;
         document.getElementById('subsidyMinWithdrawAmount').value = cfg.min_withdraw_amount != null ? cfg.min_withdraw_amount : 0;
         document.getElementById('subsidyDefaultOcrVersion').value = cfg.default_ocr_version || 'paddle';
+        document.getElementById('subsidyOcrCacheTtl').value = cfg.ocr_cache_ttl != null ? cfg.ocr_cache_ttl : 604800;
         document.getElementById('subsidyInvoiceVerifyEnabled').checked = !!cfg.invoice_verify_enabled;
         var ihMap = {
             ihName: 'invoice_header_name', ihTaxNo: 'invoice_header_tax_no', ihAddress: 'invoice_header_address',
@@ -2555,6 +2619,7 @@ class SubsidyApp {
             tax_rate_threshold: (taxRatePct / 100).toFixed(5),
             min_withdraw_amount: minWd.toFixed(2),
             default_ocr_version: document.getElementById('subsidyDefaultOcrVersion').value,
+            ocr_cache_ttl: parseInt(document.getElementById('subsidyOcrCacheTtl') ? (document.getElementById('subsidyOcrCacheTtl').value || 604800) : 604800),
             invoice_verify_enabled: document.getElementById('subsidyInvoiceVerifyEnabled').checked,
             verifier_ids: this._verifierValues.map(function (v) { return v.id; }),
             payment_staff_ids: (this._payStaffValues || []).map(function (v) { return v.id; }),
@@ -2579,6 +2644,18 @@ class SubsidyApp {
             this._loadAccount();
         } catch (e) {
             this.showToast('保存失败：' + e.message, true);
+        }
+    }
+
+    // 清除发票识别缓存（修改识别版本/税率阈值后立即生效）
+    async _clearOcrCache() {
+        const confirmed = await this.showConfirmDialog('清除发票识别缓存', '确定清除全部发票识别缓存吗？清除后下次识别将重新进行（修改的识别版本/税率阈值立即生效）。', 'danger');
+        if (!confirmed) return;
+        try {
+            const res = await this.apiPost(SUBSIDY_API + '/clear-ocr-cache/', {});
+            this.showToast((res && res.message) || '发票识别缓存已清除', false);
+        } catch (e) {
+            this.showToast('清除失败：' + e.message, true);
         }
     }
 

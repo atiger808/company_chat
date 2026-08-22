@@ -214,8 +214,8 @@ if __name__ == '__main__':
 
     image_path = r'G:\Users\zy\Pictures\test\46ba563076864f9c93ab906c8ced8a73.png'
 
-    image_path = r'G:\Users\zy\Pictures\test\aaf14f275b3248a4bdb25db3c8f08817.jpeg'
-    image_path = r'G:\Users\zy\Pictures\my\b71243910f8c4705b5fa1117d99c985b.jpeg'
+    image_path = r'G:\Users\zy\Pictures\test\53ad8b88f12446ddacb86dd6f95a7bce.png'
+    # image_path = r'G:\Users\zy\Pictures\my\b71243910f8c4705b5fa1117d99c985b.jpeg'
     image_data = open(image_path, 'rb').read()
     qr_strings = scan_qr_strings(image_data)
     print(qr_strings)

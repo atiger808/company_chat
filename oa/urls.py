@@ -1,10 +1,11 @@
 from django.urls import path
-from .views import AttendanceViewSet, ApprovalViewSet, ApprovalTypeViewSet, WorkNotificationViewSet, SubsidyViewSet, WorkCalendarViewSet
+from .views import AttendanceViewSet, ApprovalViewSet, ApprovalTypeViewSet, WorkNotificationViewSet, SubsidyViewSet, WorkCalendarViewSet, MaterialViewSet
 
 urlpatterns = [
     # 考勤打卡
     path('attendance/clock-in/', AttendanceViewSet.as_view({'post': 'clock_in'}), name='attendance-clock-in'),
     path('attendance/clock-out/', AttendanceViewSet.as_view({'post': 'clock_out'}), name='attendance-clock-out'),
+    path('attendance/makeup/', AttendanceViewSet.as_view({'post': 'makeup'}), name='attendance-makeup'),
     path('attendance/today/', AttendanceViewSet.as_view({'get': 'today'}), name='attendance-today'),
     path('attendance/statistics/', AttendanceViewSet.as_view({'get': 'statistics'}), name='attendance-statistics'),
     path('attendance/export/', AttendanceViewSet.as_view({'get': 'export'}), name='attendance-export'),
@@ -15,6 +16,10 @@ urlpatterns = [
     path('attendance/save-attendance-config/', AttendanceViewSet.as_view({'post': 'save_attendance_config'}), name='save-attendance-config'),
     path('attendance/delete-attendance-config/<int:pk>/', AttendanceViewSet.as_view({'delete': 'delete_attendance_config'}), name='delete-attendance-config'),
     path('attendance/my-config/', AttendanceViewSet.as_view({'get': 'resolve_my_config'}), name='resolve-my-config'),
+    path('attendance/members/', AttendanceViewSet.as_view({'get': 'members'}), name='attendance-members'),
+    path('attendance/user-attendance-configs/', AttendanceViewSet.as_view({'get': 'user_attendance_configs'}), name='attendance-user-configs'),
+    path('attendance/save-user-attendance-config/', AttendanceViewSet.as_view({'post': 'save_user_attendance_config'}), name='save-user-attendance-config'),
+    path('attendance/delete-user-attendance-config/<int:pk>/', AttendanceViewSet.as_view({'delete': 'delete_user_attendance_config'}), name='delete-user-attendance-config'),
     path('attendance/calendar-stats/', AttendanceViewSet.as_view({'get': 'calendar_stats'}), name='attendance-calendar-stats'),
     path('attendance/calendar-day-detail/', AttendanceViewSet.as_view({'get': 'calendar_day_detail'}), name='attendance-calendar-day-detail'),
 
@@ -34,6 +39,7 @@ urlpatterns = [
     path('approval/my-pending/', ApprovalViewSet.as_view({'get': 'my_pending'}), name='approval-my-pending'),
     path('approval/draft/', ApprovalViewSet.as_view({'post': 'draft'}), name='approval-draft'),
     path('approval/drafts/', ApprovalViewSet.as_view({'get': 'drafts'}), name='approval-drafts'),
+
     # 审批类型管理（动态自定义类型）
     path('approval/types/', ApprovalTypeViewSet.as_view({'get': 'list', 'post': 'create'}), name='approval-types'),
     path('approval/types/<int:pk>/', ApprovalTypeViewSet.as_view({'put': 'update', 'patch': 'update', 'delete': 'destroy'}), name='approval-type-detail'),
@@ -47,6 +53,11 @@ urlpatterns = [
     path('approval/<int:pk>/re-edit/', ApprovalViewSet.as_view({'post': 're_edit'}), name='approval-re-edit'),
     path('approval/<int:pk>/delete-draft/', ApprovalViewSet.as_view({'delete': 'delete_draft'}), name='approval-delete-draft'),
     path('approval/<int:pk>/update-draft/', ApprovalViewSet.as_view({'post': 'update_draft'}), name='approval-update-draft'),
+    path('approval/<int:pk>/send-private/', ApprovalViewSet.as_view({'post': 'send_private'}), name='approval-send_private'),
+    path('approval/<int:pk>/upload-receipt/', ApprovalViewSet.as_view({'post': 'upload_receipt'}), name='approval-upload-receipt'),
+    path('approval/<int:pk>/delete-receipt/', ApprovalViewSet.as_view({'post': 'delete_receipt'}), name='approval-delete-receipt'),
+    path('approval/custom-payment-methods/', ApprovalViewSet.as_view({'get': 'custom_payment_methods', 'post': 'custom_payment_methods'}), name='approval-custom-payment-methods'),
+    path('approval/custom-payment-method/<int:pk>/', ApprovalViewSet.as_view({'delete': 'custom_payment_method'}), name='approval-custom-payment-method'),
 
     # 财务服务 - 员工消费普惠补贴
     path('subsidy/', SubsidyViewSet.as_view({'get': 'list', 'post': 'create'}), name='subsidy-list'),
@@ -73,6 +84,7 @@ urlpatterns = [
     path('subsidy/configs/', SubsidyViewSet.as_view({'get': 'configs'}), name='subsidy-configs'),
     path('subsidy/save-config/', SubsidyViewSet.as_view({'post': 'save_config'}), name='subsidy-save-config'),
     path('subsidy/delete-config/<int:pk>/', SubsidyViewSet.as_view({'delete': 'delete_config'}), name='subsidy-delete-config'),
+    path('subsidy/clear-ocr-cache/', SubsidyViewSet.as_view({'post': 'clear_ocr_cache'}), name='subsidy-clear-ocr-cache'),
     path('subsidy/<int:pk>/', SubsidyViewSet.as_view({'get': 'retrieve'}), name='subsidy-detail'),
     path('subsidy/<int:pk>/re-submit/', SubsidyViewSet.as_view({'post': 're_submit'}), name='subsidy-re-submit'),
     path('subsidy/<int:pk>/delete-my/', SubsidyViewSet.as_view({'delete': 'delete_my'}), name='subsidy-delete-my'),
@@ -84,8 +96,22 @@ urlpatterns = [
     # 工作日历 + 每日工作汇总通知
     path('work-calendar/', WorkCalendarViewSet.as_view({'get': 'list'}), name='work-calendar'),
     path('work-calendar/day/', WorkCalendarViewSet.as_view({'get': 'day'}), name='work-calendar-day'),
+    path('work-calendar/stats/', WorkCalendarViewSet.as_view({'get': 'stats'}), name='work-calendar-stats'),
+    path('work-calendar/approval-efficiency/', WorkCalendarViewSet.as_view({'get': 'approval_efficiency'}), name='work-calendar-approval-efficiency'),
+    path('work-calendar/approval-leaderboard/', WorkCalendarViewSet.as_view({'get': 'approval_leaderboard'}), name='work-calendar-approval-leaderboard'),
     path('work-calendar/digest-config/', WorkCalendarViewSet.as_view({'get': 'digest_config', 'post': 'digest_config'}), name='work-calendar-digest-config'),
     path('work-calendar/digest-send/', WorkCalendarViewSet.as_view({'post': 'digest_send'}), name='work-calendar-digest-send'),
+
+    # 物资管理（物品库 + 需求/领用联动 + 入库确认）
+    path('material/items/', MaterialViewSet.as_view({'get': 'items', 'post': 'create_item'}), name='material-items'),
+    path('material/item-search/', MaterialViewSet.as_view({'get': 'item_search'}), name='material-item-search'),
+    path('material/items/<int:pk>/', MaterialViewSet.as_view({'get': 'retrieve_item', 'put': 'update_item', 'delete': 'delete_item'}), name='material-item-detail'),
+    path('material/requirement-search/', MaterialViewSet.as_view({'get': 'requirement_search'}), name='material-requirement-search'),
+    path('material/requirement-detail/', MaterialViewSet.as_view({'get': 'requirement_detail'}), name='material-requirement-detail'),
+    path('material/stock-in/', MaterialViewSet.as_view({'post': 'stock_in'}), name='material-stock-in'),
+    path('material/requirements/', MaterialViewSet.as_view({'get': 'requirements'}), name='material-requirements'),
+    path('material/requisitions/', MaterialViewSet.as_view({'get': 'requisitions'}), name='material-requisitions'),
+    path('material/requirement-status/', MaterialViewSet.as_view({'post': 'requirement_status'}), name='material-requirement-status'),
 
     # 工作通知
     path('notifications/', WorkNotificationViewSet.as_view({'get': 'list'}), name='notification-list'),

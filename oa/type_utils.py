@@ -11,6 +11,40 @@ BUILTIN_TYPES = [
     {'code': 'purchase', 'name': '采购', 'icon': 'fa-cart-plus', 'color': '#f56c6c', 'desc': ''},
     {'code': 'recruit', 'name': '招聘需求', 'icon': 'fa-user-plus', 'color': '#e6a23c', 'desc': ''},
     {'code': 'other', 'name': '其他', 'icon': 'fa-file-lines', 'color': '#909399', 'desc': ''},
+    # 物资需求单：分公司负责人 → 集团采购部；采购入库后可被领用
+    {'code': 'material_requirement', 'name': '物资需求单', 'icon': 'fa-box-open', 'color': '#16a085',
+     'desc': '分公司物资需求，采购入库后生成可领用额度',
+     'form_schema': [
+         {'key': 'branch_dept', 'label': '分公司', 'type': 'department', 'required': True, 'scope': 'company'},
+         {'key': 'amount', 'label': '预估金额', 'type': 'amount', 'required': True},
+         {'key': 'purpose', 'label': '用途', 'type': 'textarea', 'required': True},
+         {'key': 'items', 'label': '物资明细', 'type': 'struct_table', 'required': True,
+          'columns': [
+              {'key': 'item_name', 'label': '物品名称', 'type': 'item'},
+              {'key': 'spec', 'label': '规格型号', 'type': 'text'},
+              {'key': 'unit', 'label': '单位', 'type': 'text'},
+              {'key': 'price', 'label': '单价', 'type': 'amount'},
+              {'key': 'quantity', 'label': '数量', 'type': 'number'},
+              {'key': 'remark', 'label': '备注', 'type': 'text'},
+          ]},
+     ]},
+    # 物资领用单：关联需求单自动带出明细（只读锁定），产品金额=需求单预估金额，经集团物资部审核后领用
+    {'code': 'material_requisition', 'name': '物资领用单', 'icon': 'fa-box', 'color': '#e6a23c',
+     'desc': '关联需求单自动同步物品数量，审核通过后领料',
+     'form_schema': [
+         {'key': 'link_req', 'label': '关联需求单', 'type': 'link_requisition', 'required': True, 'target': 'items'},
+         {'key': 'amount', 'label': '产品金额', 'type': 'amount', 'required': True, 'readonly': True},
+         {'key': 'items', 'label': '领用明细', 'type': 'struct_table', 'required': True, 'readonly': True,
+          'columns': [
+              {'key': 'item_name', 'label': '物品名称', 'type': 'item'},
+              {'key': 'spec', 'label': '规格型号', 'type': 'text'},
+              {'key': 'unit', 'label': '单位', 'type': 'text'},
+              {'key': 'price', 'label': '单价', 'type': 'amount'},
+              {'key': 'quantity', 'label': '数量', 'type': 'number'},
+              {'key': 'remark', 'label': '备注', 'type': 'text'},
+          ]},
+         {'key': 'purpose', 'label': '用途', 'type': 'textarea', 'required': True},
+     ]},
 ]
 
 
@@ -18,14 +52,19 @@ def ensure_builtin_types():
     """确保内置审批类型存在（幂等，首次访问自动播种）；表未迁移时静默跳过"""
     try:
         for t in BUILTIN_TYPES:
-            ApprovalType.objects.get_or_create(
-                tenant=None, code=t['code'],
-                defaults={
-                    'name': t['name'], 'icon': t['icon'], 'color': t['color'],
-                    'description': t['desc'], 'is_builtin': True, 'enabled': True,
-                    'sort_order': 0,
-                }
+            defaults = {
+                'name': t['name'], 'icon': t['icon'], 'color': t['color'],
+                'description': t['desc'], 'is_builtin': True, 'enabled': True,
+                'sort_order': 0,
+                'form_schema': t.get('form_schema', []),
+            }
+            obj, created = ApprovalType.objects.get_or_create(
+                tenant=None, code=t['code'], defaults=defaults,
             )
+            # 已存在的内置类型：同步 form_schema（内置类型表单锁定，企业侧仅可开关启用）
+            if not created and obj.is_builtin and t.get('form_schema') and obj.form_schema != t['form_schema']:
+                obj.form_schema = t['form_schema']
+                obj.save(update_fields=['form_schema'])
     except Exception:
         pass
 

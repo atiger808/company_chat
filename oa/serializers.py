@@ -3,7 +3,7 @@ from .models import (
     AttendanceRecord, ApprovalRequest, ApprovalLog, ApprovalNode,
     ApprovalAssignee, ApprovalCarbonCopy, ApprovalDeptConfig,
     AttendanceConfig, SubsidyApplication, SubsidyPayment, SubsidyConfig,
-    SubsidyWallet, SubsidyWithdrawal,
+    SubsidyWallet, SubsidyWithdrawal, UserAttendanceConfig,
 )
 from .type_utils import resolve_approval_type
 
@@ -179,6 +179,8 @@ class ApprovalRequestSerializer(serializers.ModelSerializer):
             'approver', 'approver_name', 'approver_comment',
             'related_approvals', 'related_approval_list',
             'purchase_items', 'expense_items', 'leave_type', 'trip_data',
+            'payment_method',
+            'receipts', 'receipt_deadline',
             'created_at', 'updated_at', 'logs', 'approval_nodes', 'cc_users',
         ]
         read_only_fields = [
@@ -480,6 +482,7 @@ class ApprovalCreateSerializer(serializers.Serializer):
     expense_items = serializers.JSONField(required=False, default=list)
     leave_type = serializers.CharField(required=False, allow_blank=True, default='')
     trip_data = serializers.JSONField(required=False, default=dict)
+    payment_method = serializers.JSONField(required=False, default=dict, allow_null=True)
 
     def validate_approval_type(self, value):
         request = self.context.get('request') if hasattr(self, 'context') else None
@@ -524,6 +527,7 @@ class ApprovalDraftSerializer(serializers.Serializer):
     expense_items = serializers.JSONField(required=False, default=list)
     leave_type = serializers.CharField(required=False, allow_blank=True, default='')
     trip_data = serializers.JSONField(required=False, default=dict)
+    payment_method = serializers.JSONField(required=False, default=dict, allow_null=True)
 
     def validate_approval_type(self, value):
         request = self.context.get('request') if hasattr(self, 'context') else None
@@ -589,6 +593,7 @@ class ApprovalDeptConfigSerializer(serializers.ModelSerializer):
             'threshold_enabled', 'threshold_field', 'threshold_field_display',
             'threshold_value', 'threshold_department', 'threshold_department_name',
             'require_signature',
+            'receipt_return_hours', 'enable_receipt_return',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['tenant', 'created_at', 'updated_at']
@@ -676,6 +681,8 @@ class AttendanceConfigSerializer(serializers.ModelSerializer):
             'department', 'department_name', 'department_path',
             'clock_in_enabled', 'clock_in_time',
             'clock_out_enabled', 'clock_out_time',
+            'makeup_allowance', 'clock_out_limit',
+            'shift_type',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['tenant', 'created_at', 'updated_at']
@@ -692,6 +699,49 @@ class AttendanceConfigSerializer(serializers.ModelSerializer):
         if obj.department and obj.department.full_path:
             return obj.department.full_path
         return obj.department.name if obj.department else ''
+
+
+class UserAttendanceConfigSerializer(serializers.ModelSerializer):
+    """个人考勤配置序列化器"""
+    user_name = serializers.SerializerMethodField()
+    avatar_url = serializers.SerializerMethodField()
+    department_name = serializers.SerializerMethodField()
+    position = serializers.SerializerMethodField()
+    shift_type_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UserAttendanceConfig
+        fields = [
+            'id', 'user', 'user_name', 'avatar_url', 'department_name', 'position',
+            'shift_type', 'shift_type_display',
+            'clock_in_enabled', 'clock_in_time',
+            'clock_out_enabled', 'clock_out_time',
+            'makeup_allowance', 'clock_out_limit',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['user', 'created_at', 'updated_at']
+
+    def get_user_name(self, obj):
+        return obj.user.real_name or obj.user.username
+
+    def get_avatar_url(self, obj):
+        return obj.user.get_avatar_url() if hasattr(obj.user, 'get_avatar_url') else ''
+
+    def get_department_name(self, obj):
+        try:
+            from org.models import UserDepartment
+            ud = UserDepartment.objects.filter(user=obj.user, is_primary=True).select_related('department').first()
+            if ud and ud.department:
+                return ud.department.name
+        except Exception:
+            pass
+        return obj.user.department.name if obj.user.department else ''
+
+    def get_position(self, obj):
+        return obj.user.position or ''
+
+    def get_shift_type_display(self, obj):
+        return obj.get_shift_type_display()
 
 
 class SubsidyConfigSerializer(serializers.ModelSerializer):
@@ -711,7 +761,7 @@ class SubsidyConfigSerializer(serializers.ModelSerializer):
             'department', 'department_name', 'department_path',
             'enabled', 'special_rate', 'ordinary_rate', 'max_invoices',
             'show_invoice_header', 'tax_rate_threshold',
-            'min_withdraw_amount', 'default_ocr_version', 'invoice_verify_enabled',
+            'min_withdraw_amount', 'default_ocr_version', 'ocr_cache_ttl', 'invoice_verify_enabled',
             'invoice_header_name', 'invoice_header_tax_no', 'invoice_header_address',
             'invoice_header_phone', 'invoice_header_bank', 'invoice_header_bank_account',
             'invoice_header_bank_name', 'company_name', 'company_tax_no',
@@ -818,6 +868,8 @@ class SubsidyApplicationSerializer(serializers.ModelSerializer):
         return {
             'payee_name': u.payee_name or '',
             'bank_card': u.bank_card or '',
+            'bank_name': u.bank_name or '',
+            'bank_address': u.bank_address or '',
             'alipay_account': u.alipay_account or '',
             'wechat_account': u.wechat_account or '',
             'alipay_qr': u.alipay_qr or '',
@@ -951,6 +1003,8 @@ class SubsidyWithdrawalSerializer(serializers.ModelSerializer):
         return {
             'payee_name': u.payee_name or '',
             'bank_card': u.bank_card or '',
+            'bank_name': u.bank_name or '',
+            'bank_address': u.bank_address or '',
             'alipay_account': u.alipay_account or '',
             'wechat_account': u.wechat_account or '',
             'alipay_qr': u.alipay_qr or '',

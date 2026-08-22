@@ -190,6 +190,9 @@ class CloudSettingsApp {
                 this.renderCollabConfigs();
             } else {
                 this.renderConfigs();
+                if (category === 'system') {
+                    await this.renderOperationPermissions();
+                }
             }
         } catch (error) {
             console.error('加载配置失败:', error);
@@ -208,11 +211,13 @@ class CloudSettingsApp {
     renderConfigs() {
         const configList = document.getElementById('configList');
         if (!configList) return;
-        if (this.configs.length === 0) {
+        // 企业操作权限由下方专用区块配置，隐藏原始 json 项避免重复/显示异常
+        const visibleConfigs = this.configs.filter(c => c.key !== 'cloud_operation_permissions');
+        if (visibleConfigs.length === 0) {
             configList.innerHTML = `<div class="empty-state" style="text-align:center; padding:40px;"><i class="fas fa-inbox"></i><p>暂无配置项</p></div>`;
             return;
         }
-        configList.innerHTML = this.configs.map(config => `
+        configList.innerHTML = visibleConfigs.map(config => `
             <div class="config-item" data-key="${config.key}">
                 <div class="config-header">
                     <div class="config-name">
@@ -627,12 +632,12 @@ class CloudSettingsApp {
                 resultsContainer.innerHTML = '<div class="search-result-item">未找到用户</div>';
             } else {
                 resultsContainer.innerHTML = users.map(user => `
-                    <div class="search-result-item" 
+                    <div class="search-result-item"
                          onclick="cloudSettings.selectUserForPermission('${user.id}', '${this.escapeHtml(user.username)}', '${this.escapeHtml(user.real_name || '')}')">
-                        <img src="/static/images/default-avatar.png" alt="${user.username}" class="user-avatar-tiny">
+                        <img src="${user.avatar || '/static/images/default-avatar.png'}" alt="${user.username}" class="user-avatar-tiny">
                         <div>
                             <div class="result-user-name">${this.escapeHtml(user.real_name || user.username)}</div>
-                            <div class="result-user-detail">@${this.escapeHtml(user.username)} ${user.email ? `(${user.email})` : ''}</div>
+                            <div class="result-user-detail">${['@' + this.escapeHtml(user.username), this.escapeHtml(user.position || ''), this.escapeHtml(user.department || '')].filter(Boolean).join(' · ')}</div>
                         </div>
                     </div>
                 `).join('');
@@ -899,6 +904,401 @@ class CloudSettingsApp {
 
 
 
+    // ==================== 企业操作权限（允许打印/文件下载/公开分享） ====================
+
+    getOperationPermissionLabel(key) {
+        const map = {
+            allow_print: '允许打印',
+            allow_download: '允许文件下载',
+            allow_public_share: '允许公开分享',
+        };
+        return map[key] || key;
+    }
+
+    // 🔧 加载全局操作权限
+    async loadOperationGlobal() {
+        try {
+            const response = await fetch('/api/cloud/settings/operation-permissions/', {
+                headers: TokenManager.getHeaders()
+            });
+            if (!response.ok) throw new Error('加载失败');
+            const data = await response.json();
+            return data.permissions || {};
+        } catch (e) {
+            console.warn('加载操作权限失败', e);
+            return {};
+        }
+    }
+
+    // 🔧 保存全局操作权限
+    async saveOperationGlobal() {
+        const payload = {};
+        ['allow_print', 'allow_download', 'allow_public_share'].forEach(k => {
+            const el = document.getElementById('op_' + k);
+            payload[k] = el ? el.checked : false;
+        });
+        try {
+            const response = await fetch('/api/cloud/settings/operation-permissions/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify(payload)
+            });
+            if (!response.ok) { const e2 = await response.json().catch(function(){return {};}); throw new Error(e2.error || '保存失败'); }
+            this.showSuccess('保存成功', '操作权限配置已更新');
+        } catch (e) {
+            this.showError('保存失败', e.message);
+        }
+    }
+
+    // 🔧 渲染系统设置-操作权限区块（追加到 configList）
+    async renderOperationPermissions() {
+        const configList = document.getElementById('configList');
+        if (!configList) return;
+        const global = await this.loadOperationGlobal();
+        configList.insertAdjacentHTML('beforeend', `
+            <div class="config-section" id="operationPermSection">
+                <h4><i class="fas fa-lock"></i> 操作权限配置</h4>
+                <p class="section-desc">允许打印 / 允许文件下载 / 允许公开分享 全局开关；可为个别用户单独配置（覆盖全局）</p>
+                <div class="permission-grid config-item">
+                    ${['allow_print','allow_download','allow_public_share'].map(k => `
+                        <label class="permission-item">
+                            <input type="checkbox" id="op_${k}" ${global[k] ? 'checked' : ''}>
+                            <span>${this.getOperationPermissionLabel(k)}</span>
+                        </label>`).join('')}
+                </div>
+                <button class="btn btn-sm btn-primary" onclick="cloudSettings.saveOperationGlobal()" style="margin-top:8px;">
+                    <i class="fas fa-save"></i> 保存操作权限
+                </button>
+            </div>
+            <div class="config-section" id="operationUserPermSection">
+                <div class="section-header-with-action">
+                    <h4><i class="fas fa-user-cog"></i> 用户自定义操作权限</h4>
+                    <button class="btn btn-sm btn-primary" onclick="cloudSettings.showAddUserOperationModal()">
+                        <i class="fas fa-plus"></i> 添加用户权限
+                    </button>
+                </div>
+                <p class="section-desc">为特定用户设置个性化的操作权限（覆盖全局默认）</p>
+                <div id="userOperationPermList" class="config-item">
+                    <div class="loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</div>
+                </div>
+            </div>
+        `);
+        await this.loadUserOperationPermissions();
+    }
+
+    // 🔧 加载用户自定义操作权限列表
+    async loadUserOperationPermissions() {
+        const container = document.getElementById('userOperationPermList');
+        if (!container) return;
+        try {
+            const response = await fetch('/api/cloud/settings/user-operation-permissions/', {
+                headers: TokenManager.getHeaders()
+            });
+            if (!response.ok) throw new Error('加载失败');
+            const data = await response.json();
+            this.renderUserOperationPermissions(data.results || data);
+        } catch (error) {
+            container.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>加载失败：${error.message}</p></div>`;
+        }
+    }
+
+    // 🔧 渲染用户自定义操作权限列表
+    renderUserOperationPermissions(permissions) {
+        const container = document.getElementById('userOperationPermList');
+        if (!container) return;
+        if (!permissions || permissions.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-user-slash"></i>
+                    <p>暂无用户自定义操作权限配置</p>
+                    <button class="btn btn-primary" onclick="cloudSettings.showAddUserOperationModal()">
+                        <i class="fas fa-plus"></i> 添加第一个用户权限
+                    </button>
+                </div>`;
+            return;
+        }
+        container.innerHTML = `
+            <div class="user-permissions-table">
+                <table>
+                    <thead><tr><th>用户</th><th>权限配置</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead>
+                    <tbody>
+                        ${permissions.map(perm => `
+                            <tr>
+                                <td>
+                                    <div class="user-info-cell">
+                                        <img src="${(perm.user_info && perm.user_info.avatar) || '/static/images/default-avatar.png'}" class="user-avatar-small">
+                                        <div>
+                                            <div class="user-name">${this.escapeHtml((perm.user_info && (perm.user_info.real_name || perm.user_info.username)) || '')}</div>
+                                            <div class="user-username">@${this.escapeHtml((perm.user_info && perm.user_info.username) || '')}</div>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td><div class="permissions-summary">${this.renderOpPermSummary(perm.permissions || {})}</div></td>
+                                <td><span class="status-badge ${perm.is_active ? 'active' : 'inactive'}">${perm.is_active ? '启用' : '禁用'}</span></td>
+                                <td>${new Date(perm.updated_at).toLocaleString('zh-CN')}</td>
+                                <td>
+                                    <button class="btn btn-sm btn-primary" onclick="cloudSettings.editUserOperationPermission('${perm.user}')"><i class="fas fa-edit"></i> 编辑</button>
+                                    <button class="btn btn-sm btn-danger" onclick="cloudSettings.deleteUserOperationPermission('${perm.user}')"><i class="fas fa-trash"></i> 删除</button>
+                                </td>
+                            </tr>`).join('')}
+                    </tbody>
+                </table>
+            </div>`;
+    }
+
+    // 🔧 渲染操作权限摘要
+    renderOpPermSummary(permissions) {
+        const enabled = Object.entries(permissions || {}).filter(([, v]) => v).map(([k]) => this.getOperationPermissionLabel(k));
+        if (!enabled.length) return '<span class="text-muted">无权限</span>';
+        return enabled.join('、');
+    }
+
+    // 🔧 显示添加用户操作权限模态框
+    showAddUserOperationModal() {
+        const modal = document.createElement('div');
+        modal.className = 'modal show';
+        modal.id = 'addUserOperationModal';
+        modal.innerHTML = `
+            <div class="modal-content modal-lg">
+                <div class="modal-header">
+                    <h3><i class="fas fa-user-plus"></i> 添加用户操作权限</h3>
+                    <button class="close-btn">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>选择用户 <span class="required">*</span></label>
+                        <div class="user-search-container">
+                            <input type="text" id="userOperationSearchInput" class="form-control"
+                                   placeholder="搜索用户名、姓名或邮箱..."
+                                   oninput="cloudSettings.searchUsersForOperation(this.value)">
+                            <div id="userOperationSearchResults" class="user-search-results"></div>
+                        </div>
+                        <input type="hidden" id="operationSelectedUserId">
+                        <div id="operationSelectedUserInfo" class="selected-user-info" style="display:none;"></div>
+                    </div>
+                    <div class="config-section">
+                        <label>权限配置</label>
+                        <div class="permission-grid">
+                            ${['allow_print','allow_download','allow_public_share'].map(k => `
+                                <label class="permission-item">
+                                    <input type="checkbox" id="new_op_perm_${k}">
+                                    <span>${this.getOperationPermissionLabel(k)}</span>
+                                </label>`).join('')}
+                        </div>
+                    </div>
+                    <div class="config-section">
+                        <label>启用状态</label>
+                        <label class="switch">
+                            <input type="checkbox" id="new_op_perm_is_active" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>备注说明</label>
+                        <textarea id="new_op_perm_description" class="form-control" rows="3" placeholder="可选：说明为何设置此权限..."></textarea>
+                    </div>
+                    <p id="addUserOperationPermError" class="error-message"></p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="cloudSettings.closeAddUserOperationModal()">取消</button>
+                    <button class="btn btn-primary" onclick="cloudSettings.saveUserOperationPermission()">保存</button>
+                </div>
+            </div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('.close-btn').onclick = () => this.closeAddUserOperationModal();
+        modal.onclick = (e) => { if (e.target === modal) this.closeAddUserOperationModal(); };
+    }
+
+    closeAddUserOperationModal() {
+        const modal = document.getElementById('addUserOperationModal');
+        if (modal) modal.remove();
+    }
+
+    async searchUsersForOperation(searchText) {
+        const container = document.getElementById('userOperationSearchResults');
+        if (!container) return;
+        if (!searchText) { container.innerHTML = ''; container.style.display = 'none'; return; }
+        try {
+            const response = await fetch(`/api/cloud/settings/users-for-operation-permission/?search=${encodeURIComponent(searchText)}`, {
+                headers: TokenManager.getHeaders()
+            });
+            if (!response.ok) throw new Error('搜索失败');
+            const users = await response.json();
+            if (!users.length) container.innerHTML = '<div class="search-result-item">未找到用户</div>';
+            else container.innerHTML = users.map(user => `
+                <div class="search-result-item" onclick="cloudSettings.selectUserForOperation('${user.id}', '${this.escapeHtml(user.username)}', '${this.escapeHtml(user.real_name || '')}')">
+                    <img src="${user.avatar || '/static/images/default-avatar.png'}" class="user-avatar-tiny">
+                    <div>
+                        <div class="result-user-name">${this.escapeHtml(user.real_name || user.username)}</div>
+                        <div class="result-user-detail">${['@' + this.escapeHtml(user.username), this.escapeHtml(user.position || ''), this.escapeHtml(user.department || '')].filter(Boolean).join(' · ')}</div>
+                    </div>
+                </div>`).join('');
+            container.style.display = 'block';
+        } catch (e) {
+            container.innerHTML = '<div class="search-result-item">搜索失败</div>';
+        }
+    }
+
+    selectUserForOperation(userId, username, realName) {
+        document.getElementById('operationSelectedUserId').value = userId;
+        const info = document.getElementById('operationSelectedUserInfo');
+        info.innerHTML = `<img src="/static/images/default-avatar.png" class="user-avatar-tiny"> <span>${this.escapeHtml(realName || username)} (@${this.escapeHtml(username)})</span>`;
+        info.style.display = 'flex';
+        document.getElementById('userOperationSearchResults').innerHTML = '';
+    }
+
+    async saveUserOperationPermission() {
+        const userId = document.getElementById('operationSelectedUserId').value;
+        if (!userId) { document.getElementById('addUserOperationPermError').textContent = '请先选择用户'; return; }
+        const permissions = {};
+        ['allow_print','allow_download','allow_public_share'].forEach(k => {
+            const el = document.getElementById('new_op_perm_' + k);
+            permissions[k] = el ? el.checked : false;
+        });
+        const payload = {
+            user: userId,
+            permissions: permissions,
+            is_active: document.getElementById('new_op_perm_is_active').checked,
+            description: document.getElementById('new_op_perm_description').value || '',
+        };
+        try {
+            const response = await fetch('/api/cloud/settings/user-operation-permissions/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify(payload)
+            });
+            if (!response.ok) {
+                const e2 = await response.json().catch(function(){return {};});
+                throw new Error(JSON.stringify(e2) || '保存失败');
+            }
+            this.showSuccess('保存成功', '用户操作权限配置已添加');
+            this.closeAddUserOperationModal();
+            await this.loadUserOperationPermissions();
+        } catch (e) {
+            document.getElementById('addUserOperationPermError').textContent = e.message || '保存失败';
+        }
+    }
+
+    // 🔧 编辑用户操作权限
+    async editUserOperationPermission(userId) {
+        try {
+            const response = await fetch(`/api/cloud/settings/user-operation-permissions/`, {
+                headers: TokenManager.getHeaders()
+            });
+            if (!response.ok) throw new Error('加载失败');
+            const data = await response.json();
+            const list = data.results || data;
+            const perm = list.find(p => String(p.user) === String(userId));
+            if (!perm) throw new Error('未找到该用户的权限配置');
+            this.showEditUserOperationModal(perm);
+        } catch (e) {
+            this.showError('加载失败', e.message);
+        }
+    }
+
+    showEditUserOperationModal(perm) {
+        const modal = document.createElement('div');
+        modal.className = 'modal show';
+        modal.id = 'editUserOperationModal';
+        const p = perm.permissions || {};
+        modal.innerHTML = `
+            <div class="modal-content modal-lg">
+                <div class="modal-header">
+                    <h3><i class="fas fa-user-edit"></i> 编辑用户操作权限</h3>
+                    <button class="close-btn">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="selected-user-info" style="display:flex;">
+                        <img src="${(perm.user_info && perm.user_info.avatar) || '/static/images/default-avatar.png'}" class="user-avatar-tiny">
+                        <span>${this.escapeHtml((perm.user_info && (perm.user_info.real_name || perm.user_info.username)) || '')} (@${this.escapeHtml((perm.user_info && perm.user_info.username) || '')})</span>
+                    </div>
+                    <div class="config-section">
+                        <label>权限配置</label>
+                        <div class="permission-grid">
+                            ${['allow_print','allow_download','allow_public_share'].map(k => `
+                                <label class="permission-item">
+                                    <input type="checkbox" id="edit_op_perm_${k}" ${p[k] ? 'checked' : ''}>
+                                    <span>${this.getOperationPermissionLabel(k)}</span>
+                                </label>`).join('')}
+                        </div>
+                    </div>
+                    <div class="config-section">
+                        <label>启用状态</label>
+                        <label class="switch">
+                            <input type="checkbox" id="edit_op_perm_is_active" ${perm.is_active ? 'checked' : ''}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>备注说明</label>
+                        <textarea id="edit_op_perm_description" class="form-control" rows="3">${this.escapeHtml(perm.description || '')}</textarea>
+                    </div>
+                    <p id="editUserOperationPermError" class="error-message"></p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="cloudSettings.closeEditUserOperationModal()">取消</button>
+                    <button class="btn btn-primary" onclick="cloudSettings.updateUserOperationPermission('${perm.user}')">保存修改</button>
+                </div>
+            </div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('.close-btn').onclick = () => this.closeEditUserOperationModal();
+        modal.onclick = (e) => { if (e.target === modal) this.closeEditUserOperationModal(); };
+    }
+
+    closeEditUserOperationModal() {
+        const modal = document.getElementById('editUserOperationModal');
+        if (modal) modal.remove();
+    }
+
+    async updateUserOperationPermission(userId) {
+        const permissions = {};
+        ['allow_print','allow_download','allow_public_share'].forEach(k => {
+            const el = document.getElementById('edit_op_perm_' + k);
+            permissions[k] = el ? el.checked : false;
+        });
+        const payload = {
+            permissions: permissions,
+            is_active: document.getElementById('edit_op_perm_is_active').checked,
+            description: document.getElementById('edit_op_perm_description').value || '',
+        };
+        try {
+            const response = await fetch(`/api/cloud/settings/user-operation-permissions/${userId}/`, {
+                method: 'PUT',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify(payload)
+            });
+            if (!response.ok) {
+                const e2 = await response.json().catch(function(){return {};});
+                throw new Error(JSON.stringify(e2) || '更新失败');
+            }
+            this.showSuccess('更新成功', '用户操作权限配置已更新');
+            this.closeEditUserOperationModal();
+            await this.loadUserOperationPermissions();
+        } catch (e) {
+            document.getElementById('editUserOperationPermError').textContent = e.message || '更新失败';
+        }
+    }
+
+    async deleteUserOperationPermission(userId) {
+        const confirmed = await this.showConfirmDialog(
+            '删除确认',
+            '确定要删除该用户的操作权限配置吗？删除后将使用全局操作权限。',
+            'danger'
+        );
+        if (!confirmed) return;
+        try {
+            const response = await fetch(`/api/cloud/settings/user-operation-permissions/${userId}/`, {
+                method: 'DELETE',
+                headers: TokenManager.getHeaders()
+            });
+            if (!response.ok) { const e2 = await response.json().catch(function(){return {};}); throw new Error(e2.error || '删除失败'); }
+            this.showSuccess('删除成功', '用户操作权限配置已删除');
+            await this.loadUserOperationPermissions();
+        } catch (e) {
+            this.showError('删除失败', e.message);
+        }
+    }
+
     // 🔧 保存 OnlyOffice 配置
     async saveOnlyofficeConfigs() {
         const payload = {
@@ -1051,9 +1451,11 @@ class CloudSettingsApp {
         if (valueType === 'boolean') return value ? '✅ 是' : '❌ 否';
         if (valueType === 'json') {
             try {
-                return '<pre>' + JSON.stringify(JSON.parse(value), null, 2) + '</pre>';
+                // typed_value 对 json 已是解析后的对象，直接序列化，避免显示成 [object Object]
+                const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+                return '<pre>' + JSON.stringify(parsed, null, 2) + '</pre>';
             } catch {
-                return value;
+                return this.escapeHtml(String(value));
             }
         }
         return this.escapeHtml(String(value));

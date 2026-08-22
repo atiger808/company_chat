@@ -83,6 +83,8 @@ class ApprovalType(models.Model):
         ('user', '成员选择'),
         ('expense_type', '费用类型选择'),
         ('struct_table', '结构化数据明细'),
+        ('payment_method', '收款方式'),
+        ('link_requisition', '关联需求单'),
     ]
 
     code = models.CharField(max_length=40, verbose_name='类型编码')
@@ -223,6 +225,14 @@ class ApprovalRequest(models.Model):
     expense_items = models.JSONField(default=list, blank=True, verbose_name='报销项目')
     leave_type = models.CharField(max_length=30, blank=True, default='', verbose_name='请假类型')
     trip_data = models.JSONField(default=dict, blank=True, verbose_name='出差信息')
+    # 付款方式：{type:'default'|'custom', payee_name, bank_card, alipay_account, wechat_account, alipay_qr, wechat_qr}
+    # default=使用用户默认收款账号（CustomUser），提交时快照；custom=用户自定义收款方式
+    payment_method = models.JSONField(null=True, blank=True, default=dict, verbose_name='付款方式')
+    # 票据回传：最终审批通过后，申请人在时限内回传的付款凭证/票据
+    receipts = models.JSONField(default=list, blank=True, verbose_name='回传票据')
+    receipt_deadline = models.DateTimeField(null=True, blank=True, verbose_name='回传截止时间')
+    # 驳回后重新提交的起始节点（被驳回时记录，重新提交/撤回时清空；兼容驳回→存草稿→再提交路径）
+    resume_node_order = models.IntegerField(null=True, blank=True, verbose_name='驳回后重新提交的起始节点')
     current_node_order = models.IntegerField(default=0, verbose_name='当前节点序号')
     approver = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -254,6 +264,7 @@ class ApprovalLog(models.Model):
         ('processing', '正在办理'),
         ('resubmit', '重新提交'),
         ('cancel', '撤回'),
+        ('receipt_return', '票据回传'),
     ]
 
     request = models.ForeignKey(
@@ -466,6 +477,12 @@ class ApprovalDeptConfig(models.Model):
     # 是否要求审批人手写签名
     require_signature = models.BooleanField(default=False, verbose_name='开启手写签名',
                                            help_text='开启后审批人点击通过时需手写签名')
+    # 票据回传时限（小时）：最终审批通过后申请人在该时限内回传付款凭证/票据；0 表示不允许回传
+    receipt_return_hours = models.IntegerField(default=24, verbose_name='票据回传时限(小时)',
+                                              help_text='最终审批通过后申请人可在该时限内回传凭证；0 表示不允许回传')
+    # 票据回传开关：关闭时发起人与最后审批人均不可使用票据回传，审批人通过时审批弹窗不显示"通知发起人回传票据"
+    enable_receipt_return = models.BooleanField(default=False, verbose_name='开启票据回传',
+                                               help_text='开启后发起人与最后审批人可使用票据回传，审批人通过时可通知发起人回传票据')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
@@ -477,6 +494,30 @@ class ApprovalDeptConfig(models.Model):
 
     def __str__(self):
         return f'{self.approval_type} 配置'
+
+
+class CustomPaymentMethod(models.Model):
+    """用户自定义收款方式库（记忆功能：保存用户填过的自定义收款方式，便于下次复用）"""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name='custom_payment_methods', verbose_name='用户')
+    payee_name = models.CharField(max_length=50, blank=True, default='', verbose_name='收款人姓名')
+    bank_card = models.CharField(max_length=40, blank=True, default='', verbose_name='银行卡号')
+    bank_name = models.CharField(max_length=200, blank=True, default='', verbose_name='开户银行')
+    bank_address = models.CharField(max_length=300, blank=True, default='', verbose_name='开户银行地址')
+    alipay_account = models.CharField(max_length=100, blank=True, default='', verbose_name='支付宝账号')
+    wechat_account = models.CharField(max_length=100, blank=True, default='', verbose_name='微信账号')
+    alipay_qr = models.CharField(max_length=500, blank=True, default='', verbose_name='支付宝收款码')
+    wechat_qr = models.CharField(max_length=500, blank=True, default='', verbose_name='微信收款码')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        ordering = ['-updated_at']
+        verbose_name = '自定义收款方式'
+        verbose_name_plural = '自定义收款方式'
+
+    def __str__(self):
+        return f'{self.user} 自定义收款方式'
 
 
 class ApprovalNode(models.Model):
@@ -593,6 +634,16 @@ class AttendanceConfig(models.Model):
     clock_in_time = models.TimeField(null=True, blank=True, verbose_name='上班打卡截止时间')
     clock_out_enabled = models.BooleanField(default=True, verbose_name='启用下班打卡')
     clock_out_time = models.TimeField(null=True, blank=True, verbose_name='下班打卡开始时间')
+    # 每月补卡次数（0=禁用补卡）
+    makeup_allowance = models.PositiveIntegerField(default=3, verbose_name='每月补卡次数(0=禁用补卡)')
+    # 下班卡最多可重复打卡次数（防误打，以最后一次为准，至少为1）
+    clock_out_limit = models.PositiveIntegerField(default=3, verbose_name='下班卡最多打卡次数(至少1)')
+    # 班次类型：白班 / 夜班（夜班下班打卡在次日凌晨）
+    SHIFT_TYPE_CHOICES = [
+        ('day', '白班'),
+        ('night', '夜班'),
+    ]
+    shift_type = models.CharField(max_length=10, choices=SHIFT_TYPE_CHOICES, default='day', verbose_name='班次类型')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
@@ -608,6 +659,31 @@ class AttendanceConfig(models.Model):
         if self.department:
             parts.append(f'部门:{self.department.name}')
         return ' - '.join(parts)
+
+
+class UserAttendanceConfig(models.Model):
+    """个人考勤配置：针对个别成员的班次/打卡时间覆盖（如部门内个别成员单独上夜班）。
+    解析优先级最高：个人配置 > 部门配置 > 子公司配置 > 企业默认 > 父级回溯。
+    """
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                                related_name='attendance_config', verbose_name='成员')
+    shift_type = models.CharField(max_length=10, choices=AttendanceConfig.SHIFT_TYPE_CHOICES,
+                                  default='day', verbose_name='班次类型')
+    clock_in_enabled = models.BooleanField(default=True, verbose_name='启用上班打卡')
+    clock_in_time = models.TimeField(null=True, blank=True, verbose_name='上班打卡截止时间')
+    clock_out_enabled = models.BooleanField(default=True, verbose_name='启用下班打卡')
+    clock_out_time = models.TimeField(null=True, blank=True, verbose_name='下班打卡开始时间')
+    makeup_allowance = models.PositiveIntegerField(default=3, verbose_name='每月补卡次数(0=禁用补卡)')
+    clock_out_limit = models.PositiveIntegerField(default=3, verbose_name='下班卡最多打卡次数(至少1)')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '个人考勤配置'
+        verbose_name_plural = '个人考勤配置'
+
+    def __str__(self):
+        return f'{self.user} - {self.get_shift_type_display()}'
 
 
 class SubsidyApplication(models.Model):
@@ -811,6 +887,9 @@ class SubsidyConfig(models.Model):
     default_ocr_version = models.CharField(
         max_length=20, default='paddle', verbose_name='默认OCR识别版本',
         help_text='未配置时默认使用 PaddleOCR 本地识别')
+    # 发票识别结果缓存时间（秒），默认 7 天（604800）
+    ocr_cache_ttl = models.IntegerField(default=604800, verbose_name='发票识别缓存时间(秒)',
+                                       help_text='发票OCR识别结果的缓存时长，默认 7 天（604800 秒）')
     invoice_verify_enabled = models.BooleanField(default=False, verbose_name='开启发票验真')
     # 发票抬头配置（供员工开票参考）
     invoice_header_name = models.CharField(max_length=200, blank=True, default='', verbose_name='发票抬头名称')
@@ -859,3 +938,216 @@ class DailyDigestConfig(models.Model):
 
     def __str__(self):
         return f'{self.tenant} 每日通知配置'
+
+
+class MaterialItem(models.Model):
+    """物资物品库：统一物品主数据（名称/规格/单位/分类/参考价）"""
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                               related_name='material_items', verbose_name='所属企业')
+    name = models.CharField(max_length=100, verbose_name='物品名称')
+    spec = models.CharField(max_length=100, blank=True, default='', verbose_name='规格型号')
+    unit = models.CharField(max_length=20, blank=True, default='', verbose_name='单位')
+    category = models.CharField(max_length=50, blank=True, default='', verbose_name='分类')
+    price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, verbose_name='参考单价')
+    is_active = models.BooleanField(default=True, verbose_name='是否启用')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                                   null=True, blank=True, related_name='material_items_created',
+                                   verbose_name='创建人')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '物资物品库'
+        verbose_name_plural = '物资物品库'
+        ordering = ['name', 'id']
+
+    def __str__(self):
+        return f'{self.name}{(" " + self.spec) if self.spec else ""}'
+
+
+class MaterialRequirement(models.Model):
+    """物资需求单（业务数据，审批通过后进入采购/入库流转）"""
+    STATUS_CHOICES = [
+        ('pending', '待审批'),
+        ('approved', '已通过(待采购)'),
+        ('purchasing', '采购中'),
+        ('stocked', '已入库(可领用)'),
+    ]
+    request = models.OneToOneField(ApprovalRequest, on_delete=models.CASCADE,
+                                   related_name='material_requirement', verbose_name='关联审批单')
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                               null=True, blank=True, related_name='material_requirements',
+                               verbose_name='所属企业')
+    doc_no = models.CharField(max_length=40, unique=True, verbose_name='需求单号')
+    branch_dept = models.ForeignKey(Department, on_delete=models.SET_NULL,
+                                    null=True, blank=True, related_name='material_requirements',
+                                    verbose_name='分公司')
+    purpose = models.TextField(blank=True, default='', verbose_name='用途')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name='状态')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                                   null=True, blank=True, related_name='material_requirements_created',
+                                   verbose_name='申请人')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '物资需求单'
+        verbose_name_plural = '物资需求单'
+
+    def __str__(self):
+        return self.doc_no
+
+
+class MaterialRequirementItem(models.Model):
+    """物资需求单明细"""
+    requirement = models.ForeignKey(MaterialRequirement, on_delete=models.CASCADE,
+                                    related_name='items', verbose_name='需求单')
+    item_name = models.CharField(max_length=100, verbose_name='物品名称')
+    spec = models.CharField(max_length=100, blank=True, default='', verbose_name='规格型号')
+    unit = models.CharField(max_length=20, blank=True, default='', verbose_name='单位')
+    price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, verbose_name='单价')
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='数量')
+    remark = models.CharField(max_length=200, blank=True, default='', verbose_name='备注')
+    requisitioned_quantity = models.DecimalField(max_digits=12, decimal_places=2, default=0,
+                                                 verbose_name='已领用数量')
+
+    class Meta:
+        verbose_name = '物资需求单明细'
+        verbose_name_plural = '物资需求单明细'
+
+
+class MaterialRequisition(models.Model):
+    """物资领用单：关联需求单，审核通过后领料"""
+    STATUS_CHOICES = [
+        ('pending', '待审批'),
+        ('approved', '已通过(可领用)'),
+        ('rejected', '已驳回'),
+    ]
+    request = models.OneToOneField(ApprovalRequest, on_delete=models.CASCADE,
+                                   related_name='material_requisition', verbose_name='关联审批单')
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                               null=True, blank=True, related_name='material_requisitions',
+                               verbose_name='所属企业')
+    doc_no = models.CharField(max_length=40, unique=True, verbose_name='领用单号')
+    requirement = models.ForeignKey(MaterialRequirement, on_delete=models.CASCADE,
+                                    null=True, blank=True, related_name='requisitions',
+                                    verbose_name='关联需求单')
+    requirement_doc_no = models.CharField(max_length=40, blank=True, default='', verbose_name='关联需求单号(快照)')
+    branch_dept = models.ForeignKey(Department, on_delete=models.SET_NULL,
+                                    null=True, blank=True, related_name='material_requisitions',
+                                    verbose_name='领用部门')
+    purpose = models.TextField(blank=True, default='', verbose_name='用途')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name='状态')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                                   null=True, blank=True, related_name='material_requisitions_created',
+                                   verbose_name='申请人')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '物资领用单'
+        verbose_name_plural = '物资领用单'
+
+    def __str__(self):
+        return self.doc_no
+
+
+class MaterialRequisitionItem(models.Model):
+    """物资领用单明细（从需求单自动带出，快照）"""
+    requisition = models.ForeignKey(MaterialRequisition, on_delete=models.CASCADE,
+                                    related_name='items', verbose_name='领用单')
+    item_name = models.CharField(max_length=100, verbose_name='物品名称')
+    spec = models.CharField(max_length=100, blank=True, default='', verbose_name='规格型号')
+    unit = models.CharField(max_length=20, blank=True, default='', verbose_name='单位')
+    price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, verbose_name='单价')
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='数量')
+    remark = models.CharField(max_length=200, blank=True, default='', verbose_name='备注')
+
+    class Meta:
+        verbose_name = '物资领用单明细'
+        verbose_name_plural = '物资领用单明细'
+
+
+class DocumentSequence(models.Model):
+    """单据号序号（按 企业+单据类型+日期键 原子自增，保证并发唯一）"""
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                               related_name='doc_sequences', verbose_name='所属企业')
+    doc_type = models.CharField(max_length=40, verbose_name='单据类型')
+    date_key = models.CharField(max_length=20, verbose_name='日期键(如 202608)')
+    seq = models.PositiveIntegerField(default=0, verbose_name='当前序号')
+
+    class Meta:
+        unique_together = ('tenant', 'doc_type', 'date_key')
+        verbose_name = '单据号序号'
+        verbose_name_plural = '单据号序号'
+
+
+class WatermarkConfig(models.Model):
+    """企业水印配置（每企业一条，超管在管理控制台维护；隐性水印含用户信息便于溯源）"""
+    POSITION_CHOICES = [
+        ('tile', '整页平铺'),
+        ('center', '居中'),
+        ('top_left', '左上角'),
+        ('top_right', '右上角'),
+        ('bottom_left', '左下角'),
+        ('bottom_right', '右下角'),
+    ]
+    SHAPE_CHOICES = [
+        ('text', '纯文字'),
+        ('stamp', '印章(圆角边框)'),
+    ]
+    tenant = models.OneToOneField('accounts.Tenant', on_delete=models.CASCADE,
+                                  related_name='watermark_config', verbose_name='所属企业')
+    enabled = models.BooleanField(default=True, verbose_name='全局开启水印')
+    company_name = models.CharField(max_length=100, default='义乌吉通集团', verbose_name='公司名称')
+    text = models.CharField(max_length=300, blank=True, default='', verbose_name='附加水印文字')
+    font_size = models.IntegerField(default=16, verbose_name='字体大小')
+    font_color = models.CharField(max_length=20, default='#000000', verbose_name='字体颜色')
+    font_style = models.CharField(max_length=20, default='normal', verbose_name='字体样式')  # normal/bold/italic
+    rotation = models.IntegerField(default=-30, verbose_name='旋转角度')
+    opacity = models.FloatField(default=0.08, verbose_name='水印透明度')
+    position = models.CharField(max_length=20, choices=POSITION_CHOICES, default='tile', verbose_name='水印位置')
+    shape = models.CharField(max_length=20, choices=SHAPE_CHOICES, default='text', verbose_name='水印形状')
+    hidden_enabled = models.BooleanField(default=True, verbose_name='开启隐性水印')
+    hidden_opacity = models.FloatField(default=0.04, verbose_name='隐性水印透明度')
+    print_enabled = models.BooleanField(default=True, verbose_name='打印时添加水印')
+    # 每个页面的水印开关 {page_key: bool}
+    page_enabled = models.JSONField(default=dict, verbose_name='页面水印开关')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '企业水印配置'
+        verbose_name_plural = '企业水印配置'
+
+    def __str__(self):
+        return f'{self.tenant} 水印配置'
+
+
+class PrintLog(models.Model):
+    """打印操作留痕：记录用户何时在哪个页面打印了什么，便于打印统计与打印权限分配"""
+    tenant = models.ForeignKey('accounts.Tenant', null=True, blank=True, on_delete=models.SET_NULL,
+                               related_name='print_logs', verbose_name='所属企业')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name='print_logs', verbose_name='操作人')
+    page = models.CharField(max_length=50, default='other', verbose_name='打印页面')  # approval/attendance/subsidy/subsidy_verify/subsidy_pay
+    target_type = models.CharField(max_length=50, blank=True, default='', verbose_name='对象类型')
+    target_id = models.CharField(max_length=100, blank=True, default='', verbose_name='对象ID')
+    count = models.IntegerField(default=0, verbose_name='打印条数')
+    ip = models.CharField(max_length=50, blank=True, default='', verbose_name='IP地址')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='打印时间')
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = '打印记录'
+        verbose_name_plural = '打印记录'
+
+    def __str__(self):
+        return f'{self.user} {self.page} 打印 {self.created_at:%Y-%m-%d %H:%M}'
+
+
+# 默认所有页面开启水印（首次创建时播种）
+DEFAULT_WATERMARK_PAGES = [
+    'chat', 'admin', 'cloud', 'cloud_settings', 'cloud_editor',
+    'oa_approval', 'oa_subsidy', 'oa_subsidy_verify', 'oa_subsidy_pay',
+    'oa_attendance', 'work_calendar', 'tasks', 'org', 'other',
+]

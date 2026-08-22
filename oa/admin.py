@@ -1,14 +1,20 @@
 from django.contrib import admin
 from .models import (
-    AttendanceRecord, ApprovalRequest, ApprovalLog,
+    AttendanceRecord, AttendanceConfig,
+    UserAttendanceConfig,
+    ApprovalRequest, ApprovalLog,
     ApprovalNode, ApprovalAssignee, WorkNotification,
     ApprovalCarbonCopy, ApprovalDeptConfig,
+    CustomPaymentMethod,
     ApprovalType, SubsidyApplication,
     SubsidyPayment, SubsidyConfig,
     SubsidyWithdrawal, SubsidyWallet,
     SubsidyInvoiceVerifyRecord,
     DailyDigestConfig,
-
+    MaterialItem,
+    MaterialRequirement, MaterialRequirementItem,
+    MaterialRequisition, MaterialRequisitionItem,
+    DocumentSequence, WatermarkConfig, PrintLog,
 )
 
 
@@ -19,10 +25,24 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
     search_fields = ['id', 'user__username', 'user__real_name', 'location']
     list_per_page = 20
 
+@admin.register(AttendanceConfig)
+class AttendanceConfigAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'sub_tenant', 'department', 'shift_type', 'makeup_allowance', 'clock_out_limit', 'clock_in_enabled', 'clock_in_time', 'clock_out_enabled', 'clock_out_time', 'updated_at', 'created_at']
+    list_filter = ['clock_in_enabled', 'clock_out_enabled', 'shift_type']
+    search_fields = ['id', 'tenant__name', 'sub_tenant__name', 'department__name']
+    list_per_page = 20
+
+@admin.register(UserAttendanceConfig)
+class UserAttendanceConfigAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user', 'shift_type', 'makeup_allowance', 'clock_out_limit', 'clock_in_enabled', 'clock_in_time', 'clock_out_enabled', 'clock_out_time', 'updated_at', 'created_at']
+    list_filter = ['clock_in_enabled', 'clock_out_enabled', 'shift_type']
+    search_fields = ['id', 'user__username', 'user__real_name']
+    list_per_page = 20
+
 
 @admin.register(ApprovalRequest)
 class ApprovalRequestAdmin(admin.ModelAdmin):
-    list_display = ['id', 'applicant', 'title', 'approval_type', 'status', 'sign_type', 'approval_mode', 'updated_at',
+    list_display = ['id', 'applicant', 'title', 'approval_type', 'status', 'receipt_deadline', 'sign_type', 'approval_mode', 'updated_at',
                     'created_at']
     list_filter = ['status', 'approval_type', 'sign_type', 'approval_mode']
     search_fields = ['id', 'title', 'applicant__username', 'applicant__real_name']
@@ -55,7 +75,7 @@ class ApprovalAssigneeAdmin(admin.ModelAdmin):
 
 @admin.register(WorkNotification)
 class WorkNotificationAdmin(admin.ModelAdmin):
-    list_display = ['id', 'recipient', 'notification_type', 'title', 'is_read', 'created_at']
+    list_display = ['id', 'recipient', 'notification_type', 'title', 'content', 'is_read', 'created_at']
     list_filter = ['notification_type', 'is_read']
     search_fields = ['title', 'content', 'recipient__username']
     list_per_page = 20
@@ -69,10 +89,18 @@ class ApprovalCarbonCopyAdmin(admin.ModelAdmin):
 
 @admin.register(ApprovalDeptConfig)
 class ApprovalDeptConfigAdmin(admin.ModelAdmin):
-    list_display = ['id', 'tenant', 'sub_tenant', 'approval_type', 'require_signature', 'final_approver',
+    list_display = ['id', 'tenant', 'sub_tenant', 'approval_type', 'enable_receipt_return', 'require_signature', 'final_approver',
                     'threshold_enabled', 'threshold_field', 'department', 'updated_at', 'created_at']
-    list_filter = ['approval_type', 'require_signature', 'threshold_enabled', 'threshold_field']
+    list_filter = ['approval_type', 'enable_receipt_return', 'require_signature', 'threshold_enabled', 'threshold_field']
     search_fields = ['tenant__name', 'department__name']
+    list_per_page = 20
+
+
+
+@admin.register(CustomPaymentMethod)
+class CustomPaymentMethodAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user', 'payee_name', 'bank_name', 'updated_at', 'created_at']
+    search_fields = ['user__username', 'user__real_name',  'payee_name', 'bank_name', 'bank_card', 'alipay_account', 'wechat_account']
     list_per_page = 20
 
 
@@ -134,3 +162,64 @@ class DailyDigestConfigAdmin(admin.ModelAdmin):
     list_per_page = 20
 
 
+@admin.register(MaterialItem)
+class MaterialItemAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'name', 'spec', 'unit', 'category', 'price', 'is_active', 'created_by', 'updated_at']
+    list_filter = ['is_active', 'category']
+    search_fields = ['name', 'spec', 'category', 'tenant__name']
+    list_per_page = 20
+
+
+@admin.register(MaterialRequirement)
+class MaterialRequirementAdmin(admin.ModelAdmin):
+    list_display = ['id', 'doc_no', 'tenant', 'branch_dept', 'purpose', 'status', 'created_by', 'created_at', 'updated_at']
+    list_filter = ['status']
+    search_fields = ['doc_no', 'purpose', 'tenant__name', 'branch_dept__name', 'created_by__username', 'created_by__real_name']
+    list_per_page = 20
+
+
+@admin.register(MaterialRequirementItem)
+class MaterialRequirementItemAdmin(admin.ModelAdmin):
+    list_display = ['id', 'requirement', 'item_name', 'spec', 'unit', 'quantity', 'requisitioned_quantity', 'remark']
+    search_fields = ['item_name', 'spec', 'requirement__doc_no']
+    list_per_page = 20
+
+
+@admin.register(MaterialRequisition)
+class MaterialRequisitionAdmin(admin.ModelAdmin):
+    list_display = ['id', 'doc_no', 'tenant', 'requirement', 'requirement_doc_no', 'branch_dept', 'status', 'created_by', 'created_at', 'updated_at']
+    list_filter = ['status']
+    search_fields = ['doc_no', 'requirement_doc_no', 'tenant__name', 'created_by__username', 'created_by__real_name']
+    list_per_page = 20
+
+
+@admin.register(MaterialRequisitionItem)
+class MaterialRequisitionItemAdmin(admin.ModelAdmin):
+    list_display = ['id', 'requisition', 'item_name', 'spec', 'unit', 'quantity', 'remark']
+    search_fields = ['item_name', 'spec', 'requisition__doc_no']
+    list_per_page = 20
+
+
+@admin.register(DocumentSequence)
+class DocumentSequenceAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'doc_type', 'date_key', 'seq']
+    search_fields = ['tenant__name', 'doc_type', 'date_key']
+    list_filter = ['doc_type']
+    list_per_page = 20
+
+
+@admin.register(WatermarkConfig)
+class WatermarkConfigAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'company_name', 'text', 'font_size', 'font_color', 'font_style', 'rotation', 'opacity', 'position', 'updated_at']
+    search_fields = ['id', 'tenant__name', 'company_name', 'text']
+    list_filter = ['enabled', 'position', 'shape', 'hidden_enabled', 'page_enabled']
+    list_per_page = 20
+
+
+@admin.register(PrintLog)
+class PrintLogAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user', 'page', 'target_type', 'target_id', 'count', 'ip', 'created_at']
+    search_fields = ['id', 'user__username', 'user__real_name', 'page', 'target_type', 'target_id', 'ip']
+    list_filter = ['page', 'target_type', 'created_at']
+    date_hierarchy = 'created_at'
+    list_per_page = 20

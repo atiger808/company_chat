@@ -267,6 +267,11 @@ class DocumentEditorApp {
             nameEl.textContent = displayName;
             nameEl.title = displayName; // 鼠标悬停时显示完整名称（防止被截断）
         }
+
+        // 🔧 用户信息异步加载完成后，用真实姓名重绘水印
+        if (window.WatermarkManager && WatermarkManager.refresh) {
+            setTimeout(() => WatermarkManager.refresh('cloud_editor'), 0);
+        }
     }
 
     // 获取编辑配置
@@ -347,6 +352,10 @@ class DocumentEditorApp {
                         ...this.config.editorConfig?.customization,
                         chat: true,
                         mentionShare: true,
+                        // 🔧 移动端启用紧凑工具栏，节省纵向空间
+                        compactToolbar: window.innerWidth <= 768
+                            ? true
+                            : (this.config.editorConfig?.customization?.compactToolbar || false),
                         onChatMessage: (message) => {
                             this.syncChatMessage(message);
                         }
@@ -1219,7 +1228,7 @@ class DocumentEditorApp {
             <table style="width:100%;border-collapse:collapse;">
                 <thead><tr style="background:#f5f7fa;">
                     <th style="padding:12px;text-align:left;">版本号</th><th style="padding:12px;text-align:left;">大小</th>
-                    <th style="padding:12px;text-align:left;">创建者</th><th style="padding:12px;text-align:left;">时间</th>
+                    <th style="padding:12px;text-align:left;">操作者</th><th style="padding:12px;text-align:left;">更新时间</th>
                     <th style="padding:12px;text-align:center;">操作</th>
                 </tr></thead>
                 <tbody>
@@ -1227,7 +1236,12 @@ class DocumentEditorApp {
                         <tr style="border-bottom:1px solid #ebeef5;">
                             <td style="padding:12px;">v${v.version_number} ${v.is_current ? '<span style="color:#67C23A;margin-left:5px;">(当前)</span>' : ''}</td>
                             <td style="padding:12px;">${this.formatFileSize(v.file_size)}</td>
-                            <td style="padding:12px;">${v.created_by}</td>
+                            <td style="padding:12px;">
+                                <div class="version-operator">
+                                    <img src="${v.created_by_avatar || '/static/images/default-avatar.png'}" class="version-operator-avatar" alt="">
+                                    <span>${this.escapeHtml(v.created_by_name || v.created_by || '系统')}</span>
+                                </div>
+                            </td>
                             <td style="padding:12px;">${new Date(v.created_at).toLocaleString('zh-CN')}</td>
                             <td style="padding:12px;text-align:center; display: flex;">
                                 <button class="btn btn-secondary btn-sm" onclick="editorApp.downloadVersion('${v.id}', '${this.escapeHtml(v.created_by)}', ${v.version_number})" style="padding:4px 12px;font-size:12px;">下载</button>

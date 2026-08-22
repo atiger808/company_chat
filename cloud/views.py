@@ -30,7 +30,7 @@ from .models import (
     FileCollaboration, FileVersion,
     DocumentVersion, DocumentEditLock, DocumentCollaboration,
     UploadSession, CloudSystemConfig, UserOnlyOfficePermission,
-    FolderCollaboration,
+    UserCloudOperationPermission, FolderCollaboration,
 )
 from accounts.models import CustomUser, Department
 from chat.models import FileUpload, upload_to
@@ -43,7 +43,12 @@ from .serializers import (
     ChunkUploadSerializer,
     MergeChunksSerializer,
     CloudSystemConfigSerializer, SystemConfigCategorySerializer,
-    UserOnlyOfficePermissionSerializer
+    UserOnlyOfficePermissionSerializer,
+    UserCloudOperationPermissionSerializer,
+)
+from utils.cloud_permission_utils import (
+    get_global_operation_permissions, save_global_operation_permissions,
+    get_effective_operation_permission,
 )
 from .permissions import OnlyOfficeCallbackPermission  # 🔧 导入自定义权限
 from .pagination import CloudPagination, SharePagination
@@ -7328,9 +7333,17 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                             file_obj.current_version = version
                             file_obj.save(update_fields=['size', 'updated_at', 'current_version'])
 
+                            # 归属到实际编辑者（协作者编辑记录到协作者名下，而非文档拥有者）
+                            editor_user = file_obj.owner
+                            if users:
+                                try:
+                                    from accounts.models import CustomUser as _CU
+                                    editor_user = _CU.objects.get(id=users[0])
+                                except Exception:
+                                    pass
                             FileOperationLog.objects.create(
                                 file=file_obj,
-                                user=file_obj.owner,
+                                user=editor_user,
                                 operation='edit_save',
                                 description=f'在线编辑保存：{file_obj.name} (v{version.version_number})',
                                 ip_address=get_request_ip(request),
@@ -7500,6 +7513,8 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                     'file_size': v.file_size,
                     'file_size_formatted': self._format_size(v.file_size),
                     'created_by': v.created_by.username if v.created_by else '系统',
+                    'created_by_name': (v.created_by.real_name or v.created_by.username) if v.created_by else '系统',
+                    'created_by_avatar': v.created_by.get_avatar_url() if v.created_by and hasattr(v.created_by, 'get_avatar_url') else '',
                     'created_at': v.created_at.isoformat(),
                     'comment': v.comment,
                     'is_current': v.is_current,
@@ -7758,6 +7773,12 @@ class CloudSystemSettingsViewSet(viewsets.GenericViewSet):
 
     permission_classes = [permissions.IsAuthenticated, IsCloudAdmin]
     pagination_class = CloudPagination  # 🔧 添加分页类
+
+    def get_permissions(self):
+        # 🔧 生效权限查询供普通用户（网盘下载/分享拦截、OA 打印拦截）使用，不需云盘管理员
+        if self.action == 'effective_permission':
+            return [permissions.IsAuthenticated()]
+        return super().get_permissions()
 
     CACHE_PREFIX = 'company_chat:config:'
 
@@ -8786,6 +8807,8 @@ class CloudSystemSettingsViewSet(viewsets.GenericViewSet):
                     'username': user.username,
                     'real_name': user.real_name or '',
                     'email': user.email or '',
+                    'avatar': user.get_avatar_url() if hasattr(user, 'get_avatar_url') else '',
+                    'position': user.position or '',
                     'department': user.department.name if hasattr(user, 'department') and user.department else '',
                 }
                 for user in queryset
@@ -8799,6 +8822,169 @@ class CloudSystemSettingsViewSet(viewsets.GenericViewSet):
                 {'error': f'获取失败：{str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    # ==================== 企业操作权限（允许打印/文件下载/公开分享） ====================
+
+    def _op_tenant(self, request):
+        try:
+            return getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        except Exception:
+            return None
+
+    @action(detail=False, methods=['get', 'post'], url_path='operation-permissions')
+    def operation_permissions(self, request):
+        """全局操作权限配置
+        GET  /api/cloud/settings/operation-permissions/ 获取全局权限
+        POST /api/cloud/settings/operation-permissions/ 保存全局权限
+        """
+        if request.method == 'POST':
+            if not request.user.is_superuser:
+                return Response({'error': '权限不足'}, status=status.HTTP_403_FORBIDDEN)
+            permissions = save_global_operation_permissions(self._op_tenant(request), request.data)
+            return Response({'permissions': permissions})
+        permissions = get_global_operation_permissions(self._op_tenant(request))
+        return Response({'permissions': permissions})
+
+    @action(detail=False, methods=['get', 'post'], url_path='user-operation-permissions')
+    def user_operation_permissions(self, request):
+        """用户自定义操作权限配置
+        GET  /api/cloud/settings/user-operation-permissions/ 获取列表
+        POST /api/cloud/settings/user-operation-permissions/ 创建配置
+        """
+        if request.method == 'GET':
+            return self._list_user_operation_permissions(request)
+        return self._create_user_operation_permission(request)
+
+    def _list_user_operation_permissions(self, request):
+        try:
+            if not request.user.is_superuser:
+                return Response({'error': '权限不足'}, status=status.HTTP_403_FORBIDDEN)
+            queryset = UserCloudOperationPermission.objects.select_related('user', 'created_by').order_by('-updated_at')
+            search = request.query_params.get('search', '').strip()
+            if search:
+                queryset = queryset.filter(
+                    Q(user__username__icontains=search) | Q(user__real_name__icontains=search))
+            page = self.paginate_queryset(queryset)
+            if page is not None:
+                serializer = UserCloudOperationPermissionSerializer(page, many=True, context={'request': request})
+                return self.get_paginated_response(serializer.data)
+            serializer = UserCloudOperationPermissionSerializer(queryset, many=True, context={'request': request})
+            return Response(serializer.data)
+        except Exception as e:
+            logger.error(f'获取用户操作权限列表失败：{e}', exc_info=True)
+            return Response({'error': f'获取失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _create_user_operation_permission(self, request):
+        try:
+            if not request.user.is_superuser:
+                return Response({'error': '权限不足'}, status=status.HTTP_403_FORBIDDEN)
+            data = request.data.copy()
+            permissions = data.pop('permissions', {})
+            for key in ('allow_print', 'allow_download', 'allow_public_share'):
+                if key in permissions:
+                    data[key] = permissions[key]
+            serializer = UserCloudOperationPermissionSerializer(data=data, context={'request': request})
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except serializers.ValidationError as e:
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f'创建用户操作权限失败：{e}', exc_info=True)
+            return Response({'error': f'创建失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['put', 'delete'], url_path='user-operation-permissions/(?P<user_id>[^/.]+)')
+    def user_operation_permission_detail(self, request, user_id=None):
+        """更新/删除用户自定义操作权限
+        PUT    /api/cloud/settings/user-operation-permissions/{user_id}/
+        DELETE /api/cloud/settings/user-operation-permissions/{user_id}/
+        """
+        if request.method == 'PUT':
+            return self._update_user_operation_permission(request, user_id)
+        return self._delete_user_operation_permission(request, user_id)
+
+    def _update_user_operation_permission(self, request, user_id=None):
+        try:
+            if not request.user.is_superuser:
+                return Response({'error': '权限不足'}, status=status.HTTP_403_FORBIDDEN)
+            try:
+                perm = UserCloudOperationPermission.objects.get(user_id=user_id)
+            except UserCloudOperationPermission.DoesNotExist:
+                return Response({'error': '该用户暂无操作权限配置'}, status=status.HTTP_404_NOT_FOUND)
+            data = request.data.copy()
+            permissions = data.pop('permissions', None)
+            if permissions:
+                for key in ('allow_print', 'allow_download', 'allow_public_share'):
+                    if key in permissions:
+                        data[key] = permissions[key]
+            serializer = UserCloudOperationPermissionSerializer(perm, data=data, partial=True, context={'request': request})
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(serializer.data)
+        except UserCloudOperationPermission.DoesNotExist:
+            return Response({'error': '该用户暂无操作权限配置'}, status=status.HTTP_404_NOT_FOUND)
+        except serializers.ValidationError as e:
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f'更新用户操作权限失败：{e}', exc_info=True)
+            return Response({'error': f'更新失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _delete_user_operation_permission(self, request, user_id=None):
+        try:
+            if not request.user.is_superuser:
+                return Response({'error': '权限不足'}, status=status.HTTP_403_FORBIDDEN)
+            try:
+                perm = UserCloudOperationPermission.objects.get(user_id=user_id)
+                perm.delete()
+                return Response({'message': '操作权限配置已删除'})
+            except UserCloudOperationPermission.DoesNotExist:
+                return Response({'error': '该用户暂无操作权限配置'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f'删除用户操作权限失败：{e}', exc_info=True)
+            return Response({'error': f'删除失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['get'], url_path='users-for-operation-permission')
+    def get_users_for_operation_permission(self, request):
+        """获取可用于配置操作权限的用户列表（排除已配置用户）
+        GET /api/cloud/settings/users-for-operation-permission/?search=xxx
+        """
+        try:
+            if not request.user.is_superuser:
+                return Response({'error': '权限不足'}, status=status.HTTP_403_FORBIDDEN)
+            queryset = CustomUser.objects.filter(is_active=True)
+            configured = UserCloudOperationPermission.objects.values_list('user_id', flat=True)
+            queryset = queryset.exclude(id__in=configured)
+            search = request.query_params.get('search', '').strip()
+            if search:
+                queryset = queryset.filter(
+                    Q(username__icontains=search) | Q(real_name__icontains=search) | Q(email__icontains=search))
+            queryset = queryset[:50]
+            users_data = [
+                {
+                    'id': user.id,
+                    'username': user.username,
+                    'real_name': user.real_name or '',
+                    'email': user.email or '',
+                    'avatar': user.get_avatar_url() if hasattr(user, 'get_avatar_url') else '',
+                    'position': user.position or '',
+                    'department': user.department.name if getattr(user, 'department', None) else '',
+                }
+                for user in queryset
+            ]
+            return Response(users_data)
+        except Exception as e:
+            logger.error(f'获取用户列表失败：{e}', exc_info=True)
+            return Response({'error': f'获取失败：{str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['get'], url_path='effective-permission',
+            permission_classes=[permissions.IsAuthenticated])
+    def effective_permission(self, request):
+        """当前登录用户某项操作权限的生效值（用户自定义覆盖全局）
+        GET /api/cloud/settings/effective-permission/?perm=allow_print
+        """
+        perm = request.query_params.get('perm', '')
+        allowed = get_effective_operation_permission(request.user, perm, self._op_tenant(request))
+        return Response({'key': perm, 'allowed': bool(allowed)})
 
 
     # ==================== 辅助方法 ====================

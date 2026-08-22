@@ -1144,6 +1144,29 @@ class UserViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(queryset, many=True, context={'request': request})
         return Response(serializer.data)
 
+    @action(detail=False, methods=['get'])
+    def search_assignees(self, request):
+        """搜索可指派/选择的任务执行人（企业内所有活跃用户，含头像/部门/职位）。
+
+        与通讯录搜索不同：普通用户也可搜索全部活跃用户用于任务指派，不受好友限制。
+        q 为空时返回最近在线的用户（上限 50）。"""
+        query = request.query_params.get('q', '').strip()
+        qs = CustomUser.objects.filter(
+            is_active=True
+        ).exclude(
+            id=request.user.id
+        ).select_related('department')
+        if query:
+            qs = qs.filter(
+                Q(username__icontains=query) |
+                Q(real_name__icontains=query) |
+                Q(position__icontains=query) |
+                Q(department__name__icontains=query)
+            )
+        qs = qs.order_by('-is_online', '-last_login')[:50]
+        data = UserListSerializer(qs, many=True, context={'request': request}).data
+        return Response({'results': data})
+
     @action(detail=True, methods=['post'])
     def promote_user(self, request, pk=None):
         """提升用户权限"""

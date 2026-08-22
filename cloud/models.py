@@ -1123,6 +1123,63 @@ class UserOnlyOfficePermission(models.Model):
         return perm, created
 
 
+class UserCloudOperationPermission(models.Model):
+    """
+    🔧 用户专属的企业操作权限配置
+    允许为特定用户设置个性化的操作权限：允许打印 / 允许文件下载 / 允许公开分享
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # 关联用户
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='cloud_operation_permissions',
+        verbose_name='用户'
+    )
+
+    # 操作权限
+    allow_print = models.BooleanField(default=False, verbose_name='允许打印')
+    allow_download = models.BooleanField(default=True, verbose_name='允许文件下载')
+    allow_public_share = models.BooleanField(default=True, verbose_name='允许公开分享')
+
+    # 元数据
+    is_active = models.BooleanField(default=True, verbose_name='是否启用')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_cloud_operation_permissions',
+        verbose_name='创建者'
+    )
+
+    # 备注
+    description = models.TextField(blank=True, null=True, verbose_name='备注说明')
+
+    class Meta:
+        verbose_name = '用户操作权限'
+        verbose_name_plural = verbose_name
+        ordering = ['-updated_at']
+        unique_together = ['user']  # 每个用户只能有一条权限配置
+        indexes = [
+            models.Index(fields=['user', 'is_active']),
+            models.Index(fields=['is_active', '-updated_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.user.username} - 操作权限'
+
+    def get_permissions_dict(self):
+        """获取权限字典（用于序列化）"""
+        return {
+            'allow_print': self.allow_print,
+            'allow_download': self.allow_download,
+            'allow_public_share': self.allow_public_share,
+        }
+
+
 # cloud/models.py
 
 class DocumentChatMessage(models.Model):

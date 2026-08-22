@@ -2561,3 +2561,59 @@ input:checked + .slider:before {
 
 [data-theme="dark"] .log-detail-item { border-bottom-color: #333; }
 [data-theme="dark"] .log-detail-item pre { background: #2d2d2d !important; }
+
+
+
+/* ==================== Toast 提示 ==================== */
+#toast {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 10001;
+    opacity: 0;
+    transform: translateX(60px);
+    transition: all 0.35s cubic-bezier(0.34,1.56,0.64,1);
+    pointer-events: none;
+}
+#toast.show {
+    opacity: 1;
+    transform: translateX(0);
+    pointer-events: auto;
+}
+.toast-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 20px;
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.14);
+    min-width: 260px;
+    border-left: 4px solid var(--primary-color,#409eff);
+}
+.toast-icon i { font-size: 22px; }
+.toast-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary,#303133);
+}
+.toast-text {
+    font-size: 13px;
+    color: var(--text-secondary,#606266);
+    margin-top: 2px;
+}
+[data-theme="dark"] .confirm-dialog-content {
+    background: #1e1e1e;
+}
+[data-theme="dark"] .confirm-dialog-body {
+    color: var(--text-secondary,#b0b0b0);
+}
+[data-theme="dark"] .confirm-dialog-btn.cancel {
+    background: #2d2d2d;
+    border-color: #444;
+    color: var(--text-primary);
+}
+[data-theme="dark"] .toast-content {
+    background: #1e1e1e;
+    border-left-color: var(--primary-color,#409eff);
+}

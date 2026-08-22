@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理控制台 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260816-f56df66">
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260816-f56df66">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260822-1491961">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260822-1491961">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260305-1">
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260820-d0b2c3e">
     <!-- 🔧 新增：Chart.js 用于图表展示 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>-->
-    <script src="/static/js/dist/chart.min.js?v=20260816-f56df66"></script>
+    <script src="/static/js/dist/chart.min.js?v=20260822-1491961"></script>
     <!-- 🔧 关键修复2: 添加 Chart.js 加载失败的回退方案 -->
     <script>
         // 检查 Chart.js 是否加载成功
@@ -68,6 +68,11 @@
             <!-- 系统设置：仅超级管理员可见 -->
             <a href="#" class="nav-item super-admin-only" data-tab="settings" style="display: none">
                 <i class="fas fa-cog"></i> 系统设置
+            </a>
+
+            <!-- 水印设置：仅超级管理员可见 -->
+            <a href="#" class="nav-item super-admin-only" data-tab="watermark" id="watermarkNavItem" style="display:none">
+                <i class="fas fa-fingerprint"></i> 水印设置
             </a>
 
             <!-- 登录日志：仅超级管理员可见 -->
@@ -139,7 +144,7 @@
                 </div>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="adminConsole.toggleUserDropdown(event)">
                     <span id="adminUsername" class="btn-text"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260816-f56df66" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260822-1491961" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu show" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item"
@@ -1013,18 +1018,18 @@
         <div class="spinner"></div>
     </div>
 </div>
-<script src="/static/js/dist/spark-md5.min.js?v=20260816-f56df66"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260816-f56df66"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260816-f56df66"></script>
-<script src="/static/js/encrypts.js?v=20260816-f56df66"></script>
-<script src="/static/js/utils.js?v=20260816-f56df66"></script>
-<script src="/static/js/api.js?v=20260816-f56df66"></script>
-<script src="/static/js/admin.js?v=20260816-f56df66"></script>
-<script src="/static/js/admin_chat_rooms.js?v=20260816-f56df66"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260822-1491961"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260822-1491961"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260822-1491961"></script>
+<script src="/static/js/encrypts.js?v=20260822-1491961"></script>
+<script src="/static/js/utils.js?v=20260822-1491961"></script>
+<script src="/static/js/api.js?v=20260822-1491961"></script>
+<script src="/static/js/admin.js?v=20260822-1491961"></script>
+<script src="/static/js/admin_chat_rooms.js?v=20260822-1491961"></script>
 <!-- 🔧 新增：数据统计和系统设置 JS -->
-<script src="/static/js/admin_statistics.js?v=20260816-f56df66"></script>
-<script src="/static/js/admin_settings.js?v=20260816-f56df66"></script>
-<script src="/static/js/notifications.js?v=20260816-f56df66"></script>
+<script src="/static/js/admin_statistics.js?v=20260822-1491961"></script>
+<script src="/static/js/admin_settings.js?v=20260822-1491961"></script>
+<script src="/static/js/notifications.js?v=20260822-1491961"></script>
 
 
 <script>
@@ -1098,5 +1103,106 @@
     }
 </script>
 
+
+<!-- 水印配置模态框 -->
+<div id="watermarkConfigModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:720px;">
+        <div class="modal-header">
+            <h3><i class="fas fa-fingerprint" style="color:#9b59b6;"></i> 企业水印设置</h3>
+            <button class="close-btn" onclick="adminConsole.closeWatermarkConfig()">&times;</button>
+        </div>
+        <div class="modal-body" style="max-height:72vh;overflow-y:auto;">
+            <div class="form-group">
+                <label class="switch-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="wmEnabled" style="width:16px;height:16px;cursor:pointer;">
+                    <span><i class="fas fa-toggle-on" style="color:#52c41a;"></i> 全局开启水印</span>
+                </label>
+            </div>
+            <div class="form-group">
+                <label class="switch-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="wmPrintEnabled" style="width:16px;height:16px;cursor:pointer;">
+                    <span><i class="fas fa-print" style="color:#409eff;"></i> 打印时添加水印（审批/考勤/补贴等打印内容自动带水印）</span>
+                </label>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div class="form-group">
+                    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;"><i class="fas fa-building" style="color:#409eff;"></i> 公司名称</label>
+                    <input type="text" id="wmCompanyName" class="form-input" value="义乌吉通集团" style="width:100%;">
+                </div>
+                <div class="form-group">
+                    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;"><i class="fas fa-font" style="color:#409eff;"></i> 附加文字（选填）</label>
+                    <input type="text" id="wmText" class="form-input" placeholder="默认：公司名称 + 账号 + 时间" style="width:100%;">
+                </div>
+                <div class="form-group">
+                    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">字体大小</label>
+                    <input type="number" id="wmFontSize" class="form-input" value="16" min="8" style="width:100%;">
+                </div>
+                <div class="form-group">
+                    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">字体颜色</label>
+                    <input type="color" id="wmFontColor" class="form-input" value="#000000" style="width:100%;height:38px;padding:2px;">
+                </div>
+                <div class="form-group">
+                    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">字体样式</label>
+                    <select id="wmFontStyle" class="form-select" style="width:100%;">
+                        <option value="normal">常规</option>
+                        <option value="bold">加粗</option>
+                        <option value="italic">斜体</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">旋转角度</label>
+                    <input type="number" id="wmRotation" class="form-input" value="-30" style="width:100%;">
+                </div>
+                <div class="form-group">
+                    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">透明度（0~1）</label>
+                    <input type="number" id="wmOpacity" class="form-input" value="0.08" step="0.01" min="0" max="1" style="width:100%;">
+                </div>
+                <div class="form-group">
+                    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">水印位置</label>
+                    <select id="wmPosition" class="form-select" style="width:100%;">
+                        <option value="tile">整页平铺</option>
+                        <option value="center">居中</option>
+                        <option value="top_left">左上角</option>
+                        <option value="top_right">右上角</option>
+                        <option value="bottom_left">左下角</option>
+                        <option value="bottom_right">右下角</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">水印形状</label>
+                    <select id="wmShape" class="form-select" style="width:100%;">
+                        <option value="text">纯文字</option>
+                        <option value="stamp">印章(圆角边框)</option>
+                    </select>
+                </div>
+                <div class="form-group" style="grid-column:1/-1;border-top:1px solid var(--border-color,#ebeef5);padding-top:12px;">
+                    <label class="switch-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                        <input type="checkbox" id="wmHiddenEnabled" style="width:16px;height:16px;cursor:pointer;">
+                        <span><i class="fas fa-eye-slash" style="color:#9b59b6;"></i> 开启隐性水印（含姓名/部门/职位/IP/设备，溯源用）</span>
+                    </label>
+                    <div style="margin-top:6px;display:flex;align-items:center;gap:8px;">
+                        <span style="font-size:12px;color:#909399;">隐性水印透明度：</span>
+                        <input type="number" id="wmHiddenOpacity" class="form-input" value="0.04" step="0.01" min="0" max="1" style="max-width:180px;">
+                    </div>
+                </div>
+            </div>
+            <div style="border-top:1px solid var(--border-color,#ebeef5);padding-top:12px;margin-top:12px;">
+                <label style="font-size:13px;font-weight:600;display:block;margin-bottom:8px;"><i class="fas fa-window-maximize" style="color:#409eff;"></i> 各页面水印开关</label>
+                <div id="wmPageToggles" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;"></div>
+            </div>
+            <div style="margin-top:10px;font-size:12px;color:#909399;">
+                <i class="fas fa-info-circle"></i> 隐性水印信息可通过控制台运行 <code>WatermarkManager.extractHidden()</code> 提取。
+            </div>
+        </div>
+        <div class="modal-footer">
+            <span style="flex:1;"></span>
+            <button class="btn btn-secondary" onclick="adminConsole.closeWatermarkConfig()">取消</button>
+            <button class="btn btn-primary" onclick="adminConsole.saveWatermarkConfig()"><i class="fas fa-save"></i> 保存配置</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/watermark.js?v=20260822-c2d3e4f"></script>
+<script>WatermarkManager.init();</script>
 </body>
 </html>

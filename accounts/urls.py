@@ -81,6 +81,7 @@ urlpatterns = [
     path('change-password/', UserViewSet.as_view({'post': 'change_password'}), name='user-change-password'),
     path('upload-avatar/', UserViewSet.as_view({'post': 'upload_avatar'}), name='user-upload-avatar'),
     path('search_users/', UserViewSet.as_view({'get': 'search_users'}), name='user-search'),
+    path('search_assignees/', UserViewSet.as_view({'get': 'search_assignees'}), name='user-search-assignees'),
     path('online/', UserViewSet.as_view({'get': 'online_users'}), name='user-online'),
     path('<int:pk>/profile/', UserViewSet.as_view({'get': 'get_user_profile'}), name='user-profile-detail'),
 

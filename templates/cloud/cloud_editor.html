@@ -23,9 +23,13 @@
 
     <!-- 项目静态文件 -->
 
-    <script src="/static/js/utils.js?v=20260816-f56df66"></script>
-    <script src="/static/js/api.js?v=20260816-f56df66"></script>
-    <script src="/static/js/cloud_editor.js?v=20260816-f56df66"></script>
+    <script src="/static/js/utils.js?v=20260822-1491961"></script>
+    <script src="/static/js/api.js?v=20260822-1491961"></script>
+    <script src="/static/js/cloud_editor.js?v=20260822-1491961"></script>
+    <!-- 🔧 加密依赖：水印配置响应为加密包，需要 EncryptUtils 解密（缺此则水印静默不显示） -->
+    <script src="/static/js/dist/crypto-js.min.js?v=20260822-1491961"></script>
+    <script src="/static/js/dist/sm4.min.js?v=20260822-1491961"></script>
+    <script src="/static/js/encrypts.js?v=20260822-1491961"></script>
 
 
     <!-- 协同编辑专用样式 -->
@@ -533,6 +537,22 @@
             gap: 8px;
         }
 
+        /* 🔧 版本历史操作者：头像 + 姓名 */
+        .version-operator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .version-operator-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            object-fit: cover;
+            flex-shrink: 0;
+            border: 1px solid #eee;
+        }
+
         /* ==================== 按钮样式 ==================== */
         .btn {
             padding: 8px 16px;
@@ -658,32 +678,93 @@
 
         /* ==================== 移动端适配 ==================== */
         @media (max-width: 768px) {
+            .editor-container {
+                /* 🔧 适配移动端浏览器地址栏收起/展开，避免底部留白 */
+                height: 100dvh;
+                min-height: 100dvh;
+            }
+
             .collaboration-sidebar {
                 width: 100%;
                 max-width: 320px;
+                top: 40px;
+                bottom: 0;
+                box-shadow: -4px 0 16px rgba(0, 0, 0, 0.18);
             }
 
             .editor-header {
                 height: 40px;
-                padding: 0 10px;
+                padding: 0 8px;
+                gap: 6px;
             }
 
             .editor-title h1 {
-                font-size: 14px;
+                font-size: 12px;
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
-                max-width: 200px;
+                max-width: 110px;
             }
 
+            .editor-title i {
+                font-size: 15px;
+            }
+
+            /* 🔧 移动端头部按钮收敛为图标按钮，隐藏文字标签 */
             .editor-actions .btn {
-                padding: 6px 12px;
-                font-size: 12px;
+                padding: 7px 9px;
+                font-size: 13px;
+                gap: 0;
+            }
+
+            .editor-actions .btn .btn-label {
+                display: none;
+            }
+
+            /* 🔧 移动端保存状态只显示图标，隐藏文字 */
+            .save-status span {
+                display: none;
+            }
+
+            .save-status {
+                font-size: 14px;
+            }
+
+            /* 🔧 移动端当前用户信息只保留头像，进一步压缩间距 */
+            .current-user-info {
+                padding: 2px;
+                background: transparent;
+                margin-right: 2px;
+            }
+
+            .current-user-avatar {
+                width: 26px;
+                height: 26px;
             }
 
             .collab-avatar {
                 width: 24px;
                 height: 24px;
+            }
+
+            /* 🔧 按钮快速点击不触发放大 */
+            .editor-actions .btn {
+                touch-action: manipulation;
+            }
+        }
+
+        /* 超窄屏（如竖屏手机）进一步收紧 */
+        @media (max-width: 420px) {
+            .editor-header {
+                gap: 4px;
+            }
+
+            .editor-actions .btn {
+                padding: 6px 8px;
+            }
+
+            .current-user-info {
+                display: none;
             }
         }
 
@@ -839,7 +920,7 @@
         <div class="editor-actions">
             <!-- 🔧 新增：当前用户信息标签 -->
             <div class="current-user-info" id="currentUserInfo" title="当前登录用户">
-                <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260816-f56df66" alt="avatar"
+                <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260822-1491961" alt="avatar"
                      class="current-user-avatar">
                 <span id="currentUserName" class="current-user-name">加载中...</span>
             </div>
@@ -852,13 +933,13 @@
             </div>
 
             <button class="btn btn-secondary" onclick="editorApp.showVersions()">
-                <i class="fas fa-history"></i> 版本历史
+                <i class="fas fa-history"></i> <span class="btn-label">版本历史</span>
             </button>
             <button class="btn btn-primary" id="collaborationBtn" onclick="editorApp.toggleCollabSidebar(this)">
-                <i class="fas fa-users"></i> 协作者
+                <i class="fas fa-users"></i> <span class="btn-label">协作者</span>
             </button>
             <button class="btn btn-danger" onclick="editorApp.closeEditor()">
-                <i class="fas fa-times"></i> 关闭
+                <i class="fas fa-times"></i> <span class="btn-label">关闭</span>
             </button>
 
         </div>
@@ -1064,5 +1145,7 @@
 </div>
 
 
+<script src="/static/js/watermark.js?v=20260822-c2d3e4f"></script>
+<script>WatermarkManager.init();</script>
 </body>
 </html>

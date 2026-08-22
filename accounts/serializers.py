@@ -255,6 +255,21 @@ class AdminProfileUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("职位长度不能超过30字符")
         return value
 
+    def update(self, instance, validated_data):
+        """更新资料：上传头像时压缩/缩放，压缩版存 avatar（前端渲染），原图存 avatar_original"""
+        avatar = validated_data.get('avatar')
+        if avatar is not None:
+            from utils.avatar_utils import compress_avatar
+            compressed = compress_avatar(avatar)
+            if compressed:
+                try:
+                    instance.avatar_original.save(
+                        'orig_' + os.path.basename(avatar.name or 'avatar'), avatar, save=False)
+                except Exception:
+                    pass
+                validated_data['avatar'] = compressed
+        return super().update(instance, validated_data)
+
 
 
 # class UserListSerializer(serializers.ModelSerializer):
@@ -705,6 +720,21 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
         if value and len(str(value))>5:
             raise serializers.ValidationError("真实姓名长度不能超过5个字符")
         return value
+
+    def update(self, instance, validated_data):
+        """更新资料：上传头像时压缩/缩放，压缩版存 avatar（前端渲染），原图存 avatar_original"""
+        avatar = validated_data.get('avatar')
+        if avatar is not None:
+            from utils.avatar_utils import compress_avatar
+            compressed = compress_avatar(avatar)
+            if compressed:
+                try:
+                    instance.avatar_original.save(
+                        'orig_' + os.path.basename(avatar.name or 'avatar'), avatar, save=False)
+                except Exception:
+                    pass
+                validated_data['avatar'] = compressed
+        return super().update(instance, validated_data)
 
 
     # def update(self, instance, validated_data):

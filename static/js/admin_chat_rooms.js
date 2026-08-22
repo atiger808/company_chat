@@ -1576,14 +1576,16 @@ class AdminChatRoomsClient {
         };
         document.addEventListener('keydown', this._adminPreviewKeyHandler);
 
-        // 🔧 触摸滑动：左右滑动切换图片（移动端）
+        // 🔧 触摸滑动：左右滑动切换图片（移动端）；双指捏合由 Utils.enableImagePinchZoom 处理
         var touchStartX = null, touchStartY = null, swiped = false;
         overlay.addEventListener('touchstart', function(e) {
+            if (e.touches.length >= 2) return;
             touchStartX = e.touches[0].clientX;
             touchStartY = e.touches[0].clientY;
             swiped = false;
         }, {passive: true});
         overlay.addEventListener('touchmove', function(e) {
+            if (e.touches.length >= 2) return;
             if (touchStartX !== null) {
                 var dx = e.touches[0].clientX - touchStartX;
                 var dy = e.touches[0].clientY - touchStartY;
@@ -1591,6 +1593,7 @@ class AdminChatRoomsClient {
             }
         }, {passive: true});
         overlay.addEventListener('touchend', function(e) {
+            if (e.changedTouches && e.changedTouches.length >= 2) { touchStartX = null; return; }
             if (touchStartX !== null) {
                 var endX = e.changedTouches[0].clientX;
                 var endY = e.changedTouches[0].clientY;
@@ -1609,8 +1612,10 @@ class AdminChatRoomsClient {
         });
         var mainImg = document.getElementById('adminPreviewMainImg');
         if (mainImg) {
+            Utils.enableImagePinchZoom(mainImg);
             mainImg.addEventListener('click', function(e) {
                 e.stopPropagation();
+                if (mainImg._pz && mainImg._pz.scale > 1.01) return;  // 缩放中不关闭
                 if (swiped) { swiped = false; return; }
                 self._adminPreviewCleanup();
             });
@@ -1625,7 +1630,7 @@ class AdminChatRoomsClient {
         this._adminPreviewCurrent += dir;
         var img = document.getElementById('adminPreviewMainImg');
         var item = this._adminPreviewImgs[this._adminPreviewCurrent];
-        if (img) img.src = item.url || item;
+        if (img) { img.src = item.url || item; Utils.resetImageZoom(img); }
         var counter = document.getElementById('adminPreviewCounter');
         if (counter) counter.textContent = (this._adminPreviewCurrent + 1) + ' / ' + this._adminPreviewImgs.length;
         var p = document.getElementById('adminPrevBtn');

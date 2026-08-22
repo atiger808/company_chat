@@ -1,0 +1,4 @@
+PUSH_ENABLED: True
+F:\Users\ZY\anaconda3\lib\site-packages\redis\utils.py:25: CryptographyDeprecationWarning: Python 3.7 is no longer supported by the Python core team and support for it is deprecated in cryptography. The next release of cryptography will remove support for Python 3.7.
+  import cryptography  # noqa
+System check identified no issues (0 silenced).

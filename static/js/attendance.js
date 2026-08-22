@@ -30,25 +30,27 @@ class AttendanceApp {
         await this.loadStats();
         await this.loadRecords();
 
-        // 显示管理员的过滤组件
+        // 管理功能按钮：管理员/超级管理员；企业/部门过滤：仅超级管理员
         var userType = localStorage.getItem('user_type');
         if (userType === 'admin' || userType === 'super_admin') {
-            var tenantFilter = document.getElementById('attendanceFilterTenant');
-            var deptFilter = document.getElementById('attendanceFilterDepartment');
             var exportBtn = document.getElementById('attendanceExportBtn');
             var printBtn = document.getElementById('attendancePrintBtn');
             var configBtn = document.getElementById('attendanceConfigBtn');
-            if (tenantFilter) tenantFilter.style.display = '';
-            if (deptFilter) deptFilter.style.display = '';
             if (exportBtn) { exportBtn.style.display = ''; exportBtn.style.opacity = '0.4'; }
             if (printBtn) { printBtn.style.display = ''; printBtn.style.opacity = '0.4'; }
             if (configBtn) configBtn.style.display = 'inline-flex';
-            this._loadFilterTenants();
-            // Bind dept filter change
-            if (deptFilter) {
-                deptFilter.addEventListener('change', function() {
-                    attendanceApp.loadRecords(1);
-                });
+            if (userType === 'super_admin') {
+                var tenantFilter = document.getElementById('attendanceFilterTenant');
+                var deptFilter = document.getElementById('attendanceFilterDepartment');
+                if (tenantFilter) tenantFilter.style.display = '';
+                if (deptFilter) deptFilter.style.display = '';
+                this._loadFilterTenants();
+                // Bind dept filter change
+                if (deptFilter) {
+                    deptFilter.addEventListener('change', function() {
+                        attendanceApp.loadRecords(1);
+                    });
+                }
             }
         }
     }
@@ -130,11 +132,21 @@ class AttendanceApp {
                 clockInBtn.innerHTML = '<i class="fas fa-sign-in-alt"></i> 上班打卡';
             }
 
+            var clockOutCount = data.clock_out_count || 0;
+            var clockOutLimit = data.clock_out_limit || 3;
+            var shiftType = data.shift_type || 'day';
+            var isNight = shiftType === 'night';
+            var canClockOut = data.has_clock_in || data.has_pending_clock_out;
             if (data.has_clock_out) {
-                clockOutBtn.disabled = true;
                 clockOutBtn.classList.add('clocked');
-                clockOutBtn.innerHTML = '<i class="fas fa-check-circle"></i> 已打卡';
-            } else if (data.has_clock_in) {
+                if (clockOutCount >= clockOutLimit) {
+                    clockOutBtn.disabled = true;
+                    clockOutBtn.innerHTML = '<i class="fas fa-check-circle"></i> 已打' + clockOutCount + '次（上限）';
+                } else {
+                    clockOutBtn.disabled = false;
+                    clockOutBtn.innerHTML = '<i class="fas fa-sign-out-alt"></i> 下班打卡（' + clockOutCount + '/' + clockOutLimit + '）';
+                }
+            } else if (canClockOut) {
                 clockOutBtn.disabled = false;
                 clockOutBtn.classList.remove('clocked');
                 clockOutBtn.innerHTML = '<i class="fas fa-sign-out-alt"></i> 下班打卡';
@@ -144,13 +156,36 @@ class AttendanceApp {
                 clockOutBtn.innerHTML = '<i class="fas fa-sign-out-alt"></i> 下班打卡';
             }
 
-            if (data.clock_in && data.clock_out) {
-                statusEl.textContent = '✅ 今日考勤已完成';
-            } else if (data.clock_in) {
-                statusEl.textContent = '⏳ 已上班打卡，等待下班打卡';
+            if (data.has_clock_out) {
+                statusEl.textContent = '✅ ' + (isNight ? '夜班' : '今日') + '考勤已完成';
+            } else if (canClockOut) {
+                statusEl.textContent = '⏳ ' + (isNight ? '夜班' : '') + '已上班打卡，等待下班打卡';
             } else {
                 statusEl.textContent = '📋 今日尚未打卡';
             }
+
+            var shiftBadge = document.getElementById('todayShiftBadge');
+            if (shiftBadge) {
+                shiftBadge.style.display = 'inline-flex';
+                shiftBadge.textContent = isNight ? '🌙 夜班' : '☀ 白班';
+                shiftBadge.className = 'shift-badge ' + shiftType;
+            }
+
+            // 补卡与下班打卡次数提示
+            this._makeupUsed = data.makeup_used || 0;
+            this._makeupAllowance = (data.makeup_allowance != null) ? data.makeup_allowance : 3;
+            this._makeupEnabled = !!data.makeup_enabled;
+            var makeupInfoEl = document.getElementById('todayMakeupInfo');
+            if (makeupInfoEl) {
+                if (data.makeup_enabled) {
+                    var coInfo = clockOutCount > 0 ? ' · 今日下班打卡 ' + clockOutCount + '/' + clockOutLimit + ' 次' : '';
+                    makeupInfoEl.innerHTML = '<i class="fas fa-edit"></i> 本月补卡剩余 <b>' + (data.makeup_remaining || 0) + '</b> 次' + coInfo;
+                } else {
+                    makeupInfoEl.innerHTML = '<i class="fas fa-edit"></i> 未开启补卡功能';
+                }
+            }
+            var makeupBtn = document.getElementById('makeupBtn');
+            if (makeupBtn) makeupBtn.style.display = data.makeup_enabled ? '' : 'none';
         } catch (e) {
             console.error('加载今日状态失败:', e);
         }
@@ -377,38 +412,65 @@ class AttendanceApp {
         }
     }
 
+    // 获取打卡位置：自动请求定位权限，失败时给出清晰提示（权限被拒→引导去设置；无法定位→可重试或继续无位置打卡）
     async _fetchLocation() {
-        var location = '';
-        var lat = null;
-        var lng = null;
-        var reverseGeocoding = null;
+        var result = { ok: true, abort: false, skip: false, latitude: null, longitude: null, location: '', reverse_geocoding: null };
+        var pos = null;
         try {
-            var pos = await new Promise(function(res, rej) {
-                navigator.geolocation.getCurrentPosition(res, rej, { timeout: 8000, enableHighAccuracy: true });
-            });
-            lat = pos.coords.latitude;
-            lng = pos.coords.longitude;
-            // 通过后端接口进行百度地图反向地理编码
-            try {
-                var geoResp = await fetch('/api/oa/approval/geocode/?lat=' + lat + '&lng=' + lng, {
-                    headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('access_token') || '') }
-                });
-                if (geoResp.ok) {
-                    var geoData = await geoResp.json();
-                    if (geoData.location) {
-                        location = geoData.location;
-                    }
-                    if (geoData.reverse_geocoding) {
-                        reverseGeocoding = geoData.reverse_geocoding;
-                    }
-                }
-            } catch (geoErr) {
-                console.warn('地理编码接口失败:', geoErr);
+            pos = await PermUtils.getLocation();
+        } catch (err) {
+            // 定位权限被拒绝 → 引导用户去系统设置开启
+            if (err.code === 'PERMISSION_DENIED') {
+                PermUtils.showPermissionGuide('location', '考勤打卡需要获取位置信息。');
+                result.ok = false; result.abort = true; result.code = err.code; result.message = err.message;
+                return result;
             }
-        } catch (e) {
-            console.warn('位置获取失败:', e);
+            // 无法定位/超时 → 给出提示，可重试或继续无位置打卡
+            var choice = await new Promise(function (resolve) {
+                var overlay = document.createElement('div');
+                overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);padding:20px;';
+                overlay.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:340px;width:100%;box-shadow:0 12px 40px rgba(0,0,0,0.25);overflow:hidden;">'
+                    + '<div style="display:flex;align-items:center;gap:8px;padding:14px 18px;background:#fdf6ec;border-bottom:1px solid #f5e6c8;font-size:15px;font-weight:600;color:#b88230;"><i class="fas fa-map-marker-alt" style="color:#e6a23c;"></i> 无法获取位置</div>'
+                    + '<div style="padding:16px 18px;font-size:14px;color:#606266;line-height:1.7;">' + (err.message || '定位失败') + '。请检查手机系统定位服务是否开启，或移动到信号较好的位置后重试。</div>'
+                    + '<div style="padding:12px 18px;border-top:1px solid #ebeef5;text-align:right;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">'
+                    + '<button data-act="retry" style="padding:8px 16px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;">重试</button>'
+                    + '<button data-act="skip" style="padding:8px 16px;background:#fff;color:#606266;border:1px solid #dcdfe6;border-radius:6px;cursor:pointer;font-size:14px;">继续打卡（无位置）</button>'
+                    + '</div></div>';
+                document.body.appendChild(overlay);
+                overlay.querySelector('[data-act="retry"]').onclick = function () { overlay.remove(); resolve('retry'); };
+                overlay.querySelector('[data-act="skip"]').onclick = function () { overlay.remove(); resolve('skip'); };
+                overlay.addEventListener('click', function (e) { if (e.target === overlay) { overlay.remove(); resolve('skip'); } });
+            });
+            if (choice === 'skip') {
+                result.ok = true; result.skip = true;
+                return result;
+            }
+            // 重试一次
+            try {
+                pos = await PermUtils.getLocation();
+            } catch (err2) {
+                result.ok = false; result.abort = true; result.code = err2.code; result.message = err2.message;
+                return result;
+            }
         }
-        return { latitude: lat, longitude: lng, location: location, reverse_geocoding: reverseGeocoding };
+        if (pos) {
+            result.latitude = pos.latitude;
+            result.longitude = pos.longitude;
+        }
+        // 通过后端接口进行百度地图反向地理编码
+        try {
+            var geoResp = await fetch('/api/oa/approval/geocode/?lat=' + result.latitude + '&lng=' + result.longitude, {
+                headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('access_token') || '') }
+            });
+            if (geoResp.ok) {
+                var geoData = await geoResp.json();
+                if (geoData.location) result.location = geoData.location;
+                if (geoData.reverse_geocoding) result.reverse_geocoding = geoData.reverse_geocoding;
+            }
+        } catch (geoErr) {
+            console.warn('地理编码接口失败:', geoErr);
+        }
+        return result;
     }
 
     _getClientInfo() {
@@ -424,6 +486,7 @@ class AttendanceApp {
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 打卡中...';
         try {
             var loc = await this._fetchLocation();
+            if (loc.abort) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sign-in-alt"></i> 上班打卡'; return; }
             var info = this._getClientInfo();
             var data = { device: this._getDeviceInfo(), user_agent: info.userAgent };
             if (loc.latitude) data.latitude = loc.latitude;
@@ -454,6 +517,7 @@ class AttendanceApp {
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 打卡中...';
         try {
             var loc = await this._fetchLocation();
+            if (loc.abort) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sign-out-alt"></i> 下班打卡'; return; }
             var info = this._getClientInfo();
             var data = { device: this._getDeviceInfo(), user_agent: info.userAgent };
             if (loc.latitude) data.latitude = loc.latitude;
@@ -473,7 +537,59 @@ class AttendanceApp {
         } catch (e) {
             btn.disabled = false;
             btn.innerHTML = '<i class="fas fa-sign-out-alt"></i> 下班打卡';
+            this.showToast(e.message || '打卡失败', true);
             console.error('打卡失败:', e);
+        }
+    }
+
+    openMakeupModal() {
+        var now = new Date();
+        var y = now.getFullYear();
+        var m = String(now.getMonth() + 1).padStart(2, '0');
+        var d = String(now.getDate()).padStart(2, '0');
+        var todayStr = y + '-' + m + '-' + d;
+        var dateInput = document.getElementById('makeupDate');
+        if (dateInput) {
+            dateInput.max = todayStr;
+            dateInput.value = todayStr;
+        }
+        var used = this._makeupUsed || 0;
+        var allowance = (this._makeupAllowance != null) ? this._makeupAllowance : 3;
+        var tip = document.getElementById('makeupRemainingTip');
+        if (tip) {
+            tip.innerHTML = '<i class="fas fa-info-circle"></i> 本月已用补卡 <b>' + used + '</b> / ' + allowance + ' 次，剩余 <b>' + Math.max(0, allowance - used) + '</b> 次';
+        }
+        document.getElementById('attendanceMakeupModal').style.display = 'flex';
+        setTimeout(function () {
+            document.getElementById('attendanceMakeupModal').classList.add('show');
+        }, 10);
+    }
+
+    closeMakeupModal() {
+        var modal = document.getElementById('attendanceMakeupModal');
+        if (modal) {
+            modal.classList.remove('show');
+            setTimeout(function () { modal.style.display = 'none'; }, 200);
+        }
+    }
+
+    async submitMakeup() {
+        var dateStr = document.getElementById('makeupDate') ? document.getElementById('makeupDate').value : '';
+        var clockType = document.getElementById('makeupClockType') ? document.getElementById('makeupClockType').value : 'clock_in';
+        if (!dateStr) { this.showToast('请选择补卡日期', true); return; }
+        var btn = document.querySelector('#attendanceMakeupModal .btn-primary');
+        if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 提交中...'; }
+        try {
+            await this.apiPost(OA_API_URL + '/attendance/makeup/', { date: dateStr, clock_type: clockType });
+            this.showToast('补卡成功', false);
+            this.closeMakeupModal();
+            await this.loadToday();
+            await this.loadStats();
+            await this.loadRecords(1);
+        } catch (e) {
+            this.showToast(e.message || '补卡失败', true);
+        } finally {
+            if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> 确认补卡'; }
         }
     }
 
@@ -646,6 +762,7 @@ class AttendanceApp {
         if (!tbody) return;
         var trs = Array.from(tbody.querySelectorAll('tr')).filter(function(tr) { return tr.querySelector('.record-cb:checked'); });
         if (!trs.length) return;
+        var gate = function () {
         var now = new Date();
         var dateStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0')
             + ' ' + String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
@@ -704,8 +821,24 @@ class AttendanceApp {
             + '<button onclick="window.print()" style="padding:8px 24px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;">打印</button> '
             + '<button onclick="window.close()" style="padding:8px 24px;background:#fff;color:#606266;border:1px solid #dcdfe6;border-radius:6px;cursor:pointer;font-size:14px;">返回 / 关闭</button>'
             + '</div></body></html>';
+        // 🔧 打印默认叠加水印（由管理控制台「打印时添加水印」开关控制）
+        var wm = (window.WatermarkManager && WatermarkManager.buildPrintWatermark) ? WatermarkManager.buildPrintWatermark() : null;
+        if (wm) html = html.replace('</head>', '<style>' + wm.css + '</style></head>').replace('</body>', wm.html + '</body>');
         win.document.write(html);
         win.document.close();
+        };
+        // 🔧 打印权限门：先上报打印并校验「允许打印」权限，无权限则拦截
+        if (window.WatermarkManager && WatermarkManager.reportPrint) {
+            WatermarkManager.reportPrint({page: 'attendance', target_type: 'attendance_record', count: trs.length}).then(function (res) {
+                if (res && res.allowed === false) {
+                    self.showToast('您没有打印权限，请联系管理员开通', true);
+                    return;
+                }
+                gate();
+            });
+        } else {
+            gate();
+        }
     }
 
     _doExportRecords(selectedFields, target) {
@@ -890,6 +1023,7 @@ class AttendanceApp {
         this._configEditKey = null;
         this._configDeleteId = null;
         this._configAttType = 'global';
+        this._attConfigUser = null;
         document.getElementById('attConfigType').value = 'global';
         // 重置类型卡片状态
         document.querySelectorAll('.config-type-card[data-att-type]').forEach(function(c) {
@@ -905,6 +1039,7 @@ class AttendanceApp {
         document.getElementById('attendanceConfigEmpty').style.display = 'block';
         document.getElementById('attConfigSubTenantRow').style.display = 'none';
         document.getElementById('attConfigDeptRow').style.display = 'none';
+        document.getElementById('attConfigUserRow').style.display = 'none';
         var rightSel = document.getElementById('attConfigSubTenantSelect');
         if (rightSel) rightSel.innerHTML = '<option value="">请选择子公司</option>';
         await this._loadAttSubTenants();
@@ -926,24 +1061,36 @@ class AttendanceApp {
         if (card) { card.classList.add('active'); card.style.borderColor = '#409eff'; card.style.background = '#ecf5ff'; }
         document.getElementById('attConfigSubTenantRow').style.display = type === 'sub_tenant' ? 'block' : 'none';
         document.getElementById('attConfigDeptRow').style.display = type === 'department' ? 'block' : 'none';
+        document.getElementById('attConfigUserRow').style.display = type === 'user' ? 'block' : 'none';
         document.getElementById('attendanceClockInEnabled').checked = true;
         document.getElementById('attendanceClockInTime').value = '09:00';
         document.getElementById('attendanceClockOutEnabled').checked = true;
         document.getElementById('attendanceClockOutTime').value = '18:00';
+        document.getElementById('attendanceMakeupAllowance').value = 3;
+        document.getElementById('attendanceClockOutLimit').value = 3;
+        this._setShiftType('day');
         document.getElementById('attendanceConfigForm').style.display = 'block';
         document.getElementById('attendanceConfigFooter').style.display = 'flex';
         document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
         document.getElementById('attendanceConfigEmpty').style.display = 'none';
         this._toggleClockIn();
         this._toggleClockOut();
+        if (type === 'user') {
+            this._attConfigUser = null;
+            var userSearch = document.getElementById('attConfigUserSearch');
+            if (userSearch) userSearch.value = '';
+            var userRes = document.getElementById('attConfigUserRes');
+            if (userRes) userRes.style.display = 'none';
+            this._renderAttUserTag();
+        }
         this._loadConfigForType(type);
     }
 
     async _loadConfigForType(type) {
         try {
-            var resp = await fetch(OA_API_URL + '/attendance/attendance-configs/', {
-                headers: TokenManager.getHeaders()
-            });
+            var url = OA_API_URL + '/attendance/attendance-configs/';
+            if (type === 'user') url = OA_API_URL + '/attendance/user-attendance-configs/';
+            var resp = await fetch(url, { headers: TokenManager.getHeaders() });
             if (!resp.ok) return;
             var json = await resp.json();
             var configs = json.results || [];
@@ -951,15 +1098,20 @@ class AttendanceApp {
             // Match using the actual selected dropdown values
             var selSubTenant = document.getElementById('attConfigSubTenantSelect').value;
             var selDept = document.getElementById('attendanceConfigDept').value;
+            var selUser = this._attConfigUser ? String(this._attConfigUser.id) : '';
             configs.forEach(function(c) {
                 var cSt = c.sub_tenant ? String(c.sub_tenant) : '';
                 var cDept = c.department ? String(c.department) : '';
+                var cUser = c.user ? String(c.user) : '';
                 if (type === 'global' && !c.sub_tenant && !c.department) { cfg = c; }
                 else if (type === 'sub_tenant' && c.sub_tenant && !c.department) {
                     if (selSubTenant && cSt === selSubTenant) cfg = c;
                 }
                 else if (type === 'department' && c.department) {
                     if (selDept && cDept === selDept) cfg = c;
+                }
+                else if (type === 'user' && c.user) {
+                    if (selUser && cUser === selUser) cfg = c;
                 }
             });
             if (cfg) {
@@ -970,6 +1122,10 @@ class AttendanceApp {
                 if (deptSel) deptSel.value = cfg.department || '';
                 var stSel = document.getElementById('attConfigSubTenantSelect');
                 if (stSel) stSel.value = cfg.sub_tenant || '';
+                if (cfg.user) {
+                    this._attConfigUser = {id: cfg.user, name: cfg.user_name || '', avatar: cfg.avatar_url || '', department: cfg.department_name || '', position: cfg.position || ''};
+                    this._renderAttUserTag();
+                }
                 document.getElementById('attendanceClockInEnabled').checked = cfg.clock_in_enabled !== false;
                 document.getElementById('attendanceClockOutEnabled').checked = cfg.clock_out_enabled !== false;
                 if (cfg.clock_in_time) {
@@ -982,6 +1138,9 @@ class AttendanceApp {
                 } else {
                     document.getElementById('attendanceClockOutTime').value = '18:00';
                 }
+                document.getElementById('attendanceMakeupAllowance').value = (cfg.makeup_allowance != null) ? cfg.makeup_allowance : 3;
+                document.getElementById('attendanceClockOutLimit').value = (cfg.clock_out_limit != null) ? cfg.clock_out_limit : 3;
+                this._setShiftType(cfg.shift_type || 'day');
                 this._toggleClockIn();
                 this._toggleClockOut();
             }
@@ -1080,19 +1239,103 @@ class AttendanceApp {
         }
     }
 
-    async _loadAttConfigList() {
-        var container = document.getElementById('attendanceConfigList');
-        if (!container) return;
+    async _onAttUserSearch(e) {
+        var kw = (e.target.value || '').trim();
+        var res = document.getElementById('attConfigUserRes');
+        if (!res) return;
+        if (!kw) { res.style.display = 'none'; return; }
         try {
-            var resp = await fetch(OA_API_URL + '/attendance/attendance-configs/', {
+            var resp = await fetch(OA_API_URL + '/attendance/members/?search=' + encodeURIComponent(kw), {
                 headers: TokenManager.getHeaders()
             });
             if (!resp.ok) return;
             var json = await resp.json();
+            var users = json.results || [];
+            this._attSearchUsers = users;
+            var self = this;
+            res.innerHTML = users.length ? users.map(function (u) {
+                return '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;" onclick="attendanceApp._selectAttUser(' + u.id + ')">'
+                    + '<img src="' + (u.avatar || '/static/images/default-avatar.png') + '" style="width:26px;height:26px;border-radius:50%;object-fit:cover;">'
+                    + '<span style="flex:1;font-size:13px;">' + self._escape(u.name || '') + '</span>'
+                    + (u.department_name ? '<span style="font-size:11px;color:#909399;">' + self._escape(u.department_name) + '</span>' : '')
+                    + (u.position ? '<span style="font-size:11px;color:#c0c4cc;margin-left:4px;">' + self._escape(u.position) + '</span>' : '')
+                    + '</div>';
+            }).join('') : '<div style="padding:8px 12px;color:#909399;font-size:13px;">未找到成员</div>';
+            res.style.display = 'block';
+        } catch (err) {
+            console.warn('搜索成员失败', err);
+        }
+    }
+
+    _selectAttUser(id) {
+        var u = null;
+        var users = this._attSearchUsers || [];
+        for (var i = 0; i < users.length; i++) {
+            if (String(users[i].id) === String(id)) { u = users[i]; break; }
+        }
+        if (!u) return;
+        this._attConfigUser = {
+            id: u.id, name: u.name || '', avatar: u.avatar || '',
+            department: u.department_name || '', position: u.position || ''
+        };
+        var searchEl = document.getElementById('attConfigUserSearch');
+        if (searchEl) searchEl.value = '';
+        var res = document.getElementById('attConfigUserRes');
+        if (res) res.style.display = 'none';
+        this._renderAttUserTag();
+        this._configAttType = 'user';
+        this._configEditKey = null;
+        this._configDeleteId = null;
+        document.getElementById('attConfigType').value = 'user';
+        document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
+        document.getElementById('attendanceClockInEnabled').checked = true;
+        document.getElementById('attendanceClockInTime').value = '09:00';
+        document.getElementById('attendanceClockOutEnabled').checked = true;
+        document.getElementById('attendanceClockOutTime').value = '18:00';
+        document.getElementById('attendanceMakeupAllowance').value = 3;
+        document.getElementById('attendanceClockOutLimit').value = 3;
+        this._setShiftType('day');
+        this._toggleClockIn();
+        this._toggleClockOut();
+        this._loadConfigForType('user');
+    }
+
+    _clearAttUser() {
+        this._attConfigUser = null;
+        this._renderAttUserTag();
+        this._configEditKey = null;
+        this._configDeleteId = null;
+        document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
+    }
+
+    _renderAttUserTag() {
+        var container = document.getElementById('attConfigUserTag');
+        if (!container) return;
+        if (!this._attConfigUser) {
+            container.innerHTML = '<span style="font-size:12px;color:#c0c4cc;">未选择成员</span>';
+            return;
+        }
+        var u = this._attConfigUser;
+        container.innerHTML = '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 8px;background:#f3e8ff;border-radius:14px;font-size:12px;margin:2px;color:#9b59b6;">'
+            + (u.avatar ? '<img src="' + this._escape(u.avatar) + '" style="width:18px;height:18px;border-radius:50%;object-fit:cover;">' : '<i class="fas fa-user" style="font-size:10px;color:#9b59b6;"></i>')
+            + '<span>' + this._escape(u.name || ('#' + u.id)) + '</span>'
+            + (u.department ? '<span style="font-size:11px;color:#b39ddb;">' + this._escape(u.department) + '</span>' : '')
+            + '<i class="fas fa-times" style="cursor:pointer;color:#9b59b6;font-size:11px;" onclick="attendanceApp._clearAttUser()" title="取消选择"></i>'
+            + '</span>';
+    }
+
+    async _loadAttConfigList() {
+        var container = document.getElementById('attendanceConfigList');
+        if (!container) return;
+        try {
+            var filterType = this._configAttType || 'global';
+            var url = OA_API_URL + '/attendance/attendance-configs/';
+            if (filterType === 'user') url = OA_API_URL + '/attendance/user-attendance-configs/';
+            var resp = await fetch(url, { headers: TokenManager.getHeaders() });
+            if (!resp.ok) return;
+            var json = await resp.json();
             var configs = json.results || [];
             var self = this;
-            // 根据当前选中的类型过滤
-            var filterType = this._configAttType || 'global';
             if (!configs.length) {
                 container.innerHTML = '<div style="color:var(--text-light,#909399);font-size:13px;padding:8px 0;">暂无配置</div>';
                 return;
@@ -1102,14 +1345,21 @@ class AttendanceApp {
                 if (filterType === 'global' && (c.sub_tenant || c.department)) return '';
                 if (filterType === 'sub_tenant' && (!c.sub_tenant || c.department)) return '';
                 if (filterType === 'department' && !c.department) return '';
-                var label = c.department_name || c.sub_tenant_name || '集团默认';
-                var typeTag = '';
-                if (c.department) typeTag = '<span style="font-size:10px;padding:1px 4px;border-radius:3px;background:#f0f9eb;color:#67c23a;margin-left:4px;">部门</span>';
-                else if (c.sub_tenant) typeTag = '<span style="font-size:10px;padding:1px 4px;border-radius:3px;background:#fef3e0;color:#e6a23c;margin-left:4px;">子公司</span>';
-                else typeTag = '<span style="font-size:10px;padding:1px 4px;border-radius:3px;background:#e3f2fd;color:#409eff;margin-left:4px;">集团</span>';
+                if (filterType === 'user' && !c.user) return '';
+                var label, typeTag;
+                if (filterType === 'user') {
+                    label = c.user_name || ('成员 #' + c.user);
+                    typeTag = '<span style="font-size:10px;padding:1px 4px;border-radius:3px;background:#f3e8ff;color:#9b59b6;margin-left:4px;">个人</span>';
+                    if (c.department_name) label += ' <span style="color:var(--text-light,#909399);font-weight:400;">(' + attendanceApp._escape(c.department_name) + ')</span>';
+                } else {
+                    label = c.department_name || c.sub_tenant_name || '集团默认';
+                    if (c.department) typeTag = '<span style="font-size:10px;padding:1px 4px;border-radius:3px;background:#f0f9eb;color:#67c23a;margin-left:4px;">部门</span>';
+                    else if (c.sub_tenant) typeTag = '<span style="font-size:10px;padding:1px 4px;border-radius:3px;background:#fef3e0;color:#e6a23c;margin-left:4px;">子公司</span>';
+                    else typeTag = '<span style="font-size:10px;padding:1px 4px;border-radius:3px;background:#e3f2fd;color:#409eff;margin-left:4px;">集团</span>';
+                }
                 var sel = self._configEditKey && c.id === self._configEditKey ? ' style="background:#e8f4fd;font-weight:600;"' : '';
                 return '<div class="config-list-item"' + sel + ' onclick="attendanceApp._editAttConfig(' + c.id + ')" style="padding:8px 10px;border-radius:6px;cursor:pointer;margin-bottom:4px;font-size:13px;display:flex;align-items:center;justify-content:space-between;">'
-                    + '<span><i class="fas fa-clock" style="color:var(--primary-color,#409eff);margin-right:4px;"></i>' + self._escape(label) + typeTag + '</span></div>';
+                    + '<span><i class="fas fa-clock" style="color:var(--primary-color,#409eff);margin-right:4px;"></i>' + label + typeTag + '</span></div>';
             }).join('');
         } catch (e) {
             console.warn('加载考勤配置列表失败', e);
@@ -1118,9 +1368,9 @@ class AttendanceApp {
 
     async _editAttConfig(configId) {
         try {
-            var resp = await fetch(OA_API_URL + '/attendance/attendance-configs/', {
-                headers: TokenManager.getHeaders()
-            });
+            var url = OA_API_URL + '/attendance/attendance-configs/';
+            if (this._configAttType === 'user') url = OA_API_URL + '/attendance/user-attendance-configs/';
+            var resp = await fetch(url, { headers: TokenManager.getHeaders() });
             if (!resp.ok) return;
             var json = await resp.json();
             var configs = json.results || [];
@@ -1133,6 +1383,7 @@ class AttendanceApp {
             var cardType = 'global';
             if (cfg.sub_tenant && !cfg.department) cardType = 'sub_tenant';
             else if (cfg.department) cardType = 'department';
+            else if (cfg.user) cardType = 'user';
             this._configAttType = cardType;
             document.getElementById('attConfigType').value = cardType;
             document.querySelectorAll('.config-type-card[data-att-type]').forEach(function(c) { c.classList.remove('active'); c.style.borderColor = ''; c.style.background = ''; });
@@ -1140,6 +1391,7 @@ class AttendanceApp {
             if (card) { card.classList.add('active'); card.style.borderColor = '#409eff'; card.style.background = '#ecf5ff'; }
             document.getElementById('attConfigSubTenantRow').style.display = cardType === 'sub_tenant' ? 'block' : 'none';
             document.getElementById('attConfigDeptRow').style.display = cardType === 'department' ? 'block' : 'none';
+            document.getElementById('attConfigUserRow').style.display = cardType === 'user' ? 'block' : 'none';
             document.getElementById('attendanceConfigEmpty').style.display = 'none';
             document.getElementById('attendanceConfigForm').style.display = 'block';
             document.getElementById('attendanceConfigFooter').style.display = 'flex';
@@ -1148,6 +1400,14 @@ class AttendanceApp {
             if (deptSel) deptSel.value = cfg.department || '';
             var stSel = document.getElementById('attConfigSubTenantSelect');
             if (stSel) stSel.value = cfg.sub_tenant || '';
+            if (cardType === 'user') {
+                this._attConfigUser = {id: cfg.user, name: cfg.user_name || '', avatar: cfg.avatar_url || '', department: cfg.department_name || '', position: cfg.position || ''};
+                var userSearch = document.getElementById('attConfigUserSearch');
+                if (userSearch) userSearch.value = '';
+                var userRes = document.getElementById('attConfigUserRes');
+                if (userRes) userRes.style.display = 'none';
+                this._renderAttUserTag();
+            }
             document.getElementById('attendanceClockInEnabled').checked = cfg.clock_in_enabled !== false;
             document.getElementById('attendanceClockOutEnabled').checked = cfg.clock_out_enabled !== false;
             if (cfg.clock_in_time) {
@@ -1160,6 +1420,9 @@ class AttendanceApp {
             } else {
                 document.getElementById('attendanceClockOutTime').value = '18:00';
             }
+            document.getElementById('attendanceMakeupAllowance').value = (cfg.makeup_allowance != null) ? cfg.makeup_allowance : 3;
+            document.getElementById('attendanceClockOutLimit').value = (cfg.clock_out_limit != null) ? cfg.clock_out_limit : 3;
+            this._setShiftType(cfg.shift_type || 'day');
             this._toggleClockIn();
             this._toggleClockOut();
             this._loadAttConfigList();
@@ -1185,6 +1448,7 @@ class AttendanceApp {
         if (card) { card.classList.add('active'); card.style.borderColor = '#409eff'; card.style.background = '#ecf5ff'; }
         document.getElementById('attConfigSubTenantRow').style.display = 'block';
         document.getElementById('attConfigDeptRow').style.display = 'none';
+        document.getElementById('attConfigUserRow').style.display = 'none';
         document.getElementById('attendanceConfigForm').style.display = 'block';
         document.getElementById('attendanceConfigFooter').style.display = 'flex';
         document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
@@ -1194,6 +1458,9 @@ class AttendanceApp {
         document.getElementById('attendanceClockInTime').value = '09:00';
         document.getElementById('attendanceClockOutEnabled').checked = true;
         document.getElementById('attendanceClockOutTime').value = '18:00';
+        document.getElementById('attendanceMakeupAllowance').value = 3;
+        document.getElementById('attendanceClockOutLimit').value = 3;
+        this._setShiftType('day');
         this._toggleClockIn();
         this._toggleClockOut();
         this._loadConfigForType('sub_tenant');
@@ -1211,6 +1478,7 @@ class AttendanceApp {
         if (card) { card.classList.add('active'); card.style.borderColor = '#409eff'; card.style.background = '#ecf5ff'; }
         document.getElementById('attConfigSubTenantRow').style.display = 'none';
         document.getElementById('attConfigDeptRow').style.display = 'block';
+        document.getElementById('attConfigUserRow').style.display = 'none';
         document.getElementById('attendanceConfigForm').style.display = 'block';
         document.getElementById('attendanceConfigFooter').style.display = 'flex';
         document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
@@ -1220,9 +1488,48 @@ class AttendanceApp {
         document.getElementById('attendanceClockInTime').value = '09:00';
         document.getElementById('attendanceClockOutEnabled').checked = true;
         document.getElementById('attendanceClockOutTime').value = '18:00';
+        document.getElementById('attendanceMakeupAllowance').value = 3;
+        document.getElementById('attendanceClockOutLimit').value = 3;
+        this._setShiftType('day');
         this._toggleClockIn();
         this._toggleClockOut();
         this._loadConfigForType('department');
+    }
+
+    _getShiftType() {
+        var night = document.getElementById('attShiftNight');
+        return night && night.checked ? 'night' : 'day';
+    }
+
+    _setShiftType(val) {
+        var day = document.getElementById('attShiftDay');
+        var night = document.getElementById('attShiftNight');
+        var isNight = val === 'night';
+        if (day) day.checked = !isNight;
+        if (night) night.checked = isNight;
+        var hint = document.getElementById('attShiftNightHint');
+        if (hint) hint.style.display = isNight ? 'block' : 'none';
+    }
+
+    _onShiftTypeChange() {
+        var isNight = this._getShiftType() === 'night';
+        var hint = document.getElementById('attShiftNightHint');
+        if (hint) hint.style.display = isNight ? 'block' : 'none';
+        // 切换班次时若打卡时间仍为另一班次的默认值，则自动填入本班次默认时间
+        var ci = document.getElementById('attendanceClockInTime');
+        var co = document.getElementById('attendanceClockOutTime');
+        if (!ci || !co) return;
+        if (isNight) {
+            if ((ci.value === '09:00' || !ci.value) && (co.value === '18:00' || !co.value)) {
+                ci.value = '20:00';
+                co.value = '06:00';
+            }
+        } else {
+            if ((ci.value === '20:00' || !ci.value) && (co.value === '06:00' || !co.value)) {
+                ci.value = '09:00';
+                co.value = '18:00';
+            }
+        }
     }
 
     _toggleClockIn() {
@@ -1241,20 +1548,33 @@ class AttendanceApp {
         var attType = this._configAttType || document.getElementById('attConfigType').value || 'global';
         var deptId = document.getElementById('attendanceConfigDept').value;
         var subTenantId = document.getElementById('attConfigSubTenantSelect') ? document.getElementById('attConfigSubTenantSelect').value : '';
+        var userId = this._attConfigUser ? this._attConfigUser.id : '';
+        if (attType === 'user' && !userId) {
+            this.showToast('请先选择成员', true);
+            return;
+        }
         var clockInEnabled = document.getElementById('attendanceClockInEnabled').checked;
         var clockOutEnabled = document.getElementById('attendanceClockOutEnabled').checked;
         var clockInTime = document.getElementById('attendanceClockInTime').value;
         var clockOutTime = document.getElementById('attendanceClockOutTime').value;
+        var makeupAllowance = document.getElementById('attendanceMakeupAllowance') ? document.getElementById('attendanceMakeupAllowance').value : '';
+        var clockOutLimit = document.getElementById('attendanceClockOutLimit') ? document.getElementById('attendanceClockOutLimit').value : '';
         var data = {
             clock_in_enabled: clockInEnabled,
             clock_out_enabled: clockOutEnabled,
+            shift_type: this._getShiftType(),
         };
         if (clockInEnabled && clockInTime) data.clock_in_time = clockInTime;
         if (clockOutEnabled && clockOutTime) data.clock_out_time = clockOutTime;
+        if (makeupAllowance !== '') data.makeup_allowance = parseInt(makeupAllowance);
+        if (clockOutLimit !== '') data.clock_out_limit = parseInt(clockOutLimit);
         if (attType === 'department' && deptId) data.department_id = parseInt(deptId);
         if (attType === 'sub_tenant' && subTenantId) data.sub_tenant_id = parseInt(subTenantId);
+        if (attType === 'user' && userId) data.user_id = parseInt(userId);
+        var url = OA_API_URL + '/attendance/save-attendance-config/';
+        if (attType === 'user') url = OA_API_URL + '/attendance/save-user-attendance-config/';
         try {
-            var resp = await fetch(OA_API_URL + '/attendance/save-attendance-config/', {
+            var resp = await fetch(url, {
                 method: 'POST',
                 headers: TokenManager.getHeaders(),
                 body: JSON.stringify(data)
@@ -1264,7 +1584,7 @@ class AttendanceApp {
                 throw new Error(err.error || err.detail || '保存失败');
             }
             this.showToast('考勤配置保存成功', false);
-            this.closeConfigModal();
+            this._loadAttConfigList();
         } catch (e) {
             this.showAlert('保存失败', e.message || '请重试');
         }
@@ -1275,7 +1595,9 @@ class AttendanceApp {
         var confirmed = await this.showConfirmDialog('删除配置', '确定要删除当前考勤配置吗？删除后不可恢复。', 'danger');
         if (!confirmed) return;
         try {
-            var resp = await fetch(OA_API_URL + '/attendance/delete-attendance-config/' + this._configDeleteId + '/', {
+            var url = OA_API_URL + '/attendance/delete-attendance-config/' + this._configDeleteId + '/';
+            if (this._configAttType === 'user') url = OA_API_URL + '/attendance/delete-user-attendance-config/' + this._configDeleteId + '/';
+            var resp = await fetch(url, {
                 method: 'DELETE',
                 headers: TokenManager.getHeaders(),
             });

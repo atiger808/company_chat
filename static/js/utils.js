@@ -429,6 +429,120 @@ class Utils {
         return label;
     }
 
+    /**
+     * 格式化后端返回的日期时间为本地日期时间（自动处理时区转换）
+     * 兼容 ISO8601（含 Z / +08:00 偏移）与 "YYYY-MM-DD HH:mm:ss" 空格格式
+     * @param {string|Date|null} value - 后端返回的日期时间
+     * @param {Object} opts - {dateOnly:boolean, seconds:boolean, emptyText:string}
+     * @returns {string} 本地时间字符串，如 "2026-08-20 14:30:05"
+     */
+    static formatDateTime(value, opts = {}) {
+        if (value === undefined || value === null || value === '') return opts.emptyText || '-';
+        let v = String(value).trim();
+        if (v.indexOf('T') === -1 && v.indexOf(' ') > 0) v = v.replace(' ', 'T');
+        const d = new Date(v);
+        if (isNaN(d.getTime())) return opts.emptyText || '-';
+        const pad = (n) => String(n).padStart(2, '0');
+        let s = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+        if (opts.dateOnly) return s;
+        s += ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+        if (opts.seconds !== false) s += ':' + pad(d.getSeconds());
+        return s;
+    }
+
+    /**
+     * 移动端图片预览：启用双指捏合缩放（跟随手指）、缩放后单指拖动平移。
+     * 未缩放时单指滑动/点击仍由页面原有逻辑处理（切换图片/关闭），
+     * 缩放状态下点击图片不会关闭预览。
+     * @param {HTMLImageElement} imgEl - 预览中的 <img> 元素
+     */
+    static enableImagePinchZoom(imgEl) {
+        if (!imgEl || imgEl._pz) return;
+        var st = {scale: 1, tx: 0, ty: 0, startDist: 0, startScale: 1, startTx: 0, startTy: 0, startX: 0, startY: 0, startMidX: 0, startMidY: 0, pinch: false, pan: false};
+        imgEl._pz = st;
+        imgEl.style.transformOrigin = 'center center';
+        imgEl.style.touchAction = 'none';
+
+        function apply() {
+            if (st.scale <= 1.01) {
+                st.scale = 1; st.tx = 0; st.ty = 0;
+                imgEl.style.transform = '';
+            } else {
+                imgEl.style.transform = 'translate(' + st.tx + 'px,' + st.ty + 'px) scale(' + st.scale + ')';
+            }
+        }
+        function dist(t1, t2) {
+            var dx = t2.clientX - t1.clientX, dy = t2.clientY - t1.clientY;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        imgEl.addEventListener('touchstart', function (e) {
+            if (e.touches.length >= 2) {
+                e.preventDefault(); e.stopPropagation();
+                st.pinch = true; st.pan = false;
+                st.startDist = dist(e.touches[0], e.touches[1]);
+                st.startScale = st.scale;
+                st.startTx = st.tx; st.startTy = st.ty;
+                st.startMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                st.startMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+            } else if (st.scale > 1.01) {
+                // 已缩放：单指拖动平移
+                e.preventDefault(); e.stopPropagation();
+                st.pan = true; st.pinch = false;
+                st.startX = e.touches[0].clientX;
+                st.startY = e.touches[0].clientY;
+                st.startTx = st.tx; st.startTy = st.ty;
+            }
+            // 未缩放时不做处理：单指滑动/点击交给外层原有逻辑
+        }, {passive: false});
+
+        imgEl.addEventListener('touchmove', function (e) {
+            if (st.pinch && e.touches.length >= 2) {
+                e.preventDefault(); e.stopPropagation();
+                if (st.startDist > 0) {
+                    var d = dist(e.touches[0], e.touches[1]);
+                    st.scale = Math.max(1, Math.min(6, st.startScale * (d / st.startDist)));
+                    var mx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                    var my = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                    st.tx = st.startTx + (mx - st.startMidX);
+                    st.ty = st.startTy + (my - st.startMidY);
+                }
+                apply();
+            } else if (st.pan && e.touches.length === 1) {
+                e.preventDefault(); e.stopPropagation();
+                st.tx = st.startTx + (e.touches[0].clientX - st.startX);
+                st.ty = st.startTy + (e.touches[0].clientY - st.startY);
+                apply();
+            } else if (e.touches.length >= 2) {
+                e.preventDefault(); e.stopPropagation();
+            }
+        }, {passive: false});
+
+        function endTouches(e) {
+            if (e.touches && e.touches.length >= 2) return;
+            if (st.pinch || st.pan) {
+                e.preventDefault(); e.stopPropagation();
+                st.pinch = false; st.pan = false;
+                if (st.scale < 1.01) apply();
+            }
+        }
+        imgEl.addEventListener('touchend', endTouches, {passive: false});
+        imgEl.addEventListener('touchcancel', endTouches, {passive: false});
+
+        // 缩放状态下点击图片不关闭预览（未缩放时由页面原有点击逻辑关闭）
+        imgEl.addEventListener('click', function (e) {
+            if (st.scale > 1.01) { e.preventDefault(); e.stopPropagation(); }
+        });
+    }
+
+    // 重置图片缩放（切换图片时调用）
+    static resetImageZoom(imgEl) {
+        if (!imgEl || !imgEl._pz) return;
+        var st = imgEl._pz;
+        st.scale = 1; st.tx = 0; st.ty = 0; st.pinch = false; st.pan = false;
+        imgEl.style.transform = '';
+    }
+
 
 
     // 防抖函数
@@ -954,3 +1068,148 @@ const frontendConfig = new FrontendConfigManager();
 
 // 导出到全局
 window.frontendConfig = frontendConfig;
+
+// ==================== 设备权限工具（移动端 PWA 友好提示） ====================
+class PermUtils {
+
+    // 获取地理位置：成功 resolve {latitude, longitude, ...}；失败 reject {code, message}
+    static getLocation(options) {
+        return new Promise((resolve, reject) => {
+            if (!navigator.geolocation) {
+                reject({ code: 'UNSUPPORTED', message: '当前浏览器不支持定位功能' });
+                return;
+            }
+            const opts = Object.assign({ enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }, options || {});
+            navigator.geolocation.getCurrentPosition(
+                function (pos) {
+                    resolve({
+                        latitude: pos.coords.latitude,
+                        longitude: pos.coords.longitude,
+                        accuracy: pos.coords.accuracy,
+                        altitude: pos.coords.altitude,
+                        heading: pos.coords.heading,
+                        speed: pos.coords.speed,
+                    });
+                },
+                function (err) {
+                    let code = 'UNKNOWN';
+                    let message = '获取位置失败：' + ((err && err.message) || '未知错误');
+                    if (err && err.code === err.PERMISSION_DENIED) {
+                        code = 'PERMISSION_DENIED';
+                        message = '未授权定位权限，无法获取位置';
+                    } else if (err && err.code === err.POSITION_UNAVAILABLE) {
+                        code = 'POSITION_UNAVAILABLE';
+                        message = '无法获取位置（定位信号弱或系统定位未开启）';
+                    } else if (err && err.code === err.TIMEOUT) {
+                        code = 'TIMEOUT';
+                        message = '获取位置超时，请重试';
+                    }
+                    reject({ code: code, message: message });
+                },
+                opts
+            );
+        });
+    }
+
+    // 请求麦克风权限（用于语音消息/通话）：返回 {granted, code, message}
+    static async requestMicrophone() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            return { granted: false, code: 'UNSUPPORTED', message: '当前浏览器不支持麦克风' };
+        }
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            stream.getTracks().forEach(function (t) { t.stop(); });
+            return { granted: true, code: 'GRANTED', message: '' };
+        } catch (err) {
+            const name = (err && err.name) || '';
+            if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+                return { granted: false, code: 'PERMISSION_DENIED', message: '麦克风权限被拒绝，无法录音' };
+            }
+            if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+                return { granted: false, code: 'NOT_FOUND', message: '未检测到麦克风设备' };
+            }
+            return { granted: false, code: 'ERROR', message: '麦克风不可用：' + ((err && err.message) || '未知错误') };
+        }
+    }
+
+    // 请求相机权限（用于视频通话/拍照）：返回 {granted, code, message}
+    static async requestCamera() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            return { granted: false, code: 'UNSUPPORTED', message: '当前浏览器不支持相机' };
+        }
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            stream.getTracks().forEach(function (t) { t.stop(); });
+            return { granted: true, code: 'GRANTED', message: '' };
+        } catch (err) {
+            const name = (err && err.name) || '';
+            if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+                return { granted: false, code: 'PERMISSION_DENIED', message: '相机权限被拒绝，无法使用相机' };
+            }
+            return { granted: false, code: 'ERROR', message: '相机不可用：' + ((err && err.message) || '未知错误') };
+        }
+    }
+
+    // 是否以 PWA/独立窗口形式运行（已添加到桌面）
+    static isStandalone() {
+        return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+    }
+
+    // 展示权限引导对话框（引导用户去系统设置开启权限）
+    static showPermissionGuide(type, extraMsg) {
+        var labels = {
+            location: ['定位权限', '定位服务/定位', '允许访问位置信息'],
+            microphone: ['麦克风权限', '麦克风', '允许使用麦克风'],
+            camera: ['相机权限', '相机', '允许使用相机'],
+            file: ['文件访问权限', '文件/照片', '允许访问照片和文件'],
+            notification: ['通知权限', '通知', '允许接收通知'],
+        };
+        var cfg = labels[type] || [type + '权限', type, '允许使用'];
+        var title = cfg[0];
+        var deviceName = cfg[1];
+        var isStandalone = PermUtils.isStandalone();
+        var steps = isStandalone
+            ? ['前往「手机系统设置」→「应用管理」/「应用」→ 找到本应用', '开启「' + deviceName + '」权限开关', '返回后重新点击按钮']
+            : ['点击浏览器地址栏左侧的「🔒/ℹ️ 网站信息」图标', '在「权限」中把「' + deviceName + '」设置为允许', '刷新页面后重新点击按钮'];
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);padding:20px;';
+        var list = steps.map(function (s) { return '<li style="margin:2px 0;">' + s + '</li>'; }).join('');
+        overlay.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:360px;width:100%;box-shadow:0 12px 40px rgba(0,0,0,0.25);overflow:hidden;">'
+            + '<div style="display:flex;align-items:center;gap:8px;padding:14px 18px;background:#f5f7fa;border-bottom:1px solid #ebeef5;font-size:15px;font-weight:600;color:#303133;"><i class="fas fa-lock" style="color:#409eff;"></i> ' + title + '</div>'
+            + '<div style="padding:16px 18px;font-size:14px;color:#606266;line-height:1.7;">'
+            + '<p style="margin:0 0 8px;">需要「' + deviceName + '」权限才能完成该操作。' + (extraMsg || '') + '请在系统设置中开启：</p>'
+            + '<ol style="margin:0;padding-left:20px;">' + list + '</ol>'
+            + '</div>'
+            + '<div style="padding:12px 18px;border-top:1px solid #ebeef5;text-align:right;">'
+            + '<button style="padding:8px 22px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;">知道了</button>'
+            + '</div></div>';
+        document.body.appendChild(overlay);
+        var close = function () { overlay.remove(); };
+        overlay.querySelector('button').addEventListener('click', close);
+        overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    }
+
+    // 通用：获取定位失败时统一提示（isErrorToast=true 时用 toast，否则用引导对话框）
+    static handleLocationError(err) {
+        if (!err || typeof err === 'string') err = { code: 'UNKNOWN', message: err || '获取位置失败' };
+        if (err.code === 'PERMISSION_DENIED') {
+            PermUtils.showPermissionGuide('location');
+        } else {
+            // 无法定位/超时：先提示，给用户重试机会
+            var overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);padding:20px;';
+            overlay.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:340px;width:100%;box-shadow:0 12px 40px rgba(0,0,0,0.25);overflow:hidden;">'
+                + '<div style="display:flex;align-items:center;gap:8px;padding:14px 18px;background:#fdf6ec;border-bottom:1px solid #f5e6c8;font-size:15px;font-weight:600;color:#b88230;"><i class="fas fa-map-marker-alt" style="color:#e6a23c;"></i> 无法获取位置</div>'
+                + '<div style="padding:16px 18px;font-size:14px;color:#606266;line-height:1.7;">' + (err.message || '定位失败') + '。<br>请检查手机系统定位服务是否开启，或移动到信号较好的位置后重试。</div>'
+                + '<div style="padding:12px 18px;border-top:1px solid #ebeef5;text-align:right;display:flex;gap:8px;justify-content:flex-end;">'
+                + '<button data-act="cancel" style="padding:8px 16px;background:#fff;color:#606266;border:1px solid #dcdfe6;border-radius:6px;cursor:pointer;font-size:14px;">知道了</button>'
+                + '<button data-act="settings" style="padding:8px 16px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;">去开启定位</button>'
+                + '</div></div>';
+            document.body.appendChild(overlay);
+            overlay.querySelector('[data-act="cancel"]').onclick = function () { overlay.remove(); };
+            overlay.querySelector('[data-act="settings"]').onclick = function () { overlay.remove(); PermUtils.showPermissionGuide('location'); };
+            overlay.addEventListener('click', function (e) { if (e.target === overlay) overlay.remove(); });
+        }
+    }
+}
+window.PermUtils = PermUtils;

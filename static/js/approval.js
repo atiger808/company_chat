@@ -155,6 +155,7 @@ class ApprovalApp {
         var isAdmin = this._isAdminFromStorage();
         console.log('isAdmin:', isAdmin);
         this._applyAdminButtons(isAdmin);
+        // 物资管理/物品库入口在「审批服务」下拉（该下拉仅管理员可见），无需额外显隐
         // 各初始化步骤独立容错：任一失败不阻断后续执行
         try {
             await this.loadList();
@@ -278,8 +279,8 @@ class ApprovalApp {
         const cur = document.getElementById('newApprovalType');
         if (cur && !cur.value && this._approvalTypes.length) {
             this.selectType(this._approvalTypes[0].code);
-        } else if (cur && cur.value && !this._isBuiltinType(cur.value)) {
-            // 类型保存后：当前已选中的自定义类型实时重渲染动态表单（无需刷新页面）
+        } else if (cur && cur.value && (!this._isBuiltinType(cur.value) || this._isDynamicSchemaType(cur.value))) {
+            // 类型保存后：当前已选中的自定义/带表单内置类型实时重渲染动态表单（无需刷新页面）
             const t = this._getType(cur.value);
             this._renderDynamicFields(t ? (t.form_schema || []) : [], this._editFormData || {});
         }
@@ -359,6 +360,12 @@ class ApprovalApp {
         return ['leave', 'overtime', 'expense', 'trip', 'purchase', 'recruit', 'other'].indexOf(code) !== -1;
     }
 
+    // 是否渲染动态表单：自定义类型，或带 form_schema 的内置类型（如物资需求单/领用单）
+    _isDynamicSchemaType(code) {
+        const t = this._getType(code);
+        return !!(t && t.form_schema && t.form_schema.length);
+    }
+
     _hideBuiltinFields() {
         ['dateRow', 'amountGroup', 'expenseRow', 'recruitForm',
          'leaveTypeRow', 'tripInfoRow', 'purchaseItemsRow', 'expenseItemsRow'].forEach(id => {
@@ -371,8 +378,10 @@ class ApprovalApp {
         const container = document.getElementById('dynamicFormFields');
         if (!container) return;
         values = values || {};
+        this._currentSchema = schema || [];
         this._dynAttachmentValues = {};
         this._dynUserValues = {};
+        this._dynReqLinkValues = {};
         let html = '';
         const self = this;
         (schema || []).forEach(f => {
@@ -426,7 +435,7 @@ class ApprovalApp {
                 case 'amount':
                     html += '<div style="display:flex;align-items:center;gap:6px;">'
                         + (f.unit ? '<span style="font-size:15px;font-weight:600;color:#e6a23c;white-space:nowrap;flex-shrink:0;">' + self._escape(self._unitSymbol(f.unit)) + '</span>' : '<i class="fas fa-yen-sign" style="color:#e6a23c;"></i>')
-                        + '<input type="number" step="0.01" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(val) + '" placeholder="0.00" oninput="approvalApp._onDynNumericChange()" style="flex:1;">'
+                        + '<input type="number" step="0.01" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(val) + '" placeholder="0.00" oninput="approvalApp._onDynNumericChange()" style="flex:1;' + (f.readonly ? 'background:#f5f7fa;' : '') + '"' + (f.readonly ? ' disabled' : '') + '>'
                         + (f.unit ? '<span style="font-size:12px;color:#909399;white-space:nowrap;flex-shrink:0;">' + self._escape(self._unitLabel(f.unit)) + '</span>' : '') + '</div>';
                     break;
                 case 'attachment':
@@ -450,9 +459,18 @@ class ApprovalApp {
                         + '</div>';
                     break;
                 case 'struct_table': {
-                    html += '<div class="dyn-struct-table" data-struct-key="' + self._escape(key) + '">'
+                    const ro = !!f.readonly;
+                    html += '<div class="dyn-struct-table" data-struct-key="' + self._escape(key) + '"' + (ro ? ' data-readonly="1"' : '') + '>'
                         + '<div class="dyn-struct-rows"></div>'
-                        + '<button type="button" class="btn btn-sm btn-secondary dyn-struct-add" onclick="approvalApp._addDynStructRow(\'' + self._escape(key) + '\')"><i class="fas fa-plus"></i> 添加明细</button></div>';
+                        + (ro ? '' : '<button type="button" class="btn btn-sm btn-secondary dyn-struct-add" onclick="approvalApp._addDynStructRow(\'' + self._escape(key) + '\')"><i class="fas fa-plus"></i> 添加明细</button>')
+                        + '</div>';
+                    break;
+                }
+                case 'link_requisition': {
+                    html += '<div class="dyn-reqlink"><div style="position:relative;">'
+                        + '<input type="text" class="form-input" placeholder="输入需求单号/分公司/物品名称搜索..." oninput="approvalApp._onDynReqLinkSearch(event, \'' + self._escape(key) + '\')">'
+                        + '<div class="dyn-reqlink-res" id="dynReqLinkRes_' + self._escape(key) + '" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:#fff;border:1px solid #dcdfe6;border-radius:6px;max-height:180px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);"></div>'
+                        + '</div><div class="dyn-reqlink-tag" id="dynReqLinkTag_' + self._escape(key) + '"></div></div>';
                     break;
                 }
                 default:
@@ -473,12 +491,24 @@ class ApprovalApp {
             }
             if (f.type === 'department') {
                 // 始终加载部门下拉（新建审批无值也要渲染选项）
-                this._loadDynDeptOptions(f.key, values[f.key]);
+                this._loadDynDeptOptions(f.key, values[f.key], f.scope);
             }
             if (f.type === 'struct_table') {
                 this._dynStructCols = this._dynStructCols || {};
                 this._dynStructCols[f.key] = f.columns || [];
+                this._dynStructReadonly = this._dynStructReadonly || {};
+                this._dynStructReadonly[f.key] = !!f.readonly;
                 this._renderDynStructRows(f.key, values[f.key], f.columns || []);
+            }
+            if (f.type === 'link_requisition') {
+                this._dynReqLinkValues = this._dynReqLinkValues || {};
+                this._dynReqLinkValues[f.key] = (typeof values[f.key] === 'object' && values[f.key]) ? values[f.key] : null;
+                this._renderDynReqLinkTag(f.key);
+                // 若已选需求单，自动带出明细
+                const lv = this._dynReqLinkValues[f.key];
+                if (lv && lv.requirement_id && f.target) {
+                    this._autoFillRequisitionDetail(f.key, f.target, lv.requirement_id);
+                }
             }
             if (f.type === 'expense_type') {
                 let target = null;
@@ -531,14 +561,15 @@ class ApprovalApp {
         if (!tbl) return;
         const rowsEl = tbl.querySelector('.dyn-struct-rows');
         if (!rowsEl) return;
+        const readonly = this._dynStructReadonly && this._dynStructReadonly[key];
         rowsEl.innerHTML = '';
         (rows || []).forEach(function (row) {
             if (typeof row !== 'object') return;
-            approvalApp._appendDynStructRow(tbl, row, columns);
+            approvalApp._appendDynStructRow(tbl, row, columns, readonly);
         });
     }
 
-    _appendDynStructRow(tbl, row, columns) {
+    _appendDynStructRow(tbl, row, columns, readonly) {
         const rowsEl = tbl.querySelector('.dyn-struct-rows');
         if (!rowsEl || !columns || !columns.length) return;
         row = row || {};
@@ -547,29 +578,251 @@ class ApprovalApp {
         wrap.innerHTML = '<div class="dyn-struct-fields">'
             + columns.map(function (c) {
                 const val = row[c.key] !== undefined ? row[c.key] : '';
+                const isNumeric = c.type === 'amount' || c.type === 'number';
+                const isItem = c.type === 'item';
+                if (readonly) {
+                    // 只读（如领用单关联需求单自动带出的明细）：文本展示 + 隐藏值用于提交收集，不可改/删/加
+                    let txt = val;
+                    if (c.type === 'amount' && val !== '' && val != null) txt = Number(val).toFixed(2);
+                    return '<div class="dyn-struct-field"><label>' + approvalApp._escape(c.label || c.key) + '</label>'
+                        + '<input type="hidden" class="dyn-struct-input" data-c="' + approvalApp._escape(c.key) + '" value="' + approvalApp._escape(val) + '">'
+                        + '<div class="dyn-struct-ro" style="padding:6px 10px;background:#f5f7fa;border:1px solid #ebeef5;border-radius:4px;color:#606266;font-size:13px;min-height:20px;">' + approvalApp._escape(txt === '' ? '-' : txt) + '</div></div>';
+                }
                 const inputAttrs = c.type === 'amount'
                     ? 'type="number" step="0.01" placeholder="0.00"'
-                    : 'type="text"';
+                    : (c.type === 'number' ? 'type="number"' : 'type="text"');
+                const onInput = (isNumeric || isItem) ? ' oninput="approvalApp._onDynStructChange()"' : '';
+                const input = '<input ' + inputAttrs + onInput + ' autocomplete="off" class="form-input dyn-struct-input" data-c="' + approvalApp._escape(c.key) + '"' + (isItem ? ' data-item="1" placeholder="输入或搜索物品"' : '') + ' value="' + approvalApp._escape(val) + '">';
                 return '<div class="dyn-struct-field">'
                     + '<label>' + approvalApp._escape(c.label || c.key) + '</label>'
-                    + '<input ' + inputAttrs + ' class="form-input dyn-struct-input" data-c="' + approvalApp._escape(c.key) + '" value="' + approvalApp._escape(val) + '">'
+                    + input
+                    + (isItem ? '<div class="dyn-struct-item-res" style="position:absolute;left:0;right:0;top:100%;z-index:50;background:#fff;border:1px solid #dcdfe6;border-radius:6px;max-height:160px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);display:none;"></div>' : '')
                     + '</div>';
             }).join('')
             + '</div>'
-            + '<button type="button" class="dyn-struct-del" title="删除此行" onclick="approvalApp._removeDynStructRow(this)"><i class="fas fa-times"></i></button>';
+            + (readonly ? '' : '<button type="button" class="dyn-struct-del" title="删除此行" onclick="approvalApp._removeDynStructRow(this)"><i class="fas fa-times"></i></button>');
         rowsEl.appendChild(wrap);
+        // 物品名称列：挂接物品库联想（只读明细不挂接）
+        if (!readonly) {
+            wrap.querySelectorAll('.dyn-struct-input[data-item="1"]').forEach(function (input) {
+                approvalApp._bindDynStructItemAuto(input);
+            });
+        }
+    }
+
+    // 物品名称列联想：从物品库搜索，选中后自动回填规格/单位
+    _bindDynStructItemAuto(input) {
+        const field = input.closest('.dyn-struct-field');
+        if (!field) return;
+        const res = field.querySelector('.dyn-struct-item-res');
+        if (!res) return;
+        let timer = null;
+        input.addEventListener('input', function (e) {
+            const kw = e.target.value.trim();
+            if (!kw) { res.style.display = 'none'; return; }
+            clearTimeout(timer);
+            timer = setTimeout(function () {
+                fetch(OA_API_URL + '/material/item-search/?search=' + encodeURIComponent(kw), {headers: TokenManager.getHeaders()})
+                    .then(r => r.json()).then(function (d) {
+                        const items = d.results || [];
+                        if (!items.length) { res.innerHTML = '<div style="padding:6px 10px;color:#909399;font-size:12px;">未找到物品，可直接输入</div>'; }
+                        else {
+                            res.innerHTML = items.map(function (it) {
+                                return '<div style="padding:6px 10px;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:13px;" onclick="approvalApp._pickDynStructItem(this)" data-name="' + approvalApp._escape(it.name) + '" data-spec="' + approvalApp._escape(it.spec || '') + '" data-unit="' + approvalApp._escape(it.unit || '') + '" data-price="' + approvalApp._escape(it.price || '') + '">'
+                                    + '<span>' + approvalApp._escape(it.name) + '</span>'
+                                    + (it.spec ? ' <span style="font-size:11px;color:#909399;">' + approvalApp._escape(it.spec) + '</span>' : '')
+                                    + (it.unit ? ' <span style="font-size:11px;color:#c0c4cc;">' + approvalApp._escape(it.unit) + '</span>' : '')
+                                    + (it.price ? ' <span style="font-size:11px;color:#e6a23c;">¥' + approvalApp._escape(it.price) + '</span>' : '')
+                                    + '</div>';
+                            }).join('');
+                        }
+                        res.style.display = 'block';
+                    }).catch(function () {});
+            }, 200);
+        });
+        input.addEventListener('blur', function () {
+            setTimeout(function () { res.style.display = 'none'; }, 200);
+        });
+    }
+
+    _pickDynStructItem(el) {
+        const input = el.closest('.dyn-struct-field').querySelector('.dyn-struct-input[data-item="1"]');
+        if (input) input.value = el.getAttribute('data-name') || '';
+        const row = el.closest('.dyn-struct-row');
+        if (row) {
+            const spec = el.getAttribute('data-spec');
+            const unit = el.getAttribute('data-unit');
+            const price = el.getAttribute('data-price');
+            const specIn = row.querySelector('.dyn-struct-input[data-c="spec"]');
+            const unitIn = row.querySelector('.dyn-struct-input[data-c="unit"]');
+            const priceIn = row.querySelector('.dyn-struct-input[data-c="price"]');
+            if (specIn && spec) specIn.value = spec;
+            if (unitIn && unit) unitIn.value = unit;
+            if (priceIn && price) priceIn.value = price;
+        }
+        const res = el.parentNode;
+        if (res) res.style.display = 'none';
+        approvalApp._onDynStructChange();
+    }
+
+    // 结构化明细变更：自动把明细金额/数字列合计写入顶层「金额/合计」阈值字段，并刷新审批链（联动阈值审批）
+    _onDynStructChange() {
+        const typeEl = document.getElementById('newApprovalType');
+        const type = typeEl ? typeEl.value : '';
+        if (type && (!this._isBuiltinType(type) || this._isDynamicSchemaType(type))) {
+            const t = this._getType(type);
+            const schema = (t && t.form_schema) || [];
+            let totalSum = 0;
+            const self = this;
+            schema.forEach(function (f) {
+                if (f.type !== 'struct_table') return;
+                const cols = f.columns || [];
+                const tbl = document.querySelector('.dyn-struct-table[data-struct-key="' + f.key + '"]');
+                if (!tbl) return;
+                const priceCol = cols.find(function (c) { return c.key === 'price' && (c.type === 'amount' || c.type === 'number'); });
+                const qtyCol = cols.find(function (c) { return c.key === 'quantity' && (c.type === 'number' || c.type === 'amount'); });
+                if (priceCol && qtyCol) {
+                    // 物资明细：预估金额 = Σ(单价 × 数量)
+                    tbl.querySelectorAll('.dyn-struct-row').forEach(function (row) {
+                        const p = parseFloat(row.querySelector('.dyn-struct-input[data-c="price"]').value) || 0;
+                        const q = parseFloat(row.querySelector('.dyn-struct-input[data-c="quantity"]').value) || 0;
+                        totalSum += p * q;
+                    });
+                    return;
+                }
+                const numericCols = cols.filter(function (c) { return c.type === 'amount' || c.type === 'number'; });
+                if (!numericCols.length) return;
+                numericCols.forEach(function (ac) {
+                    tbl.querySelectorAll('.dyn-struct-input[data-c="' + ac.key + '"]').forEach(function (input) {
+                        totalSum += parseFloat(input.value) || 0;
+                    });
+                });
+            });
+            // 若 schema 存在顶层「金额/合计」数字字段，自动写入合计值
+            const amountField = schema.find(function (f) {
+                return (f.key === 'amount' || f.key === 'total' || f.key === 'total_amount')
+                    && (f.type === 'amount' || f.type === 'number');
+            });
+            if (amountField) {
+                const el = document.querySelector('input[data-k="' + amountField.key + '"]');
+                if (el) el.value = totalSum > 0 ? totalSum.toFixed(2) : '';
+            }
+        }
+        this._debouncedChainRefresh();
     }
 
     _addDynStructRow(key) {
         const tbl = document.querySelector('.dyn-struct-table[data-struct-key="' + key + '"]');
         if (!tbl) return;
+        if (tbl.getAttribute('data-readonly') === '1') return;  // 只读明细不可添加
         this._dynStructCols = this._dynStructCols || {};
-        this._appendDynStructRow(tbl, {}, this._dynStructCols[key] || []);
+        this._appendDynStructRow(tbl, {}, this._dynStructCols[key] || [], false);
+        this._onDynStructChange();
     }
 
     _removeDynStructRow(btn) {
         const row = btn.closest('.dyn-struct-row');
         if (row) row.remove();
+        this._onDynStructChange();
+    }
+
+    // ===== 关联需求单（物资领用单） =====
+    async _onDynReqLinkSearch(e, key) {
+        const kw = (e.target.value || '').trim();
+        const res = document.getElementById('dynReqLinkRes_' + key);
+        if (!res) return;
+        if (!kw) { res.style.display = 'none'; return; }
+        try {
+            const r = await fetch(OA_API_URL + '/material/requirement-search/?search=' + encodeURIComponent(kw), {headers: TokenManager.getHeaders()});
+            if (!r.ok) return;
+            const d = await r.json();
+            const list = d.results || [];
+            const self = this;
+            res.innerHTML = list.length ? list.map(function (it) {
+                if (it.linkable) {
+                    return '<div style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;" onclick="approvalApp._selectDynReqLink(' + it.id + ', \'' + self._escape(key) + '\')">'
+                        + '<div style="font-size:13px;font-weight:600;color:#16a085;">' + self._escape(it.doc_no) + ' <span style="font-size:10px;color:#16a085;background:#e8f8f0;border-radius:4px;padding:0 4px;">可领用</span></div>'
+                        + '<div style="font-size:11px;color:#909399;">' + self._escape([it.branch_dept, '物品 ' + it.item_count + ' 项', '剩余可领 ' + it.remaining].filter(Boolean).join(' · ')) + '</div>'
+                        + '</div>';
+                }
+                return '<div style="padding:8px 12px;opacity:0.55;border-bottom:1px solid #f0f0f0;cursor:not-allowed;" title="需求单' + self._escape(it.status_label) + '，入库后方可领用">'
+                    + '<div style="font-size:13px;font-weight:600;color:#606266;">' + self._escape(it.doc_no) + ' <span style="font-size:10px;color:#e6a23c;background:#fdf6ec;border-radius:4px;padding:0 4px;">' + self._escape(it.status_label) + '</span></div>'
+                    + '<div style="font-size:11px;color:#909399;">' + self._escape([it.branch_dept, '物品 ' + it.item_count + ' 项'].filter(Boolean).join(' · ')) + '（未入库，暂不可领用）</div>'
+                    + '</div>';
+            }).join('') : '<div style="padding:8px 12px;color:#909399;font-size:13px;">未找到需求单，请先发起物资需求单</div>';
+            res.style.display = 'block';
+        } catch (err) {}
+    }
+
+    async _selectDynReqLink(id, key) {
+        this._dynReqLinkValues = this._dynReqLinkValues || {};
+        try {
+            const r = await fetch(OA_API_URL + '/material/requirement-detail/?id=' + id, {headers: TokenManager.getHeaders()});
+            if (!r.ok) { this.showToast('加载需求单失败', true); return; }
+            const raw = await r.json();
+            const detail = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+            if (!detail) { this.showToast('加载需求单失败', true); return; }
+            this._dynReqLinkValues[key] = {requirement_id: detail.id, doc_no: detail.doc_no, branch_dept: detail.branch_dept, purpose: detail.purpose, amount: detail.amount};
+            const search = document.querySelector('.dyn-reqlink input');
+            if (search) search.value = '';
+            const res = document.getElementById('dynReqLinkRes_' + key);
+            if (res) res.style.display = 'none';
+            this._renderDynReqLinkTag(key);
+            // 产品金额 = 关联需求单的预估金额（自动填充；只读字段已禁用）
+            const amtInput = document.querySelector('input[data-k="amount"]');
+            if (amtInput) {
+                amtInput.value = (detail.amount != null && detail.amount !== '') ? detail.amount : '';
+            }
+            const f = (this._currentSchema || []).find(function (s) { return s.key === key; });
+            if (f && f.target) this._fillDynStructFromRequirement(f.target, detail.items || []);
+        } catch (e) { this.showToast((e && e.message) || '加载需求单失败', true); }
+    }
+
+    _clearDynReqLink(key) {
+        this._dynReqLinkValues = this._dynReqLinkValues || {};
+        this._dynReqLinkValues[key] = null;
+        this._renderDynReqLinkTag(key);
+        // 清空产品金额
+        const amtInput = document.querySelector('input[data-k="amount"]');
+        if (amtInput) amtInput.value = '';
+        const f = (this._currentSchema || []).find(function (s) { return s.key === key; });
+        if (f && f.target) {
+            const tbl = document.querySelector('.dyn-struct-table[data-struct-key="' + f.target + '"]');
+            if (tbl) { const rowsEl = tbl.querySelector('.dyn-struct-rows'); if (rowsEl) rowsEl.innerHTML = ''; }
+        }
+    }
+
+    _renderDynReqLinkTag(key) {
+        const tag = document.getElementById('dynReqLinkTag_' + key);
+        if (!tag) return;
+        const v = this._dynReqLinkValues && this._dynReqLinkValues[key];
+        if (!v) { tag.innerHTML = '<span style="font-size:12px;color:#c0c4cc;">未选择需求单（选择后将自动带出领用明细）</span>'; return; }
+        tag.innerHTML = '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#e8f8f0;border-radius:14px;font-size:12px;color:#16a085;margin-top:6px;">'
+            + '<i class="fas fa-box-open" style="font-size:11px;"></i>'
+            + '<span style="font-weight:600;">' + this._escape(v.doc_no || '') + '</span>'
+            + (v.branch_dept ? '<span style="font-size:11px;color:#7fc8b0;">' + this._escape(v.branch_dept) + '</span>' : '')
+            + '<i class="fas fa-times" style="cursor:pointer;font-size:11px;color:#909399;" onclick="approvalApp._clearDynReqLink(\'' + this._escape(key) + '\')" title="取消关联"></i>'
+            + '</span>';
+    }
+
+    // 从需求单自动带出明细到目标 struct_table（回填数量为剩余可领量；只读字段按只读渲染）
+    _fillDynStructFromRequirement(target, items) {
+        const tbl = document.querySelector('.dyn-struct-table[data-struct-key="' + target + '"]');
+        if (!tbl) return;
+        const rowsEl = tbl.querySelector('.dyn-struct-rows');
+        if (!rowsEl) return;
+        const cols = this._dynStructCols[target] || [];
+        const readonly = this._dynStructReadonly && this._dynStructReadonly[target];
+        rowsEl.innerHTML = '';
+        (items || []).forEach(function (it) {
+            approvalApp._appendDynStructRow(tbl, {
+                item_name: it.item_name, spec: it.spec, unit: it.unit,
+                price: it.price,
+                quantity: it.remaining != null ? it.remaining : it.quantity,
+                remark: it.remark || ''
+            }, cols, readonly);
+        });
+        this._onDynStructChange();
     }
 
     _collectDynamicFormData() {
@@ -619,6 +872,10 @@ class ApprovalApp {
                 if (hasVal) rows.push(obj);
             });
             if (rows.length) data[key] = rows;
+        });
+        // 关联需求单
+        Object.keys(this._dynReqLinkValues || {}).forEach(k => {
+            if (this._dynReqLinkValues[k]) data[k] = this._dynReqLinkValues[k];
         });
         return data;
     }
@@ -688,12 +945,16 @@ class ApprovalApp {
         this._renderDynAttachList(key);
     }
 
-    _loadDynDeptOptions(key, selectedId) {
+    _loadDynDeptOptions(key, selectedId, scope) {
         const sel = document.getElementById('dynDept_' + key);
         if (!sel) return;
         // scope=all：自定义类型「部门」字段，展示当前用户所属所有企业下的所有部门
         this.apiGet(OA_API_URL + '/approval/org_departments/?scope=all').then(data => {
-            const depts = data.results || [];
+            let depts = data.results || [];
+            // scope=company（分公司）：仅展示公司型部门
+            if (scope === 'company') {
+                depts = depts.filter(function (d) { return d.department_type === 'company'; });
+            }
             sel.innerHTML = this._buildDepartmentTreeHtml(depts, selectedId);
         }).catch(() => {
         });
@@ -833,6 +1094,20 @@ class ApprovalApp {
                 } else {
                     v = JSON.stringify(v);
                 }
+            } else if (f.type === 'link_requisition' && typeof v === 'object' && v) {
+                v = self._escape(v.doc_no || ('关联需求单 #' + (v.requirement_id || '')));
+                if (v.branch_dept) v += '（' + self._escape(v.branch_dept) + '）';
+            } else if (f.type === 'link_requisition') {
+                v = String(v || '-');
+            } else if (f.type === 'payment_method' && typeof v === 'object' && v && v.type) {
+                // 收款方式（兜底：form_data 中仍含该字段时展示）
+                var _pm = v;
+                var _parts = [_pm.type === 'custom' ? '自定义收款方式' : '默认收款账号'];
+                if (_pm.payee_name) _parts.push('收款人：' + _pm.payee_name);
+                if (_pm.bank_card) _parts.push('银行卡：' + _pm.bank_card + (_pm.bank_name ? '（' + _pm.bank_name + '）' : '') + (_pm.bank_address ? ' ' + _pm.bank_address : ''));
+                if (_pm.alipay_account) _parts.push('支付宝：' + _pm.alipay_account);
+                if (_pm.wechat_account) _parts.push('微信：' + _pm.wechat_account);
+                v = _parts.map(function (p) { return self._escape(p); }).join('；');
             } else if (typeof v === 'object') {
                 v = JSON.stringify(v);
             }
@@ -950,7 +1225,8 @@ class ApprovalApp {
             ['date', '日期'], ['datetime', '日期时间'], ['amount', '金额'],
             ['select', '下拉选择'], ['radio', '单选'], ['checkbox', '多选'],
             ['attachment', '附件'], ['department', '部门选择'], ['user', '成员选择'],
-            ['expense_type', '费用类型选择'], ['struct_table', '结构化数据明细']
+            ['expense_type', '费用类型选择'], ['struct_table', '结构化数据明细'],
+            ['payment_method', '收款方式'], ['link_requisition', '关联需求单']
         ];
         return types.map(function (t) {
             return '<option value="' + t[0] + '"' + (sel === t[0] ? ' selected' : '') + '>' + t[1] + '</option>';
@@ -959,7 +1235,8 @@ class ApprovalApp {
 
     // schema 编辑器：options 输入框占位提示随字段类型变化
     _schemaOptionsPlaceholder(type) {
-        if (type === 'struct_table') return '列定义：key:名称:类型|key2:名称2（如 name:项目名称:amount|remark:备注，类型 text/number/amount）';
+        if (type === 'struct_table') return '列定义：key:名称:类型|key2:名称2（如 name:项目名称:amount|remark:备注，类型 text/number/amount/item）';
+        if (type === 'link_requisition') return '关联明细字段key（如 items，选择需求单后自动带出到该明细）';
         if (['select', 'radio', 'checkbox'].indexOf(type) !== -1) return '选项（逗号分隔，下拉/单选/多选用）';
         return '选项（下拉/单选/多选 或 结构化明细 使用）';
     }
@@ -1079,7 +1356,7 @@ class ApprovalApp {
             if (unit && (type === 'amount' || type === 'number')) field.unit = unit;
             else if (type === 'amount') field.unit = 'cny'; // 金额未选时默认人民币元
             if (type === 'struct_table' && optsRaw.trim()) {
-                // 列定义：key:名称:类型|key2:名称2（类型 text/number/amount，缺省 text）
+                // 列定义：key:名称:类型|key2:名称2（类型 text/number/amount/item，缺省 text）
                 field.columns = optsRaw.split('|').map(function (s) {
                     const parts = s.split(':');
                     const ck = (parts[0] || '').trim();
@@ -1088,9 +1365,11 @@ class ApprovalApp {
                     return {
                         key: ck,
                         label: cl,
-                        type: (ct === 'number' || ct === 'amount') ? ct : 'text'
+                        type: (ct === 'number' || ct === 'amount' || ct === 'item') ? ct : 'text'
                     };
                 }).filter(function (c) { return c.key; });
+            } else if (type === 'link_requisition' && optsRaw.trim()) {
+                field.target = optsRaw.trim();
             } else if (['select', 'radio', 'checkbox'].indexOf(type) !== -1 && optsRaw.trim()) {
                 field.options = optsRaw.split(/[,，]/).map(function (s) {
                     return s.trim();
@@ -1294,11 +1573,20 @@ class ApprovalApp {
                 return
             }
             const err = await resp.json().catch(() => ({}));
-            throw new Error(err.error || '请求失败');
+            throw new Error(this._extractApiError(err));
         }
         ;
         const raw = await resp.json();
         return raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+    }
+
+    _extractApiError(err) {
+        if (!err || typeof err !== 'object') return '请求失败';
+        var msg = err.error || err.message || err.detail;
+        if (Array.isArray(msg)) msg = msg.join('；');
+        else if (msg && typeof msg === 'object') msg = Object.values(msg)[0];
+        if (Array.isArray(msg)) msg = msg.join('；');
+        return msg || '请求失败';
     }
 
     async apiPost(url, data) {
@@ -1313,7 +1601,7 @@ class ApprovalApp {
                 return
             }
             const err = await resp.json().catch(() => ({}));
-            throw new Error(err.error || '请求失败');
+            throw new Error(this._extractApiError(err));
         }
         const raw = await resp.json();
         return raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
@@ -1549,8 +1837,10 @@ class ApprovalApp {
 
     onTypeChange() {
         const type = document.getElementById('newApprovalType').value;
-        // 自定义类型：隐藏内置专属表单，按 schema 渲染动态表单
-        if (!this._isBuiltinType(type)) {
+        // 收款方式：报销/采购/自定义类型显示
+        this._togglePaymentSection(type);
+        // 自定义类型 / 带表单的内置类型（物资需求单等）：隐藏内置专属表单，按 schema 渲染动态表单
+        if (!this._isBuiltinType(type) || this._isDynamicSchemaType(type)) {
             this._hideBuiltinFields();
             const t = this._getType(type);
             this._renderDynamicFields(t ? (t.form_schema || []) : [], this._editFormData || {});
@@ -1679,6 +1969,253 @@ class ApprovalApp {
         if (row) row.style.display = val === 'supplement' ? 'block' : 'none';
     }
 
+    // ===== 收款方式（报销/采购/自定义类型） =====
+
+    // 显示/隐藏收款方式区块：报销/采购自动显示；自定义类型仅当 schema 配置了「收款方式」字段时显示
+    _togglePaymentSection(type) {
+        const section = document.getElementById('paymentMethodSection');
+        if (!section) return;
+        this._paymentMethodFieldKey = null;
+        let need = (type === 'expense' || type === 'purchase');
+        if (!need && !this._isBuiltinType(type)) {
+            const t = this._getType(type);
+            const pmField = (t && t.form_schema || []).find(function (f) { return f.type === 'payment_method'; });
+            if (pmField) {
+                need = true;
+                this._paymentMethodFieldKey = pmField.key;
+            }
+        }
+        section.style.display = need ? 'block' : 'none';
+        if (!need) return;
+        this._loadApprovalPaymentInfo();
+        this._onPaymentMethodTypeChange();
+    }
+
+    _onPaymentMethodTypeChange() {
+        const t = document.querySelector('input[name="paymentMethodType"]:checked');
+        const v = t ? t.value : 'none';
+        const isCustom = v === 'custom';
+        const dWrap = document.getElementById('paymentMethodDefaultWrap');
+        const cWrap = document.getElementById('paymentMethodCustomWrap');
+        if (dWrap) dWrap.style.display = (v === 'default') ? 'block' : 'none';
+        if (cWrap) cWrap.style.display = isCustom ? 'block' : 'none';
+        // 切换到自定义时加载已保存的收款方式（记忆功能）
+        if (isCustom) this._loadCustomPaymentMethods();
+    }
+
+    // 加载用户默认收款账号
+    async _loadApprovalPaymentInfo() {
+        const infoEl = document.getElementById('paymentMethodDefaultInfo');
+        const emptyEl = document.getElementById('paymentMethodDefaultEmpty');
+        if (!infoEl) return;
+        infoEl.textContent = '加载中...';
+        try {
+            const d = await this.apiGet('/api/oa/subsidy/payment-info/');
+            const parts = [];
+            if (d.payee_name) parts.push('收款人：' + d.payee_name);
+            if (d.bank_card) parts.push('银行卡：' + d.bank_card);
+            if (d.bank_name) parts.push('开户行：' + d.bank_name);
+            if (d.bank_address) parts.push('开户行地址：' + d.bank_address);
+            if (d.alipay_account) parts.push('支付宝：' + d.alipay_account);
+            if (d.wechat_account) parts.push('微信：' + d.wechat_account);
+            const has = !!d.payee_name && !!(d.bank_card || d.alipay_account || d.wechat_account);
+            if (emptyEl) emptyEl.style.display = has ? 'none' : 'flex';
+            infoEl.style.color = has ? '#606266' : '#f56c6c';
+            infoEl.textContent = has ? (parts.join('；') || '已设置') : '尚未设置收款账号，请点击下方按钮完善';
+        } catch (e) {
+            if (emptyEl) emptyEl.style.display = 'flex';
+            infoEl.style.color = '#f56c6c';
+            infoEl.textContent = '未获取到收款账号';
+        }
+    }
+
+    openApprovalPaymentModal() {
+        const modal = document.getElementById('approvalPaymentModal');
+        if (!modal) return;
+        const self = this;
+        this.apiGet('/api/oa/subsidy/payment-info/').then(function (d) {
+            document.getElementById('apPayeeName').value = d.payee_name || '';
+            document.getElementById('apBankCard').value = d.bank_card || '';
+            document.getElementById('apBankName').value = d.bank_name || '';
+            document.getElementById('apBankAddress').value = d.bank_address || '';
+            document.getElementById('apAlipayAccount').value = d.alipay_account || '';
+            document.getElementById('apWechatAccount').value = d.wechat_account || '';
+        }).catch(function () {});
+        modal.style.display = 'flex';
+        setTimeout(function () { modal.classList.add('show'); }, 10);
+    }
+
+    _closeApprovalPaymentModal() {
+        const modal = document.getElementById('approvalPaymentModal');
+        if (modal) {
+            modal.classList.remove('show');
+            setTimeout(function () { modal.style.display = 'none'; }, 200);
+        }
+    }
+
+    async _saveApprovalPaymentInfo() {
+        const payee = document.getElementById('apPayeeName').value.trim();
+        const bank = document.getElementById('apBankCard').value.trim();
+        const alipay = document.getElementById('apAlipayAccount').value.trim();
+        const wechat = document.getElementById('apWechatAccount').value.trim();
+        if (!payee) { this.showAlert('提示', '请填写收款人真实姓名'); return; }
+        if (!bank && !alipay && !wechat) { this.showAlert('提示', '请至少填写一种收款方式（银行卡/支付宝/微信）'); return; }
+        try {
+            await this.apiPost('/api/oa/subsidy/payment-info/', {
+                payee_name: payee, bank_card: bank,
+                bank_name: document.getElementById('apBankName').value.trim(),
+                bank_address: document.getElementById('apBankAddress').value.trim(),
+                alipay_account: alipay, wechat_account: wechat
+            });
+            this._closeApprovalPaymentModal();
+            this.showToast('收款账号已保存', false);
+            this._loadApprovalPaymentInfo();
+        } catch (e) {
+            this.showAlert('保存失败', e.message);
+        }
+    }
+
+    // 收集收款方式提交数据（未选择则返回空对象，不要求必须填写）
+    _collectPaymentMethod() {
+        const t = document.querySelector('input[name="paymentMethodType"]:checked');
+        const type = t ? t.value : 'none';
+        if (type === 'custom') {
+            return {
+                type: 'custom',
+                payee_name: document.getElementById('pmCustomPayee').value.trim(),
+                bank_card: document.getElementById('pmCustomBank').value.trim(),
+                bank_name: document.getElementById('pmCustomBankName').value.trim(),
+                bank_address: document.getElementById('pmCustomBankAddress').value.trim(),
+                alipay_account: document.getElementById('pmCustomAlipay').value.trim(),
+                wechat_account: document.getElementById('pmCustomWechat').value.trim()
+            };
+        }
+        if (type === 'default') {
+            return {type: 'default'};
+        }
+        return {};
+    }
+
+    // 加载用户已保存的自定义收款方式（记忆功能），含开户行展示与删除管理
+    async _loadCustomPaymentMethods() {
+        const sel = document.getElementById('pmCustomSaved');
+        if (!sel) return;
+        try {
+            const data = await this.apiGet(OA_API_URL + '/approval/custom-payment-methods/');
+            this._customPmList = data.results || [];
+            const list = this._customPmList;
+            const current = sel.value;
+            sel.innerHTML = '<option value="">— 新建收款方式 —</option>';
+            list.forEach(function (m) {
+                const label = this._customPmLabel(m);
+                const opt = document.createElement('option');
+                opt.value = String(m.id);
+                opt.setAttribute('data-pm', JSON.stringify(m));
+                opt.textContent = label;
+                sel.appendChild(opt);
+            }, this);
+            if (current && Array.prototype.some.call(sel.options, function (o) { return o.value === current; })) {
+                sel.value = current;
+            } else {
+                sel.value = '';
+            }
+            this._renderCustomPmList();
+        } catch (e) {
+            console.warn('加载已保存收款方式失败', e);
+        }
+    }
+
+    // 已保存收款方式的展示文案（收款人 + 开户行 + 银行卡/支付宝/微信）
+    _customPmLabel(m) {
+        if (!m) return '';
+        const parts = [m.payee_name || '收款人'];
+        if (m.bank_name) parts.push('开户行：' + m.bank_name);
+        if (m.bank_card) parts.push('银行卡：' + m.bank_card);
+        if (m.alipay_account) parts.push('支付宝：' + m.alipay_account);
+        if (m.wechat_account) parts.push('微信：' + m.wechat_account);
+        return parts.join('　');
+    }
+
+    // 渲染已保存收款方式的管理列表（每项可删除）
+    _renderCustomPmList() {
+        const wrap = document.getElementById('pmCustomSavedList');
+        if (!wrap) return;
+        const list = this._customPmList || [];
+        if (!list.length) {
+            wrap.innerHTML = '';
+            return;
+        }
+        const self = this;
+        wrap.innerHTML = list.map(function (m) {
+            return '<div style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:#fff;border:1px solid var(--border-color,#dcdfe6);border-radius:6px;font-size:12px;color:#606266;">'
+                + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + self._escape(self._customPmLabel(m)) + '">' + self._escape(self._customPmLabel(m)) + '</span>'
+                + '<button type="button" title="删除该收款方式" onclick="approvalApp._deleteCustomPaymentMethod(' + m.id + ', this)" style="border:none;background:none;color:#f56c6c;cursor:pointer;font-size:14px;line-height:1;padding:2px 4px;"><i class="fas fa-times"></i></button>'
+                + '</div>';
+        }).join('');
+    }
+
+    // 删除一条已保存的自定义收款方式
+    async _deleteCustomPaymentMethod(id, btn) {
+        const confirmed = await this.showConfirmDialog('删除收款方式', '确定删除这条已保存的收款方式吗？', 'danger');
+        if (!confirmed) return;
+        try {
+            const resp = await fetch(OA_API_URL + '/approval/custom-payment-method/' + id + '/', {
+                method: 'DELETE',
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) throw new Error((await resp.json()).error || '删除失败');
+            this.showToast('已删除', false);
+            this._loadCustomPaymentMethods();
+        } catch (e) {
+            this.showAlert('删除失败', e.message || '请重试');
+        }
+    }
+
+    // 选择已保存的收款方式时回填表单；选择“新建”则清空
+    _onCustomSavedChange() {
+        const sel = document.getElementById('pmCustomSaved');
+        if (!sel) return;
+        const opt = sel.options[sel.selectedIndex];
+        if (!opt || !opt.value) {
+            // 新建
+            document.getElementById('pmCustomPayee').value = '';
+            document.getElementById('pmCustomBank').value = '';
+            document.getElementById('pmCustomBankName').value = '';
+            document.getElementById('pmCustomBankAddress').value = '';
+            document.getElementById('pmCustomAlipay').value = '';
+            document.getElementById('pmCustomWechat').value = '';
+            return;
+        }
+        try {
+            const pm = JSON.parse(opt.getAttribute('data-pm') || '{}');
+            document.getElementById('pmCustomPayee').value = pm.payee_name || '';
+            document.getElementById('pmCustomBank').value = pm.bank_card || '';
+            document.getElementById('pmCustomBankName').value = pm.bank_name || '';
+            document.getElementById('pmCustomBankAddress').value = pm.bank_address || '';
+            document.getElementById('pmCustomAlipay').value = pm.alipay_account || '';
+            document.getElementById('pmCustomWechat').value = pm.wechat_account || '';
+        } catch (e) {
+            console.warn('回填收款方式失败', e);
+        }
+    }
+
+    // 编辑回填：把已有收款方式加载到表单
+    _fillPaymentMethod(pm) {
+        if (!pm || typeof pm !== 'object') pm = {};
+        const radios = document.querySelectorAll('input[name="paymentMethodType"]');
+        let pmType = 'none';
+        if (pm.type === 'custom') pmType = 'custom';
+        else if (pm.type === 'default') pmType = 'default';
+        for (let i = 0; i < radios.length; i++) radios[i].checked = radios[i].value === pmType;
+        document.getElementById('pmCustomPayee').value = pm.payee_name || '';
+        document.getElementById('pmCustomBank').value = pm.bank_card || '';
+        document.getElementById('pmCustomBankName').value = pm.bank_name || '';
+        document.getElementById('pmCustomBankAddress').value = pm.bank_address || '';
+        document.getElementById('pmCustomAlipay').value = pm.alipay_account || '';
+        document.getElementById('pmCustomWechat').value = pm.wechat_account || '';
+        this._onPaymentMethodTypeChange();
+    }
+
     // ===== 采购物项 =====
     _addPurchaseItem(item) {
         item = item || {};
@@ -1737,7 +2274,7 @@ class ApprovalApp {
         var row = document.createElement('tr');
         row.innerHTML = '<td style="padding:4px;border:1px solid var(--border-color,#dcdfe6);"><input class="form-input ei-name" value="' + this._escape(item.name || '') + '" placeholder="项目名称" style="min-width:100px;"></td>'
             + '<td style="padding:4px;border:1px solid var(--border-color,#dcdfe6);"><input type="number" class="form-input ei-amount" value="' + (item.amount || '') + '" min="0" step="0.01" oninput="approvalApp._recalcExpenseTotal()" style="width:100%;"></td>'
-            + '<td style="padding:4px;border:1px solid var(--border-color,#dcdfe6);"><input class="form-input ei-remark" value="' + this._escape(item.remark || '') + '" placeholder="备注" style="min-width:80px;"></td>'
+            + '<td style="padding:4px;border:1px solid var(--border-color,#dcdfe6);"><input class="form-input ei-remark" value="' + this._escape(item.remark || '') + '" placeholder="备注" style="min-width:80px;width:100%;"></td>'
             + '<td style="padding:4px;border:1px solid var(--border-color,#dcdfe6);text-align:center;"><button type="button" class="btn btn-sm btn-danger" onclick="approvalApp._removeExpenseItem(this)"><i class="fas fa-times"></i></button></td>';
         body.appendChild(row);
         this._recalcExpenseTotal();
@@ -1962,9 +2499,9 @@ class ApprovalApp {
         this._isReEdit = false;
         this._reEditId = null;
         this._editFormData = {};
-        // 自定义类型：重置动态表单为空白
+        // 自定义类型/带表单内置类型：重置动态表单为空白
         var _curType = document.getElementById('newApprovalType') ? document.getElementById('newApprovalType').value : '';
-        if (_curType && !this._isBuiltinType(_curType)) {
+        if (_curType && (!this._isBuiltinType(_curType) || this._isDynamicSchemaType(_curType))) {
             var _t = this._getType(_curType);
             this._renderDynamicFields(_t ? (_t.form_schema || []) : [], {});
         }
@@ -2038,8 +2575,8 @@ class ApprovalApp {
         if (amt) params.push('amount=' + amt);
         var hc = document.getElementById('recruitHeadcount') ? document.getElementById('recruitHeadcount').value : '';
         if (hc) params.push('headcount=' + hc);
-        // 自定义类型：传递动态表单数字字段值用于阈值预览
-        if (!this._isBuiltinType(apprType)) {
+        // 自定义类型 / 带表单内置类型：传递动态表单数字字段值用于阈值预览
+        if (!this._isBuiltinType(apprType) || this._isDynamicSchemaType(apprType)) {
             var fd = this._collectDynamicFormData();
             var numeric = {};
             Object.keys(fd).forEach(function (k) {
@@ -2703,44 +3240,64 @@ class ApprovalApp {
     }
 
     handleFileSelect(e) {
-        const files = e.target.files;
+        const files = Array.prototype.slice.call(e.target.files || []);
         if (!files.length) return;
-        if (this._attachmentFiles.length >= 10) {
-            this.showAlert('提示', '当前已添加10个附件，最多上传10个附件');
-            return;
-        }
-        const file = files[0];
-        if (file.size > this.fileMaxSizeMB * 1024 * 1024) {
-            this.showAlert('提示', `文件大小不能超过${this.fileMaxSizeMB}MB`);
-            return;
-        }
-        const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-        const allowed = ['.jpg', '.jpeg', '.png', '.gif', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.zip', '.mp4', '.avi', '.mov', '.mp3', '.wav'];
-        if (!allowed.includes(ext)) {
-            this.showAlert('错误', '不支持的文件格式');
-            return;
-        }
-
-        const formData = new FormData();
-        formData.append('file', file);
+        const max = 10;
         const self = this;
+        let pending = files.slice();
+        let failed = false;
 
-        fetch(OA_API_URL + '/approval/upload-attachment/', {
-            method: 'POST',
-            headers: {'Authorization': TokenManager.getHeaders()['Authorization']},
-            body: formData
-        }).then(async function (r) {
-            var res = await r.json();
-            if (!r.ok) throw new Error(res.error || res.detail || '上传失败');
-            if (res.url) {
-                self._attachmentFiles.push({url: res.url, name: res.name});
-                self._renderAttachments();
-            } else {
-                self.showAlert('提示', '上传失败');
+        const uploadNext = function () {
+            if (!pending.length) {
+                e.target.value = '';
+                if (failed) self.showAlert('提示', '部分文件上传失败，请检查格式或大小后重试');
+                return;
             }
-        }).catch(function (err) {
-            self.showAlert('上传失败', err.message);
-        });
+            if (self._attachmentFiles.length >= max) {
+                self.showAlert('提示', '最多上传10个附件，已忽略多余文件');
+                pending = [];
+                e.target.value = '';
+                return;
+            }
+            const file = pending.shift();
+            if (file.size > self.fileMaxSizeMB * 1024 * 1024) {
+                failed = true;
+                self.showAlert('提示', `「${file.name}」大小不能超过${self.fileMaxSizeMB}MB`);
+                uploadNext();
+                return;
+            }
+            const ext = (file.name.substring(file.name.lastIndexOf('.')) || '').toLowerCase();
+            const allowed = ['.jpg', '.jpeg', '.png', '.gif', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.zip', '.mp4', '.avi', '.mov', '.mp3', '.wav'];
+            if (!allowed.includes(ext)) {
+                failed = true;
+                self.showAlert('错误', `「${file.name}」不支持的文件格式`);
+                uploadNext();
+                return;
+            }
+            const formData = new FormData();
+            formData.append('file', file);
+            fetch(OA_API_URL + '/approval/upload-attachment/', {
+                method: 'POST',
+                headers: {'Authorization': TokenManager.getHeaders()['Authorization']},
+                body: formData
+            }).then(async function (r) {
+                var res = await r.json();
+                if (!r.ok) throw new Error(res.error || res.detail || '上传失败');
+                if (res.url) {
+                    self._attachmentFiles.push({url: res.url, name: res.name});
+                    self._renderAttachments();
+                } else {
+                    failed = true;
+                    self.showAlert('提示', `「${file.name}」上传失败`);
+                }
+                uploadNext();
+            }).catch(function (err) {
+                failed = true;
+                self.showAlert('上传失败', `「${file.name}」${err.message}`);
+                uploadNext();
+            });
+        };
+        uploadNext();
     }
 
     _getFileIcon(name) {
@@ -2765,7 +3322,7 @@ class ApprovalApp {
             return '<div class="att-item" style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-secondary,#f5f7fa);border-radius:6px;margin-bottom:4px;">'
                 + thumbHtml
                 + '<span style="flex:1;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape(f.name) + '</span>'
-                + '<button class="action-btn" onclick="approvalApp.removeAttachment(' + i + ')" style="width:24px;height:24px;"><i class="fas fa-times" style="font-size:12px;"></i></button></div>';
+                + '<button class="btn btn-secondary" onclick="approvalApp.removeAttachment(' + i + ')" style="width:24px;height:24px;"><i class="fas fa-times" style="font-size:12px;"></i></button></div>';
         }).join('');
     }
 
@@ -2827,14 +3384,19 @@ class ApprovalApp {
         if (type === 'expense') data.expense_items = this._collectExpenseItems();
         if (type === 'leave') data.leave_type = this._collectLeaveType();
         if (type === 'trip') data.trip_data = this._collectTripData();
+        // 收款方式：报销/采购用固定区块
+        if (type === 'expense' || type === 'purchase') {
+            data.payment_method = this._collectPaymentMethod();
+        }
         // Include recruit_data if recruit type
         if (type === 'recruit') {
             var rd = this._gatherRecruitData();
             if (rd) data.recruit_data = rd;
         }
-        // 自定义类型：收集动态表单数据
-        if (!this._isBuiltinType(type)) {
+        // 自定义类型 / 带表单内置类型（物资需求单等）：收集动态表单数据（若配置了「收款方式」字段，把收款方式注入该字段）
+        if (!this._isBuiltinType(type) || this._isDynamicSchemaType(type)) {
             var fd = this._collectDynamicFormData();
+            if (this._paymentMethodFieldKey) fd[this._paymentMethodFieldKey] = this._collectPaymentMethod();
             data.form_data = fd;
         }
         if (startDate) data.start_date = startDate.substring(0, 10);
@@ -2859,7 +3421,10 @@ class ApprovalApp {
             this.showToast('审批提交成功', false);
             this.loadList(1);
         } catch (e) {
-            this.showToast('提交失败' + (e.message || '请检查表单后重试'), true);
+            var msg = e.message || '请检查表单后重试';
+            // 未设置收款账号：弹出收款方式设置弹窗
+            if (msg && msg.indexOf('收款账号') >= 0) this.openApprovalPaymentModal();
+            this.showToast('提交失败' + msg, true);
         }
     }
 
@@ -2906,13 +3471,19 @@ class ApprovalApp {
         if (f.approval_type === 'expense') data.expense_items = this._collectExpenseItems();
         if (f.approval_type === 'leave') data.leave_type = this._collectLeaveType();
         if (f.approval_type === 'trip') data.trip_data = this._collectTripData();
+        // 收款方式：报销/采购用固定区块；自定义类型注入到 form_data 的「收款方式」字段
+        if (f.approval_type === 'expense' || f.approval_type === 'purchase') {
+            data.payment_method = this._collectPaymentMethod();
+        }
         if (f.approval_type === 'recruit') {
             var rd = this._gatherRecruitData();
             if (rd) data.recruit_data = rd;
         }
-        // 自定义类型：收集动态表单数据
-        if (!this._isBuiltinType(f.approval_type)) {
-            data.form_data = this._collectDynamicFormData();
+        // 自定义类型 / 带表单内置类型（物资需求单等）：收集动态表单数据（若配置了「收款方式」字段，把收款方式注入该字段）
+        if (!this._isBuiltinType(f.approval_type) || this._isDynamicSchemaType(f.approval_type)) {
+            var _fd = this._collectDynamicFormData();
+            if (this._paymentMethodFieldKey) _fd[this._paymentMethodFieldKey] = this._collectPaymentMethod();
+            data.form_data = _fd;
         }
         if (f.start_date) data.start_date = f.start_date.substring(0, 10);
         if (f.end_date) data.end_date = f.end_date.substring(0, 10);
@@ -2988,6 +3559,10 @@ class ApprovalApp {
             if (d.expense_date) document.getElementById('newExpenseDate').value = d.expense_date;
             // 审批方式/模式固定为会签+顺序审批，历史草稿也强制这两个值
             this._lockApprovalDefaults();
+            // 重置附件列表与预览，避免残留上一份草稿的附件
+            this._attachmentFiles = [];
+            var ap = document.getElementById('attachmentPreview');
+            if (ap) { ap.innerHTML = ''; ap.style.display = 'none'; }
             if (d.attachments && d.attachments.length) {
                 this._attachmentFiles = d.attachments.map(function (u) {
                     if (typeof u === 'object' && u !== null) {
@@ -3017,6 +3592,8 @@ class ApprovalApp {
                 return {id: ra.id, title: ra.title, type: ra.approval_type_display || ra.approval_type, status: ra.status_display || ''};
             });
             this._renderRelApprovalTags();
+            // 清空可能残留的内置类型结构化数据行（避免重新编辑时叠加重复的报销项目/采购物项等）
+            this._clearTypeRows();
             // 加载内置类型结构化数据（采购物项/报销项目/请假类型/出差信息）
             this._loadTypeDataIntoForm(d);
             // 加载招聘需求数据
@@ -3071,6 +3648,10 @@ class ApprovalApp {
             this._editFormData = d.form_data || {};
             // 选中审批类型卡片
             if (d.approval_type) this.selectType(d.approval_type);
+            // 回填收款方式（报销/采购，或自定义类型配置了「收款方式」字段）
+            if (d.approval_type === 'expense' || d.approval_type === 'purchase' || this._paymentMethodFieldKey) {
+                this._fillPaymentMethod(d.payment_method);
+            }
             // 显示费用行
             if (d.approval_type === 'expense') {
                 document.getElementById('expenseRow').style.display = 'grid';
@@ -3283,9 +3864,20 @@ class ApprovalApp {
             else if (thDept) thDept.value = '';
             var sigEl = document.getElementById('configRequireSignature');
             if (sigEl) sigEl.checked = cfg && cfg.require_signature ? true : false;
+            var rhEl = document.getElementById('configReceiptReturnHours');
+            if (rhEl) rhEl.value = (cfg && cfg.receipt_return_hours !== null && cfg.receipt_return_hours !== undefined) ? cfg.receipt_return_hours : 24;
+            var erEl = document.getElementById('configEnableReceiptReturn');
+            if (erEl) erEl.checked = !!(cfg && cfg.enable_receipt_return);
+            this._onReceiptConfigChange();
         } catch (e) {
             console.error('Load config failed:', e);
         }
+    }
+
+    _onReceiptConfigChange() {
+        var erEl = document.getElementById('configEnableReceiptReturn');
+        var grp = document.getElementById('configReceiptReturnHoursGroup');
+        if (grp) grp.style.display = erEl && erEl.checked ? 'block' : 'none';
     }
 
     _buildDepartmentTreeHtml(depts, selectedId) {
@@ -3627,8 +4219,8 @@ class ApprovalApp {
         } else if (type === 'recruit') {
             fieldSel.innerHTML = '<option value="headcount">招聘人数</option>';
             if (fieldLabel) fieldLabel.innerHTML = '阈值（人）';
-        } else if (!this._isBuiltinType(type)) {
-            // 自定义类型：列出 schema 中的数字/金额字段
+        } else if (!this._isBuiltinType(type) || this._isDynamicSchemaType(type)) {
+            // 自定义类型 / 带表单内置类型：列出 schema 中的数字/金额字段
             const t = this._getType(type);
             const numericFields = ((t && t.form_schema) || []).filter(function (f) {
                 return f.type === 'number' || f.type === 'amount';
@@ -3681,6 +4273,8 @@ class ApprovalApp {
             threshold_value: thValue ? parseFloat(thValue) : null,
             threshold_department_id: thDeptId ? parseInt(thDeptId) : null,
             require_signature: document.getElementById('configRequireSignature') ? document.getElementById('configRequireSignature').checked : false,
+            receipt_return_hours: parseInt(document.getElementById('configReceiptReturnHours') ? (document.getElementById('configReceiptReturnHours').value || 0) : 24),
+            enable_receipt_return: document.getElementById('configEnableReceiptReturn') ? document.getElementById('configEnableReceiptReturn').checked : false,
         };
         if (subTenantId) data.sub_tenant_id = parseInt(subTenantId);
         try {
@@ -3719,6 +4313,7 @@ class ApprovalApp {
 
     async showDetail(id) {
         try {
+            this._detailApprovalId = id;
             const d = await this.apiGet(OA_API_URL + '/approval/' + id + '/');
             // 支持在新模态框中打开（关联审批查看时保持当前详情不关闭）
             var modalId = this._detailModalId || 'approvalDetailModal';
@@ -3751,8 +4346,9 @@ class ApprovalApp {
             };
             const defAv = '/static/images/default-avatar.png';
             var currentUserId = parseInt(localStorage.getItem('user_id'));
-            // 记录该审批是否需要手写签名
+            // 记录该审批是否需要手写签名 / 是否开启票据回传
             this._currentApprovalRequireSignature = d.require_signature ? true : false;
+            this._currentApprovalEnableReceipt = !!d.enable_receipt_return;
 
             console.log('_currentApprovalRequireSignature:::', this._currentApprovalRequireSignature);
 
@@ -3762,7 +4358,12 @@ class ApprovalApp {
             if (d.approval_mode === 'sequential') modeLabel += ' · 顺序审批';
             else modeLabel += ' · 并行审批';
 
-            let html = '<div class="detail-grid">'
+            // 已撤回的审批在顶部给出醒目提示（从工作通知/聊天跳转过来时尤其重要）
+            var cancelledBanner = d.status === 'cancelled'
+                ? '<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:#fdf0ef;border:1px solid #f8d0cd;border-radius:8px;color:#c0392b;font-size:13px;margin-bottom:12px;"><i class="fas fa-ban" style="flex-shrink:0;"></i> <span>该审批已被发起人撤回（撤销），无需继续处理。</span></div>'
+                : '';
+
+            let html = cancelledBanner + '<div class="detail-grid">'
                 + '<div class="detail-item" style="grid-column:1/-1;"><label><i class="fas fa-user-circle" style="color:var(--primary-color,#409eff);"></i> 申请人</label><span style="display:flex;align-items:center;gap:8px;"><img src="' + (d.applicant_avatar || defAv) + '" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">' + (d.applicant === currentUserId ? '我' : this._escape(d.applicant_name || '')) + '</span></div>'
                 + '<div class="detail-item"><label><i class="fas fa-tag" style="color:#409eff;"></i> 审批标题</label><span>' + this._escape(d.title) + '</span></div>'
                 + '<div class="detail-item"><label><i class="fas fa-list" style="color:#67c23a;"></i> 审批类型</label><span><span class="type-icon-badge type-' + d.approval_type + '" style="color:' + (d.approval_type_color || this._getTypeColor(d.approval_type)) + ';"><i class="fas ' + (d.approval_type_icon || this._getTypeIcon(d.approval_type)) + '"></i> ' + this._escape(d.approval_type_name || d.approval_type_display || d.approval_type) + '</span></span></div>'
@@ -3893,6 +4494,36 @@ class ApprovalApp {
                 html += '<tr style="background:var(--bg-secondary,#f5f7fa);"><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);text-align:right;"><b>报销总金额</b></td><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);font-weight:700;color:#67c23a;">' + eTotal.toFixed(2) + '</td><td style="padding:5px;border:1px solid var(--border-color,#dcdfe6);"></td></tr>';
                 html += '</tbody></table></div></div>';
             }
+            // 收款方式/收款信息展示（仅超级管理员、申请人、最终审批节点审批人可见，保护申请人隐私）
+            if (d.payment_method && d.payment_method.type && d.can_view_payment) {
+                var pm = d.payment_method;
+                // 左侧：收款信息文本（仅显示已填写字段）
+                var payee = '<div style="font-size:13px;line-height:1.8;">'
+                    + '<div style="margin-bottom:4px;"><span style="color:#909399;">方式：</span><b>' + this._escape(pm.type === 'custom' ? '自定义收款方式' : '默认收款账号') + '</b></div>'
+                    + (pm.payee_name ? '<div style="margin-bottom:2px;"><span style="color:#909399;">收款人：</span><b>' + this._escape(pm.payee_name) + '</b></div>' : '')
+                    + (pm.bank_card ? '<div style="margin-bottom:2px;"><span style="color:#909399;">银行卡号：</span>' + this._escape(pm.bank_card) + '</div>' : '')
+                    + (pm.bank_name ? '<div style="margin-bottom:2px;"><span style="color:#909399;">开户银行：</span>' + this._escape(pm.bank_name) + '</div>' : '')
+                    + (pm.bank_address ? '<div style="margin-bottom:2px;"><span style="color:#909399;">开户银行地址：</span>' + this._escape(pm.bank_address) + '</div>' : '')
+                    + (pm.alipay_account ? '<div style="margin-bottom:2px;"><span style="color:#909399;">支付宝账号：</span>' + this._escape(pm.alipay_account) + '</div>' : '')
+                    + (pm.wechat_account ? '<div style="margin-bottom:2px;"><span style="color:#909399;">微信账号：</span>' + this._escape(pm.wechat_account) + '</div>' : '')
+                    + '</div>';
+                // 右侧：收款二维码（如有）
+                var qrHtml = '';
+                var qrItem = function (u, label) {
+                    return '<div style="text-align:center;flex:0 0 auto;"><img src="' + approvalApp._escape(u) + '" style="width:88px;height:88px;max-width:88px;border-radius:8px;object-fit:cover;border:1px solid #dcdfe6;cursor:zoom-in;background:#fff;" onclick="approvalApp._previewImageByUrl(this.src,\'' + label + '\')" title="点击放大预览"><div style="font-size:11px;color:#909399;margin-top:2px;">' + label + '</div></div>';
+                };
+                if (pm.alipay_qr) qrHtml += qrItem(pm.alipay_qr, '支付宝收款码');
+                if (pm.wechat_qr) qrHtml += qrItem(pm.wechat_qr, '微信收款码');
+                var hasInfo = pm.payee_name || pm.bank_card || pm.alipay_account || pm.wechat_account;
+                if (hasInfo || qrHtml) {
+                    html += '<div class="detail-item full-width" style="background:var(--bg-secondary,#f5f7fa);border-radius:6px;padding:8px 10px;"><label><i class="fas fa-wallet" style="color:#16a085;"></i> 收款方式</label><div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;flex:1;">'
+                        + '<div style="flex:1;min-width:200px;">' + payee + '</div>'
+                        + (qrHtml ? '<div style="display:flex;gap:10px;flex-wrap:wrap;flex:0 0 auto;">' + qrHtml + '</div>' : '')
+                        + '</div></div>';
+                }
+            }
+            // 票据回传：最终审批通过后申请人在时限内回传付款凭证/票据
+            html += this._renderReceiptSection(d);
             // 招聘需求详情展示
             if (d.approval_type === 'recruit' && d.recruit_data) {
                 var rd = d.recruit_data;
@@ -3925,8 +4556,24 @@ class ApprovalApp {
                     + '</div></div>';
             }
 
-            // 自定义审批类型：动态表单详情
-            if (!this._isBuiltinType(d.approval_type)) {
+            // 物资单据：显眼展示单据号 + 复制按钮（方便申请人凭单号发起领用/领料）
+            if ((d.approval_type === 'material_requirement' || d.approval_type === 'material_requisition')
+                && d.form_data && d.form_data.doc_no) {
+                var _docNo = String(d.form_data.doc_no);
+                var _docLabel = d.approval_type === 'material_requirement' ? '物资需求单号' : '物资领用单号';
+                html += '<div class="detail-item" style="grid-column:1/-1;background:#f0f9eb;border:1px solid #cdeeda;border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+                    + '<label style="margin:0;"><i class="fas fa-hashtag" style="color:#16a085;"></i> ' + _docLabel + '</label>'
+                    + '<span style="font-size:18px;font-weight:700;color:#16a085;letter-spacing:1px;cursor:pointer;" title="点击复制" onclick="approvalApp._copyText(\'' + this._escape(_docNo) + '\')">' + this._escape(_docNo) + '</span>'
+                    + '<button class="btn btn-secondary" onclick="approvalApp._copyText(\'' + this._escape(_docNo) + '\')" title="复制单据号" style="font-size:12px;padding:3px 10px;border:1px solid #16a085;border-radius:4px;color:#16a085;background:#fff;cursor:pointer;"><i class="fas fa-copy"></i> 复制</button>'
+                    + (d.approval_type === 'material_requisition' && d.form_data.requirement_doc_no ? '<span style="font-size:12px;color:#909399;">关联需求单：' + this._escape(d.form_data.requirement_doc_no) + '</span>' : '')
+                    + (d.approval_type === 'material_requisition' && d.form_data.link_req
+                        ? '<button class="btn btn-secondary" onclick="approvalApp._openRequirementDetail(\'' + this._escape(d.form_data.link_req.requirement_id || d.form_data.link_req.id) + '\')" title="查看需求单详情" style="font-size:12px;padding:3px 10px;border:1px solid #16a085;border-radius:4px;color:#16a085;background:#fff;cursor:pointer;"><i class="fas fa-box-open"></i> 查看需求单</button>'
+                        : '')
+                    + '</div>';
+            }
+
+            // 自定义审批类型 / 带表单内置类型（物资需求单/领用单）：动态表单详情
+            if (!this._isBuiltinType(d.approval_type) || this._isDynamicSchemaType(d.approval_type)) {
                 var dynType = this._getType(d.approval_type);
                 if (dynType && dynType.form_schema && dynType.form_schema.length) {
                     html += this._renderDynamicDetail(d.form_data || {}, dynType.form_schema, d.form_data_display || {});
@@ -3964,6 +4611,11 @@ class ApprovalApp {
                             + '<span style="flex:1;font-size:13px;">' + (as.user === currentUserId ? '我' : (as.user_name || '')) + (as.user_position ? '<span style="font-size:11px;color:#909399;margin-left:4px;">' + as.user_position + '</span>' : '') + (as.user_department ? '<span style="font-size:11px;color:#a0a0a0;margin-left:4px;">(' + approvalApp._escape(as.user_department) + ')</span>' : '') + '</span>'
                             + '<span class="' + stCls + '" style="font-size:11px;">' + stTxt + '</span>'
                             + (as.comment ? '<span style="font-size:12px;color:var(--text-light);">: ' + as.comment + '</span>' : '')
+                            // 发起人查看自己发起的审批时，对"待审批且节点已到达"的审批人提供"发送私聊"提醒
+                            + (d.applicant === currentUserId && as.status === 'pending' && as.user !== currentUserId
+                                && (d.approval_mode === 'parallel' || node.order <= (d.current_node_order || 0) || node.node_type === 'initiator')
+                                ? '<button type="button" onclick="approvalApp.sendApprovalPrivate(' + d.id + ',' + as.user + ',this)" style="border:1px solid #409eff;color:#409eff;background:#fff;border-radius:4px;font-size:11px;padding:2px 8px;cursor:pointer;white-space:nowrap;flex-shrink:0;line-height:1.6;" title="以私聊形式发送给该审批人，对方点击可直接处理"><i class="fas fa-comment-dots" style="margin-right:2px;"></i>发送私聊</button>'
+                                : '')
                             + '</div>';
                     });
                     html += '</div>';
@@ -3977,7 +4629,8 @@ class ApprovalApp {
                     + '<h4 style="font-size:15px;margin:0 0 12px 0;"><i class="fas fa-history" style="color:#9b59b6;margin-right:6px;"></i>审批记录</h4>'
                     + '<div class="approval-timeline">';
                 d.logs.forEach(function (log) {
-                    var actionText = log.action_display || (log.action === 'approve' ? '通过' : log.action === 'reject' ? '驳回' : log.action === 'deferred' ? '暂缓' : log.action === 'processing' ? '办理中' : log.action === 'resubmit' ? '重新提交' : log.action === 'cancel' ? '撤回' : '');
+                    var actionText = log.action_display || (log.action === 'approve' ? '通过' : log.action === 'reject' ? '驳回' : log.action === 'deferred' ? '暂缓' : log.action === 'processing' ? '办理中' : log.action === 'resubmit' ? '重新提交' : log.action === 'cancel' ? '撤回' : log.action === 'receipt_return' ? '票据回传' : '');
+
                     var operatorName = (log.operator === currentUserId) ? '我' : (log.operator_name || '系统');
                     if (log.operator_position && log.operator !== currentUserId) operatorName += ', ' + log.operator_position;
                     var attachHtml = '';
@@ -4120,7 +4773,13 @@ class ApprovalApp {
             }
         } catch (e) {
             console.error('加载详情失败:', e);
-            this.showToast(e.message || '加载详情失败', true)
+            var msg = (e && e.message) || '加载详情失败';
+            // 审批已删除/不存在 → 给出明确提示（从工作通知/聊天跳转时尤其常见）
+            if (msg.indexOf('不存在') !== -1 || msg.indexOf('删除') !== -1) {
+                this.showAlert('审批已删除', '该审批已被删除或不存在，无法查看详情。');
+            } else {
+                this.showToast(msg, true);
+            }
         }
     }
 
@@ -4159,8 +4818,10 @@ class ApprovalApp {
         });
         var mainImg = overlay.querySelector('img');
         if (mainImg) {
+            Utils.enableImagePinchZoom(mainImg);
             mainImg.addEventListener('click', function (e) {
                 e.stopPropagation();
+                if (mainImg._pz && mainImg._pz.scale > 1.01) return;  // 缩放中不关闭
                 self._closePreview();
             });
         }
@@ -4267,14 +4928,16 @@ class ApprovalApp {
         this._previewKeyHandler = keyHandler;
         document.addEventListener('keydown', keyHandler);
 
-        // 🔧 触摸滑动：左右滑动切换图片（移动端）
+        // 🔧 触摸滑动：左右滑动切换图片（移动端）；双指捏合由 Utils.enableImagePinchZoom 处理
         var touchStartX = null, touchStartY = null, swiped = false;
         overlay.addEventListener('touchstart', function (e) {
+            if (e.touches.length >= 2) return;
             touchStartX = e.touches[0].clientX;
             touchStartY = e.touches[0].clientY;
             swiped = false;
         }, {passive: true});
         overlay.addEventListener('touchmove', function (e) {
+            if (e.touches.length >= 2) return;
             if (touchStartX !== null) {
                 var dx = e.touches[0].clientX - touchStartX;
                 var dy = e.touches[0].clientY - touchStartY;
@@ -4282,6 +4945,7 @@ class ApprovalApp {
             }
         }, {passive: true});
         overlay.addEventListener('touchend', function (e) {
+            if (e.changedTouches && e.changedTouches.length >= 2) { touchStartX = null; return; }
             if (touchStartX !== null) {
                 var endX = e.changedTouches[0].clientX;
                 var endY = e.changedTouches[0].clientY;
@@ -4303,8 +4967,10 @@ class ApprovalApp {
         });
         var mainImg = document.getElementById('previewMainImg');
         if (mainImg) {
+            Utils.enableImagePinchZoom(mainImg);
             mainImg.addEventListener('click', function (e) {
                 e.stopPropagation();
+                if (mainImg._pz && mainImg._pz.scale > 1.01) return;  // 缩放中不关闭
                 if (swiped) {
                     swiped = false;
                     return;
@@ -4340,7 +5006,10 @@ class ApprovalApp {
         var img = document.getElementById('previewMainImg');
         var item = this._previewImgs[this._previewCurrent];
         var src = (typeof item === 'object' && item !== null) ? (item.url || item) : item;
-        if (img) img.src = src;
+        if (img) {
+            img.src = src;
+            Utils.resetImageZoom(img);
+        }
         var counter = document.getElementById('previewCounter');
         if (counter) counter.textContent = (this._previewCurrent + 1) + ' / ' + this._previewImgs.length;
         var p = document.getElementById('approvalPrevBtn');
@@ -4371,16 +5040,333 @@ class ApprovalApp {
         }, 1500);
     }
 
-    // ==================== 打印 ====================
-    _printDetail() {
-        var modalId = this._detailModalId || 'approvalDetailModal';
+    // ==================== 物资物品库管理 ====================
+    openMaterialItemsModal() {
+        document.getElementById('materialItemsModal').style.display = 'flex';
+        setTimeout(function () { document.getElementById('materialItemsModal').classList.add('show'); }, 10);
+        this._defaultMaximize('materialItemsModal');
+        this._materialItemPage = 1;
+        this._loadMaterialItems(1);
+    }
+    closeMaterialItemsModal() {
+        var m = document.getElementById('materialItemsModal');
+        if (m) { m.classList.remove('show'); setTimeout(function () { m.style.display = 'none'; }, 150); }
+    }
+    async _loadMaterialItems(page) {
+        var tbody = document.getElementById('materialItemTableBody');
+        if (!tbody) return;
+        page = page || 1;
+        this._materialItemPage = page;
+        var kw = document.getElementById('materialItemSearch') ? document.getElementById('materialItemSearch').value.trim() : '';
+        try {
+            var url = OA_API_URL + '/material/items/?page=' + page + '&page_size=10';
+            if (kw) url += '&search=' + encodeURIComponent(kw);
+            var r = await fetch(url, {headers: TokenManager.getHeaders()});
+            if (!r.ok) { tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:30px;color:#909399;">加载失败</td></tr>'; return; }
+            var d = await r.json();
+            var items = d.results || [];
+            if (!items.length) { tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:30px;color:#909399;">' + (kw ? '未找到匹配物品' : '暂无物品，点击「新增物品」添加') + '</td></tr>'; this._renderMaterialItemPagination(d); return; }
+            tbody.innerHTML = items.map(function (it) {
+                var stock = (it.stock != null) ? Number(it.stock) : null;
+                var stockHtml = stock === null ? '-'
+                    : '<span style="color:' + (stock > 0 ? '#67c23a' : (stock === 0 ? '#909399' : '#f56c6c')) + ';font-weight:600;">' + stock + ' ' + approvalApp._escape(it.unit || '') + '</span>';
+                return '<tr>'
+                    + '<td>' + approvalApp._escape(it.name) + '</td>'
+                    + '<td>' + approvalApp._escape(it.spec || '-') + '</td>'
+                    + '<td>' + approvalApp._escape(it.unit || '-') + '</td>'
+                    + '<td>' + approvalApp._escape(it.category || '-') + '</td>'
+                    + '<td>' + approvalApp._escape(it.price || '-') + '</td>'
+                    + '<td>' + stockHtml + '</td>'
+                    + '<td><button class="action-btn" onclick="approvalApp._editMaterialItem(' + it.id + ')" title="编辑"><i class="fas fa-edit"></i></button>'
+                    + '<button class="action-btn" style="color:#f56c6c;" onclick="approvalApp._deleteMaterialItem(' + it.id + ')" title="删除"><i class="fas fa-trash"></i></button></td>'
+                    + '</tr>';
+            }).join('');
+            this._renderMaterialItemPagination(d);
+        } catch (e) { tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:30px;color:#909399;">加载失败</td></tr>'; }
+    }
+    _renderMaterialItemPagination(d) {
+        var el = document.getElementById('materialItemPagination');
+        if (!el) return;
+        var p = (d && d.page) || 1, t = (d && d.total_pages) || 1;
+        if (t <= 1) { el.innerHTML = ''; el.style.display = 'none'; return; }
+        el.style.display = 'flex';
+        el.innerHTML = '<span style="margin-right:10px;color:#909399;font-size:12px;">共 ' + (d.count || 0) + ' 条，第 ' + p + '/' + t + ' 页</span>'
+            + '<button class="pagination-btn" onclick="approvalApp._loadMaterialItems(' + (p - 1) + ')"' + (p <= 1 ? ' disabled' : '') + '><i class="fas fa-chevron-left"></i> 上一页</button>'
+            + '<button class="pagination-btn" onclick="approvalApp._loadMaterialItems(' + (p + 1) + ')"' + (p >= t ? ' disabled' : '') + '>下一页 <i class="fas fa-chevron-right"></i></button>';
+    }
+    _openMaterialItemForm() {
+        this._editingMaterialItem = null;
+        ['miName', 'miSpec', 'miUnit', 'miCategory', 'miPrice'].forEach(function (id) { document.getElementById(id).value = ''; });
+        document.getElementById('materialItemForm').style.display = 'block';
+    }
+    _editMaterialItem(id) {
+        var self = this;
+        fetch(OA_API_URL + '/material/items/' + id + '/', {headers: TokenManager.getHeaders()}).then(function (r) { return r.ok ? r.json() : null; }).then(function (it) {
+            if (!it) return;
+            self._editingMaterialItem = id;
+            document.getElementById('miName').value = it.name || '';
+            document.getElementById('miSpec').value = it.spec || '';
+            document.getElementById('miUnit').value = it.unit || '';
+            document.getElementById('miCategory').value = it.category || '';
+            document.getElementById('miPrice').value = it.price || '';
+            document.getElementById('materialItemForm').style.display = 'block';
+        });
+    }
+    _cancelMaterialItemForm() {
+        document.getElementById('materialItemForm').style.display = 'none';
+        this._editingMaterialItem = null;
+    }
+    async _saveMaterialItem() {
+        var name = document.getElementById('miName').value.trim();
+        if (!name) { this.showToast('物品名称不能为空', true); return; }
+        var payload = {
+            name: name,
+            spec: document.getElementById('miSpec').value.trim(),
+            unit: document.getElementById('miUnit').value.trim(),
+            category: document.getElementById('miCategory').value.trim(),
+            price: document.getElementById('miPrice').value
+        };
+        try {
+            var url = OA_API_URL + '/material/items/';
+            var opts = {method: 'POST', headers: TokenManager.getHeaders(), body: JSON.stringify(payload)};
+            if (this._editingMaterialItem) {
+                url = OA_API_URL + '/material/items/' + this._editingMaterialItem + '/';
+                opts = {method: 'PUT', headers: TokenManager.getHeaders(), body: JSON.stringify(payload)};
+            }
+            var r = await fetch(url, opts);
+            if (!r.ok) { var e2 = await r.json().catch(function () { return {}; }); throw new Error(e2.error || '保存失败'); }
+            this.showToast('保存成功', false);
+            this._cancelMaterialItemForm();
+            this._loadMaterialItems();
+        } catch (e) { this.showToast(e.message || '保存失败', true); }
+    }
+    async _deleteMaterialItem(id) {
+        var ok = await this.showConfirmDialog('删除物品', '确定删除该物品吗？', 'danger');
+        if (!ok) return;
+        try {
+            var r = await fetch(OA_API_URL + '/material/items/' + id + '/', {method: 'DELETE', headers: TokenManager.getHeaders()});
+            if (!r.ok) throw new Error('删除失败');
+            this.showToast('已删除', false);
+            this._loadMaterialItems();
+        } catch (e) { this.showToast(e.message || '删除失败', true); }
+    }
+
+    // ==================== 物资管理（需求单/领用单） ====================
+    openMaterialMgmtModal() {
+        document.getElementById('materialMgmtModal').style.display = 'flex';
+        setTimeout(function () { document.getElementById('materialMgmtModal').classList.add('show'); }, 10);
+        this._defaultMaximize('materialMgmtModal');
+        this._matTab = 'req';
+        this._matPage = 1;
+        var ms = document.getElementById('matSearch');
+        if (ms) ms.value = '';
+        this._switchMaterialTab('req');
+    }
+    closeMaterialMgmtModal() {
+        var m = document.getElementById('materialMgmtModal');
+        if (m) { m.classList.remove('show'); setTimeout(function () { m.style.display = 'none'; }, 150); }
+    }
+    _defaultMaximize(modalId) {
         var modal = document.getElementById(modalId);
         if (!modal) return;
-        var bodyEl = modal.querySelector('.modal-body');
-        if (!bodyEl || !bodyEl.innerHTML.trim()) {
-            this.showToast('没有可打印的审批内容', true);
-            return;
+        var content = modal.querySelector('.modal-content');
+        if (content && !content.classList.contains('maximized')) {
+            content.classList.add('maximized');
+            var btn = modal.querySelector('.maximize-btn i');
+            if (btn) btn.className = 'fas fa-compress';
         }
+    }
+    _switchMaterialTab(tab) {
+        this._matTab = tab;
+        this._matPage = 1;
+        document.querySelectorAll('.mat-tab-btn').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-tab') === tab); });
+        document.getElementById('matReqPanel').style.display = tab === 'req' ? 'block' : 'none';
+        document.getElementById('matReqsnPanel').style.display = tab === 'reqsn' ? 'block' : 'none';
+        if (tab === 'req') this._loadMaterialRequirements(1);
+        else this._loadMaterialRequisitions(1);
+    }
+    _onMaterialSearch() {
+        var self = this;
+        clearTimeout(this._matSearchTimer);
+        this._matSearchTimer = setTimeout(function () {
+            self._matPage = 1;
+            if (self._matTab === 'req') self._loadMaterialRequirements(1);
+            else self._loadMaterialRequisitions(1);
+        }, 300);
+    }
+    _reloadMaterialTab() {
+        var page = this._matPage || 1;
+        if (this._matTab === 'req') this._loadMaterialRequirements(page);
+        else this._loadMaterialRequisitions(page);
+    }
+    _matPageGo(page) {
+        if (this._matTab === 'req') this._loadMaterialRequirements(page);
+        else this._loadMaterialRequisitions(page);
+    }
+    _renderMaterialPagination(data) {
+        var el = document.getElementById('matPagination');
+        if (!el) return;
+        var p = (data && data.page) || 1, t = (data && data.total_pages) || 1;
+        if (t <= 1) { el.innerHTML = ''; el.style.display = 'none'; return; }
+        el.style.display = 'flex';
+        el.innerHTML = '<span style="margin-right:10px;color:#909399;font-size:12px;">共 ' + (data.count || 0) + ' 条，第 ' + p + '/' + t + ' 页</span>'
+            + '<button class="pagination-btn" onclick="approvalApp._matPageGo(' + (p - 1) + ')"' + (p <= 1 ? ' disabled' : '') + '><i class="fas fa-chevron-left"></i> 上一页</button>'
+            + '<button class="pagination-btn" onclick="approvalApp._matPageGo(' + (p + 1) + ')"' + (p >= t ? ' disabled' : '') + '>下一页 <i class="fas fa-chevron-right"></i></button>';
+    }
+    _renderMatStatus(status, kind) {
+        var reqMap = {
+            pending: ['#909399', '待审批'],
+            approved: ['#e6a23c', '已通过(待采购)'],
+            purchasing: ['#409eff', '采购中'],
+            stocked: ['#67c23a', '已入库(可领用)'],
+            rejected: ['#f56c6c', '已驳回']
+        };
+        var reqsnMap = {
+            pending: ['#909399', '待审批'],
+            approved: ['#67c23a', '已通过(可领用)'],
+            rejected: ['#f56c6c', '已驳回']
+        };
+        var map = kind === 'reqsn' ? reqsnMap : reqMap;
+        var c = map[status] || ['#909399', status];
+        return '<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;color:#fff;background:' + c[0] + ';">' + this._escape(c[1]) + '</span>';
+    }
+    async _loadMaterialRequirements(page) {
+        var tbody = document.getElementById('matReqTbody');
+        if (!tbody) return;
+        page = page || 1;
+        this._matPage = page;
+        var search = document.getElementById('matSearch') ? document.getElementById('matSearch').value.trim() : '';
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:#909399;"><i class="fas fa-spinner fa-spin"></i> 加载中...</td></tr>';
+        try {
+            var url = OA_API_URL + '/material/requirements/?page=' + page + '&page_size=10';
+            if (search) url += '&search=' + encodeURIComponent(search);
+            var d = await this.apiGet(url);
+            if (!d) return;
+            var list = d.results || [];
+            if (!list.length) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:#909399;">' + (search ? '未找到匹配的需求单' : '暂无物资需求单') + '</td></tr>'; this._renderMaterialPagination(d); return; }
+            var self = this;
+            tbody.innerHTML = list.map(function (it) {
+                var actions = '';
+                if (it.status === 'approved') {
+                    actions += '<button class="action-btn" title="确认采购" onclick="approvalApp._changeRequirementStatus(' + it.id + ',\'purchasing\')"><i class="fas fa-cart-arrow-down" style="color:#409eff;"></i></button>';
+                    actions += '<button class="action-btn" title="确认入库" onclick="approvalApp._changeRequirementStatus(' + it.id + ',\'stocked\')"><i class="fas fa-warehouse" style="color:#67c23a;"></i></button>';
+                } else if (it.status === 'purchasing') {
+                    actions += '<button class="action-btn" title="确认入库" onclick="approvalApp._changeRequirementStatus(' + it.id + ',\'stocked\')"><i class="fas fa-warehouse" style="color:#67c23a;"></i></button>';
+                } else if (it.status === 'stocked') {
+                    actions += '<span style="font-size:11px;color:#67c23a;"><i class="fas fa-check-circle"></i> 可领用</span>';
+                }
+                if (it.request_id) {
+                    actions += '<button class="action-btn" title="查看审批" onclick="approvalApp.showDetail(' + it.request_id + ')"><i class="fas fa-eye"></i></button>';
+                }
+                return '<tr>'
+                    + '<td style="font-weight:600;color:#16a085;">' + self._escape(it.doc_no) + '</td>'
+                    + '<td>' + self._escape(it.branch_dept || '-') + '</td>'
+                    + '<td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + self._escape(it.purpose) + '">' + self._escape(it.purpose || '-') + '</td>'
+                    + '<td>' + self._renderMatStatus(it.status, 'req') + '</td>'
+                    + '<td>' + it.item_count + ' 项 / 剩余 ' + it.remaining + '</td>'
+                    + '<td>' + self._escape(it.applicant || '-') + '</td>'
+                    + '<td>' + self._escape(it.created_at || '-') + '</td>'
+                    + '<td>' + (actions || '-') + '</td>'
+                    + '</tr>';
+            }).join('');
+            this._renderMaterialPagination(d);
+        } catch (e) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:#909399;">加载失败</td></tr>'; }
+    }
+    async _loadMaterialRequisitions(page) {
+        var tbody = document.getElementById('matReqsnTbody');
+        if (!tbody) return;
+        page = page || 1;
+        this._matPage = page;
+        var search = document.getElementById('matSearch') ? document.getElementById('matSearch').value.trim() : '';
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:#909399;"><i class="fas fa-spinner fa-spin"></i> 加载中...</td></tr>';
+        try {
+            var url = OA_API_URL + '/material/requisitions/?page=' + page + '&page_size=10';
+            if (search) url += '&search=' + encodeURIComponent(search);
+            var d = await this.apiGet(url);
+            if (!d) return;
+            var list = d.results || [];
+            if (!list.length) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:#909399;">' + (search ? '未找到匹配的领用单' : '暂无物资领用单') + '</td></tr>'; this._renderMaterialPagination(d); return; }
+            var self = this;
+            tbody.innerHTML = list.map(function (it) {
+                var actions = it.request_id ? '<button class="action-btn" title="查看审批" onclick="approvalApp.showDetail(' + it.request_id + ')"><i class="fas fa-eye"></i></button>' : '-';
+                return '<tr>'
+                    + '<td style="font-weight:600;color:#e6a23c;">' + self._escape(it.doc_no) + '</td>'
+                    + '<td style="font-weight:600;color:#16a085;">' + self._escape(it.requirement_doc_no || '-') + '</td>'
+                    + '<td>' + self._escape(it.branch_dept || '-') + '</td>'
+                    + '<td>' + self._renderMatStatus(it.status, 'reqsn') + '</td>'
+                    + '<td>' + it.item_count + ' 项</td>'
+                    + '<td>' + self._escape(it.applicant || '-') + '</td>'
+                    + '<td>' + self._escape(it.created_at || '-') + '</td>'
+                    + '<td>' + actions + '</td>'
+                    + '</tr>';
+            }).join('');
+            this._renderMaterialPagination(d);
+        } catch (e) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:#909399;">加载失败</td></tr>'; }
+    }
+    async _changeRequirementStatus(id, status) {
+        var label = status === 'stocked' ? '确认该需求单已采购入库，之后可被领用' : '将该需求单标记为采购中';
+        var ok = await this.showConfirmDialog('需求单状态流转', label + '？', 'confirm');
+        if (!ok) return;
+        try {
+            var r = await fetch(OA_API_URL + '/material/requirement-status/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify({id: id, status: status})
+            });
+            if (!r.ok) { var e2 = await r.json().catch(function () { return {}; }); throw new Error(this._extractApiError(e2)); }
+            this.showToast('已更新', false);
+            this._loadMaterialRequirements();
+        } catch (e) { this.showToast(e.message || '更新失败', true); }
+    }
+
+    async _openRequirementDetail(rid) {
+        try {
+            var d = await this.apiGet(OA_API_URL + '/material/requirement-detail/?id=' + rid);
+            if (!d) return;
+            var body = document.getElementById('matReqDetailBody');
+            var itemsHtml = (d.items || []).map(function (i) {
+                var price = (i.price != null && i.price !== '') ? Number(i.price) : null;
+                var totalAmt = (price != null) ? (price * (Number(i.quantity) || 0)).toFixed(2) : '-';
+                return '<tr><td>' + approvalApp._escape(i.item_name) + '</td>'
+                    + '<td>' + approvalApp._escape(i.spec || '-') + '</td>'
+                    + '<td>' + approvalApp._escape(i.unit || '-') + '</td>'
+                    + '<td style="text-align:right;">' + (price != null ? price.toFixed(2) : '-') + '</td>'
+                    + '<td style="text-align:right;">' + i.quantity + '</td>'
+                    + '<td style="text-align:right;color:#e6a23c;font-weight:600;">' + totalAmt + '</td>'
+                    + '<td style="color:#67c23a;font-weight:600;">' + i.remaining + '</td></tr>';
+            }).join('') || '<tr><td colspan="7" style="text-align:center;color:#909399;">无明细</td></tr>';
+            body.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;margin-bottom:12px;">'
+                + '<div><strong>需求单号：</strong><span style="color:#16a085;font-weight:700;">' + approvalApp._escape(d.doc_no) + '</span></div>'
+                + '<div><strong>状态：</strong>' + approvalApp._renderMatStatus(d.status, 'req') + '</div>'
+                + '<div><strong>分公司：</strong>' + approvalApp._escape(d.branch_dept || '-') + '</div>'
+                + '<div><strong>申请人：</strong>' + approvalApp._escape(d.applicant || '-') + '</div>'
+                + '<div><strong>预估金额：</strong><span style="color:#e6a23c;font-weight:700;">¥' + (d.amount != null && d.amount !== '' ? (Number(d.amount)).toFixed(2) : '-') + '</span></div>'
+                + '<div><strong>用途：</strong>' + approvalApp._escape(d.purpose || '-') + '</div>'
+                + '</div>'
+                + '<table class="oa-table"><thead><tr><th>物品名称</th><th>规格</th><th>单位</th><th>单价</th><th>数量</th><th>金额</th><th>剩余可领</th></tr></thead><tbody>' + itemsHtml + '</tbody></table>';
+            // 提升层级：在审批详情（z-index 3000）之上打开
+            document.getElementById('materialReqDetailModal').style.zIndex = '3500';
+            document.getElementById('materialReqDetailModal').style.display = 'flex';
+            setTimeout(function () { document.getElementById('materialReqDetailModal').classList.add('show'); }, 10);
+        } catch (e) { this.showToast('加载需求单详情失败', true); }
+    }
+    closeRequirementDetailModal() {
+        var m = document.getElementById('materialReqDetailModal');
+        if (m) { m.classList.remove('show'); setTimeout(function () { m.style.display = 'none'; }, 150); }
+    }
+
+    // ==================== 打印 ====================
+    _printDetail() {
+        var self = this;
+        var gate = function () {
+            var modalId = self._detailModalId || 'approvalDetailModal';
+            var modal = document.getElementById(modalId);
+            if (!modal) return;
+            var bodyEl = modal.querySelector('.modal-body');
+            if (!bodyEl || !bodyEl.innerHTML.trim()) {
+                self.showToast('没有可打印的审批内容', true);
+                return;
+            }
         // 用独立隐藏iframe承载打印内容，避免打印整个页面时等待无关资源（字体/CDN/其他弹窗图片）导致一直加载
         var old = document.getElementById('approvalPrintFrame');
         if (old && old.parentNode) old.parentNode.removeChild(old);
@@ -4425,7 +5411,11 @@ class ApprovalApp {
 
         var doc = iframe.contentDocument;
         doc.open();
-        doc.write('<html><head><meta charset="utf-8"><title>审批详情打印</title><style>' + css + '</style></head><body>' + bodyEl.innerHTML + '</body></html>');
+        // 🔧 打印默认叠加水印（由管理控制台「打印时添加水印」开关控制）
+        var wm = (window.WatermarkManager && WatermarkManager.buildPrintWatermark) ? WatermarkManager.buildPrintWatermark() : null;
+        var printCss = wm ? css + wm.css : css;
+        var printBody = wm ? bodyEl.innerHTML + wm.html : bodyEl.innerHTML;
+        doc.write('<html><head><meta charset="utf-8"><title>审批详情打印</title><style>' + printCss + '</style></head><body>' + printBody + '</body></html>');
         doc.close();
 
         // 图片加载失败时直接隐藏，避免打印预览一直等待
@@ -4446,12 +5436,25 @@ class ApprovalApp {
                 if (iframe && iframe.parentNode) iframe.parentNode.removeChild(iframe);
             }, 3000);
         }
-        // 等资源加载完再打印；超时强制打印，避免卡死
-        var force = setTimeout(doPrint, 1200);
-        iframe.onload = function () {
-            clearTimeout(force);
-            setTimeout(doPrint, 150);
+            // 等资源加载完再打印；超时强制打印，避免卡死
+            var force = setTimeout(doPrint, 1200);
+            iframe.onload = function () {
+                clearTimeout(force);
+                setTimeout(doPrint, 150);
+            };
         };
+        // 🔧 打印权限门：先上报打印并校验「允许打印」权限，无权限则拦截
+        if (window.WatermarkManager && WatermarkManager.reportPrint) {
+            WatermarkManager.reportPrint({page: 'approval', target_type: 'approval', target_id: self._detailApprovalId || ''}).then(function (res) {
+                if (res && res.allowed === false) {
+                    self.showToast('您没有打印权限，请联系管理员开通', true);
+                    return;
+                }
+                gate();
+            });
+        } else {
+            gate();
+        }
     }
 
     // ==================== 审批操作 ====================
@@ -4497,6 +5500,11 @@ class ApprovalApp {
                 + '<button type="button" class="btn btn-secondary" onclick="approvalApp._toggleSignatureFullscreen()" style="font-size:12px;padding:4px 12px;"><i class="fas fa-expand"></i> 全屏签名</button>'
                 + '<span style="font-size:11px;color:#909399;">支持鼠标或手指书写</span></div>'
                 + '</div>'
+                + '<div id="actionNotifyReceiptWrap" style="display:none;margin-top:12px;padding:10px 12px;background:#f4fdf9;border:1px solid #d1f2eb;border-radius:8px;">'
+                + '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:500;color:#16a085;">'
+                + '<input type="checkbox" id="actionNotifyReceipt" style="width:16px;height:16px;cursor:pointer;">'
+                + '<span><i class="fas fa-bell" style="margin-right:2px;"></i> 通知发起人回传票据</span></label>'
+                + '<div style="font-size:11px;color:#909399;margin-top:4px;">开启后，通过审批时会向发起人发送「请及时回传票据/凭证」的工作通知</div></div>'
                 + '</div>'
                 + '<div class="modal-footer" id="actionModalFooter">'
                 + '<button class="btn btn-secondary" onclick="approvalApp.closeModal(\'actionModal\')">取消</button>'
@@ -4546,6 +5554,13 @@ class ApprovalApp {
                 if (sigWrap) sigWrap.style.display = 'block';
             }
         }
+        // 「通知发起人回传票据」开关：仅当该审批类型开启票据回传且操作为通过时显示
+        var notifyWrap = document.getElementById('actionNotifyReceiptWrap');
+        if (notifyWrap) notifyWrap.style.display = (action === 'approve' && this._currentApprovalEnableReceipt) ? 'block' : 'none';
+        var notifyCb = document.getElementById('actionNotifyReceipt');
+        if (notifyCb) notifyCb.checked = false;
+        // 提升详情层级，保证在物资管理/物品库等其它模态框之上打开（不关闭下层模态框）
+        modal.style.zIndex = '3000';
         modal.style.display = 'flex';
         setTimeout(function () {
             modal.classList.add('show');
@@ -4618,6 +5633,15 @@ class ApprovalApp {
             }
             data.signature = this._signatureWithTimestamp(sigCanvas);
         }
+
+        if (action === 'approve') {
+            var confirmed = await this.showConfirmDialog('确认发送私聊卡片', '是否确认通过审批？', 'confirm');
+            if (!confirmed) return;
+            // 「通知发起人回传票据」开关：开启才让后端发送请及时回传票据/凭证通知
+            var notifyCb = document.getElementById('actionNotifyReceipt');
+            if (notifyCb && notifyCb.checked) data.notify_receipt_return = true;
+        }
+
         try {
             await this.apiPost(OA_API_URL + '/approval/' + id + '/' + action + '/', data);
             this.closeModal('actionModal');
@@ -4757,7 +5781,7 @@ class ApprovalApp {
         var approverName = '';
         try {
             var cu = JSON.parse(localStorage.getItem('current_user') || 'null');
-            approverName = (cu && (cu.real_name || cu.name)) ? (cu.real_name || cu.name) : '';
+            approverName = (cu && (cu.real_name || cu.username)) ? (cu.real_name || cu.username) : '';
         } catch (e) {
         }
         var lineY = h + 2;
@@ -4872,6 +5896,24 @@ class ApprovalApp {
 
     // ==================== 工具方法 ====================
 
+    _copyText(text) {
+        var self = this;
+        var done = function () { self.showToast('已复制：' + text, false); };
+        var fallback = function () {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); done(); } catch (e) { self.showToast('复制失败，请手动复制', true); }
+            document.body.removeChild(ta);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(done).catch(fallback);
+        } else {
+            fallback();
+        }
+    }
+
     _escape(text) {
         if (!text) return '';
         return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -4977,6 +6019,220 @@ class ApprovalApp {
 
     showSuccess(message) {
         this.showToast(message, false);
+    }
+
+    /**
+     * 发起人把审批以私聊卡片形式发送给待审批人，对方点击卡片直达审批详情
+     */
+    async sendApprovalPrivate(approvalId, assigneeUserId, btn) {
+        var confirmed = await this.showConfirmDialog('确认发送私聊卡片', '确认发送私聊卡片给待审批人？', 'confirm');
+        if (!confirmed) return;
+
+        if (!approvalId || !assigneeUserId) return;
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 发送中...';
+        }
+        try {
+            const res = await this.apiPost(OA_API_URL + '/approval/' + approvalId + '/send-private/', {
+                assignee_user_id: assigneeUserId
+            });
+            this.showToast((res && res.message) || '已发送私聊提醒', false);
+            if (btn) {
+                btn.disabled = true;
+                btn.style.borderColor = '#67c23a';
+                btn.style.color = '#67c23a';
+                btn.innerHTML = '<i class="fas fa-check" style="margin-right:2px;"></i>已发送';
+            }
+        } catch (e) {
+            this.showToast(e.message || '发送失败', true);
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-comment-dots" style="margin-right:2px;"></i>发送私聊';
+            }
+        }
+    }
+
+    // ==================== 票据回传 ====================·
+
+    // 渲染票据回传区块（仅审批已通过且配置了回传时限时显示）
+    // 判断当前用户是否为最后审批人（最终审批节点；未标记最终节点时取最高 order 节点）
+    _isLastApprover(d, currentUserId) {
+        if (!d || !d.approval_nodes || !currentUserId) return false;
+        var finalNode = null;
+        for (var i = 0; i < d.approval_nodes.length; i++) {
+            if (d.approval_nodes[i].is_final_approver) { finalNode = d.approval_nodes[i]; break; }
+        }
+        if (!finalNode) {
+            var candidates = d.approval_nodes.filter(function (x) { return x.node_type !== 'initiator'; });
+            candidates.sort(function (a, b) { return (b.order || 0) - (a.order || 0); });
+            finalNode = candidates[0];
+        }
+        if (!finalNode) return false;
+        return (finalNode.assignees || []).some(function (as) { return as.user === currentUserId; });
+    }
+
+    _renderReceiptSection(d) {
+        if (!d) return '';
+        var currentUserId = parseInt(localStorage.getItem('user_id'));
+        var isApplicant = d.applicant === currentUserId;
+        var isLastApprover = this._isLastApprover(d, currentUserId);
+        if (!isApplicant && !isLastApprover) return '';
+        // 票据回传开关关闭时：发起人与最后审批人均不可使用票据回传，整个区域隐藏
+        if (!d.enable_receipt_return) return '';
+        var inProgress = ['pending', 'deferred', 'processing'].indexOf(d.status) >= 0;
+        // 已通过：只要配置开启回传（时限>0）即显示；进行中：发起人/最后审批人可补传
+        if (d.status === 'approved') {
+            if (!(d.receipt_return_hours > 0)) return '';
+        } else if (!inProgress) {
+            return '';
+        }
+        var deadlineText = '';
+        var canUpload = false;
+        if (d.status === 'approved') {
+            if (d.receipt_deadline) {
+                var deadline = new Date(d.receipt_deadline);
+                var expired = new Date() > deadline;
+                deadlineText = '回传截止时间：' + this._formatTime(d.receipt_deadline)
+                    + (expired ? ' <span style="color:#f56c6c;">（已过期）</span>' : ' <span style="color:#67c23a;">（请在截止前回传付款凭证/票据）</span>');
+                canUpload = !expired;
+            } else {
+                // 截止时间缺失（旧数据/边界）：按配置的回传时限展示并允许回传（后端会自动补算截止时间）
+                deadlineText = '审批已通过，可在配置的回传时限（' + d.receipt_return_hours + ' 小时）内补传付款凭证/票据';
+                canUpload = true;
+            }
+        } else {
+            deadlineText = '审批进行中，可补传票据';
+            canUpload = true;
+        }
+        var receipts = d.receipts || [];
+        // 区分回传方：最后审批人回传=对发起人的反馈；发起人回传=对审批人的反馈（历史数据无标记按发起人处理）
+        var lastApproverReceipts = receipts.filter(function (r) { return (r.uploader_role || '') === 'last_approver'; });
+        var applicantReceipts = receipts.filter(function (r) { return (r.uploader_role || '') !== 'last_approver'; });
+        var html = '<div class="detail-item full-width" style="margin-top:8px;border:1px solid #d1f2eb;border-radius:8px;padding:12px;background:#f4fdf9;">'
+            + '<div style="font-size:14px;font-weight:600;color:#16a085;margin-bottom:8px;border-bottom:1px solid #d1f2eb;padding-bottom:6px;"><i class="fas fa-file-upload"></i> 票据回传</div>'
+            + '<div style="font-size:13px;color:#606266;margin-bottom:8px;">' + deadlineText + '</div>';
+        // 渲染一组回传票据（canDelete=仅该组回传者可删除本人上传的票据）
+        var renderReceiptGroup = function (title, hint, group, canDelete) {
+            if (!group.length) return '';
+            var g = '<div style="margin-bottom:8px;"><div style="font-size:13px;font-weight:600;color:#16a085;margin-bottom:4px;">' + title + ' <span style="font-weight:400;color:#909399;font-size:12px;">' + hint + '</span></div>'
+                + '<div style="display:flex;flex-direction:column;gap:4px;">';
+            group.forEach(function (r) {
+                var rName = r.name || '';
+                var rUrl = r.url || '';
+                var isImg = /\.(jpg|jpeg|png|gif|webp)$/i.test(rName || rUrl);
+                var isDoc = /\.(doc|docx|xls|xlsx|ppt|pptx|pdf)$/i.test(rName || rUrl);
+                // 点击行为：图片→预览；文档→自动保存到我的网盘并打开在线编辑；其他→保存到网盘
+                var inner = isImg
+                    ? '<img src="' + approvalApp._escape(rUrl) + '" style="width:40px;height:40px;border-radius:4px;object-fit:cover;border:1px solid #d1f2eb;">'
+                    : '<i class="fas ' + (isDoc ? 'fa-file-word' : 'fa-file') + '" style="color:#16a085;font-size:18px;"></i>';
+                g += '<div style="display:flex;align-items:center;gap:8px;padding:4px 6px;background:#fff;border:1px solid #e2f3ee;border-radius:6px;">'
+                    + '<a href="javascript:void(0)" data-url="' + approvalApp._escape(rUrl) + '" data-name="' + approvalApp._escape(rName || '') + '" onclick="approvalApp._handleAttach(this)" title="' + (isImg ? '点击预览图片' : '点击保存到我的网盘' + (isDoc ? '并在线编辑' : '')) + '" style="display:inline-flex;align-items:center;gap:6px;color:#16a085;text-decoration:none;flex:1;overflow:hidden;">'
+                    + inner + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + approvalApp._escape(rName || '') + '</span></a>'
+                    + (canDelete ? '<button type="button" title="删除该回传票据" data-url="' + approvalApp._escape(rUrl) + '" onclick="approvalApp._deleteReceipt(' + d.id + ', this)" style="border:none;background:none;color:#f56c6c;cursor:pointer;font-size:14px;line-height:1;padding:2px 4px;flex-shrink:0;"><i class="fas fa-trash-alt"></i></button>' : '')
+                    + '</div>';
+            });
+            g += '</div></div>';
+            return g;
+        };
+        html += renderReceiptGroup('最后审批人回传', '（对发起人的反馈）', lastApproverReceipts, isLastApprover);
+        html += renderReceiptGroup('发起人回传', '（对审批人的反馈）', applicantReceipts, isApplicant);
+        // 最后审批人可填写审批意见（随票据一起回传，展示在审批记录最下面）
+        if (canUpload && isLastApprover && !isApplicant) {
+            html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;"><i class="fas fa-comment-dots" style="color:#16a085;"></i> 审批意见</label>'
+                + '<textarea id="receiptComment' + d.id + '" rows="2" placeholder="选填，填写回传票据的相关说明..." style="width:100%;padding:8px 10px;border:1px solid var(--border-color,#dcdfe6);border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea></div>';
+        }
+        // 发起人/最后审批人可上传；最后审批人还可单独提交审批意见
+        if (canUpload) {
+            html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
+                + '<button type="button" class="btn btn-sm btn-primary" onclick="approvalApp._triggerReceiptUpload(' + d.id + ')"><i class="fas fa-upload"></i> 回传付款凭证/票据</button>'
+                + '<input type="file" id="receiptFileInput' + d.id + '" style="display:none;" multiple onchange="approvalApp._handleReceiptFileSelect(' + d.id + ', this)">'
+                + (isLastApprover && !isApplicant
+                    ? '<button type="button" class="btn btn-sm btn-secondary" onclick="approvalApp._submitReceiptComment(' + d.id + ')"><i class="fas fa-comment-dots"></i> 单独提交审批意见</button>'
+                    : '')
+                + '</div>';
+        }
+        html += '</div>';
+        return html;
+    }
+
+    // 单独提交审批意见（不附票据文件）
+    async _submitReceiptComment(id) {
+        const commentEl = document.getElementById('receiptComment' + id);
+        const comment = commentEl ? commentEl.value.trim() : '';
+        if (!comment) {
+            this.showToast('请先填写审批意见', true);
+            return;
+        }
+        try {
+            const res = await this.apiPost(OA_API_URL + '/approval/' + id + '/upload-receipt/', {comment: comment});
+            this.showToast((res && res.message) || '审批意见已提交', false);
+            if (commentEl) commentEl.value = '';
+            this.showDetail(id);
+        } catch (e) {
+            this.showAlert('提交失败', e.message || '请重试');
+        }
+    }
+
+    // 删除一条已回传的票据（仅最后审批人有权限，后端会再次校验）
+    async _deleteReceipt(id, btn) {
+        const url = btn ? btn.getAttribute('data-url') : '';
+        if (!url) return;
+        const confirmed = await this.showConfirmDialog('删除票据', '确定删除该回传票据吗？删除后不可恢复。', 'danger');
+        if (!confirmed) return;
+        try {
+            const res = await this.apiPost(OA_API_URL + '/approval/' + id + '/delete-receipt/', {url: url});
+            this.showToast((res && res.message) || '已删除', false);
+            this.showDetail(id);
+        } catch (e) {
+            this.showAlert('删除失败', e.message || '请重试');
+        }
+    }
+
+    _triggerReceiptUpload(id) {
+        const input = document.getElementById('receiptFileInput' + id);
+        if (input) input.click();
+    }
+
+    async _handleReceiptFileSelect(id, input) {
+        const files = input.files;
+        if (!files || !files.length) return;
+        const uploaded = [];
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            if (file.size > this.fileMaxSizeMB * 1024 * 1024) {
+                this.showAlert('提示', '文件大小不能超过' + this.fileMaxSizeMB + 'MB');
+                continue;
+            }
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+                const resp = await fetch(OA_API_URL + '/approval/upload-attachment/', {
+                    method: 'POST',
+                    headers: {'Authorization': TokenManager.getHeaders()['Authorization']},
+                    body: formData
+                });
+                if (!resp.ok) throw new Error('上传失败');
+                const result = await resp.json();
+                if (result.url) uploaded.push({url: result.url, name: result.name || file.name});
+            } catch (e) {
+                console.error('上传回传票据失败', e);
+            }
+        }
+        if (input) input.value = '';
+        if (uploaded.length) {
+            // 随票据一起提交的审批意见（最后审批人可填）
+            const commentEl = document.getElementById('receiptComment' + id);
+            const comment = commentEl ? commentEl.value.trim() : '';
+            try {
+                const res = await this.apiPost(OA_API_URL + '/approval/' + id + '/upload-receipt/', {files: uploaded, comment: comment});
+                this.showToast((res && res.message) || '票据回传成功', false);
+                if (commentEl) commentEl.value = '';
+                this.showDetail(id);
+            } catch (e) {
+                this.showAlert('回传失败', e.message || '请重试');
+            }
+        }
     }
 
 

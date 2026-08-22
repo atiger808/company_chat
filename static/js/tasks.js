@@ -3,7 +3,7 @@
 class TaskApp {
     constructor() {
         this.tasks = [];
-        this.users = [];
+        this.assigneeResults = [];
         this.currentUser = null;
         this.currentFilter = 'my';
         this.currentView = 'list';
@@ -22,9 +22,9 @@ class TaskApp {
         }
         // 各初始化步骤独立容错：任一失败不阻断后续（含任务详情自动打开）
         try { await this.loadCurrentUser(); } catch (e) { console.error('加载当前用户失败', e); }
-        try { await this.loadUsers(); } catch (e) { console.error('加载用户列表失败', e); }
         try { await this.loadStats(); } catch (e) { console.error('加载统计失败', e); }
         try { await this.loadTasks(); } catch (e) { console.error('加载任务失败', e); }
+        try { this.initAssigneePicker(); } catch (e) { console.error('初始化执行人选择器失败', e); }
 
         // 从工作通知/聊天室任务卡片跳转：自动打开对应任务详情
         try {
@@ -60,19 +60,6 @@ class TaskApp {
                 userEl.querySelector('.user-name').textContent = this.currentUser.real_name || this.currentUser.username;
             }
         } catch (e) { console.error('加载用户失败', e); }
-    }
-
-    async loadUsers() {
-        try {
-            const res = await fetch('/api/auth/users/?page_size=100', { headers: TokenManager.getHeaders() });
-            if (res.status === 401) {
-                this.handleAuthError();
-                return;
-            }
-            const data = await res.json();
-            this.users = data.results || data || [];
-            this.renderAssigneeOptions();
-        } catch (e) { console.error('加载用户列表失败', e); }
     }
 
     async loadStats() {
@@ -497,6 +484,37 @@ class TaskApp {
         window.location.href = this.chat_login_url;
     }
 
+    // ==================== 优雅的提示对话框 ====================
+    showAlert(title, message) {
+        return new Promise((resolve) => {
+            const dialog = document.createElement('div');
+            dialog.className = 'confirm-dialog';
+            dialog.innerHTML = '<div class="confirm-dialog-content">'
+                + '<div class="confirm-dialog-header">'
+                + '<i class="fas fa-info-circle"></i>'
+                + '<span>' + this._escape(title) + '</span>'
+                + '<button class="close-btn"><i class="fas fa-times"></i></button></div>'
+                + '<div class="confirm-dialog-body">' + message + '</div>'
+                + '<div class="confirm-dialog-footer">'
+                + '<button class="confirm-dialog-btn confirm">确定</button></div></div>';
+            document.body.appendChild(dialog);
+            const close = () => {
+                dialog.classList.remove('show');
+                setTimeout(() => {
+                    if (dialog.parentNode) document.body.removeChild(dialog);
+                }, 250);
+                resolve();
+            };
+            dialog.querySelector('.confirm').addEventListener('click', close);
+            dialog.querySelector('.close-btn').addEventListener('click', close);
+            dialog.addEventListener('click', (e) => {
+                if (e.target === dialog) close();
+            });
+            setTimeout(() => dialog.classList.add('show'), 10);
+        });
+    }
+
+
     showConfirm(title, message) {
         return new Promise((resolve) => {
             const dialog = document.createElement('div');
@@ -518,6 +536,51 @@ class TaskApp {
             dialog.querySelector('.close-btn').onclick = () => { dialog.remove(); resolve(false); };
         });
     }
+
+    showError(title, message) {
+        this.showToast(`${title}: ${message}`, 'error');
+    }
+
+    /**
+     * 🔧 新增：警告提示
+     */
+    showWarning(title, message) {
+        const toast = document.createElement('div');
+        toast.className = 'toast toast-warning';
+        toast.innerHTML = `<strong>${title}</strong><br>${message}`;
+        document.body.appendChild(toast);
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => toast.remove(), 300);
+        }, 5000);  // 警告显示时间更长
+    }
+
+    showSuccess(title, message) {
+        this.showToast(`${title}: ${message}`, 'success');
+    }
+
+    showInfo(title, message) {
+        this.showToast(`${title}: ${message}`, 'info');
+    }
+
+    showToast(message, type = 'info') {
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.innerHTML = `<strong>${type === 'error' ? '错误' : type === 'success' ? '成功' : '提示'}</strong><br>${message}`;
+        document.body.appendChild(toast);
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
+    }
+
+    // ===== 工具 =====
+    _escape(text) {
+        return Utils.escapeHtml ? Utils.escapeHtml(text) : String(text || '').replace(/[&<>"]/g, function (c) {
+            return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c];
+        });
+    }
+
 
     // ==================== 侧边栏切换 ====================
 
@@ -611,6 +674,7 @@ class TaskApp {
         document.getElementById('taskId').value = '';
         document.getElementById('taskTitle').value = '';
         document.getElementById('taskDesc').value = '';
+        this.resetAssigneePicker();
     }
 
     closeModal() {
@@ -624,11 +688,27 @@ class TaskApp {
             description: document.getElementById('taskDesc').value,
             priority: document.getElementById('taskPriority').value,
             status: document.getElementById('taskStatus').value,
-            assignee_id: document.getElementById('taskAssignee').value || null,
+            assignee_id: document.getElementById('taskAssigneeId').value || null,
             due_date: document.getElementById('taskDueDate').value || null
         };
 
-        if (!data.title) return alert('请输入任务标题');
+        if (!data.title) {
+            console.log('请输入任务标题');
+            this.showAlert('提示', '请输入任务标题');
+            return;
+        }
+
+        if (!data.assignee_id) {
+            console.log('请选择执行人');
+            this.showAlert('提示', '请选择执行人');
+            return;
+        }
+
+        if (!data.due_date) {
+            console.log('请选择截止日期');
+            this.showAlert('提示', '请选择截止日期');
+            return;
+        }
 
         try {
             const url = id ? `/api/tasks/${id}/` : '/api/tasks/';
@@ -644,10 +724,139 @@ class TaskApp {
         } catch (e) { console.error('保存失败', e); }
     }
 
-    renderAssigneeOptions() {
-        const select = document.getElementById('taskAssignee');
-        select.innerHTML = '<option value="">未指派</option>' + 
-            this.users.map(u => `<option value="${u.id}">${u.real_name || u.username}</option>`).join('');
+    // ==================== 执行人搜索选择器 ====================
+
+    escapeHtml(text) {
+        if (text === null || text === undefined) return '';
+        return String(text).replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+    }
+
+    initAssigneePicker() {
+        const input = document.getElementById('taskAssigneeSearchInput');
+        const dropdown = document.getElementById('taskAssigneeDropdown');
+        if (!input || !dropdown) return;
+        let debounceTimer = null;
+        input.addEventListener('input', () => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => this.searchAssignees(), 250);
+        });
+        input.addEventListener('focus', () => { if (input.value.trim()) this.searchAssignees(); });
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); this.searchAssignees(); }
+        });
+        // 点击选择器外部关闭下拉
+        document.addEventListener('click', (e) => {
+            const picker = document.querySelector('.assignee-picker');
+            if (picker && !picker.contains(e.target)) dropdown.style.display = 'none';
+        });
+        // 模态框内滚动/窗口缩放时关闭下拉，避免位置错乱
+        const modal = document.getElementById('taskModal');
+        if (modal) modal.addEventListener('scroll', () => { dropdown.style.display = 'none'; }, true);
+        window.addEventListener('resize', () => { dropdown.style.display = 'none'; });
+    }
+
+    async searchAssignees() {
+        const input = document.getElementById('taskAssigneeSearchInput');
+        const dropdown = document.getElementById('taskAssigneeDropdown');
+        if (!input || !dropdown) return;
+        const q = input.value.trim();
+        try {
+            const res = await fetch(`/api/auth/search_assignees/?q=${encodeURIComponent(q)}`, { headers: TokenManager.getHeaders() });
+            if (res.status === 401) { this.handleAuthError(); return; }
+            if (!res.ok) return;
+            const data = await res.json();
+            this.renderAssigneeDropdown(data.results || []);
+        } catch (e) { console.error('搜索执行人失败', e); }
+    }
+
+    renderAssigneeDropdown(results) {
+        const dropdown = document.getElementById('taskAssigneeDropdown');
+        if (!dropdown) return;
+        this.assigneeResults = results;
+        if (!results.length) {
+            dropdown.innerHTML = '<div class="assignee-empty">未找到匹配的用户</div>';
+            this._positionAssigneeDropdown();
+            return;
+        }
+        dropdown.innerHTML = results.map((u, i) => {
+            const name = this.escapeHtml(u.real_name || u.username);
+            const dept = u.department_info ? this.escapeHtml(u.department_info.name || '') : '';
+            const pos = this.escapeHtml(u.position || '');
+            const meta = [dept, pos].filter(Boolean).join(' · ');
+            const avatar = u.avatar_url || '/static/images/default-avatar.png';
+            return `<div class="assignee-option" onclick="taskApp.selectAssigneeByIndex(${i})">
+                <img class="assignee-avatar" src="${this.escapeHtml(avatar)}" alt="头像">
+                <div class="assignee-info">
+                    <div class="assignee-name">${name}</div>
+                    ${meta ? `<div class="assignee-meta">${meta}</div>` : ''}
+                </div>
+            </div>`;
+        }).join('');
+        this._positionAssigneeDropdown();
+    }
+
+    /**
+     * 🔧 固定定位下拉：依据输入框实时坐标定位，避免被模态框 overflow 裁剪
+     */
+    _positionAssigneeDropdown() {
+        const input = document.getElementById('taskAssigneeSearchInput');
+        const dropdown = document.getElementById('taskAssigneeDropdown');
+        if (!input || !dropdown) return;
+        const rect = input.getBoundingClientRect();
+        const maxH = 260;
+        const spaceBelow = window.innerHeight - rect.bottom - 8;
+        let top;
+        let maxHeight;
+        if (spaceBelow >= 140) {
+            top = rect.bottom + 4;
+            maxHeight = Math.min(maxH, spaceBelow);
+        } else {
+            maxHeight = Math.min(maxH, rect.top - 8);
+            top = rect.top - maxHeight;
+        }
+        dropdown.style.top = top + 'px';
+        dropdown.style.left = rect.left + 'px';
+        dropdown.style.width = rect.width + 'px';
+        dropdown.style.maxHeight = maxHeight + 'px';
+        dropdown.style.display = 'block';
+    }
+
+    selectAssigneeByIndex(i) {
+        const u = this.assigneeResults[i];
+        if (u) this.setAssignee(u);
+    }
+
+    setAssignee(u) {
+        document.getElementById('taskAssigneeId').value = u.id;
+        const selected = document.getElementById('taskAssigneeSelected');
+        const avatar = document.getElementById('taskAssigneeAvatar');
+        const nameEl = document.getElementById('taskAssigneeName');
+        const metaEl = document.getElementById('taskAssigneeMeta');
+        const input = document.getElementById('taskAssigneeSearchInput');
+        const dropdown = document.getElementById('taskAssigneeDropdown');
+        if (avatar) avatar.src = u.avatar_url || '/static/images/default-avatar.png';
+        if (nameEl) nameEl.textContent = u.real_name || u.username;
+        if (metaEl) {
+            const dept = u.department_info ? (u.department_info.name || '') : '';
+            const pos = u.position || '';
+            metaEl.textContent = [dept, pos].filter(Boolean).join(' · ');
+        }
+        if (selected) selected.style.display = 'flex';
+        if (input) input.value = '';
+        if (dropdown) dropdown.style.display = 'none';
+    }
+
+    clearAssignee(event) {
+        if (event) event.stopPropagation();
+        document.getElementById('taskAssigneeId').value = '';
+        const selected = document.getElementById('taskAssigneeSelected');
+        if (selected) selected.style.display = 'none';
+    }
+
+    resetAssigneePicker() {
+        this.clearAssignee();
+        const input = document.getElementById('taskAssigneeSearchInput');
+        if (input) input.value = '';
     }
 
     getPriorityText(p) { return { low: '低', medium: '中', high: '高', urgent: '紧急' }[p]; }

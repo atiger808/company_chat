@@ -2126,6 +2126,14 @@ class AdminConsole {
                     return;
                 }
 
+                // 水印设置：打开配置模态框，不切换标签
+                if (item.dataset.tab === 'watermark') {
+                    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                    item.classList.add('active');
+                    this.openWatermarkConfig();
+                    return;
+                }
+
                 // 更新激活状态
                 document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
                 item.classList.add('active');
@@ -2445,6 +2453,36 @@ class AdminConsole {
             }
         }, 3000);
     }
+
+    showToast(message, isError) {
+        let toast = document.getElementById('toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'toast';
+            document.body.appendChild(toast);
+        }
+        const icon = isError ? 'fa-exclamation-circle' : 'fa-check-circle';
+        const title = isError ? '错误' : '成功';
+        const color = isError ? '#f56c6c' : '#67c23a';
+        toast.innerHTML = '<div class="toast-content" style="border-left-color:' + color + ';">'
+            + '<div class="toast-icon"><i class="fas ' + icon + '" style="color:' + color + ';"></i></div>'
+            + '<div><div class="toast-title">' + title + '</div>'
+            + '<div class="toast-text">' + this._escape(message) + '</div></div></div>';
+        toast.classList.remove('show');
+        void toast.offsetHeight;
+        toast.classList.add('show');
+        clearTimeout(toast._timer);
+        toast._timer = setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+
+    // ===== 工具 =====
+    _escape(text) {
+        return Utils.escapeHtml ? Utils.escapeHtml(text) : String(text || '').replace(/[&<>"]/g, function (c) {
+            return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c];
+        });
+    }
+
 
     // ==================== 加载指示器 ====================
     showLoading() {
@@ -2821,6 +2859,98 @@ class AdminConsole {
             clearTimeout(timer);
             timer = setTimeout(function() { fn.apply(ctx, args); }, delay);
         };
+    }
+
+    // ==================== 水印设置 ====================
+    openWatermarkConfig() {
+        document.getElementById('watermarkConfigModal').style.display = 'flex';
+        setTimeout(function () { document.getElementById('watermarkConfigModal').classList.add('show'); }, 10);
+        this.loadWatermarkConfig();
+    }
+    closeWatermarkConfig() {
+        var m = document.getElementById('watermarkConfigModal');
+        if (m) { m.classList.remove('show'); setTimeout(function () { m.style.display = 'none'; }, 150); }
+    }
+    async loadWatermarkConfig() {
+        try {
+            const resp = await fetch('/api/system/watermark-config/', {headers: TokenManager.getHeaders()});
+            if (!resp.ok) { this.showError && this.showError('加载失败', '无法获取水印配置'); return; }
+            const raw = await resp.json();
+            const d = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+            const cfg = d.config || {};
+            document.getElementById('wmEnabled').checked = cfg.enabled !== false;
+            document.getElementById('wmCompanyName').value = cfg.company_name || '义乌吉通集团';
+            document.getElementById('wmText').value = cfg.text || '';
+            document.getElementById('wmFontSize').value = cfg.font_size || 16;
+            document.getElementById('wmFontColor').value = cfg.font_color || '#000000';
+            document.getElementById('wmFontStyle').value = cfg.font_style || 'normal';
+            document.getElementById('wmRotation').value = cfg.rotation != null ? cfg.rotation : -30;
+            document.getElementById('wmOpacity').value = cfg.opacity != null ? cfg.opacity : 0.08;
+            document.getElementById('wmPosition').value = cfg.position || 'tile';
+            document.getElementById('wmShape').value = cfg.shape || 'text';
+            document.getElementById('wmHiddenEnabled').checked = cfg.hidden_enabled !== false;
+            document.getElementById('wmHiddenOpacity').value = cfg.hidden_opacity != null ? cfg.hidden_opacity : 0.04;
+            document.getElementById('wmPrintEnabled').checked = cfg.print_enabled !== false;
+            this._renderWatermarkPageToggles(cfg.page_enabled || {});
+        } catch (e) { console.warn('加载水印配置失败', e); }
+    }
+    _renderWatermarkPageToggles(pageEnabled) {
+        var wrap = document.getElementById('wmPageToggles');
+        if (!wrap) return;
+        var defs = [
+            ['chat', '企业聊天室'], ['admin', '管理控制台'],
+            ['cloud', '企业网盘'], ['cloud_settings', '网盘系统配置'],
+            ['oa_approval', 'OA审批'], ['oa_subsidy', '普惠补贴'],
+            ['oa_subsidy_verify', '财务核验'], ['oa_subsidy_pay', '财务支付'],
+            ['oa_attendance', '考勤打卡'], ['work_calendar', '工作日历'],
+            ['tasks', '任务中心'], ['org', '组织架构'], ['other', '其他页面']
+        ];
+        var self = this;
+        wrap.innerHTML = defs.map(function (d) {
+            var on = pageEnabled[d[0]] !== false;
+            return '<label style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:var(--bg-secondary,#f5f7fa);border-radius:6px;cursor:pointer;font-size:13px;">'
+                + '<input type="checkbox" class="wm-page-cb" data-page="' + d[0] + '" ' + (on ? 'checked' : '') + ' style="width:15px;height:15px;cursor:pointer;"> ' + d[1] + '</label>';
+        }).join('');
+    }
+    async saveWatermarkConfig() {
+        var pageEnabled = {};
+        document.querySelectorAll('#wmPageToggles .wm-page-cb').forEach(function (cb) {
+            pageEnabled[cb.getAttribute('data-page')] = cb.checked;
+        });
+        var payload = {
+            enabled: document.getElementById('wmEnabled').checked,
+            company_name: document.getElementById('wmCompanyName').value,
+            text: document.getElementById('wmText').value,
+            font_size: parseInt(document.getElementById('wmFontSize').value) || 16,
+            font_color: document.getElementById('wmFontColor').value,
+            font_style: document.getElementById('wmFontStyle').value,
+            rotation: parseInt(document.getElementById('wmRotation').value) || -30,
+            opacity: parseFloat(document.getElementById('wmOpacity').value) || 0.08,
+            position: document.getElementById('wmPosition').value,
+            shape: document.getElementById('wmShape').value,
+            hidden_enabled: document.getElementById('wmHiddenEnabled').checked,
+            hidden_opacity: parseFloat(document.getElementById('wmHiddenOpacity').value) || 0.04,
+            print_enabled: document.getElementById('wmPrintEnabled').checked,
+            page_enabled: pageEnabled,
+        };
+        try {
+            const resp = await fetch('/api/system/watermark-config/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify(payload)
+            });
+            if (!resp.ok) { const e2 = await resp.json().catch(function(){return{};}); throw new Error(e2.error || '保存失败'); }
+            this.showToast ? this.showToast('水印配置已保存', false) : (alert && alert('水印配置已保存'));
+            // 刷新当前页水印
+            if (window.WatermarkManager && window.WatermarkManager.init) {
+                var layer = document.getElementById('wm_visible_layer');
+                if (layer) layer.remove();
+                var hlayer = document.getElementById('wm_hidden_layer');
+                if (hlayer) hlayer.remove();
+                WatermarkManager.init();
+            }
+            this.closeWatermarkConfig();
+        } catch (e) { this.showError ? this.showError('保存失败', e.message) : (alert && alert('保存失败：' + e.message)); }
     }
 
 }

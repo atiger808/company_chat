@@ -15,8 +15,20 @@ import json
 import uuid
 import requests
 
-from .models import AttendanceRecord, ApprovalRequest, ApprovalType, ApprovalLog, ApprovalNode, ApprovalAssignee, WorkNotification, ApprovalCarbonCopy, ApprovalDeptConfig, AttendanceConfig, SubsidyApplication, SubsidyPayment, SubsidyConfig, SubsidyWallet, SubsidyWithdrawal, SubsidyInvoiceVerifyRecord
-from .type_utils import ensure_builtin_types, resolve_approval_type, collect_form_data, validate_form_data
+from .models import (
+    AttendanceRecord, ApprovalRequest, ApprovalType, ApprovalLog,
+    ApprovalNode, ApprovalAssignee, WorkNotification, ApprovalCarbonCopy,
+    ApprovalDeptConfig, AttendanceConfig, UserAttendanceConfig,
+    SubsidyApplication, SubsidyPayment, SubsidyConfig, SubsidyWallet,
+    SubsidyWithdrawal, SubsidyInvoiceVerifyRecord,
+    MaterialItem, MaterialRequirement, MaterialRequisition,
+    MaterialRequirementItem, MaterialRequisitionItem, DocumentSequence,
+    WatermarkConfig, DEFAULT_WATERMARK_PAGES, PrintLog,
+)
+from .type_utils import (
+    ensure_builtin_types, resolve_approval_type,
+    collect_form_data, validate_form_data,
+)
 
 
 def _approval_type_label(approval):
@@ -50,6 +62,7 @@ from .serializers import (
 )
 from utils.encrypt_aes import encrypt_data
 from utils.request_util import get_request_ip
+from utils.cloud_permission_utils import get_effective_operation_permission
 
 
 def send_work_notification(user_id, title, content, notification_type='system', related_url='', extra_data=None):
@@ -106,8 +119,44 @@ class AttendanceViewSet(viewsets.ViewSet):
     """考勤打卡视图集"""
     permission_classes = [permissions.IsAuthenticated]
 
+    def _get_managed_department_ids(self, user):
+        """获取用户作为负责人/副负责人的部门 ID 集合（含所有子部门）"""
+        from accounts.models import Department
+        managed = list(Department.objects.filter(
+            Q(manager=user) | Q(deputy_managers=user)
+        ).values_list('id', flat=True))
+        if not managed:
+            return []
+        # 向下收集所有子部门，使部门负责人可查看整个部门树成员的打卡记录
+        ids = list(managed)
+        frontier = list(managed)
+        while frontier:
+            children = list(Department.objects.filter(
+                parent_id__in=frontier
+            ).values_list('id', flat=True))
+            new_ids = [c for c in children if c not in ids]
+            if not new_ids:
+                break
+            ids.extend(new_ids)
+            frontier = new_ids
+        return ids
+
+    def _can_view_record(self, user, record):
+        """打卡记录查看权限：超管=全部；部门负责人=本部门成员；普通用户=仅自己"""
+        if user.user_type == 'super_admin':
+            return True
+        if record.user_id == user.id:
+            return True
+        managed = self._get_managed_department_ids(user)
+        if managed:
+            from org.models import UserDepartment
+            return UserDepartment.objects.filter(
+                user_id=record.user_id, department_id__in=managed
+            ).exists()
+        return False
+
     def list(self, request):
-        """打卡记录列表（分页+搜索，企业隔离）"""
+        """打卡记录列表（分页+搜索，三级权限：超管/部门负责人/普通用户）"""
         user = request.user
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
         page = int(request.query_params.get('page', 1))
@@ -116,20 +165,35 @@ class AttendanceViewSet(viewsets.ViewSet):
         status_filter = request.query_params.get('status', '').strip()
         clock_type = request.query_params.get('clock_type', '').strip()
 
-        if user.user_type in ['super_admin', 'admin']:
+        if user.user_type == 'super_admin':
+            # 超级管理员：可见全部成员（当前企业 + 子企业）
             qs = AttendanceRecord.objects.select_related('user__department').all()
-            # 企业隔离：非超管只能看自己企业的记录
-            if user.user_type != 'super_admin' and tenant:
-                qs = qs.filter(tenant=tenant)
-
-            filter_tenant_id = request.query_params.get('tenant_id', '').strip()
-            if filter_tenant_id:
-                qs = qs.filter(tenant_id=filter_tenant_id)
-            filter_org_dept_id = request.query_params.get('org_dept_id', '').strip()
-            if filter_org_dept_id:
-                qs = qs.filter(user__department_relations__department_id=filter_org_dept_id)
+            if tenant:
+                tenant_ids = [tenant.id]
+                try:
+                    sub_ids = list(tenant.sub_tenants.filter(is_active=True).values_list('id', flat=True))
+                    if sub_ids:
+                        tenant_ids.extend(sub_ids)
+                except Exception:
+                    pass
+                qs = qs.filter(tenant_id__in=tenant_ids)
         else:
-            qs = AttendanceRecord.objects.select_related('user__department').filter(user=user)
+            # 部门负责人：仅可见所管理部门的成员（含子部门）
+            managed_dept_ids = self._get_managed_department_ids(user)
+            if managed_dept_ids:
+                qs = AttendanceRecord.objects.select_related('user__department').filter(
+                    user__department_relations__department_id__in=managed_dept_ids
+                ).distinct()
+            else:
+                # 普通用户：仅可见自己
+                qs = AttendanceRecord.objects.select_related('user__department').filter(user=user)
+
+        filter_tenant_id = request.query_params.get('tenant_id', '').strip()
+        if filter_tenant_id:
+            qs = qs.filter(tenant_id=filter_tenant_id)
+        filter_org_dept_id = request.query_params.get('org_dept_id', '').strip()
+        if filter_org_dept_id:
+            qs = qs.filter(user__department_relations__department_id=filter_org_dept_id)
 
         if status_filter:
             qs = qs.filter(status=status_filter)
@@ -164,7 +228,7 @@ class AttendanceViewSet(viewsets.ViewSet):
     def retrieve(self, request, pk=None):
         try:
             record = AttendanceRecord.objects.select_related('user__department').get(id=pk)
-            if request.user.user_type not in ['super_admin', 'admin'] and record.user != request.user:
+            if not self._can_view_record(request.user, record):
                 return Response({'error': '暂无查看权限'}, status=403)
             data = AttendanceRecordSerializer(record, context={'request': request}).data
             return Response({'encrypt': True, 'data': encrypt_data(data)})
@@ -182,7 +246,7 @@ class AttendanceViewSet(viewsets.ViewSet):
         from org.models import UserDepartment
         primary_dept = UserDepartment.objects.filter(user=request.user, is_primary=True).select_related('department').first()
         dept_id = primary_dept.department_id if primary_dept else None
-        config = self._get_attendance_config(tenant, dept_id)
+        config = self._get_attendance_config(tenant, dept_id, request.user)
         if config and not config.clock_in_enabled:
             return Response({'error': '该时段无需打卡（已配置为不打卡）', 'skip': True}, status=200)
 
@@ -192,9 +256,9 @@ class AttendanceViewSet(viewsets.ViewSet):
             return Response({'encrypt': True, 'data': encrypt_data(data)})
         # 使用配置时间或默认 9:00
         if config and config.clock_in_time:
-            deadline = now.replace(hour=config.clock_in_time.hour, minute=config.clock_in_time.minute, second=0, microsecond=0)
+            deadline = now.replace(hour=config.clock_in_time.hour, minute=config.clock_in_time.minute, second=59, microsecond=0)
         else:
-            deadline = now.replace(hour=9, minute=0, second=0, microsecond=0)
+            deadline = now.replace(hour=9, minute=0, second=59, microsecond=0)
         status_val = 'late' if now > deadline else 'normal'
         logger.info(f'{request.user} 上班打卡 now: {now} deadline: {deadline} status: {status_val}')
         record = AttendanceRecord.objects.create(
@@ -272,14 +336,22 @@ class AttendanceViewSet(viewsets.ViewSet):
         from org.models import UserDepartment
         primary_dept = UserDepartment.objects.filter(user=request.user, is_primary=True).select_related('department').first()
         dept_id = primary_dept.department_id if primary_dept else None
-        config = self._get_attendance_config(tenant, dept_id)
+        config = self._get_attendance_config(tenant, dept_id, request.user)
         if config and not config.clock_out_enabled:
             return Response({'error': '该时段无需打卡（已配置为不打卡）', 'skip': True}, status=200)
 
-        existing = AttendanceRecord.objects.filter(user=request.user, date=today, clock_type='clock_out').first()
-        if existing:
-            data = AttendanceRecordSerializer(existing, context={'request': request}).data
-            return Response({'encrypt': True, 'data': encrypt_data(data)})
+        # 下班卡可重复打（防止误打下班卡），以最后一次打卡时间为准，上限由配置控制
+        out_limit = config.clock_out_limit if config and config.clock_out_limit else 3
+        if out_limit < 1:
+            out_limit = 1
+        today_out_count = AttendanceRecord.objects.filter(
+            user=request.user, date=today, clock_type='clock_out').count()
+        if today_out_count >= out_limit:
+            return Response({
+                'error': f'今日下班打卡次数已达上限（{out_limit}次）',
+                'clock_out_count': today_out_count,
+                'clock_out_limit': out_limit,
+            }, status=400)
         # 查找最近一次上班打卡（支持跨夜班次）
         from datetime import timedelta as td
         clock_in_record = AttendanceRecord.objects.filter(
@@ -287,9 +359,15 @@ class AttendanceViewSet(viewsets.ViewSet):
         ).order_by('-clock_time').first()
         if not clock_in_record or (clock_in_record.date < today - td(days=1)):
             return Response({'error': '请先上班打卡'}, status=400)
-        # 使用配置时间或默认 18:00
+        # 使用配置时间或默认 18:00；夜班下班截止时间为上班日次日（如 20:00 上班 → 次日 06:00 下班）
+        is_night = config is not None and config.shift_type == 'night'
         if config and config.clock_out_time:
-            deadline = now.replace(hour=config.clock_out_time.hour, minute=config.clock_out_time.minute, second=0, microsecond=0)
+            if is_night:
+                from datetime import datetime as dt
+                base_date = (clock_in_record.date + td(days=1)) if clock_in_record else today
+                deadline = timezone.make_aware(dt.combine(base_date, config.clock_out_time))
+            else:
+                deadline = now.replace(hour=config.clock_out_time.hour, minute=config.clock_out_time.minute, second=0, microsecond=0)
         else:
             deadline = now.replace(hour=18, minute=0, second=0, microsecond=0)
         status_val = 'early_leave' if now < deadline else 'normal'
@@ -319,20 +397,129 @@ class AttendanceViewSet(viewsets.ViewSet):
             extra_data={'status': status_val, 'date': str(today)},
         )
         data = AttendanceRecordSerializer(record, context={'request': request}).data
+        data['clock_out_count'] = today_out_count + 1
+        data['clock_out_limit'] = out_limit
+        data['clock_out_remaining'] = max(0, out_limit - (today_out_count + 1))
+        return Response({'encrypt': True, 'data': encrypt_data(data)}, status=201)
+
+    @action(detail=False, methods=['post'])
+    def makeup(self, request):
+        """补卡：仅可补当月漏打的上班/下班卡，次数上限由考勤配置 makeup_allowance 控制"""
+        from datetime import datetime as dt_datetime, time as dt_time
+        clock_type = request.data.get('clock_type', '')
+        date_str = request.data.get('date', '')
+        if clock_type not in ('clock_in', 'clock_out'):
+            return Response({'error': '请选择补卡类型（上班卡/下班卡）'}, status=400)
+        try:
+            makeup_date = dt_datetime.strptime(date_str, '%Y-%m-%d').date()
+        except (ValueError, TypeError):
+            return Response({'error': '日期格式错误，请使用 YYYY-MM-DD'}, status=400)
+        now = timezone.localtime(timezone.now())
+        today = now.date()
+        if makeup_date > today:
+            return Response({'error': '不能为未来日期补卡'}, status=400)
+        if makeup_date.year != today.year or makeup_date.month != today.month:
+            return Response({'error': '仅支持补当月漏打的打卡记录'}, status=400)
+
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        from org.models import UserDepartment
+        primary_dept = UserDepartment.objects.filter(user=request.user, is_primary=True).select_related('department').first()
+        dept_id = primary_dept.department_id if primary_dept else None
+        config = self._get_attendance_config(tenant, dept_id, request.user)
+        allowance = config.makeup_allowance if config and config.makeup_allowance is not None else 3
+        if allowance <= 0:
+            return Response({'error': '当前考勤未开启补卡功能（每月补卡次数为0）'}, status=400)
+
+        used = AttendanceRecord.objects.filter(
+            user=request.user, remark='补卡',
+            date__year=today.year, date__month=today.month,
+        ).count()
+        if used >= allowance:
+            return Response({
+                'error': f'本月补卡次数已用完（{allowance}次）',
+                'makeup_used': used,
+                'makeup_allowance': allowance,
+                'makeup_remaining': 0,
+            }, status=400)
+
+        if AttendanceRecord.objects.filter(user=request.user, date=makeup_date, clock_type=clock_type).exists():
+            return Response({'error': '该日期已存在上班/下班打卡记录，无需补卡'}, status=400)
+
+        if clock_type == 'clock_in':
+            cfg_time = config.clock_in_time if config and config.clock_in_time else dt_time(9, 0)
+            label = '上班'
+        else:
+            cfg_time = config.clock_out_time if config and config.clock_out_time else dt_time(18, 0)
+            label = '下班'
+        clock_dt = dt_datetime.combine(makeup_date, cfg_time)
+        aware_dt = timezone.make_aware(clock_dt) if timezone.is_naive(clock_dt) else clock_dt
+        record = AttendanceRecord.objects.create(
+            user=request.user, clock_type=clock_type, date=makeup_date,
+            tenant=tenant,
+            status='normal', remark='补卡',
+            location='', device='补卡',
+        )
+        # clock_time 为 auto_now_add，创建后更新为配置时间
+        record.clock_time = aware_dt
+        record.save(update_fields=['clock_time'])
+        logger.info(f'{request.user} 补卡 {clock_type} {makeup_date} 时间:{aware_dt}')
+        send_work_notification(
+            user_id=request.user.id,
+            title='补卡成功',
+            content=f'已补{label}卡（{makeup_date}，时间 {cfg_time.strftime("%H:%M")}）',
+            notification_type='attendance',
+            related_url='/oa/attendance/',
+            extra_data={'clock_type': clock_type, 'date': str(makeup_date), 'makeup': True},
+        )
+        data = AttendanceRecordSerializer(record, context={'request': request}).data
+        data['makeup_used'] = used + 1
+        data['makeup_allowance'] = allowance
+        data['makeup_remaining'] = allowance - (used + 1)
         return Response({'encrypt': True, 'data': encrypt_data(data)}, status=201)
 
     @action(detail=False, methods=['get'])
     def today(self, request):
-        today = timezone.now().date()
+        today = timezone.localtime(timezone.now()).date()
         records = AttendanceRecord.objects.filter(user=request.user, date=today).order_by('clock_time')
         clock_in = records.filter(clock_type='clock_in').first()
         clock_out = records.filter(clock_type='clock_out').first()
+        clock_out_count = records.filter(clock_type='clock_out').count()
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        from org.models import UserDepartment
+        primary_dept = UserDepartment.objects.filter(user=request.user, is_primary=True).select_related('department').first()
+        dept_id = primary_dept.department_id if primary_dept else None
+        config = self._get_attendance_config(tenant, dept_id, request.user)
+        shift_type = config.shift_type if config else 'day'
+        out_limit = config.clock_out_limit if config and config.clock_out_limit else 3
+        if out_limit < 1:
+            out_limit = 1
+        allowance = config.makeup_allowance if config and config.makeup_allowance is not None else 3
+        makeup_used = AttendanceRecord.objects.filter(
+            user=request.user, remark='补卡',
+            date__year=today.year, date__month=today.month,
+        ).count()
+        # 待下班状态：当天已上班打卡未下班；或夜班时前一天晚上已上班打卡（工作跨夜），次日尚未下班
+        from datetime import timedelta as td
+        has_pending_clock_out = clock_out is None and (
+            clock_in is not None
+            or (shift_type == 'night' and AttendanceRecord.objects.filter(
+                user=request.user, date=today - td(days=1), clock_type='clock_in').exists())
+        )
         return Response({'encrypt': True, 'data': encrypt_data({
             'date': today.isoformat(),
             'clock_in': AttendanceRecordSerializer(clock_in, context={'request': request}).data if clock_in else None,
             'clock_out': AttendanceRecordSerializer(clock_out, context={'request': request}).data if clock_out else None,
             'has_clock_in': clock_in is not None,
             'has_clock_out': clock_out is not None,
+            'has_pending_clock_out': has_pending_clock_out,
+            'shift_type': shift_type,
+            'clock_out_count': clock_out_count,
+            'clock_out_limit': out_limit,
+            'clock_out_remaining': max(0, out_limit - clock_out_count),
+            'makeup_enabled': allowance > 0,
+            'makeup_allowance': allowance,
+            'makeup_used': makeup_used,
+            'makeup_remaining': max(0, allowance - makeup_used),
         })})
 
     @action(detail=True, methods=['get'])
@@ -340,7 +527,7 @@ class AttendanceViewSet(viewsets.ViewSet):
         """获取打卡记录的BD09坐标（用于百度地图），如需转换则调用百度坐标转换接口"""
         try:
             record = AttendanceRecord.objects.get(id=pk)
-            if request.user.user_type not in ['super_admin', 'admin'] and record.user != request.user:
+            if not self._can_view_record(request.user, record):
                 return Response({'error': '暂无查看权限'}, status=403)
 
             # 如果已有BD09坐标，直接返回
@@ -388,11 +575,26 @@ class AttendanceViewSet(viewsets.ViewSet):
         import csv
         user = request.user
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
-        qs = AttendanceRecord.objects.select_related('user__department').all()
-        if user.user_type not in ['super_admin', 'admin']:
-            qs = qs.filter(user=user)
+        if user.user_type == 'super_admin':
+            qs = AttendanceRecord.objects.select_related('user__department').all()
             if tenant:
-                qs = qs.filter(tenant=tenant)
+                tenant_ids = [tenant.id]
+                try:
+                    sub_ids = list(tenant.sub_tenants.filter(is_active=True).values_list('id', flat=True))
+                    if sub_ids:
+                        tenant_ids.extend(sub_ids)
+                except Exception:
+                    pass
+                qs = qs.filter(tenant_id__in=tenant_ids)
+        else:
+            # 部门负责人：仅可见所管理部门的成员（含子部门）；普通用户：仅自己
+            managed_dept_ids = self._get_managed_department_ids(user)
+            if managed_dept_ids:
+                qs = AttendanceRecord.objects.select_related('user__department').filter(
+                    user__department_relations__department_id__in=managed_dept_ids
+                ).distinct()
+            else:
+                qs = AttendanceRecord.objects.select_related('user__department').filter(user=user)
 
         # Filter by selected record IDs
         record_ids_str = request.query_params.get('record_ids', '').strip()
@@ -619,8 +821,13 @@ class AttendanceViewSet(viewsets.ViewSet):
 
     # ──────── 考勤配置 ────────
 
-    def _get_attendance_config(self, tenant, department_id=None):
-        """按优先级获取考勤配置：部门配置 > 子企业配置 > 企业默认 > 父级回溯"""
+    def _get_attendance_config(self, tenant, department_id=None, user=None):
+        """按优先级获取考勤配置：个人配置 > 部门配置 > 子企业配置 > 企业默认 > 父级回溯"""
+        if user:
+            try:
+                return UserAttendanceConfig.objects.get(user=user)
+            except UserAttendanceConfig.DoesNotExist:
+                pass
         if not tenant:
             return None
         # 1. 部门级配置
@@ -646,7 +853,7 @@ class AttendanceViewSet(viewsets.ViewSet):
         if tenant.parent:
             parent = self._get_parent_tenant(tenant)
             if parent:
-                return self._get_attendance_config(parent)
+                return self._get_attendance_config(parent, user=user)
         return None
 
     def _get_parent_tenant(self, tenant):
@@ -714,11 +921,31 @@ class AttendanceViewSet(viewsets.ViewSet):
                 clock_out_time = dt_time(int(parts[0]), int(parts[1]), 0)
             except (ValueError, IndexError):
                 return Response({'error': '下班打卡时间格式错误，请使用 HH:MM 格式'}, status=400)
+        makeup_allowance = request.data.get('makeup_allowance', 3)
+        clock_out_limit = request.data.get('clock_out_limit', 3)
+        try:
+            makeup_allowance = int(makeup_allowance)
+        except (ValueError, TypeError):
+            return Response({'error': '每月补卡次数格式错误'}, status=400)
+        if makeup_allowance < 0:
+            return Response({'error': '每月补卡次数不能小于0（0表示禁用补卡）'}, status=400)
+        try:
+            clock_out_limit = int(clock_out_limit)
+        except (ValueError, TypeError):
+            return Response({'error': '下班卡最多打卡次数格式错误'}, status=400)
+        if clock_out_limit < 1:
+            return Response({'error': '下班卡最多打卡次数不能小于1'}, status=400)
+        shift_type = request.data.get('shift_type', 'day')
+        if shift_type not in ('day', 'night'):
+            return Response({'error': '班次类型错误（白班/夜班）'}, status=400)
         defaults = {
             'clock_in_enabled': request.data.get('clock_in_enabled', True),
             'clock_in_time': clock_in_time,
             'clock_out_enabled': request.data.get('clock_out_enabled', True),
             'clock_out_time': clock_out_time,
+            'makeup_allowance': makeup_allowance,
+            'clock_out_limit': clock_out_limit,
+            'shift_type': shift_type,
         }
         try:
             config, created = AttendanceConfig.objects.update_or_create(
@@ -752,7 +979,7 @@ class AttendanceViewSet(viewsets.ViewSet):
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
         primary_dept = UserDepartment.objects.filter(user=request.user, is_primary=True).select_related('department').first()
         dept_id = primary_dept.department_id if primary_dept else None
-        config = self._get_attendance_config(tenant, dept_id)
+        config = self._get_attendance_config(tenant, dept_id, request.user)
         # 返回配置和当前企业的默认时间
         result = {
             'config': config,
@@ -760,9 +987,124 @@ class AttendanceViewSet(viewsets.ViewSet):
             'default_clock_out_time': '18:00',
         }
         if config:
-            from .serializers import AttendanceConfigSerializer
-            result['config'] = AttendanceConfigSerializer(config).data
+            if isinstance(config, UserAttendanceConfig):
+                from .serializers import UserAttendanceConfigSerializer
+                result['config'] = UserAttendanceConfigSerializer(config).data
+            else:
+                from .serializers import AttendanceConfigSerializer
+                result['config'] = AttendanceConfigSerializer(config).data
         return Response({'encrypt': True, 'data': encrypt_data(result)})
+
+    @action(detail=False, methods=['get'])
+    def members(self, request):
+        """当前企业成员列表，供个人考勤配置选择成员"""
+        from accounts.models import CustomUser
+        from django.db.models import Q
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        keyword = request.query_params.get('search', '').strip()
+        qs = CustomUser.objects.filter(is_active=True)
+        if tenant:
+            qs = qs.filter(tenant_memberships__tenant=tenant, tenant_memberships__is_active=True)
+        if keyword:
+            qs = qs.filter(Q(real_name__icontains=keyword) | Q(username__icontains=keyword))
+        qs = qs.distinct().order_by('real_name', 'username')[:100]
+        ids = [u.id for u in qs]
+        from org.models import UserDepartment
+        dept_map = dict(UserDepartment.objects.filter(user_id__in=ids, is_primary=True).select_related('department').values_list('user_id', 'department__name'))
+        results = [{
+            'id': u.id,
+            'name': u.real_name or u.username,
+            'avatar': u.get_avatar_url() if hasattr(u, 'get_avatar_url') else '',
+            'position': u.position or '',
+            'department_name': dept_map.get(u.id) or '',
+        } for u in qs]
+        return Response({'results': results})
+
+    @action(detail=False, methods=['get'])
+    def user_attendance_configs(self, request):
+        """个人考勤配置列表"""
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        qs = UserAttendanceConfig.objects.select_related('user').all()
+        if tenant:
+            qs = qs.filter(user__tenant_memberships__tenant=tenant, user__tenant_memberships__is_active=True)
+        qs = qs.distinct().order_by('-updated_at')
+        from .serializers import UserAttendanceConfigSerializer
+        data = UserAttendanceConfigSerializer(qs, many=True).data
+        return Response({'results': data})
+
+    @action(detail=False, methods=['post'])
+    def save_user_attendance_config(self, request):
+        """保存个人考勤配置（如部门内个别成员单独上夜班）"""
+        if request.user.user_type not in ('super_admin', 'admin'):
+            return Response({'error': '仅企业超级管理员或管理员可操作'}, status=403)
+        from accounts.models import CustomUser
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        try:
+            target_user = CustomUser.objects.get(id=int(request.data.get('user_id')))
+        except (ValueError, TypeError, CustomUser.DoesNotExist):
+            return Response({'error': '成员不存在'}, status=400)
+        if tenant:
+            if not target_user.tenant_memberships.filter(tenant=tenant, is_active=True).exists():
+                return Response({'error': '该成员不属于当前企业'}, status=400)
+
+        shift_type = request.data.get('shift_type', 'day')
+        if shift_type not in ('day', 'night'):
+            return Response({'error': '班次类型错误（白班/夜班）'}, status=400)
+        from datetime import time as dt_time
+        clock_in_time = request.data.get('clock_in_time')
+        clock_out_time = request.data.get('clock_out_time')
+        if clock_in_time:
+            try:
+                parts = clock_in_time.split(':')
+                clock_in_time = dt_time(int(parts[0]), int(parts[1]), 0)
+            except (ValueError, IndexError):
+                return Response({'error': '上班打卡时间格式错误，请使用 HH:MM 格式'}, status=400)
+        if clock_out_time:
+            try:
+                parts = clock_out_time.split(':')
+                clock_out_time = dt_time(int(parts[0]), int(parts[1]), 0)
+            except (ValueError, IndexError):
+                return Response({'error': '下班打卡时间格式错误，请使用 HH:MM 格式'}, status=400)
+        try:
+            makeup_allowance = int(request.data.get('makeup_allowance', 3))
+        except (ValueError, TypeError):
+            return Response({'error': '每月补卡次数格式错误'}, status=400)
+        if makeup_allowance < 0:
+            return Response({'error': '每月补卡次数不能小于0（0表示禁用补卡）'}, status=400)
+        try:
+            clock_out_limit = int(request.data.get('clock_out_limit', 3))
+        except (ValueError, TypeError):
+            return Response({'error': '下班卡最多打卡次数格式错误'}, status=400)
+        if clock_out_limit < 1:
+            return Response({'error': '下班卡最多打卡次数不能小于1'}, status=400)
+
+        config, created = UserAttendanceConfig.objects.update_or_create(
+            user=target_user,
+            defaults={
+                'shift_type': shift_type,
+                'clock_in_enabled': request.data.get('clock_in_enabled', True),
+                'clock_in_time': clock_in_time,
+                'clock_out_enabled': request.data.get('clock_out_enabled', True),
+                'clock_out_time': clock_out_time,
+                'makeup_allowance': makeup_allowance,
+                'clock_out_limit': clock_out_limit,
+            },
+        )
+        from .serializers import UserAttendanceConfigSerializer
+        data = UserAttendanceConfigSerializer(config).data
+        return Response({'encrypt': True, 'data': encrypt_data(data)}, status=201 if created else 200)
+
+    @action(detail=True, methods=['delete'])
+    def delete_user_attendance_config(self, request, pk=None):
+        """删除个人考勤配置"""
+        if request.user.user_type != 'super_admin':
+            return Response({'error': '仅超级管理员可操作'}, status=403)
+        try:
+            config = UserAttendanceConfig.objects.get(id=pk)
+            config.delete()
+            return Response({'message': 'ok'})
+        except UserAttendanceConfig.DoesNotExist:
+            return Response({'error': '配置不存在'}, status=404)
 
 
 class ApprovalTypeViewSet(viewsets.ViewSet):
@@ -831,7 +1173,7 @@ class ApprovalTypeViewSet(viewsets.ViewSet):
                 for c in cols:
                     if not isinstance(c, dict) or not c.get('key') or not c.get('label'):
                         return f'字段 {f.get("label")} 的明细列需包含 key 和 label'
-                    if c.get('type') and c.get('type') not in ('text', 'number', 'amount'):
+                    if c.get('type') and c.get('type') not in ('text', 'number', 'amount', 'item'):
                         return f'字段 {f.get("label")} 的明细列类型 {c.get("type")} 不支持'
         return None
 
@@ -866,7 +1208,7 @@ class ApprovalTypeViewSet(viewsets.ViewSet):
                     normalized.append({
                         'key': c.get('key'),
                         'label': c.get('label') or c.get('key'),
-                        'type': c.get('type') if c.get('type') in ('text', 'number', 'amount') else 'text',
+                        'type': c.get('type') if c.get('type') in ('text', 'number', 'amount', 'item') else 'text',
                     })
                 f['columns'] = normalized
         return schema
@@ -985,12 +1327,27 @@ class ApprovalViewSet(viewsets.ViewSet):
             # 审批人可见：
             #  ① 已到自己的节点且审批进行中（并行全部节点、顺序仅当前节点）；
             #  ② 自己已通过/驳回过该审批（无论审批当前状态/节点）。
+            # 审批人可见规则：
+            #  ① 已通过：曾为该审批审批人的均可查看；
+            #  ② 已驳回：仅驳回该审批的审批人可查看；
+            #  ③ 已撤回：审批到达自己节点时被发起人撤回的审批人可查看；
+            #  ④ 进行中：已到达自己节点（并行全部节点、顺序仅当前及已到达节点）。
             active_assignee_ids = ApprovalAssignee.objects.filter(
                 user=user
             ).exclude(
                 node__request__applicant=user
             ).filter(
-                Q(node__request__status__in=['approved', 'rejected', 'cancelled']) |
+                Q(node__request__status='approved') |
+                Q(node__request__status='rejected', status='rejected') |
+                Q(
+                    node__request__status='cancelled',
+                    node__request__approval_mode='parallel'
+                ) |
+                Q(
+                    node__request__status='cancelled',
+                    node__request__approval_mode='sequential',
+                    node__order__lte=models.F('node__request__current_node_order')
+                ) |
                 Q(
                     node__request__status__in=['pending', 'deferred', 'processing'],
                     node__request__approval_mode='parallel'
@@ -1110,9 +1467,29 @@ class ApprovalViewSet(viewsets.ViewSet):
                 tenant = approval.tenant or getattr(request, 'tenant', None) or request.user.get_active_tenant()
                 config = self._get_config_for_tenant(tenant, approval.approval_type) if tenant else None
                 data['require_signature'] = bool(config and config.require_signature)
+                # 票据回传时限（小时，0=禁止回传；未配置时默认 24 小时）
+                data['receipt_return_hours'] = int(config.receipt_return_hours) if config is not None and config.receipt_return_hours is not None else 24
+                # 票据回传开关（默认关闭）
+                data['enable_receipt_return'] = bool(config and config.enable_receipt_return)
             except Exception as e:
                 logger.warning(f'解析审批签名配置失败: {e}')
                 data['require_signature'] = False
+                data['receipt_return_hours'] = 0
+                data['enable_receipt_return'] = False
+
+            # 收款信息可见性：仅超级管理员、申请人、最终审批节点的审批人可见（保护申请人隐私）
+            try:
+                is_final_node_approver = ApprovalAssignee.objects.filter(
+                    node__request=approval, node__is_final_approver=True, user=request.user
+                ).exists()
+                data['can_view_payment'] = (
+                    request.user.user_type == 'super_admin'
+                    or approval.applicant_id == request.user.id
+                    or is_final_node_approver
+                )
+            except Exception as e:
+                logger.warning(f'计算收款信息可见性失败: {e}')
+                data['can_view_payment'] = True  # 出错时默认可见，避免误隐藏
 
             # 标注最终审批人的配置来源（优先使用节点固化的来源；历史数据缺失时实时解析兜底）
             try:
@@ -1129,6 +1506,471 @@ class ApprovalViewSet(viewsets.ViewSet):
             return Response({'encrypt': True, 'data': encrypt_data(data)})
         except ApprovalRequest.DoesNotExist:
             return Response({'error': '该条审批不存在或者已经删除'}, status=404)
+
+    @action(detail=True, methods=['post'])
+    def send_private(self, request, pk=None):
+        """审批发起人将待审批的审批以私聊卡片形式发送给指定审批人，对方点击卡片直达审批详情处理"""
+        from chat.models import ChatRoom, Message
+        user = request.user
+        try:
+            approval = ApprovalRequest.objects.select_related(
+                'applicant'
+            ).prefetch_related('approval_nodes__assignees').get(id=pk)
+        except ApprovalRequest.DoesNotExist:
+            return Response({'error': '该条审批不存在或者已经删除'}, status=404)
+
+        if approval.applicant_id != user.id:
+            return Response({'error': '只有审批发起人可以将审批私聊发送给审批人'}, status=403)
+        if approval.status in ('approved', 'rejected', 'cancelled'):
+            return Response({'error': '该审批已结束，无法再发送私聊提醒'}, status=400)
+
+        target_id = request.data.get('assignee_user_id')
+        if not target_id:
+            return Response({'error': '缺少目标审批人'}, status=400)
+        try:
+            from accounts.models import CustomUser
+            target_user = CustomUser.objects.get(id=target_id)
+        except CustomUser.DoesNotExist:
+            return Response({'error': '目标用户不存在'}, status=404)
+        if target_user.id == user.id:
+            return Response({'error': '不能发送给自己'}, status=400)
+
+        # 仅当目标审批人仍处于待审批状态时允许发送；顺序审批时还需该审批人所在节点已到达
+        pending_assignee = ApprovalAssignee.objects.filter(
+            node__request=approval, user=target_user, status='pending'
+        ).select_related('node').first()
+        if not pending_assignee:
+            return Response({'error': '该审批人已完成处理或不在待处理节点，无法发送'}, status=400)
+        if approval.approval_mode == 'sequential' and approval.current_node_order:
+            if pending_assignee.node.order > approval.current_node_order:
+                return Response({'error': '该审批人所在节点尚未到达，暂不能发送私聊提醒'}, status=400)
+
+        # get-or-create 私聊房间（与 ChatRoomViewSet.create 的私聊唯一性逻辑保持一致）
+        room = ChatRoom.objects.filter(
+            room_type='private', members=user
+        ).filter(members__id=target_user.id).first()
+        if not room:
+            room = ChatRoom.objects.create(room_type='private', name='', creator=user)
+            room.members.add(user, target_user)
+
+        type_label = _approval_type_label(approval)
+        card_data = {
+            'approval_id': approval.id,
+            'title': approval.title,
+            'type_name': type_label,
+            'applicant_name': user.real_name or user.username,
+            'applicant_id': user.id,
+            'amount': str(approval.amount) if approval.amount is not None else None,
+            'status': approval.status,
+            'status_display': approval.get_status_display(),
+            'created_at': approval.created_at.isoformat() if approval.created_at else None,
+            'sender_name': user.real_name or user.username,
+        }
+        preview_text = f"📨 {card_data['applicant_name']} 给您发送了一条审批: {approval.title}"
+
+        message = Message.objects.create(
+            chat_room=room,
+            sender=user,
+            content=json.dumps(card_data, ensure_ascii=False),
+            message_type='approval_card'
+        )
+
+        # WebSocket 实时广播到该私聊房间
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f'chat_{room.id}',
+            {
+                'type': 'chat_message',
+                'chat_room': room.id,
+                'message_id': str(message.id),
+                'sender': {
+                    'id': user.id,
+                    'username': user.username,
+                    'real_name': user.real_name,
+                    'avatar': user.avatar.url if getattr(user, 'avatar', None) else None,
+                },
+                'sender_id': user.id,
+                'sender_name': user.real_name or user.username,
+                'content': preview_text,
+                'message_type': 'approval_card',
+                'timestamp': message.timestamp.isoformat(),
+                'approval_data': card_data,
+            }
+        )
+
+        # 同步发一条工作通知，点击直达审批详情（复用已有跳转逻辑）
+        send_work_notification(
+            target_user.id,
+            '审批私聊提醒',
+            f'{user.real_name or user.username} 给您发送了一条审批「{approval.title}」，请及时处理',
+            notification_type='approval',
+            related_url=f'/oa/approval/?approval_id={approval.id}',
+            extra_data={'approval_id': approval.id, 'action': 'private_remind'},
+        )
+
+        return Response({'encrypt': True, 'data': encrypt_data({'success': True, 'message': '已发送私聊提醒'})})
+
+    def _get_receipt_return_hours(self, approval):
+        """获取票据回传时限（小时，0=禁止回传；未配置默认 24 小时）"""
+        try:
+            tenant = approval.tenant or approval.applicant.get_active_tenant()
+            config = self._get_config_for_tenant(tenant, approval.approval_type) if tenant else None
+            if config is not None and config.receipt_return_hours is not None:
+                return int(config.receipt_return_hours)
+        except Exception as e:
+            logger.warning(f'解析票据回传配置失败: {e}')
+        return 24
+
+    def _get_receipt_return_enabled(self, approval):
+        """票据回传开关是否开启（配置 enable_receipt_return，默认关闭）"""
+        try:
+            tenant = approval.tenant or approval.applicant.get_active_tenant()
+            config = self._get_config_for_tenant(tenant, approval.approval_type) if tenant else None
+            if config is not None:
+                return bool(config.enable_receipt_return)
+        except Exception as e:
+            logger.warning(f'解析票据回传开关配置失败: {e}')
+        return False
+
+    def _is_last_approver(self, approval, user):
+        """是否为最后审批人（最终审批节点审批人；未标记最终节点时取最高 order 节点）"""
+        final_node = approval.approval_nodes.filter(is_final_approver=True).first()
+        if not final_node:
+            final_node = approval.approval_nodes.order_by('-order').first()
+        if not final_node:
+            return False
+        return final_node.assignees.filter(user=user).exists()
+
+    def _last_approver_ids(self, approval):
+        """最后审批节点的全部审批人 id"""
+        final_node = approval.approval_nodes.filter(is_final_approver=True).first()
+        if not final_node:
+            final_node = approval.approval_nodes.order_by('-order').first()
+        if not final_node:
+            return []
+        return list(final_node.assignees.values_list('user_id', flat=True))
+
+    def _current_pending_approver_ids(self, approval):
+        """当前需处理该审批的审批人 id（顺序=当前节点待审批；并行=所有待审批节点）"""
+        if approval.approval_mode == 'sequential':
+            node = approval.approval_nodes.filter(order=approval.current_node_order).first()
+            if not node:
+                return []
+            return list(node.assignees.filter(status='pending').values_list('user_id', flat=True))
+        return list(ApprovalAssignee.objects.filter(
+            node__request=approval, status='pending'
+        ).values_list('user_id', flat=True))
+
+    @action(detail=True, methods=['post'])
+    def upload_receipt(self, request, pk=None):
+        """票据回传：审批发起人/最后审批人补传票据。
+        发起人上传：审批进行中→通知当前节点审批人；审批已走完→通知最后审批人；未选择票据→不发送通知。
+        最后审批人上传：发送工作通知给审批发起人。"""
+        try:
+            approval = ApprovalRequest.objects.select_related('applicant').prefetch_related(
+                'approval_nodes__assignees').get(id=pk)
+        except ApprovalRequest.DoesNotExist:
+            return Response({'error': '审批不存在'}, status=404)
+        is_applicant = approval.applicant_id == request.user.id
+        is_last_approver = self._is_last_approver(approval, request.user)
+        if not (is_applicant or is_last_approver):
+            return Response({'error': '仅审批发起人或最后审批人可回传票据'}, status=403)
+        if not self._get_receipt_return_enabled(approval):
+            return Response({'error': '当前审批未开启票据回传'}, status=400)
+        if approval.status not in ('pending', 'deferred', 'processing', 'approved'):
+            return Response({'error': '当前审批状态不可回传票据'}, status=400)
+        # 已通过时按配置的回传时限校验
+        if approval.status == 'approved':
+            hours = self._get_receipt_return_hours(approval)
+            if hours <= 0:
+                return Response({'error': '当前审批未开启票据回传'}, status=400)
+            if not approval.receipt_deadline:
+                approval.receipt_deadline = timezone.now() + timezone.timedelta(hours=hours)
+                approval.save(update_fields=['receipt_deadline'])
+            if timezone.now() > approval.receipt_deadline:
+                return Response({'error': '已超过票据回传截止时间，无法回传'}, status=400)
+
+        files = request.data.get('files') or request.data.get('receipts') or []
+        if not isinstance(files, list):
+            files = [files]
+        receipts = list(approval.receipts or [])
+        now_iso = timezone.now().isoformat()
+        # 回传方角色：发起人回传=对审批人的反馈；最后审批人回传=对发起人的反馈
+        uploader_role = 'applicant' if is_applicant else ('last_approver' if is_last_approver else 'other')
+        added = 0
+        added_files = []
+        for f in files:
+            if not isinstance(f, dict):
+                continue
+            url = (f.get('url') or '').strip()
+            if not url:
+                continue
+            name = (f.get('name') or '').strip() or url.split('/')[-1]
+            if any(r.get('url') == url for r in receipts):
+                continue
+            receipts.append({'url': url, 'name': name, 'uploaded_at': now_iso, 'uploader_role': uploader_role})
+            added_files.append({'url': url, 'name': name})
+            added += 1
+        approval.receipts = receipts
+        approval.save(update_fields=['receipts'])
+
+        receipt_comment = (request.data.get('comment') or '').strip()
+        # 既未选择票据也未填写审批意见 → 无操作，不发送通知
+        if added == 0 and not receipt_comment:
+            return Response({'encrypt': True, 'data': encrypt_data({
+                'success': True, 'message': '未选择票据，未发送通知', 'receipts': receipts, 'added': 0})})
+
+        # 记录审批日志：审批意见（可单独回传）+ 回传的票据文件显示在「审批记录」最下面
+        try:
+            ApprovalLog.objects.create(
+                request=approval,
+                operator=request.user,
+                action='receipt_return',
+                comment=receipt_comment or '回传了付款凭证/票据',
+                attachments=added_files,
+            )
+        except Exception as e:
+            logger.warning(f'记录票据回传日志失败: {e}')
+
+        uploader_name = request.user.real_name or request.user.username
+        related_url = f'/oa/approval/?approval_id={approval.id}'
+        if added > 0:
+            notify_act = 'receipt_uploaded'
+            last_approver_notify = f'{uploader_name} 已回传 {added} 个票据/凭证，请及时查看'
+            applicant_notify_done = f'{uploader_name} 已补传 {added} 个票据/凭证，请及时查看'
+            applicant_notify_ing = f'{uploader_name} 已补传 {added} 个票据/凭证，请及时处理'
+        else:
+            notify_act = 'receipt_comment'
+            last_approver_notify = f'{uploader_name} 提交了审批意见，请及时查看'
+            applicant_notify_done = f'{uploader_name} 提交了审批意见，请及时查看'
+            applicant_notify_ing = f'{uploader_name} 提交了审批意见，请及时处理'
+        # 最后审批人回传/提交意见 → 通知审批发起人
+        if is_last_approver and not is_applicant:
+            send_work_notification(
+                approval.applicant.id,
+                '票据已回传',
+                last_approver_notify,
+                notification_type='approval',
+                related_url=related_url,
+                extra_data={'approval_id': approval.id, 'action': notify_act, 'by': 'last_approver'},
+            )
+        elif is_applicant:
+            # 发起人回传/提交意见：审批已走完→通知最后审批人；进行中→通知当前节点审批人
+            if approval.status == 'approved':
+                targets = self._last_approver_ids(approval)
+                content = applicant_notify_done
+            else:
+                targets = self._current_pending_approver_ids(approval)
+                content = applicant_notify_ing
+            for uid in set(targets):
+                if uid == request.user.id:
+                    continue
+                send_work_notification(
+                    uid,
+                    '发起人已补传票据',
+                    content,
+                    notification_type='approval',
+                    related_url=related_url,
+                    extra_data={'approval_id': approval.id, 'action': notify_act, 'by': 'applicant'},
+                )
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'success': True, 'message': '回传成功', 'receipts': receipts, 'added': added})})
+
+    @action(detail=True, methods=['post'])
+    def delete_receipt(self, request, pk=None):
+        """删除已回传的票据（仅回传本人可删除自己的票据）"""
+        try:
+            approval = ApprovalRequest.objects.get(id=pk)
+        except ApprovalRequest.DoesNotExist:
+            return Response({'error': '审批不存在'}, status=404)
+        # 当前用户的回传角色：发起人删自己回传的；最后审批人删自己回传的
+        user_role = 'applicant' if approval.applicant_id == request.user.id else ('last_approver' if self._is_last_approver(approval, request.user) else 'other')
+        if user_role == 'other':
+            return Response({'error': '您无权限删除回传票据'}, status=403)
+        url = (request.data.get('url') or '').strip()
+        if not url:
+            return Response({'error': '缺少票据地址'}, status=400)
+        receipts = list(approval.receipts or [])
+        target = next((r for r in receipts if (r.get('url') or '') == url), None)
+        if not target:
+            return Response({'error': '未找到该回传票据'}, status=400)
+        # 仅能删除本人上传的票据（防止删除对方的反馈票据）
+        if (target.get('uploader_role') or 'applicant') != user_role:
+            return Response({'error': '仅能删除本人回传的票据'}, status=403)
+        new_receipts = [r for r in receipts if (r.get('url') or '') != url]
+        approval.receipts = new_receipts
+        approval.save(update_fields=['receipts'])
+        # 同步从「审批记录」中对应的票据回传日志里移除该附件
+        try:
+            for log in ApprovalLog.objects.filter(request=approval, action='receipt_return'):
+                atts = list(log.attachments or [])
+                new_atts = [a for a in atts if (a.get('url') or '') != url]
+                if len(new_atts) != len(atts):
+                    log.attachments = new_atts
+                    log.save(update_fields=['attachments'])
+        except Exception as e:
+            logger.warning(f'同步删除票据回传日志附件失败: {e}')
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'success': True, 'message': '已删除', 'receipts': new_receipts})})
+
+    @staticmethod
+    def _custom_pm_to_dict(m):
+        return {
+            'id': m.id, 'type': 'custom',
+            'payee_name': m.payee_name, 'bank_card': m.bank_card, 'bank_name': m.bank_name,
+            'bank_address': m.bank_address, 'alipay_account': m.alipay_account,
+            'wechat_account': m.wechat_account, 'alipay_qr': m.alipay_qr, 'wechat_qr': m.wechat_qr,
+        }
+
+    @action(detail=False, methods=['get', 'post'])
+    def custom_payment_methods(self, request):
+        """获取/保存用户自定义收款方式库（记忆功能）"""
+        from oa.models import CustomPaymentMethod
+        if request.method == 'GET':
+            methods = CustomPaymentMethod.objects.filter(user=request.user).order_by('-updated_at')
+            data = [self._custom_pm_to_dict(m) for m in methods]
+            return Response({'results': data})
+        # POST：保存一条自定义收款方式（相同内容去重）
+        pm = request.data.get('payment_method') or request.data
+        if not isinstance(pm, dict):
+            pm = {}
+        payee = (pm.get('payee_name') or '').strip()
+        if not payee:
+            return Response({'error': '请填写收款人姓名'}, status=400)
+        m, _ = CustomPaymentMethod.objects.get_or_create(
+            user=request.user,
+            payee_name=payee,
+            bank_card=(pm.get('bank_card') or '').strip(),
+            bank_name=(pm.get('bank_name') or '').strip(),
+            bank_address=(pm.get('bank_address') or '').strip(),
+            alipay_account=(pm.get('alipay_account') or '').strip(),
+            wechat_account=(pm.get('wechat_account') or '').strip(),
+            alipay_qr=pm.get('alipay_qr') or '',
+            wechat_qr=pm.get('wechat_qr') or '',
+        )
+        return Response(self._custom_pm_to_dict(m))
+
+    @action(detail=True, methods=['delete'])
+    def custom_payment_method(self, request, pk=None):
+        """删除用户的一条自定义收款方式"""
+        from oa.models import CustomPaymentMethod
+        try:
+            m = CustomPaymentMethod.objects.get(id=pk, user=request.user)
+        except CustomPaymentMethod.DoesNotExist:
+            return Response({'error': '收款方式不存在'}, status=404)
+        m.delete()
+        return Response({'message': 'ok'})
+
+    def _resolve_payment_method(self, user, payment_method, approval_type, type_obj=None):
+        """解析审批付款方式（报销/采购/自定义类型，收款方式可选）。
+
+        default：使用用户默认收款账号（CustomUser，提交时快照）；未设置则返回需要完善收款信息的提示。
+        custom：用户自定义收款方式（需收款人姓名 + 至少一种收款方式），并记忆到用户收款方式库。
+        未选择收款方式时返回 ({}, None)，审批详情不展示收款信息。
+        返回 (payment_method_dict, error_response)；非付款类型返回 ({}, None)。
+        """
+        if not isinstance(payment_method, dict):
+            payment_method = {}
+        need_payment = approval_type in ('expense', 'purchase')
+        if not need_payment and type_obj and not type_obj.is_builtin:
+            # 自定义类型：仅当 schema 配置了「收款方式」字段时才需要
+            need_payment = any(f.get('type') == 'payment_method' for f in (type_obj.form_schema or []))
+        if not need_payment:
+            return {}, None
+        pm_type = (payment_method.get('type') or '').strip()
+        # 收款方式可选：未选择则不保存收款方式
+        if not pm_type:
+            return {}, None
+        if pm_type == 'custom':
+            payee = (payment_method.get('payee_name') or '').strip()
+            has_any = any((payment_method.get(k) or '').strip()
+                          for k in ('bank_card', 'alipay_account', 'wechat_account'))
+            if not payee or not has_any:
+                return None, Response({'error': '请填写自定义收款方式（收款人姓名 + 至少一种收款方式）'}, status=400)
+            result = {
+                'type': 'custom', 'payee_name': payee,
+                'bank_card': (payment_method.get('bank_card') or '').strip(),
+                'bank_name': (payment_method.get('bank_name') or '').strip(),
+                'bank_address': (payment_method.get('bank_address') or '').strip(),
+                'alipay_account': (payment_method.get('alipay_account') or '').strip(),
+                'wechat_account': (payment_method.get('wechat_account') or '').strip(),
+                'alipay_qr': payment_method.get('alipay_qr') or '',
+                'wechat_qr': payment_method.get('wechat_qr') or '',
+            }
+            # 记忆自定义收款方式：保存到用户收款方式库，供下次选择复用（相同内容去重）
+            try:
+                from oa.models import CustomPaymentMethod
+                CustomPaymentMethod.objects.get_or_create(
+                    user=user,
+                    payee_name=result['payee_name'],
+                    bank_card=result['bank_card'],
+                    bank_name=result['bank_name'],
+                    bank_address=result['bank_address'],
+                    alipay_account=result['alipay_account'],
+                    wechat_account=result['wechat_account'],
+                    alipay_qr=result['alipay_qr'],
+                    wechat_qr=result['wechat_qr'],
+                )
+            except Exception as e:
+                logger.warning(f'保存自定义收款方式失败: {e}')
+            return result, None
+        # 默认：使用用户默认收款账号；未设置则提示先完善
+        if not SubsidyViewSet._user_has_payment_info(user):
+            return None, Response({'error': '您还未填写收款账号，请先完善收款信息',
+                                   'need_payment_info': True}, status=400)
+        return self._snapshot_default_payment(user), None
+
+    def _snapshot_default_payment(self, user):
+        """快照用户默认收款账号（CustomUser 收款信息，含开户行与收款码）"""
+        return {
+            'type': 'default',
+            'payee_name': user.payee_name or '',
+            'bank_card': user.bank_card or '',
+            'bank_name': user.bank_name or '',
+            'bank_address': user.bank_address or '',
+            'alipay_account': user.alipay_account or '',
+            'wechat_account': user.wechat_account or '',
+            'alipay_qr': user.alipay_qr or '',
+            'wechat_qr': user.wechat_qr or '',
+        }
+
+    def _extract_payment_from_form_data(self, form_data, type_obj):
+        """自定义类型：若 schema 配置了「收款方式」字段，从 form_data 提取其值并从 form_data 移除。
+        返回 (payment_method_dict, 是否已提取)。"""
+        if not type_obj or type_obj.is_builtin or not isinstance(form_data, dict):
+            return {}, False
+        pm_field = next((f for f in (type_obj.form_schema or []) if f.get('type') == 'payment_method'), None)
+        if not pm_field:
+            return {}, False
+        key = pm_field.get('key')
+        pm = form_data.get(key)
+        if isinstance(pm, dict):
+            form_data.pop(key, None)
+            return pm, True
+        return {}, False
+
+    def _resolve_payment_method_for_draft(self, user, payment_method, approval_type):
+        """草稿用的软解析：未选择→({})；默认方式→快照用户收款账号（无收款信息也不报错，字段为空）；
+        自定义方式→原样存储（不强制校验）。保证草稿详情也能展示收款信息。"""
+        if not isinstance(payment_method, dict):
+            payment_method = {}
+        pm_type = (payment_method.get('type') or '').strip()
+        # 收款方式可选：未选择则不保存收款方式
+        if not pm_type:
+            return {}, None
+        if pm_type == 'custom':
+            return {
+                'type': 'custom',
+                'payee_name': (payment_method.get('payee_name') or '').strip(),
+                'bank_card': (payment_method.get('bank_card') or '').strip(),
+                'bank_name': (payment_method.get('bank_name') or '').strip(),
+                'bank_address': (payment_method.get('bank_address') or '').strip(),
+                'alipay_account': (payment_method.get('alipay_account') or '').strip(),
+                'wechat_account': (payment_method.get('wechat_account') or '').strip(),
+                'alipay_qr': payment_method.get('alipay_qr') or '',
+                'wechat_qr': payment_method.get('wechat_qr') or '',
+            }
+        return self._snapshot_default_payment(user)
 
     def create(self, request):
         serializer = ApprovalCreateSerializer(data=request.data, context={'request': request})
@@ -1214,6 +2056,17 @@ class ApprovalViewSet(viewsets.ViewSet):
             except (ValueError, TypeError):
                 pass
 
+        # 收款方式：报销/采购用 serializer.payment_method；自定义类型从 form_data 的「收款方式」字段提取
+        payment_method = serializer.validated_data.get('payment_method') or {}
+        if type_obj and not type_obj.is_builtin:
+            fd_pm, _ = self._extract_payment_from_form_data(form_data, type_obj)
+            if fd_pm:
+                payment_method = fd_pm
+        payment_method, pm_err = self._resolve_payment_method(
+            request.user, payment_method, approval_type, type_obj)
+        if pm_err:
+            return pm_err
+
         with transaction.atomic():
             approval = ApprovalRequest.objects.create(
                 applicant=request.user,
@@ -1237,7 +2090,22 @@ class ApprovalViewSet(viewsets.ViewSet):
                 form_data=form_data,
                 sign_type=serializer.validated_data.get('sign_type', 'countersign'),
                 approval_mode=serializer.validated_data.get('approval_mode', 'sequential'),
+                payment_method=payment_method,
             )
+            # 物资单据：创建业务记录 + 自动生成单据号（失败则回滚整单）；金额镜像到审批金额字段以支持阈值审批
+            if approval_type in ('material_requirement', 'material_requisition'):
+                from decimal import Decimal as _D, InvalidOperation as _IO
+                from .material_utils import ensure_material_record
+                _mrec, merr = ensure_material_record(approval, form_data)
+                if merr:
+                    raise serializers.ValidationError(merr)
+                approval.form_data = form_data
+                if form_data.get('amount'):
+                    try:
+                        approval.amount = _D(str(form_data['amount']))
+                    except (_IO, ValueError, TypeError):
+                        pass
+                approval.save(update_fields=['form_data', 'amount'] if form_data.get('amount') else ['form_data'])
             from accounts.models import CustomUser, Department
 
             # 创建发起人节点（order 0，展示用）
@@ -1544,7 +2412,12 @@ class ApprovalViewSet(viewsets.ViewSet):
         threshold_values = {}
         fd = form_data or {}
         for k, v in fd.items():
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
+            if isinstance(v, bool):
+                continue
+            if isinstance(v, (int, float)):
+                threshold_values[k] = float(v)
+            elif isinstance(v, str) and v.strip():
+                # 动态表单数字/金额字段收集为字符串（如 "1234.56"），也纳入阈值判断
                 try:
                     threshold_values[k] = float(v)
                 except (ValueError, TypeError):
@@ -1798,21 +2671,29 @@ class ApprovalViewSet(viewsets.ViewSet):
         ).exists()
 
     def _is_approver_reached(self, approval, user):
-        """审批人可查看：该审批已到达自己节点（含后续流程）。
-        - 并行审批：所有审批人节点同时生效，任一审批人都可查看；
-        - 顺序审批：流程进行中仅当前及已到达节点（order<=current_node_order）的审批人可查看；审批结束后视为全部节点已到达。
+        """审批人可查看规则：
+        - 已通过：曾为该审批审批人的均可查看；
+        - 已驳回：仅驳回该审批的审批人可查看；
+        - 已撤回：审批到达自己节点时被发起人撤回的审批人可查看；
+        - 进行中：已到达自己节点（并行全部节点、顺序仅当前及已到达节点）。
         """
-        if not ApprovalAssignee.objects.filter(node__request=approval, user=user).exists():
+        assignee = ApprovalAssignee.objects.filter(
+            node__request=approval, user=user
+        ).select_related('node').first()
+        if not assignee:
             return False
         if approval.approval_mode == 'parallel':
             return True
-        if approval.status in ('pending', 'deferred', 'processing'):
-            return ApprovalAssignee.objects.filter(
-                node__request=approval, user=user,
-                node__order__lte=approval.current_node_order,
-            ).exists()
-        # 已结束（通过/驳回/撤回）：整条流程完成，视为已到达
-        return True
+        if approval.status == 'approved':
+            return True
+        if approval.status == 'rejected':
+            # 仅驳回该审批的审批人可查看
+            return assignee.status == 'rejected'
+        if approval.status == 'cancelled':
+            # 审批到达自己节点时被发起人撤回
+            return assignee.node.order <= (approval.current_node_order or 0)
+        # 进行中（pending/deferred/processing）：已到达自己节点
+        return assignee.node.order <= (approval.current_node_order or 0)
 
     def _check_user_processed(self, approval, user):
         """检查用户是否已作为审批人通过/驳回过该审批（此类审批人可查看）"""
@@ -1900,10 +2781,48 @@ class ApprovalViewSet(viewsets.ViewSet):
 
         if all_approved:
             approval.status = 'approved'
-            approval.save()
+            # 显式刷新 updated_at：save(update_fields=[...]) 不会更新 auto_now 字段，
+            # 否则审批通过后更新时间仍停留在倒数第二个审批人的操作时间
+            approval.updated_at = now
+            if approval.resume_node_order is not None:
+                approval.resume_node_order = None
+                approval.save(update_fields=['status', 'resume_node_order', 'updated_at'])
+            else:
+                approval.save(update_fields=['status', 'updated_at'])
+            # 物资单据通过后的业务流转（领用单回写台账防超领 / 需求单置为待采购）
+            try:
+                self._on_material_approved(approval)
+            except Exception as e:
+                logger.warning(f'物资单据审批通过后处理失败: {approval.id} {e}')
             return True
 
         return False
+
+    def _on_material_approved(self, approval):
+        """物资单据审批通过：领用单回写需求单已领台账；需求单进入待采购状态"""
+        from .material_utils import write_requisition_ledger
+        from .models import MaterialRequirement, MaterialRequisition
+        if approval.approval_type == 'material_requisition':
+            rec = MaterialRequisition.objects.filter(request=approval).first()
+            if rec and rec.status != 'approved':
+                rec.status = 'approved'
+                rec.save(update_fields=['status'])
+                write_requisition_ledger(rec)
+                # 通知申请人：领用单已通过，凭领用单号可领料
+                if rec.created_by_id:
+                    send_work_notification(
+                        user_id=rec.created_by_id,
+                        title='物资领用单已通过',
+                        content=f'领用单 {rec.doc_no}（关联需求单 {rec.requirement_doc_no or ""}）已通过审核，可凭单领用',
+                        notification_type='approval',
+                        related_url=f'/oa/approval/?approval_id={approval.id}',
+                        extra_data={'approval_id': approval.id},
+                    )
+        elif approval.approval_type == 'material_requirement':
+            rec = MaterialRequirement.objects.filter(request=approval).first()
+            if rec and rec.status == 'pending':
+                rec.status = 'approved'
+                rec.save(update_fields=['status'])
 
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
@@ -1971,7 +2890,7 @@ class ApprovalViewSet(viewsets.ViewSet):
                     approval.save(update_fields=['status'])
 
         # 通知申请人
-        timestamp = timezone.now().strftime('%m-%d %H:%M')
+        timestamp = timezone.localtime(timezone.now()).strftime('%m-%d %H:%M')
         if approval.status == 'approved':
             send_work_notification(
                 user_id=approval.applicant.id,
@@ -1981,8 +2900,35 @@ class ApprovalViewSet(viewsets.ViewSet):
                 related_url=f'/oa/approval/?approval_id={approval.id}',
                 extra_data={'approval_id': approval.id, 'action': 'approved'},
             )
-        # 审批结束后才向抄送人发送抄送通知
-        if approval.status in ('approved', 'rejected'):
+            # 票据回传：按配置的回传时限计算截止时间；仅当审批人开启「通知发起人回传票据」时才发送
+            # 「请及时回传票据/凭证」工作通知给发起人（默认关闭则不发送）
+            notify_receipt_return = bool(request.data.get('notify_receipt_return'))
+            hours = 24  # 未配置时默认 24 小时
+            try:
+                r_tenant = approval.tenant or getattr(request, 'tenant', None) or approval.applicant.get_active_tenant()
+                r_config = self._get_config_for_tenant(r_tenant, approval.approval_type) if r_tenant else None
+                if r_config is not None and r_config.receipt_return_hours is not None:
+                    hours = int(r_config.receipt_return_hours)
+            except Exception as e:
+                logger.warning(f'解析票据回传配置失败: {e}')
+            if self._get_receipt_return_enabled(approval) and hours > 0:
+                deadline = timezone.now() + timezone.timedelta(hours=hours)
+                approval.receipt_deadline = deadline
+                approval.save(update_fields=['receipt_deadline'])
+                if notify_receipt_return:
+                    send_work_notification(
+                        user_id=approval.applicant.id,
+                        title='请及时回传票据/凭证',
+                        content=f'您的审批已通过，请在 {hours} 小时内（{timezone.localtime(deadline).strftime("%m-%d %H:%M")} 前）回传付款凭证或相关票据',
+                        notification_type='approval',
+                        related_url=f'/oa/approval/?approval_id={approval.id}',
+                        extra_data={'approval_id': approval.id, 'action': 'receipt_return'},
+                    )
+            elif approval.receipt_deadline is not None:
+                approval.receipt_deadline = None
+                approval.save(update_fields=['receipt_deadline'])
+        # 审批通过后才向抄送人发送抄送通知（驳回不通知抄送人）
+        if approval.status == 'approved':
             self._notify_cc_after_end(approval)
         # 通知下一节点审批人（顺序审批）
         if approval.status == 'pending' and approval.approval_mode == 'sequential':
@@ -2034,20 +2980,23 @@ class ApprovalViewSet(viewsets.ViewSet):
                 nodes = approval.approval_nodes.all()
 
             processed = False
+            rejected_node_order = None
             for node in nodes:
                 if self._process_node_approval(approval, node, 'reject', request.user, comment, attachments, signature):
                     processed = True
+                    rejected_node_order = node.order
                     break
 
             if not processed:
                 return Response({'error': '您已审批过，无需重复操作'}, status=400)
 
-            # 任何人驳回，整体驳回
+            # 任何人驳回，整体驳回；记录驳回节点，便于重新提交时从该节点继续审批
             approval.status = 'rejected'
+            approval.resume_node_order = rejected_node_order
             approval.save()
 
-        # 通知申请人
-        timestamp = timezone.now().strftime('%m-%d %H:%M')
+        # 通知申请人（驳回时不给抄送人/抄送部门发送通知，仅通知发起人）
+        timestamp = timezone.localtime(timezone.now()).strftime('%m-%d %H:%M')
         send_work_notification(
             user_id=approval.applicant.id,
             title='审批已驳回',
@@ -2056,8 +3005,6 @@ class ApprovalViewSet(viewsets.ViewSet):
             related_url=f'/oa/approval/?approval_id={approval.id}',
             extra_data={'approval_id': approval.id, 'action': 'rejected', 'comment': comment},
         )
-        # 审批结束后才向抄送人发送抄送通知
-        self._notify_cc_after_end(approval)
 
         logger.info(f'{request.user} 驳回审批 {approval.title}')
         data = ApprovalRequestSerializer(approval, context={'request': request}).data
@@ -2113,7 +3060,7 @@ class ApprovalViewSet(viewsets.ViewSet):
                 approval.save(update_fields=['status'])
 
         # 通知申请人
-        timestamp = timezone.now().strftime('%m-%d %H:%M')
+        timestamp = timezone.localtime(timezone.now()).strftime('%m-%d %H:%M')
         status_info = {
             'deferred': '暂缓（审批人稍后会继续处理）',
             'processing': '正在办理中',
@@ -2151,6 +3098,16 @@ class ApprovalViewSet(viewsets.ViewSet):
                 department = request.user.department
         else:
             department = request.user.department
+        # 草稿也软解析收款方式：默认方式→快照用户收款账号（便于草稿详情展示收款信息），自定义→原样存储
+        # 自定义类型：从 form_data 的「收款方式」字段提取
+        from .type_utils import resolve_approval_type
+        _tobj = resolve_approval_type(approval_type, tenant)
+        _pm = serializer.validated_data.get('payment_method') or {}
+        if _tobj and not _tobj.is_builtin:
+            fd_pm, _ = self._extract_payment_from_form_data(form_data, _tobj)
+            if fd_pm:
+                _pm = fd_pm
+        payment_method = self._resolve_payment_method_for_draft(request.user, _pm, approval_type) if isinstance(_pm, dict) and _pm.get('type') else {}
         approval = ApprovalRequest.objects.create(
             applicant=request.user,
             tenant=tenant,
@@ -2167,6 +3124,11 @@ class ApprovalViewSet(viewsets.ViewSet):
             expense_date=serializer.validated_data.get('expense_date'),
             attachments=serializer.validated_data.get('attachments', []),
             recruit_data=serializer.validated_data.get('recruit_data', {}),
+            purchase_items=serializer.validated_data.get('purchase_items', []) or [],
+            expense_items=serializer.validated_data.get('expense_items', []) or [],
+            leave_type=serializer.validated_data.get('leave_type', '') or '',
+            trip_data=serializer.validated_data.get('trip_data', {}) or {},
+            payment_method=payment_method,
             form_data=form_data,
             sign_type=serializer.validated_data.get('sign_type', 'countersign'),
             approval_mode=serializer.validated_data.get('approval_mode', 'sequential'),
@@ -2241,7 +3203,12 @@ class ApprovalViewSet(viewsets.ViewSet):
         if approval.applicant != request.user:
             return Response({'error': '只能撤销自己的申请'}, status=403)
         approval.status = 'cancelled'
-        approval.save(update_fields=['status'])
+        # 撤回视为全新流程：清除驳回续审标记
+        if approval.resume_node_order is not None:
+            approval.resume_node_order = None
+            approval.save(update_fields=['status', 'resume_node_order'])
+        else:
+            approval.save(update_fields=['status'])
         logger.info(f'{request.user} 撤销审批 {approval.title}')
         # 记录撤销日志
         ApprovalLog.objects.create(
@@ -2250,19 +3217,59 @@ class ApprovalViewSet(viewsets.ViewSet):
             action='cancel',
             comment='已撤回审批申请',
         )
-        # 通知审批人
-        assignees = ApprovalAssignee.objects.filter(
-            node__request=approval, status='pending'
-        ).select_related('user')
-        for asgn in assignees:
+        # 撤销通知对象：已审批过的用户 + 到达审批节点的用户；未到达节点且未审批的用户不通知。
+        # 到达节点判定：
+        #   并行 → 全部节点到达；
+        #   顺序且 current_node_order>0 → order <= current_node_order 的节点；
+        #   顺序且 current_node_order 缺失(旧数据=0) → 推断第一个“未最终处理”的节点为到达节点（新提交即第一个审批节点）。
+        # 到达节点上的审批人（含 assignee 与 node.user）均通知，但严格限定在到达节点内，避免漏发/多发。
+        notify_ids = set()
+        # 1) 已审批过的审批人（无论节点）
+        processed_qs = ApprovalAssignee.objects.filter(
+            node__request=approval,
+            status__in=['approved', 'rejected', 'deferred', 'processing'],
+        ).exclude(node__request__applicant=request.user)
+        notify_ids.update(processed_qs.values_list('user_id', flat=True))
+
+        # 2) 到达节点
+        if approval.approval_mode == 'parallel':
+            reached_node_qs = ApprovalNode.objects.filter(request=approval)
+        elif approval.current_node_order and approval.current_node_order > 0:
+            reached_node_qs = ApprovalNode.objects.filter(
+                request=approval, order__lte=approval.current_node_order)
+        else:
+            # 顺序且缺失 current_node_order：第一个有“未最终处理”审批人的节点
+            first_unfinished = ApprovalNode.objects.filter(
+                request=approval,
+                assignees__status__in=['pending', 'deferred', 'processing'],
+            ).distinct().order_by('order').first()
+            reached_node_qs = ApprovalNode.objects.filter(pk=first_unfinished.pk) if first_unfinished else ApprovalNode.objects.none()
+        reached_node_ids = list(reached_node_qs.values_list('id', flat=True))
+
+        # 到达节点上的审批人（assignee 记录）
+        reached_assignees = ApprovalAssignee.objects.filter(node_id__in=reached_node_ids).exclude(
+            node__request__applicant=request.user)
+        notify_ids.update(reached_assignees.values_list('user_id', flat=True))
+        # 到达节点上的审批人（node.user，assignee 记录缺失时的兜底，仅限到达节点）
+        reached_node_users = ApprovalNode.objects.filter(id__in=reached_node_ids, user__isnull=False).exclude(
+            user=request.user)
+        notify_ids.update(reached_node_users.values_list('user_id', flat=True))
+        notify_ids.discard(request.user.id)
+        logger.info(f'{request.user} 撤销审批 {approval.title} 待通知候选 notify_ids:{notify_ids} '
+                    f'(assignees={ApprovalAssignee.objects.filter(node__request=approval).count()}, '
+                    f'nodes={ApprovalNode.objects.filter(request=approval).count()}, '
+                    f'mode={approval.approval_mode}, cur_node_order={approval.current_node_order}, '
+                    f'reached_node_ids={reached_node_ids})')
+        for uid in notify_ids:
             send_work_notification(
-                user_id=asgn.user.id,
+                user_id=uid,
                 title='审批已撤销',
                 content=f'{request.user.real_name or request.user.username} 撤销了审批申请“{approval.title}”',
                 notification_type='approval',
                 related_url=f'/oa/approval/?approval_id={approval.id}',
                 extra_data={'approval_id': approval.id, 'action': 'cancelled'},
             )
+
         data = ApprovalRequestSerializer(approval, context={'request': request}).data
         return Response({'encrypt': True, 'data': encrypt_data(data)})
 
@@ -2305,6 +3312,15 @@ class ApprovalViewSet(viewsets.ViewSet):
             approval.leave_type = serializer.validated_data['leave_type']
         if serializer.validated_data.get('trip_data') is not None:
             approval.trip_data = serializer.validated_data['trip_data']
+        # 付款方式：重新编辑提交时同样校验/快照（报销/采购/自定义类型）
+        if 'payment_method' in serializer.validated_data or approval.approval_type in ('expense', 'purchase'):
+            from .type_utils import resolve_approval_type
+            t_obj = resolve_approval_type(approval.approval_type, request.tenant or request.user.get_active_tenant())
+            pm, pm_err = self._resolve_payment_method(
+                request.user, serializer.validated_data.get('payment_method'), approval.approval_type, t_obj)
+            if pm_err:
+                return pm_err
+            approval.payment_method = pm
         # 根据物项/项目自动计算总金额与出差天数
         purchase_items = approval.purchase_items or []
         expense_items = approval.expense_items or []
@@ -2336,7 +3352,41 @@ class ApprovalViewSet(viewsets.ViewSet):
                                       serializer.validated_data.get('form_data') or {},
                                       approval.approval_type)
         approval.form_data = form_data
+        # 物资单据：重新提交时同步业务记录（保留原单据号），校验失败则拒绝重新提交
+        if approval.approval_type in ('material_requirement', 'material_requisition'):
+            from decimal import Decimal as _D, InvalidOperation as _IO
+            from .material_utils import ensure_material_record
+            _mrec, merr = ensure_material_record(approval, form_data)
+            if merr:
+                return Response({'error': merr}, status=400)
+            approval.form_data = form_data
+            if form_data.get('amount'):
+                try:
+                    approval.amount = _D(str(form_data['amount']))
+                except (_IO, ValueError, TypeError):
+                    pass
+        # 被驳回后重新提交：从驳回节点继续审批（已通过节点不再重审）。
+        # 优先使用驳回时持久化的 resume_node_order（兼容“驳回→存草稿→再提交”路径，
+        # 因为 update_draft 会重建审批链并清空节点状态）；同时收集当前链中驳回节点之前的已通过节点，
+        # 供直接重新提交时校验审批人是否一致。
+        resume_order = approval.resume_node_order
+        if not resume_order:
+            # 兜底：从当前审批链中被驳回的审批人推导驳回节点（兼容旧数据直接重新提交）
+            rejected_asgn = ApprovalAssignee.objects.filter(
+                node__request=approval, status='rejected'
+            ).select_related('node').order_by('node__order').first()
+            if rejected_asgn:
+                resume_order = rejected_asgn.node.order
+        old_approved = {}  # {node_order: set(user_id)}
+        if resume_order:
+            for n in ApprovalNode.objects.filter(
+                request=approval, order__lt=resume_order
+            ).prefetch_related('assignees'):
+                asgns = list(n.assignees.all())
+                if asgns and all(a.status == 'approved' for a in asgns):
+                    old_approved[n.order] = set(a.user_id for a in asgns)
         approval.status = 'pending'
+        approval.resume_node_order = None  # 重新提交后清空
         approval.save()
         # 重建审批人节点（根据所选部门自动生成）
         approver_nodes = serializer.validated_data.get('approver_nodes', [])
@@ -2347,7 +3397,6 @@ class ApprovalViewSet(viewsets.ViewSet):
                 department_id=department_id or getattr(approval.department, 'id', None),
                 threshold_values=self._gather_threshold_values(serializer.validated_data, form_data),
             )
-        from oa.models import ApprovalAssignee
         ApprovalAssignee.objects.filter(node__request=approval).delete()
         approval.approval_nodes.all().delete()
         from accounts.models import CustomUser
@@ -2386,9 +3435,43 @@ class ApprovalViewSet(viewsets.ViewSet):
                     pass
         # 若配置了最终审批人，标记对应节点
         self._mark_final_approver_node(approval, request)
-        # 顺序审批重置到第一个节点
-        if approval.approval_mode == 'sequential':
-            approval.current_node_order = 1
+        # 被驳回后重新提交：从驳回节点继续审批，之前已通过的节点不再重新审批。
+        # - 直接重新提交（未存草稿）：当前链中驳回节点之前的已通过节点仍在，校验审批人一致后保持通过；
+        # - 驳回→存草稿→再提交：update_draft 已重建审批链并清空状态，此时顺序审批下驳回节点之前的节点必然已通过，直接保持通过。
+        carry_resume = False
+        if resume_order:
+            if old_approved:
+                carry_ok = True
+                for order, old_users in old_approved.items():
+                    node = ApprovalNode.objects.filter(request=approval, order=order).first()
+                    if not node:
+                        carry_ok = False
+                        break
+                    new_users = set(node.assignees.values_list('user_id', flat=True))
+                    if new_users != old_users:
+                        carry_ok = False
+                        break
+                if carry_ok:
+                    # 之前已通过的节点保持通过，不再重新审批
+                    for order in old_approved:
+                        node = ApprovalNode.objects.filter(request=approval, order=order).first()
+                        if node:
+                            node.assignees.update(status='approved')
+                    carry_resume = True
+            else:
+                # 经草稿中转：驳回节点之前的节点保持通过
+                for node in ApprovalNode.objects.filter(request=approval, order__lt=resume_order):
+                    node.assignees.update(status='approved')
+                carry_resume = True
+        if carry_resume:
+            # 顺序审批：从驳回节点开始
+            if approval.approval_mode == 'sequential':
+                approval.current_node_order = resume_order
+            approval.save()
+        else:
+            # 顺序审批重置到第一个节点
+            if approval.approval_mode == 'sequential':
+                approval.current_node_order = 1
             approval.save()
 
         # 记录重新提交的审批日志
@@ -2399,12 +3482,13 @@ class ApprovalViewSet(viewsets.ViewSet):
             comment='重新提交审批申请',
         )
 
-        # 通知审批人（顺序审批仅通知第一个节点）
+        # 通知审批人（顺序审批仅通知当前活动节点；被驳回后继续审批时即驳回节点）
         from accounts.models import CustomUser, Department
         assignee_qs = ApprovalAssignee.objects.filter(node__request=approval, status='pending')
         if approval.approval_mode == 'sequential':
-            first_node = approval.approval_nodes.filter(order=1).first()
-            assignee_qs = assignee_qs.filter(node=first_node) if first_node else assignee_qs.none()
+            active_order = approval.current_node_order or 1
+            active_node = approval.approval_nodes.filter(order=active_order).first()
+            assignee_qs = assignee_qs.filter(node=active_node) if active_node else assignee_qs.none()
         for asgn in assignee_qs.select_related('user'):
             send_work_notification(
                 user_id=asgn.user.id,
@@ -2485,9 +3569,29 @@ class ApprovalViewSet(viewsets.ViewSet):
             approval.recruit_data = serializer.validated_data['recruit_data']
         if serializer.validated_data.get('attachments') is not None:
             approval.attachments = serializer.validated_data['attachments']
+        if serializer.validated_data.get('purchase_items') is not None:
+            approval.purchase_items = serializer.validated_data['purchase_items'] or []
+        if serializer.validated_data.get('expense_items') is not None:
+            approval.expense_items = serializer.validated_data['expense_items'] or []
+        if serializer.validated_data.get('leave_type') is not None:
+            approval.leave_type = serializer.validated_data['leave_type'] or ''
+        if serializer.validated_data.get('trip_data') is not None:
+            approval.trip_data = serializer.validated_data['trip_data'] or {}
         form_data = collect_form_data(serializer.validated_data,
                                       serializer.validated_data.get('form_data') or {},
                                       approval.approval_type)
+        # 收款方式：报销/采购用 serializer.payment_method；自定义类型从 form_data 的「收款方式」字段提取
+        _pm = serializer.validated_data.get('payment_method') or {}
+        from .type_utils import resolve_approval_type
+        _tobj = resolve_approval_type(approval.approval_type, request.tenant or request.user.get_active_tenant())
+        if _tobj and not _tobj.is_builtin:
+            fd_pm, _ = self._extract_payment_from_form_data(form_data, _tobj)
+            if fd_pm:
+                _pm = fd_pm
+        if _pm:
+            approval.payment_method = self._resolve_payment_method_for_draft(request.user, _pm, approval.approval_type)
+        elif serializer.validated_data.get('payment_method') is not None:
+            approval.payment_method = {}
         approval.form_data = form_data
         # 重新编辑时保存为草稿
         if approval.status in ('cancelled', 'rejected'):
@@ -2631,7 +3735,7 @@ class ApprovalViewSet(viewsets.ViewSet):
             return Response({'results': [], 'default_id': None})
 
         depts = list(Department.objects.filter(tenant_id__in=tenant_ids, is_active=True).values(
-            'id', 'name', 'parent_id', 'full_path', 'tenant_id', 'level'))
+            'id', 'name', 'parent_id', 'full_path', 'tenant_id', 'level', 'department_type'))
 
         default_id = None
         if scope == 'all':
@@ -2979,6 +4083,15 @@ class ApprovalViewSet(viewsets.ViewSet):
         # 手写签名开关
         if 'require_signature' in request.data:
             defaults['require_signature'] = bool(request.data.get('require_signature'))
+        # 票据回传时限（小时，0=禁止回传）
+        if 'receipt_return_hours' in request.data:
+            try:
+                defaults['receipt_return_hours'] = int(request.data.get('receipt_return_hours') or 0)
+            except (ValueError, TypeError):
+                pass
+        # 票据回传开关（默认关闭）
+        if 'enable_receipt_return' in request.data:
+            defaults['enable_receipt_return'] = bool(request.data.get('enable_receipt_return'))
 
         try:
             config, created = ApprovalDeptConfig.objects.update_or_create(
@@ -3062,40 +4175,575 @@ class ApprovalViewSet(viewsets.ViewSet):
         return Response({'results': results, 'count': len(results)})
 
 
-class WorkCalendarViewSet(viewsets.ViewSet):
-    """工作日历：按日聚合工作事件 + 每日工作汇总通知配置"""
+class MaterialViewSet(viewsets.ViewSet):
+    """物资管理：物品库 + 需求/领用联动（关联需求单搜索/自动带出）+ 入库确认"""
     permission_classes = [permissions.IsAuthenticated]
 
     def _tenant(self, request):
         return getattr(request, 'tenant', None) or request.user.get_active_tenant()
 
-    def _summary(self, request):
+    def _admin(self, request):
+        return request.user.user_type in ('super_admin', 'admin')
+
+    # ===== 物品库 =====
+    def items(self, request):
+        """物品库列表（可搜索+分页）；含现有库存 = 已入库需求单数量 - 已通过领用单数量"""
+        tenant = self._tenant(request)
+        qs = MaterialItem.objects.filter(tenant=tenant, is_active=True)
+        keyword = request.query_params.get('search', '').strip()
+        if keyword:
+            from django.db.models import Q
+            qs = qs.filter(Q(name__icontains=keyword) | Q(spec__icontains=keyword) | Q(category__icontains=keyword))
+        qs = qs.order_by('name')
+        page = max(1, int(request.query_params.get('page', 1) or 1))
+        page_size = max(1, int(request.query_params.get('page_size', 20) or 20))
+        total = qs.count()
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        items_page = list(qs[(page - 1) * page_size: page * page_size])
+        from django.db.models import Sum
+        stock_in = dict(MaterialRequirementItem.objects.filter(
+            requirement__tenant=tenant, requirement__status='stocked'
+        ).values('item_name').annotate(t=Sum('quantity')).values_list('item_name', 't'))
+        stock_out = dict(MaterialRequisitionItem.objects.filter(
+            requisition__tenant=tenant, requisition__status='approved'
+        ).values('item_name').annotate(t=Sum('quantity')).values_list('item_name', 't'))
+        data = [{
+            'id': i.id, 'name': i.name, 'spec': i.spec, 'unit': i.unit,
+            'category': i.category, 'price': str(i.price or ''),
+            'stock': float((stock_in.get(i.name, 0) or 0) - (stock_out.get(i.name, 0) or 0)),
+        } for i in items_page]
+        return Response({'results': data, 'count': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages})
+
+    def item_search(self, request):
+        """物品名称联想（表单录入用）"""
+        tenant = self._tenant(request)
+        keyword = request.query_params.get('search', '').strip()
+        qs = MaterialItem.objects.filter(tenant=tenant, is_active=True)
+        if keyword:
+            from django.db.models import Q
+            qs = qs.filter(Q(name__icontains=keyword) | Q(spec__icontains=keyword))
+        qs = qs.order_by('name')[:10]
+        data = [{'id': i.id, 'name': i.name, 'spec': i.spec, 'unit': i.unit,
+                 'price': str(i.price or '')} for i in qs]
+        return Response({'results': data})
+
+    def create_item(self, request):
+        if not self._admin(request):
+            return Response({'error': '仅企业管理员可操作'}, status=403)
+        tenant = self._tenant(request)
+        name = (request.data.get('name') or '').strip()
+        if not name:
+            return Response({'error': '物品名称不能为空'}, status=400)
+        item = MaterialItem.objects.create(
+            tenant=tenant, name=name,
+            spec=(request.data.get('spec') or '').strip(),
+            unit=(request.data.get('unit') or '').strip(),
+            category=(request.data.get('category') or '').strip(),
+            price=request.data.get('price') or None,
+            created_by=request.user,
+        )
+        return Response({'message': 'ok', 'id': item.id}, status=201)
+
+    def retrieve_item(self, request, pk=None):
+        try:
+            item = MaterialItem.objects.get(id=pk)
+        except MaterialItem.DoesNotExist:
+            return Response({'error': '物品不存在'}, status=404)
+        return Response({'id': item.id, 'name': item.name, 'spec': item.spec, 'unit': item.unit,
+                         'category': item.category, 'price': str(item.price or '')})
+
+    def update_item(self, request, pk=None):
+        if not self._admin(request):
+            return Response({'error': '仅企业管理员可操作'}, status=403)
+        try:
+            item = MaterialItem.objects.get(id=pk)
+        except MaterialItem.DoesNotExist:
+            return Response({'error': '物品不存在'}, status=404)
+        if request.data.get('name') is not None:
+            item.name = (request.data.get('name') or '').strip()
+        if 'spec' in request.data:
+            item.spec = (request.data.get('spec') or '').strip()
+        if 'unit' in request.data:
+            item.unit = (request.data.get('unit') or '').strip()
+        if 'category' in request.data:
+            item.category = (request.data.get('category') or '').strip()
+        if 'price' in request.data:
+            item.price = request.data.get('price') or None
+        if 'is_active' in request.data:
+            item.is_active = bool(request.data.get('is_active', True))
+        item.save()
+        return Response({'message': 'ok'})
+
+    def delete_item(self, request, pk=None):
+        if not self._admin(request):
+            return Response({'error': '仅企业管理员可操作'}, status=403)
+        try:
+            item = MaterialItem.objects.get(id=pk)
+        except MaterialItem.DoesNotExist:
+            return Response({'error': '物品不存在'}, status=404)
+        item.delete()
+        return Response({'message': 'ok'})
+
+    # ===== 需求单联动 =====
+    def requirement_search(self, request):
+        """需求单搜索：返回本企业需求单并标注是否可领用（已入库且剩余>0 才能关联），
+        未入库的需求单仅展示（灰色、不可选），让申请人清楚需求单已生成及当前状态"""
+        tenant = self._tenant(request)
+        keyword = request.query_params.get('search', '').strip()
+        qs = MaterialRequirement.objects.filter(tenant=tenant).prefetch_related('items')
+        if keyword:
+            from django.db.models import Q
+            qs = qs.filter(Q(doc_no__icontains=keyword) | Q(purpose__icontains=keyword)
+                          | Q(branch_dept__name__icontains=keyword) | Q(items__item_name__icontains=keyword))
+        qs = qs.distinct().order_by('-updated_at')[:50]
+        status_labels = dict(MaterialRequirement.STATUS_CHOICES)
+        data = []
+        for r in qs:
+            total_remain = float(sum((i.quantity - i.requisitioned_quantity) for i in r.items.all()))
+            data.append({
+                'id': r.id, 'doc_no': r.doc_no,
+                'branch_dept': r.branch_dept.name if r.branch_dept else '',
+                'purpose': r.purpose,
+                'item_count': r.items.count(),
+                'remaining': total_remain,
+                'status': r.status,
+                'status_label': status_labels.get(r.status, r.status),
+                'linkable': r.status == 'stocked' and total_remain > 0,
+                'created_at': r.created_at.strftime('%Y-%m-%d'),
+            })
+        return Response({'results': data})
+
+    def requirement_detail(self, request):
+        """需求单详情 + 明细（含剩余可领），供领用单自动带出"""
+        rid = request.query_params.get('id', '').strip()
+        if not rid:
+            return Response({'error': '缺少需求单ID'}, status=400)
+        try:
+            r = MaterialRequirement.objects.get(id=int(rid))
+        except (ValueError, TypeError, MaterialRequirement.DoesNotExist):
+            return Response({'error': '需求单不存在'}, status=404)
+        items = [{
+            'item_name': i.item_name, 'spec': i.spec, 'unit': i.unit,
+            'price': float(i.price) if i.price is not None else None,
+            'quantity': float(i.quantity),
+            'remaining': float(i.quantity - i.requisitioned_quantity),
+            'remark': i.remark,
+        } for i in r.items.all()]
+        status_labels = dict(MaterialRequirement.STATUS_CHOICES)
+        # 预估金额：优先取审批金额字段，兜底取审批 form_data
+        amount = None
+        if r.request_id:
+            _req = ApprovalRequest.objects.filter(id=r.request_id).first()
+            if _req:
+                if _req.amount:
+                    amount = float(_req.amount)
+                elif _req.form_data.get('amount'):
+                    try:
+                        amount = float(_req.form_data['amount'])
+                    except (ValueError, TypeError):
+                        amount = None
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'id': r.id, 'doc_no': r.doc_no,
+            'branch_dept': r.branch_dept.name if r.branch_dept else '',
+            'purpose': r.purpose,
+            'status': r.status,
+            'status_label': status_labels.get(r.status, r.status),
+            'applicant': (r.created_by.real_name or r.created_by.username) if r.created_by else '',
+            'request_id': r.request_id,
+            'amount': amount,
+            'items': items,
+        })})
+
+    def stock_in(self, request):
+        """入库确认：需求单已采购入库，之后才可被领用（仅企业管理员/超管）"""
+        if not self._admin(request):
+            return Response({'error': '仅企业管理员可操作'}, status=403)
+        rid = request.data.get('id') or request.data.get('requirement_id')
+        if not rid:
+            return Response({'error': '缺少需求单ID'}, status=400)
+        try:
+            r = MaterialRequirement.objects.get(id=int(rid))
+        except (ValueError, TypeError, MaterialRequirement.DoesNotExist):
+            return Response({'error': '需求单不存在'}, status=404)
+        if r.request.status != 'approved':
+            return Response({'error': '需求单审批通过后才能确认入库'}, status=400)
+        r.status = 'stocked'
+        r.save(update_fields=['status'])
+        try:
+            if r.created_by_id:
+                send_work_notification(
+                    user_id=r.created_by_id,
+                    title='物资已入库',
+                    content=f'需求单 {r.doc_no} 已入库，可发起领用',
+                    notification_type='approval',
+                    related_url=f'/oa/approval/?approval_id={r.request_id}',
+                    extra_data={'approval_id': r.request_id},
+                )
+        except Exception:
+            pass
+        return Response({'message': '已确认入库'})
+
+    def requirements(self, request):
+        """物资需求单列表（物资管理界面，可搜索单号/分公司/用途 + 分页）"""
+        from django.db.models import Q
+        tenant = self._tenant(request)
+        qs = MaterialRequirement.objects.filter(tenant=tenant).select_related('branch_dept', 'created_by') \
+            .prefetch_related('items')
+        search = request.query_params.get('search', '').strip()
+        if search:
+            qs = qs.filter(Q(doc_no__icontains=search) | Q(purpose__icontains=search)
+                          | Q(branch_dept__name__icontains=search))
+        qs = qs.order_by('-updated_at')
+        page = max(1, int(request.query_params.get('page', 1) or 1))
+        page_size = max(1, int(request.query_params.get('page_size', 20) or 20))
+        total = qs.count()
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        status_labels = dict(MaterialRequirement.STATUS_CHOICES)
+        data = []
+        for r in list(qs[(page - 1) * page_size: page * page_size]):
+            items = list(r.items.all())
+            total_remain = float(sum((i.quantity - i.requisitioned_quantity) for i in items))
+            data.append({
+                'id': r.id, 'doc_no': r.doc_no,
+                'branch_dept': r.branch_dept.name if r.branch_dept else '',
+                'purpose': r.purpose,
+                'status': r.status,
+                'status_label': status_labels.get(r.status, r.status),
+                'item_count': len(items),
+                'remaining': round(total_remain, 2),
+                'applicant': (r.created_by.real_name or r.created_by.username) if r.created_by else '',
+                'request_status': r.request.status if r.request_id else '',
+                'request_id': r.request_id,
+                'created_at': r.created_at.strftime('%Y-%m-%d %H:%M'),
+            })
+        return Response({'encrypt': True, 'data': encrypt_data(
+            {'results': data, 'count': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages})})
+
+    def requisitions(self, request):
+        """物资领用单列表（物资管理界面，可搜索单号/需求单号 + 分页）"""
+        from django.db.models import Q
+        tenant = self._tenant(request)
+        qs = MaterialRequisition.objects.filter(tenant=tenant).select_related('requirement', 'branch_dept', 'created_by') \
+            .prefetch_related('items')
+        search = request.query_params.get('search', '').strip()
+        if search:
+            qs = qs.filter(Q(doc_no__icontains=search) | Q(requirement_doc_no__icontains=search)
+                          | Q(branch_dept__name__icontains=search))
+        qs = qs.order_by('-updated_at')
+        page = max(1, int(request.query_params.get('page', 1) or 1))
+        page_size = max(1, int(request.query_params.get('page_size', 20) or 20))
+        total = qs.count()
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        status_labels = dict(MaterialRequisition.STATUS_CHOICES)
+        data = []
+        for r in list(qs[(page - 1) * page_size: page * page_size]):
+            data.append({
+                'id': r.id, 'doc_no': r.doc_no,
+                'requirement_doc_no': r.requirement_doc_no or (r.requirement.doc_no if r.requirement else ''),
+                'branch_dept': r.branch_dept.name if r.branch_dept else '',
+                'purpose': r.purpose,
+                'status': r.status,
+                'status_label': status_labels.get(r.status, r.status),
+                'item_count': r.items.count(),
+                'applicant': (r.created_by.real_name or r.created_by.username) if r.created_by else '',
+                'request_status': r.request.status if r.request_id else '',
+                'request_id': r.request_id,
+                'created_at': r.created_at.strftime('%Y-%m-%d %H:%M'),
+            })
+        return Response({'encrypt': True, 'data': encrypt_data(
+            {'results': data, 'count': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages})})
+
+    def requirement_status(self, request):
+        """需求单状态流转：已通过(待采购) → 采购中 → 已入库(可领用)（仅企业管理员/超管）"""
+        if not self._admin(request):
+            return Response({'error': '仅企业管理员可操作'}, status=403)
+        rid = request.data.get('id') or request.data.get('requirement_id')
+        status = (request.data.get('status') or '').strip()
+        if not rid:
+            return Response({'error': '缺少需求单ID'}, status=400)
+        if status not in ('purchasing', 'stocked'):
+            return Response({'error': '不支持的状态'}, status=400)
+        try:
+            r = MaterialRequirement.objects.get(id=int(rid))
+        except (ValueError, TypeError, MaterialRequirement.DoesNotExist):
+            return Response({'error': '需求单不存在'}, status=404)
+        if r.request.status != 'approved':
+            return Response({'error': '需求单审批通过后才能进入采购/入库'}, status=400)
+        allowed = {'purchasing': {'approved'}, 'stocked': {'approved', 'purchasing'}}
+        if r.status not in allowed.get(status, set()):
+            return Response({'error': f'当前状态({r.status})不能流转到({status})'}, status=400)
+        r.status = status
+        r.save(update_fields=['status'])
+        try:
+            if r.created_by_id:
+                label = '已入库(可领用)' if status == 'stocked' else '采购中'
+                send_work_notification(
+                    user_id=r.created_by_id,
+                    title='物资需求单状态更新',
+                    content=f'需求单 {r.doc_no} {label}',
+                    notification_type='approval',
+                    related_url=f'/oa/approval/?approval_id={r.request_id}',
+                    extra_data={'approval_id': r.request_id},
+                )
+        except Exception:
+            pass
+        return Response({'message': '已更新'})
+
+
+class WatermarkViewSet(viewsets.ViewSet):
+    """企业水印配置：管理控制台维护（仅超管），各页面加载渲染水印（显性+隐性）"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _tenant(self, request):
+        return getattr(request, 'tenant', None) or request.user.get_active_tenant()
+
+    def _config_data(self, cfg):
+        return {
+            'enabled': bool(cfg.enabled),
+            'company_name': cfg.company_name,
+            'text': cfg.text,
+            'font_size': cfg.font_size,
+            'font_color': cfg.font_color,
+            'font_style': cfg.font_style,
+            'rotation': cfg.rotation,
+            'opacity': float(cfg.opacity),
+            'position': cfg.position,
+            'shape': cfg.shape,
+            'hidden_enabled': bool(cfg.hidden_enabled),
+            'hidden_opacity': float(cfg.hidden_opacity),
+            'print_enabled': bool(cfg.print_enabled),
+            'page_enabled': cfg.page_enabled or {},
+        }
+
+    def config(self, request):
+        """获取当前企业水印配置（各页面加载水印用；附当前登录 IP 供隐性水印溯源）"""
+        tenant = self._tenant(request)
+        # 无有效企业（如系统级账号/未归属企业）时不渲染水印，避免建配置报错
+        if not tenant:
+            return Response({'encrypt': True, 'data': encrypt_data({
+                'config': {'enabled': False, 'page_enabled': {}},
+                'extra': {'ip': get_request_ip(request)},
+            })})
+        defaults = {'page_enabled': {p: True for p in DEFAULT_WATERMARK_PAGES}}
+        cfg, _ = WatermarkConfig.objects.get_or_create(tenant=tenant, defaults=defaults)
+        if not cfg.page_enabled:
+            cfg.page_enabled = {p: True for p in DEFAULT_WATERMARK_PAGES}
+            cfg.save(update_fields=['page_enabled'])
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'config': self._config_data(cfg),
+            'extra': {'ip': get_request_ip(request)},
+        })})
+
+    def save_config(self, request):
+        """保存水印配置（仅超级管理员）"""
+        if request.user.user_type != 'super_admin':
+            return Response({'error': '仅超级管理员可配置'}, status=403)
+        tenant = self._tenant(request)
+        if not tenant:
+            return Response({'error': '未找到所属企业，无法配置水印'}, status=400)
+        cfg, _ = WatermarkConfig.objects.get_or_create(
+            tenant=tenant, defaults={'page_enabled': {p: True for p in DEFAULT_WATERMARK_PAGES}})
+        if 'enabled' in request.data:
+            cfg.enabled = bool(request.data.get('enabled'))
+        if request.data.get('company_name') not in (None, ''):
+            cfg.company_name = str(request.data.get('company_name')).strip()
+        if 'text' in request.data:
+            cfg.text = str(request.data.get('text') or '')
+        if 'font_size' in request.data:
+            try:
+                cfg.font_size = max(8, int(request.data.get('font_size')))
+            except (ValueError, TypeError):
+                pass
+        if request.data.get('font_color') not in (None, ''):
+            cfg.font_color = str(request.data.get('font_color')).strip()
+        if 'font_style' in request.data:
+            s = str(request.data.get('font_style'))
+            cfg.font_style = s if s in ('normal', 'bold', 'italic') else 'normal'
+        if 'rotation' in request.data:
+            try:
+                cfg.rotation = int(request.data.get('rotation'))
+            except (ValueError, TypeError):
+                pass
+        if 'opacity' in request.data:
+            try:
+                cfg.opacity = max(0.0, min(1.0, float(request.data.get('opacity'))))
+            except (ValueError, TypeError):
+                pass
+        if 'position' in request.data:
+            cfg.position = str(request.data.get('position'))
+        if 'shape' in request.data:
+            cfg.shape = str(request.data.get('shape'))
+        if 'hidden_enabled' in request.data:
+            cfg.hidden_enabled = bool(request.data.get('hidden_enabled'))
+        if 'hidden_opacity' in request.data:
+            try:
+                cfg.hidden_opacity = max(0.0, min(1.0, float(request.data.get('hidden_opacity'))))
+            except (ValueError, TypeError):
+                pass
+        if 'print_enabled' in request.data:
+            cfg.print_enabled = bool(request.data.get('print_enabled'))
+        if 'page_enabled' in request.data and isinstance(request.data.get('page_enabled'), dict):
+            merged = dict(cfg.page_enabled or {})
+            for k, v in request.data.get('page_enabled').items():
+                merged[str(k)] = bool(v)
+            cfg.page_enabled = merged
+        cfg.save()
+        return Response({'encrypt': True, 'data': encrypt_data(self._config_data(cfg))})
+
+
+class PrintLogViewSet(viewsets.ViewSet):
+    """打印操作留痕：记录用户打印了哪个页面的什么内容，供打印统计/打印权限分配使用"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def create(self, request):
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        try:
+            count = int(request.data.get('count') or 0)
+        except (TypeError, ValueError):
+            count = 0
+        # 🔧 校验「允许打印」权限：无权限则拦截且不写日志（前端据 allowed=false 阻止打印）
+        allowed = get_effective_operation_permission(request.user, 'allow_print', tenant)
+        if not allowed:
+            return Response({'encrypt': True, 'data': encrypt_data({'ok': False, 'allowed': False})})
+        try:
+            PrintLog.objects.create(
+                tenant=tenant,
+                user=request.user,
+                page=str(request.data.get('page') or 'other')[:50],
+                target_type=str(request.data.get('target_type') or '')[:50],
+                target_id=str(request.data.get('target_id') or '')[:100],
+                count=max(count, 0),
+                ip=get_request_ip(request),
+            )
+        except Exception as e:
+            logger.warning(f'记录打印日志失败: {e}')
+        return Response({'encrypt': True, 'data': encrypt_data({'ok': True, 'allowed': True})})
+
+
+class WorkCalendarViewSet(viewsets.ViewSet):
+    """工作日历：按日聚合工作事件 + 每日工作汇总通知配置"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    # 网盘/协作文档操作 → (事件类型, 图标, 动作文案)
+    _CLOUD_OP_EVENT = {
+        'upload': ('cloud', 'fas fa-upload', '上传文件'),
+        'download': ('cloud', 'fas fa-download', '下载文件'),
+        'preview': ('cloud', 'fas fa-eye', '预览文件'),
+        'create': ('cloud', 'fas fa-file-alt', '新建文件'),
+        'update': ('cloud', 'fas fa-edit', '更新文件'),
+        'rename': ('cloud', 'fas fa-i-cursor', '重命名文件'),
+        'move': ('cloud', 'fas fa-folder-open', '移动文件'),
+        'batch_move': ('cloud', 'fas fa-folder-open', '批量移动'),
+        'delete': ('cloud', 'fas fa-trash', '删除文件'),
+        'restore': ('cloud', 'fas fa-trash-restore', '恢复文件'),
+        'permanent_delete': ('cloud', 'fas fa-trash', '永久删除'),
+        'batch_delete': ('cloud', 'fas fa-trash', '批量删除'),
+        'empty_trash': ('cloud', 'fas fa-trash', '清空回收站'),
+        'share': ('cloud', 'fas fa-share-alt', '分享文件'),
+        'unshare': ('cloud', 'fas fa-ban', '取消分享'),
+        'share_access': ('cloud', 'fas fa-eye', '访问分享'),
+        'save_from_share': ('cloud', 'fas fa-cloud-download-alt', '从分享保存'),
+        'save_from_chat': ('cloud', 'fas fa-cloud-upload-alt', '从聊天保存'),
+        'sync_to_cloud': ('cloud', 'fas fa-cloud-upload-alt', '同步到云'),
+        'edit_save': ('doc', 'fas fa-edit', '编辑保存'),
+        'add_collaborator': ('cloud', 'fas fa-user-plus', '添加协作者'),
+        'remove_collaborator': ('cloud', 'fas fa-user-minus', '移除协作者'),
+        'update_collaborator': ('cloud', 'fas fa-user-cog', '更新协作者'),
+        'update_collaboration_status': ('doc', 'fas fa-users', '协作状态'),
+        'restore_version': ('doc', 'fas fa-history', '恢复版本'),
+        'version_download': ('cloud', 'fas fa-download', '下载版本'),
+        'add_folder_member': ('cloud', 'fas fa-user-plus', '添加文件夹成员'),
+        'remove_folder_member': ('cloud', 'fas fa-user-minus', '移除文件夹成员'),
+    }
+    # 组织架构操作 → (图标, 动作文案)
+    _ORG_ACTION_MAP = {
+        'create_dept': ('fas fa-plus', '创建部门'),
+        'update_dept': ('fas fa-edit', '修改部门'),
+        'delete_dept': ('fas fa-trash', '删除部门'),
+        'move_dept': ('fas fa-arrows-alt', '移动部门'),
+        'add_member': ('fas fa-user-plus', '添加成员'),
+        'remove_member': ('fas fa-user-minus', '移除成员'),
+        'set_leader': ('fas fa-user-tie', '设置负责人'),
+        'switch_tenant': ('fas fa-exchange-alt', '切换企业'),
+    }
+
+    def _tenant(self, request):
+        return getattr(request, 'tenant', None) or request.user.get_active_tenant()
+
+    def _resolve_target_user(self, request):
+        """超管可通过 user_id 指定查看某成员工作日历；否则返回当前用户"""
+        user = request.user
+        user_id = request.query_params.get('user_id', '').strip()
+        if not user_id or user.user_type != 'super_admin':
+            return user
+        try:
+            from accounts.models import CustomUser
+            tenant = self._tenant(request)
+            target = CustomUser.objects.get(id=int(user_id), is_active=True)
+            if tenant:
+                ids = [tenant.id]
+                try:
+                    ids += [t.id for t in tenant.sub_tenants.filter(is_active=True)]
+                except Exception:
+                    pass
+                if not target.tenant_memberships.filter(tenant_id__in=ids, is_active=True).exists():
+                    return user
+            return target
+        except Exception:
+            return user
+
+    def _summary(self, request, target=None):
         from .tasks import compute_user_work_summary
-        return compute_user_work_summary(request.user, self._tenant(request))
+        u = target or request.user
+        return compute_user_work_summary(u, self._tenant(request))
+
+    def _target_info(self, target):
+        return {'id': target.id, 'name': target.real_name or target.username,
+                'avatar': target.get_avatar_url() if hasattr(target, 'get_avatar_url') else ''}
+
+    def _primary_dept_name(self, user):
+        try:
+            from org.models import UserDepartment
+            ud = UserDepartment.objects.filter(user=user, is_primary=True).select_related('department').first()
+            if ud and ud.department:
+                return ud.department.name
+        except Exception:
+            pass
+        return (user.department.name if user.department else '') or ''
+
+    def _user_brief(self, user):
+        return {
+            'name': user.real_name or user.username,
+            'avatar': user.get_avatar_url() if hasattr(user, 'get_avatar_url') else '',
+            'department': self._primary_dept_name(user),
+            'position': user.position or '',
+        }
 
     def list(self, request):
         """月度汇总：当前待办 + 该月每日事件计数"""
-        from .tasks import _tenant_ids as _tids
         now = timezone.localtime()
         year = int(request.query_params.get('year', now.year))
         month = int(request.query_params.get('month', now.month))
-        pending = self._summary(request)
-        days = self._month_days(request.user, year, month)
+        target = self._resolve_target_user(request)
+        pending = self._summary(request, target)
+        days = self._month_days(target, year, month)
         return Response({'encrypt': True, 'data': encrypt_data({
             'pending': pending, 'year': year, 'month': month, 'days': days,
+            'target_user': self._target_info(target),
         })})
 
     def _month_days(self, user, year, month):
         import calendar as cal
         from datetime import date
         from tasks.models import Task
-        from cloud.models import CloudFile
+        from cloud.models import CloudFile, FileOperationLog
+        from org.models import OrgChangeLog
         from .models import ApprovalRequest, SubsidyApplication, SubsidyWithdrawal, AttendanceRecord
         _, last = cal.monthrange(year, month)
         start, end = date(year, month, 1), date(year, month, last)
         days = {}
         for d in range(1, last + 1):
-            days[f'{year:04d}-{month:02d}-{d:02d}'] = {'approvals': 0, 'invoices': 0, 'withdrawals': 0, 'tasks': 0, 'docs': 0, 'clock_in': None, 'clock_out': None}
+            days[f'{year:04d}-{month:02d}-{d:02d}'] = {'approvals': 0, 'invoices': 0, 'withdrawals': 0, 'tasks': 0, 'docs': 0, 'cloud': 0, 'org': 0, 'clock_in': None, 'clock_out': None}
 
         def _bump(qs, key):
             for dt in qs:
@@ -3108,6 +4756,9 @@ class WorkCalendarViewSet(viewsets.ViewSet):
         _bump(SubsidyWithdrawal.objects.filter(user=user, requested_at__date__range=[start, end]).values_list('requested_at', flat=True), 'withdrawals')
         _bump(Task.objects.filter(Q(assignee=user) | Q(creator=user), status='done', updated_at__date__range=[start, end]).values_list('updated_at', flat=True), 'tasks')
         _bump(CloudFile.objects.filter(owner=user, is_document=True, created_at__date__range=[start, end]).values_list('created_at', flat=True), 'docs')
+        # 网盘/协作文档操作 + 组织架构操作（按操作者归属）
+        _bump(FileOperationLog.objects.filter(user=user, created_at__date__range=[start, end]).values_list('created_at', flat=True), 'cloud')
+        _bump(OrgChangeLog.objects.filter(operator=user, created_at__date__range=[start, end]).values_list('created_at', flat=True), 'org')
         for r in AttendanceRecord.objects.filter(user=user, date__range=[start, end]).order_by('date', 'clock_time'):
             ds = r.date.strftime('%Y-%m-%d')
             t = timezone.localtime(r.clock_time).strftime('%H:%M')
@@ -3125,15 +4776,18 @@ class WorkCalendarViewSet(viewsets.ViewSet):
             d = dt_date.fromisoformat(date_str)
         except (ValueError, TypeError):
             return Response({'error': '日期格式错误'}, status=400)
-        pending = self._summary(request)
-        events = self._day_events(request.user, d)
+        target = self._resolve_target_user(request)
+        pending = self._summary(request, target)
+        events = self._day_events(target, d)
         return Response({'encrypt': True, 'data': encrypt_data({
             'pending': pending, 'date': date_str, 'events': events,
+            'target_user': self._target_info(target),
         })})
 
     def _day_events(self, user, d):
         from tasks.models import Task
-        from cloud.models import CloudFile
+        from cloud.models import CloudFile, FileOperationLog
+        from org.models import OrgChangeLog
         from .models import ApprovalRequest, ApprovalLog, SubsidyApplication, SubsidyWithdrawal, AttendanceRecord
         events = []
 
@@ -3160,10 +4814,282 @@ class WorkCalendarViewSet(viewsets.ViewSet):
             add('task', 'fas fa-tasks', f'完成任务：{t.title}', fmt(t.updated_at), f'/tasks/?task_id={t.id}')
         for c in CloudFile.objects.filter(owner=user, is_document=True, created_at__date=d):
             add('doc', 'fas fa-file-alt', f'新建协作文档：{c.name}', fmt(c.created_at), '/cloud/')
+        # 网盘/协作文档操作：谁操作记谁（协作者编辑归属到编辑者）
+        for lg in FileOperationLog.objects.filter(user=user, created_at__date=d).order_by('created_at'):
+            ev = self._CLOUD_OP_EVENT.get(lg.operation)
+            if ev:
+                title = lg.description or ev[2]
+                add(ev[0], ev[1], title, fmt(lg.created_at), '/cloud/')
+        # 组织架构操作：谁操作记谁
+        for oc in OrgChangeLog.objects.filter(operator=user, created_at__date=d).select_related('department'):
+            icon, label = self._ORG_ACTION_MAP.get(oc.action, ('fas fa-sitemap', oc.get_action_display() or oc.action))
+            dept_name = oc.department.name if oc.department else '企业'
+            add('org', icon, f'{label}：{dept_name}', fmt(oc.created_at), '/org/')
         for r in AttendanceRecord.objects.filter(user=user, date=d).order_by('clock_time'):
             add('attendance', 'fas fa-clock', f'{r.get_clock_type_display()}打卡', fmt(r.clock_time), '/oa/attendance/')
         events.sort(key=lambda e: e['time'], reverse=True)
         return events
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """时间线统计：某时间范围内按日/月聚合的处理量（审批/核验发票/支付提现/任务 + 网盘/组织操作）"""
+        from datetime import date as dt_date, timedelta
+        from .models import ApprovalAssignee, SubsidyApplication, SubsidyWithdrawal
+        from tasks.models import Task
+        from cloud.models import FileOperationLog
+        from org.models import OrgChangeLog
+        target = self._resolve_target_user(request)
+        now_date = timezone.localdate()
+        start = end = None
+        try:
+            start_s = request.query_params.get('start', '').strip()
+            if start_s:
+                start = dt_date.fromisoformat(start_s)
+            end_s = request.query_params.get('end', '').strip()
+            if end_s:
+                end = dt_date.fromisoformat(end_s)
+        except ValueError:
+            return Response({'error': '日期格式错误，请使用 YYYY-MM-DD'}, status=400)
+        if start is None:
+            start = now_date - timedelta(days=29)
+        if end is None:
+            end = now_date
+        if start > end:
+            start, end = end, start
+        days_count = (end - start).days + 1
+
+        if days_count <= 62:
+            buckets = [start + timedelta(days=i) for i in range(days_count)]
+            labels = [b.strftime('%m-%d') for b in buckets]
+            key_fn = lambda v: v.date()
+        else:
+            cur = start.replace(day=1)
+            buckets = []
+            while cur <= end:
+                buckets.append(cur)
+                nxt = (cur.replace(day=28) + timedelta(days=4)).replace(day=1)
+                cur = nxt
+            labels = [b.strftime('%Y-%m') for b in buckets]
+            key_fn = lambda v: v.date().replace(day=1)
+        bucket_map = {b: i for i, b in enumerate(buckets)}
+
+        def _arr():
+            return [0] * len(buckets)
+
+        approvals, invoices, withdrawals = _arr(), _arr(), _arr()
+        tasks, cloud, org = _arr(), _arr(), _arr()
+
+        def _count(qs, arr):
+            for v in qs:
+                idx = bucket_map.get(key_fn(v))
+                if idx is not None:
+                    arr[idx] += 1
+
+        _count(ApprovalAssignee.objects.filter(
+            user=target, status__in=['approved', 'rejected', 'deferred'],
+            operated_at__isnull=False, operated_at__date__gte=start, operated_at__date__lte=end,
+        ).values_list('operated_at', flat=True), approvals)
+        _count(SubsidyApplication.objects.filter(
+            verified_by=target, verified_at__isnull=False, verified_at__date__gte=start, verified_at__date__lte=end,
+        ).values_list('verified_at', flat=True), invoices)
+        _count(SubsidyWithdrawal.objects.filter(
+            paid_by=target, paid_at__isnull=False, paid_at__date__gte=start, paid_at__date__lte=end,
+        ).values_list('paid_at', flat=True), withdrawals)
+        _count(Task.objects.filter(
+            Q(assignee=target) | Q(creator=target), status='done',
+            updated_at__date__gte=start, updated_at__date__lte=end,
+        ).values_list('updated_at', flat=True), tasks)
+        _count(FileOperationLog.objects.filter(
+            user=target, created_at__date__gte=start, created_at__date__lte=end,
+        ).values_list('created_at', flat=True), cloud)
+        _count(OrgChangeLog.objects.filter(
+            operator=target, created_at__date__gte=start, created_at__date__lte=end,
+        ).values_list('created_at', flat=True), org)
+
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'start': start.isoformat(), 'end': end.isoformat(),
+            'labels': labels, 'approvals': approvals, 'invoices': invoices,
+            'withdrawals': withdrawals, 'tasks': tasks, 'cloud': cloud, 'org': org,
+            'target_user': self._target_info(target),
+        })})
+
+    def _node_reach_times(self, request_ids):
+        """节点到达时间：节点1=最近一次提交/重新提交时间；后续节点=上一节点最后一个操作时间。
+        撤销后重新提交（re_edit）会删除并重建全部审批人与节点，
+        因此"最近一次到达"以当前审批人记录 created_at 的最小值（最近一次提交时间）为准，
+        而不是原始 request.created_at。"""
+        from .models import ApprovalRequest, ApprovalNode
+        result = {}
+        if not request_ids:
+            return result
+        nodes = ApprovalNode.objects.filter(request_id__in=request_ids).prefetch_related('assignees')
+        by_req = {}
+        for n in nodes:
+            by_req.setdefault(n.request_id, []).append(n)
+        req_times = {r.id: r.created_at for r in ApprovalRequest.objects.filter(id__in=request_ids)}
+        for rid, nl in by_req.items():
+            ordered = sorted(nl, key=lambda n: n.order)
+            # 最近一次提交/重新提交时间：当前审批人记录创建时间的最小值（撤销重提会删除重建，故为最近一次）
+            submit_time = None
+            for n in ordered:
+                for a in n.assignees.all():
+                    if submit_time is None or a.created_at < submit_time:
+                        submit_time = a.created_at
+            if submit_time is None:
+                submit_time = req_times.get(rid)
+            last_op_of_prev = None
+            for node in ordered:
+                arrival = submit_time if last_op_of_prev is None else last_op_of_prev
+                if arrival:
+                    result[node.id] = arrival
+                lop = None
+                for a in node.assignees.all():
+                    if a.operated_at and (lop is None or a.operated_at > lop):
+                        lop = a.operated_at
+                if lop:
+                    last_op_of_prev = lop
+        return result
+
+    @action(detail=False, methods=['get'])
+    def approval_efficiency(self, request):
+        """审批效率：审批到达自己节点 → 自己审批通过 花费的时间"""
+        from datetime import date as dt_date, timedelta
+        from .models import ApprovalAssignee
+        target = self._resolve_target_user(request)
+        now_date = timezone.localdate()
+        start = end = None
+        try:
+            start_s = request.query_params.get('start', '').strip()
+            if start_s:
+                start = dt_date.fromisoformat(start_s)
+            end_s = request.query_params.get('end', '').strip()
+            if end_s:
+                end = dt_date.fromisoformat(end_s)
+        except ValueError:
+            return Response({'error': '日期格式错误，请使用 YYYY-MM-DD'}, status=400)
+        if start is None:
+            start = now_date - timedelta(days=29)
+        if end is None:
+            end = now_date
+        if start > end:
+            start, end = end, start
+
+        assignees = ApprovalAssignee.objects.filter(
+            user=target, status='approved', operated_at__isnull=False,
+            operated_at__date__gte=start, operated_at__date__lte=end,
+        ).select_related('node__request__applicant').order_by('operated_at')
+        assignee_list = list(assignees)
+        request_ids = {a.node.request_id for a in assignee_list}
+        reach = self._node_reach_times(request_ids)
+
+        items = []
+        for a in assignee_list:
+            arrival = reach.get(a.node_id)
+            operated = a.operated_at
+            if not arrival or operated <= arrival:
+                continue
+            minutes = int((operated - arrival).total_seconds() // 60)
+            items.append({
+                'request_id': a.node.request_id,
+                'title': a.node.request.title,
+                'node_order': a.node.order,
+                'arrival': arrival.isoformat(),
+                'approved_at': operated.isoformat(),
+                'minutes': minutes,
+                'applicant': self._user_brief(a.node.request.applicant),
+            })
+        avg_min = max_min = 0
+        if items:
+            total_min = sum(i['minutes'] for i in items)
+            avg_min = int(total_min / len(items))
+            max_min = max(i['minutes'] for i in items)
+
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'start': start.isoformat(), 'end': end.isoformat(),
+            'count': len(items), 'avg_minutes': avg_min, 'max_minutes': max_min,
+            'items': items, 'target_user': self._target_info(target),
+        })})
+
+    @action(detail=False, methods=['get'])
+    def approval_leaderboard(self, request):
+        """审批效率负责人排行榜：企业审批人在时间范围内按平均用时升序，含审批数量/总用时/平均用时"""
+        from datetime import date as dt_date, timedelta
+        from collections import defaultdict
+        from .models import ApprovalAssignee
+        from accounts.models import CustomUser
+        from org.models import UserDepartment
+        if request.user.user_type != 'super_admin':
+            return Response({'error': '仅超级管理员可查看'}, status=403)
+        tenant = self._tenant(request)
+        now_date = timezone.localdate()
+        start = end = None
+        try:
+            start_s = request.query_params.get('start', '').strip()
+            if start_s:
+                start = dt_date.fromisoformat(start_s)
+            end_s = request.query_params.get('end', '').strip()
+            if end_s:
+                end = dt_date.fromisoformat(end_s)
+        except ValueError:
+            return Response({'error': '日期格式错误，请使用 YYYY-MM-DD'}, status=400)
+        if start is None:
+            start = now_date - timedelta(days=29)
+        if end is None:
+            end = now_date
+        if start > end:
+            start, end = end, start
+
+        qs = ApprovalAssignee.objects.filter(
+            status='approved', operated_at__isnull=False,
+            operated_at__date__gte=start, operated_at__date__lte=end,
+        ).select_related('user', 'node__request')
+        if tenant:
+            ids = [tenant.id]
+            try:
+                ids += [t.id for t in tenant.sub_tenants.filter(is_active=True)]
+            except Exception:
+                pass
+            qs = qs.filter(user__tenant_memberships__tenant_id__in=ids, user__tenant_memberships__is_active=True)
+        qs = qs.distinct()
+        assignee_list = list(qs)
+        request_ids = {a.node.request_id for a in assignee_list}
+        reach = self._node_reach_times(request_ids)
+
+        agg = defaultdict(lambda: {'count': 0, 'total': 0})
+        for a in assignee_list:
+            arrival = reach.get(a.node_id)
+            if not arrival or a.operated_at <= arrival:
+                continue
+            mins = int((a.operated_at - arrival).total_seconds() // 60)
+            agg[a.user_id]['count'] += 1
+            agg[a.user_id]['total'] += mins
+
+        user_ids = list(agg.keys())
+        users = {u.id: u for u in CustomUser.objects.filter(id__in=user_ids)}
+        dept_map = dict(UserDepartment.objects.filter(
+            user_id__in=user_ids, is_primary=True).select_related('department').values_list('user_id', 'department__name'))
+
+        results = []
+        for uid, data in agg.items():
+            u = users.get(uid)
+            if not u:
+                continue
+            results.append({
+                'user_id': uid,
+                'name': u.real_name or u.username,
+                'avatar': u.get_avatar_url() if hasattr(u, 'get_avatar_url') else '',
+                'department': dept_map.get(uid) or (u.department.name if u.department else '') or '',
+                'position': u.position or '',
+                'count': data['count'],
+                'total_minutes': data['total'],
+                'avg_minutes': int(data['total'] / data['count']) if data['count'] else 0,
+            })
+        results.sort(key=lambda r: r['avg_minutes'])
+
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'start': start.isoformat(), 'end': end.isoformat(),
+            'results': results,
+        })})
 
     # ===== 每日通知配置 =====
     def digest_config(self, request):
@@ -3620,6 +5546,8 @@ class SubsidyViewSet(viewsets.ViewSet):
             return Response({'encrypt': True, 'data': encrypt_data({
                 'payee_name': u.payee_name or '',
                 'bank_card': u.bank_card or '',
+                'bank_name': u.bank_name or '',
+                'bank_address': u.bank_address or '',
                 'alipay_account': u.alipay_account or '',
                 'wechat_account': u.wechat_account or '',
                 'alipay_qr': u.alipay_qr or '',
@@ -3627,13 +5555,17 @@ class SubsidyViewSet(viewsets.ViewSet):
             })})
         u.payee_name = (request.data.get('payee_name') or '').strip()
         u.bank_card = (request.data.get('bank_card') or '').strip()
+        u.bank_name = (request.data.get('bank_name') or '').strip()
+        u.bank_address = (request.data.get('bank_address') or '').strip()
         u.alipay_account = (request.data.get('alipay_account') or '').strip()
         u.wechat_account = (request.data.get('wechat_account') or '').strip()
         u.alipay_qr = (request.data.get('alipay_qr') or '').strip()
         u.wechat_qr = (request.data.get('wechat_qr') or '').strip()
-        u.save(update_fields=['payee_name', 'bank_card', 'alipay_account', 'wechat_account', 'alipay_qr', 'wechat_qr'])
+        u.save(update_fields=['payee_name', 'bank_card', 'bank_name', 'bank_address',
+                              'alipay_account', 'wechat_account', 'alipay_qr', 'wechat_qr'])
         return Response({'encrypt': True, 'data': encrypt_data({
             'payee_name': u.payee_name, 'bank_card': u.bank_card,
+            'bank_name': u.bank_name, 'bank_address': u.bank_address,
             'alipay_account': u.alipay_account, 'wechat_account': u.wechat_account,
             'alipay_qr': u.alipay_qr, 'wechat_qr': u.wechat_qr,
         })})
@@ -3654,11 +5586,27 @@ class SubsidyViewSet(viewsets.ViewSet):
         ocr_version = ocr_version.strip() or 'paddle'
         if ocr_version not in ('baidu_vat', 'baidu_general', 'paddle'):
             return Response({'error': '不支持的OCR识别版本'}, status=400)
-        # 税率阈值（用于按税率判定发票类型；缺省不覆盖识别结果）
+        # 税率阈值（用于按税率判定发票类型：识别税率 >= 阈值 → 增值税专用发票，否则普通发票）
+        # 与发票识别缓存时间（秒）均取自补贴配置（默认阈值 6%、缓存 7 天）
+        cfg = None
         try:
             tax_rate_threshold = float(request.data.get('tax_rate_threshold') or 0)
         except (ValueError, TypeError):
             tax_rate_threshold = 0
+        if tax_rate_threshold <= 0:
+            try:
+                tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+                cfg = self._get_subsidy_config(tenant, self._applicant_primary_dept_id(request.user))
+                tax_rate_threshold = float(cfg.tax_rate_threshold) if cfg and cfg.tax_rate_threshold else 0.06
+            except Exception as e:
+                logger.warning(f'解析税率阈值失败: {e}')
+                tax_rate_threshold = 0.06
+        try:
+            ocr_cache_ttl = int(cfg.ocr_cache_ttl) if cfg and cfg.ocr_cache_ttl else 604800
+        except (ValueError, TypeError):
+            ocr_cache_ttl = 604800
+        if ocr_cache_ttl < 60:
+            ocr_cache_ttl = 60
         url = (request.data.get('url') or request.data.get('file_url') or '').strip()
         file = request.FILES.get('file')
         image_path = None
@@ -3703,8 +5651,8 @@ class SubsidyViewSet(viewsets.ViewSet):
             return Response({'encrypt': True, 'data': encrypt_data({'task_id': '', 'result': cached, 'cached': True})})
         try:
             from .tasks import subsidy_ocr_task
-            logger.info(f'OCR任务入队 md5={md5[:8]} version={ocr_version} tax_rate_threshold={tax_rate_threshold} user={request.user}')
-            task = subsidy_ocr_task.delay(image_path, ocr_version, cache_key, delete_after, tax_rate_threshold)
+            logger.info(f'OCR任务入队 md5={md5[:8]} version={ocr_version} tax_rate_threshold={tax_rate_threshold} cache_ttl={ocr_cache_ttl} user={request.user}')
+            task = subsidy_ocr_task.delay(image_path, ocr_version, cache_key, delete_after, tax_rate_threshold, ocr_cache_ttl)
         except Exception as e:
             logger.error(f'OCR任务入队失败: {e}')
             return Response({'error': f'识别任务提交失败: {e}'}, status=500)
@@ -4516,12 +6464,13 @@ class SubsidyViewSet(viewsets.ViewSet):
 
     @action(detail=True, methods=['get'])
     def withdraw_detail(self, request, pk=None):
-        """提现申请详情（财务支付人员/超级管理员）"""
+        """提现申请详情（申请人本人 / 财务支付人员 / 超级管理员）"""
         try:
             wd = SubsidyWithdrawal.objects.select_related('user', 'tenant', 'paid_by').get(id=pk)
         except SubsidyWithdrawal.DoesNotExist:
             return Response({'error': '提现申请不存在'}, status=404)
-        if request.user.user_type != 'super_admin' and not self._is_payment_staff(request.user, wd.tenant):
+        if wd.user_id != request.user.id and request.user.user_type != 'super_admin' \
+                and not self._is_payment_staff(request.user, wd.tenant):
             return Response({'error': '仅超级管理员或财务支付人员可查看'}, status=403)
         from .serializers import SubsidyWithdrawalSerializer
         return Response({'encrypt': True, 'data': encrypt_data(SubsidyWithdrawalSerializer(wd).data)})
@@ -4789,6 +6738,13 @@ class SubsidyViewSet(viewsets.ViewSet):
         default_ocr_version = (request.data.get('default_ocr_version') or 'paddle').strip()
         if default_ocr_version not in ('baidu_vat', 'baidu_general', 'paddle'):
             default_ocr_version = 'paddle'
+        # 发票识别缓存时间（秒），默认 7 天
+        try:
+            ocr_cache_ttl = int(request.data.get('ocr_cache_ttl') or 604800)
+        except (ValueError, TypeError):
+            ocr_cache_ttl = 604800
+        if ocr_cache_ttl < 60:
+            ocr_cache_ttl = 60
         # 发票验真开关
         invoice_verify_enabled = str(request.data.get('invoice_verify_enabled', 'false')).lower() in ('1', 'true', 'yes', 'on')
         # 发票抬头字段显示开关（JSON：key→bool）
@@ -4814,6 +6770,7 @@ class SubsidyViewSet(viewsets.ViewSet):
                     'tax_rate_threshold': tax_rate_threshold,
                     'min_withdraw_amount': min_withdraw_amount,
                     'default_ocr_version': default_ocr_version,
+                    'ocr_cache_ttl': ocr_cache_ttl,
                     'invoice_verify_enabled': invoice_verify_enabled,
                     'invoice_header_name': (request.data.get('invoice_header_name') or '').strip(),
                     'invoice_header_tax_no': (request.data.get('invoice_header_tax_no') or '').strip(),
@@ -4855,3 +6812,21 @@ class SubsidyViewSet(viewsets.ViewSet):
             return Response({'message': 'ok'})
         except SubsidyConfig.DoesNotExist:
             return Response({'error': '配置不存在'}, status=404)
+
+    @action(detail=False, methods=['post'])
+    def clear_ocr_cache(self, request):
+        """清除发票识别缓存（修改识别版本/税率阈值后立即生效，无需等待缓存过期）"""
+        if request.user.user_type != 'super_admin':
+            return Response({'error': '仅超级管理员可操作'}, status=403)
+        try:
+            from django.core.cache import cache
+            deleted = 0
+            try:
+                deleted = cache.delete_pattern('subsidy_ocr:*')
+            except Exception as e:
+                logger.warning(f'delete_pattern 不支持或失败: {e}')
+            return Response({'encrypt': True, 'data': encrypt_data({
+                'success': True, 'message': '发票识别缓存已清除，修改立即生效', 'deleted': deleted or 0})})
+        except Exception as e:
+            logger.error(f'清除发票识别缓存失败: {e}')
+            return Response({'error': f'清除发票识别缓存失败: {str(e)}'}, status=500)

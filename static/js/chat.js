@@ -173,6 +173,16 @@ class VersionManager {
         const isCritical = updateInfo.forceUpdate || updateInfo.appUpdated;
         this.updateBanner.classList.add(isCritical ? 'critical' : 'minor');
 
+        // 🔧 版本更新日志折叠：默认只显示前 2 条，其余收起，点击「查看全部/收起」展开/折叠
+        const logLines = String(updateInfo.updateMessage || '').split('<br>').map(l => l.trim()).filter(Boolean);
+        const previewLines = logLines.slice(0, 2);
+        const moreLines = logLines.slice(2);
+        let descHtml = '<div class="update-desc">' + (previewLines.join('<br>') || (updateInfo.updateMessage || '')) + '</div>';
+        if (moreLines.length) {
+            descHtml += '<button class="update-log-toggle" id="updateLogToggle"><i class="fas fa-chevron-down"></i> 查看全部更新日志 (' + logLines.length + ')</button>'
+                + '<div class="update-log-full" id="updateLogFull" style="display:none;">' + moreLines.join('<br>') + '</div>';
+        }
+
         // 构建提示内容
         let content = `
             <div class="update-content">
@@ -183,9 +193,7 @@ class VersionManager {
                     <div class="update-title">
                         ${isCritical ? '重要更新' : '发现新版本'}
                     </div>
-                    <div class="update-desc">
-                        ${updateInfo.updateMessage}
-                    </div>
+                    ${descHtml}
                     ${updateInfo.latest.build_time ? `
                     <div class="update-time">
                         <small>版本: ${updateInfo.latest.static_version}</small>
@@ -225,6 +233,20 @@ class VersionManager {
 
         this.updateBanner.innerHTML = content;
         document.body.appendChild(this.updateBanner);
+
+        // 🔧 版本更新日志展开/收起
+        const logToggle = document.getElementById('updateLogToggle');
+        if (logToggle) {
+            logToggle.onclick = () => {
+                const full = document.getElementById('updateLogFull');
+                if (!full) return;
+                const isCollapsed = full.style.display === 'none';
+                full.style.display = isCollapsed ? 'block' : 'none';
+                logToggle.innerHTML = isCollapsed
+                    ? '<i class="fas fa-chevron-up"></i> 收起更新日志'
+                    : '<i class="fas fa-chevron-down"></i> 查看全部更新日志 (' + logLines.length + ')';
+            };
+        }
 
         // 绑定事件
         document.getElementById('updateNowBtn').onclick = () => {
@@ -1583,6 +1605,9 @@ class ChatClient {
                 call_duration: data.call_duration || 0,
                 call_type: data.call_type || null,
                 call_status: data.call_status || 'completed',
+                // 🔧 卡片数据（任务/审批）
+                task_data: data.task_data || null,
+                approval_data: data.approval_data || null,
                 is_temp: false
             };
             this.messages.push(fullMessage);
@@ -3013,6 +3038,56 @@ class ChatClient {
             </div>
         `;
 
+        container.innerHTML = cardHtml;
+    }
+
+    /**
+     * 🔧 渲染审批卡片到聊天室（审批发起人私聊发送给审批人，点击直达审批详情）
+     */
+    renderApprovalCardInChat(data, container) {
+        container.className = '';
+        if (!data || !data.approval_id) {
+            container.innerHTML = '<div class="message-text" style="color:#909399;"><i class="fas fa-clipboard-check"></i> [审批卡片]</div>';
+            return;
+        }
+
+        const statusText = data.status_display || '待审批';
+        const statusColors = {
+            'pending': '#E6A23C', 'approved': '#67C23A', 'rejected': '#F56C6C',
+            'cancelled': '#909399', 'deferred': '#909399', 'processing': '#409EFF'
+        };
+        const statusColor = statusColors[data.status] || '#909399';
+
+        const title = this.escapeHtml(data.title || '审批');
+        const typeName = this.escapeHtml(data.type_name || '');
+        const applicant = this.escapeHtml(data.applicant_name || '');
+        const amount = data.amount ? '¥' + this.escapeHtml(data.amount) : '';
+
+        const cardHtml = `
+            <div class="message-content message-left approval-card-message" data-approval-id="${data.approval_id}"
+                 onclick="window.open('/oa/approval/?approval_id=${data.approval_id}', '_blank')"
+                 style="max-width: 320px; padding: 0; overflow: hidden; border-radius: 8px; border: 1px solid #e4e7ed; background: #fff; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); cursor: pointer; transition: all 0.3s;">
+                <!-- 卡片头部 -->
+                <div style="padding: 12px 16px; gap: 8px; background: linear-gradient(135deg, #eef6ff 0%, #dbeafe 100%); border-bottom: 1px solid #e4e7ed; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: 600; color: #303133; font-size: 14px; display: flex; align-items: center; gap: 6px;">
+                        <i class="fas fa-clipboard-check" style="color: var(--primary-color, #409eff);"></i> ${typeName ? typeName + ' ' : ''}审批卡片
+                    </span>
+                    <span style="font-size: 10px; padding: 4px 8px; border-radius: 10px; color: #fff; background: ${statusColor}; white-space: nowrap;">${statusText}</span>
+                </div>
+                <!-- 卡片内容 -->
+                <div style="padding: 12px 16px;">
+                    <div style="font-size: 14px; color: #303133; margin-bottom: 8px; font-weight: 500; line-height: 1.4;">${title}</div>
+                    <div style="font-size: 12px; color: #909399; display: flex; flex-direction: column; gap: 4px;">
+                        <span title="发起人"><i class="fas fa-user-circle" style="width: 14px;"></i> ${applicant}</span>
+                        ${amount ? `<span title="金额"><i class="fas fa-yen-sign" style="width: 14px;"></i> ${amount}</span>` : ''}
+                    </div>
+                </div>
+                <!-- 卡片底部 -->
+                <div style="padding: 8px 16px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;">
+                    点击查看审批 <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
+                </div>
+            </div>
+        `;
         container.innerHTML = cardHtml;
     }
 
@@ -4841,6 +4916,24 @@ class ChatClient {
                         </div>
                     </div>
                 `;
+        } else if (message.message_type === 'approval_card') {
+            let appTitle = '';
+            let appType = '';
+            try {
+                const apData = typeof message.content === 'string' ? JSON.parse(message.content) : (message.approval_data || {});
+                appTitle = apData.title || apData.approval_id || '';
+                appType = apData.type_name || '';
+            } catch (e) {
+                appTitle = '';
+            }
+            previewContent = `
+                    <div class="forward-task-card-preview" title="审批卡片" style="padding:6px 8px;border-left:3px solid #409EFF;display:flex;align-items:center;gap:8px;">
+                        <div style="font-weight:500;font-size:13px;color:#303133;display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+                            <i class="fas fa-clipboard-check" style="color:#409EFF;"></i>
+                            <span>${this.escapeHtml(appType ? appType + ' · ' : '')}审批卡片${appTitle ? '：' + this.escapeHtml(appTitle) : ''}</span>
+                        </div>
+                    </div>
+                `;
         } else {
             previewContent = this.escapeHtml(message.content || '[未知类型]');
         }
@@ -5441,6 +5534,34 @@ class ChatClient {
                             </div>
                         </div>`;
 
+            // 🔧 新增：渲染被引用的审批卡片消息（迷你卡片风格）
+            case 'approval_card':
+                let qAppTitle = '';
+                let qAppType = '';
+                let qAppStatus = '';
+                try {
+                    const apData = (typeof content === 'string' && (content.startsWith('{') || content.startsWith('['))) ? JSON.parse(content) : (message?.approval_data || {});
+                    qAppTitle = apData.title || content || '[审批卡片]';
+                    qAppType = apData.type_name || '';
+                    qAppStatus = apData.status_display || '';
+                } catch (e) {
+                    qAppTitle = content || '[审批卡片]';
+                }
+                if (qAppTitle.length > 40) qAppTitle = qAppTitle.substring(0, 40) + '...';
+                return `<div class="quoted-file-link" style="padding: 6px 8px; border-left: 3px solid #409EFF; background: #f0f7ff; border-radius: 4px;"
+                             onclick="${getClickHandler()}"
+                             title="点击跳转到原消息">
+                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+                                <i class="fas fa-clipboard-check" style="color:#409EFF;font-size:12px;"></i>
+                                <span style="font-weight:500;font-size:12px;color:#303133;">${escape(qAppTitle)}</span>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#909399;">
+                                ${qAppType ? `<span style="background:#409EFF;color:#fff;padding:1px 6px;border-radius:8px;">${escape(qAppType)}</span>` : ''}
+                                ${qAppStatus ? `<span>${escape(qAppStatus)}</span>` : ''}
+                                <i class="fas fa-location-arrow" style="margin-left:auto;color:#ccc;"></i>
+                            </div>
+                        </div>`;
+
 
             case 'location':
                 return `<span class="quote-icon-wrapper"><i class="fas fa-map-marker-alt"></i> [位置]</span>`;
@@ -5661,6 +5782,25 @@ class ChatClient {
                 } catch (e) {
                     console.error('解析任务卡片数据失败', e);
                     container.innerHTML = '<div class="message-text" style="color:#909399;"><i class="fas fa-tasks"></i> [任务卡片]</div>';
+                }
+                break;
+            case 'approval_card':
+                try {
+                    // 🔧 从 content(JSON) 或 approval_data 获取审批数据
+                    let approvalData = message.approval_data || null;
+                    if (!approvalData && message.content) {
+                        try {
+                            const parsed = JSON.parse(message.content);
+                            if (parsed && parsed.approval_id !== undefined) {
+                                approvalData = parsed;
+                            }
+                        } catch (_) {
+                        }
+                    }
+                    this.renderApprovalCardInChat(approvalData, container);
+                } catch (e) {
+                    console.error('解析审批卡片数据失败', e);
+                    container.innerHTML = '<div class="message-text" style="color:#909399;"><i class="fas fa-clipboard-check"></i> [审批卡片]</div>';
                 }
                 break;
             default:
@@ -8475,14 +8615,16 @@ class ChatClient {
         this._chatKeyHandler = kh;
         document.addEventListener('keydown', kh);
 
-        // 🔧 触摸滑动：左右滑动切换图片（移动端）
+        // 🔧 触摸滑动：左右滑动切换图片（移动端）；双指捏合由 Utils.enableImagePinchZoom 处理
         var touchStartX = null, touchStartY = null, swiped = false;
         overlay.addEventListener('touchstart', function (e) {
+            if (e.touches.length >= 2) return;
             touchStartX = e.touches[0].clientX;
             touchStartY = e.touches[0].clientY;
             swiped = false;
         }, {passive: true});
         overlay.addEventListener('touchmove', function (e) {
+            if (e.touches.length >= 2) return;
             if (touchStartX !== null) {
                 var dx = e.touches[0].clientX - touchStartX;
                 var dy = e.touches[0].clientY - touchStartY;
@@ -8490,6 +8632,7 @@ class ChatClient {
             }
         }, {passive: true});
         overlay.addEventListener('touchend', function (e) {
+            if (e.changedTouches && e.changedTouches.length >= 2) { touchStartX = null; return; }
             if (touchStartX !== null) {
                 var endX = e.changedTouches[0].clientX;
                 var endY = e.changedTouches[0].clientY;
@@ -8511,8 +8654,10 @@ class ChatClient {
         });
         var mainImg = document.getElementById('chatMainImg');
         if (mainImg) {
+            Utils.enableImagePinchZoom(mainImg);
             mainImg.addEventListener('click', function (e) {
                 e.stopPropagation();
+                if (mainImg._pz && mainImg._pz.scale > 1.01) return;  // 缩放中不关闭
                 if (swiped) {
                     swiped = false;
                     return;
@@ -8541,6 +8686,7 @@ class ChatClient {
             var self = this;
             setTimeout(function () {
                 img.src = item.url;
+                Utils.resetImageZoom(img);
                 img.style.opacity = '1';
             }, 100);
         }
@@ -10972,15 +11118,6 @@ class ChatClient {
         const message = this.messages.find(m => m.id === messageId || m.message_id === messageId);
         if (!message) return;
 
-        // 获取当前聊天室成员用于指派
-        const room = this.chatRooms.find(r => r.id == this.currentRoomId);
-        const members = room?.members || [];
-
-        // 生成成员下拉选项，默认选中自己
-        const memberOptions = members.map(m =>
-            `<option value="${m.id}" ${m.id === this.currentUser.id ? 'selected' : ''}>${m.real_name || m.username}</option>`
-        ).join('');
-
         // 移除可能存在的旧模态框
         const oldModal = document.getElementById('taskConvertModal');
         if (oldModal) oldModal.remove();
@@ -11012,10 +11149,22 @@ class ChatClient {
                     <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                         <div class="form-group">
                             <label>指派给</label>
-                            <select id="taskConvertAssignee" class="form-control" style="padding-left: 12px;">
-                                <option value="">不指派</option>
-                                ${memberOptions}
-                            </select>
+                            <div class="assignee-picker">
+                                <input type="hidden" id="taskConvertAssigneeId" value="">
+                                <div class="assignee-selected" id="taskConvertAssigneeSelected" style="display:none;">
+                                    <img id="taskConvertAssigneeAvatar" class="assignee-avatar" src="/static/images/default-avatar.png" alt="头像">
+                                    <div class="assignee-info">
+                                        <div class="assignee-name" id="taskConvertAssigneeName"></div>
+                                        <div class="assignee-meta" id="taskConvertAssigneeMeta"></div>
+                                    </div>
+                                    <button type="button" class="assignee-clear" title="取消选择" onclick="chatClient.clearConvertAssignee(event)">&times;</button>
+                                </div>
+                                <div class="assignee-search">
+                                    <i class="fas fa-search"></i>
+                                    <input type="text" id="taskConvertAssigneeSearchInput" class="form-control" placeholder="输入姓名/账号/部门/职位搜索用户...">
+                                </div>
+                                <div class="assignee-dropdown" id="taskConvertAssigneeDropdown"></div>
+                            </div>
                         </div>
                         <div class="form-group">
                             <label>截止日期</label>
@@ -11040,7 +11189,136 @@ class ChatClient {
     `;
 
         document.body.insertAdjacentHTML('beforeend', modalHtml);
+        this.initTaskConvertPicker();
         this.hideContextMenu();
+    }
+
+    /**
+     * 🔧 执行人搜索选择器初始化（消息转任务）
+     */
+    initTaskConvertPicker() {
+        const input = document.getElementById('taskConvertAssigneeSearchInput');
+        const dropdown = document.getElementById('taskConvertAssigneeDropdown');
+        if (!input || !dropdown) return;
+        let debounceTimer = null;
+        input.addEventListener('input', () => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => this.searchConvertAssignees(), 250);
+        });
+        input.addEventListener('focus', () => { if (input.value.trim()) this.searchConvertAssignees(); });
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); this.searchConvertAssignees(); }
+        });
+        // 点击选择器外部关闭下拉
+        document.addEventListener('click', (e) => {
+            if (dropdown.style.display !== 'none' && !document.querySelector('#taskConvertModal .assignee-picker')?.contains(e.target)) {
+                dropdown.style.display = 'none';
+            }
+        });
+        // 模态框内滚动/窗口缩放时关闭下拉，避免位置错乱
+        const modal = document.getElementById('taskConvertModal');
+        if (modal) modal.addEventListener('scroll', () => { dropdown.style.display = 'none'; }, true);
+        window.addEventListener('resize', () => { dropdown.style.display = 'none'; });
+        // 不默认指派任何人，交由用户搜索选择
+    }
+
+    async searchConvertAssignees() {
+        const input = document.getElementById('taskConvertAssigneeSearchInput');
+        const dropdown = document.getElementById('taskConvertAssigneeDropdown');
+        if (!input || !dropdown) return;
+        const q = input.value.trim();
+        try {
+            const res = await fetch(`/api/auth/search_assignees/?q=${encodeURIComponent(q)}`, { headers: TokenManager.getHeaders() });
+            if (res.status === 401) { this.handleAuthError(); return; }
+            if (!res.ok) return;
+            const data = await res.json();
+            this.renderConvertAssigneeDropdown(data.results || []);
+        } catch (e) { console.error('搜索执行人失败', e); }
+    }
+
+    renderConvertAssigneeDropdown(results) {
+        const dropdown = document.getElementById('taskConvertAssigneeDropdown');
+        if (!dropdown) return;
+        this.convertAssigneeResults = results;
+        if (!results.length) {
+            dropdown.innerHTML = '<div class="assignee-empty">未找到匹配的用户</div>';
+            this._positionConvertDropdown();
+            return;
+        }
+        dropdown.innerHTML = results.map((u, i) => {
+            const name = this.escapeHtml(u.real_name || u.username);
+            const dept = u.department_info ? this.escapeHtml(u.department_info.name || '') : '';
+            const pos = this.escapeHtml(u.position || '');
+            const meta = [dept, pos].filter(Boolean).join(' · ');
+            const avatar = u.avatar_url || '/static/images/default-avatar.png';
+            return `<div class="assignee-option" onclick="chatClient.selectConvertAssigneeByIndex(${i})">
+                <img class="assignee-avatar" src="${this.escapeHtml(avatar)}" alt="头像">
+                <div class="assignee-info">
+                    <div class="assignee-name">${name}</div>
+                    ${meta ? `<div class="assignee-meta">${meta}</div>` : ''}
+                </div>
+            </div>`;
+        }).join('');
+        this._positionConvertDropdown();
+    }
+
+    /**
+     * 🔧 固定定位下拉：依据输入框实时坐标定位，避免被模态框 overflow 裁剪
+     */
+    _positionConvertDropdown() {
+        const input = document.getElementById('taskConvertAssigneeSearchInput');
+        const dropdown = document.getElementById('taskConvertAssigneeDropdown');
+        if (!input || !dropdown) return;
+        const rect = input.getBoundingClientRect();
+        const maxH = 260;
+        const spaceBelow = window.innerHeight - rect.bottom - 8;
+        let top;
+        let maxHeight;
+        if (spaceBelow >= 140) {
+            top = rect.bottom + 4;
+            maxHeight = Math.min(maxH, spaceBelow);
+        } else {
+            maxHeight = Math.min(maxH, rect.top - 8);
+            top = rect.top - maxHeight;
+        }
+        dropdown.style.top = top + 'px';
+        dropdown.style.left = rect.left + 'px';
+        dropdown.style.width = rect.width + 'px';
+        dropdown.style.maxHeight = maxHeight + 'px';
+        dropdown.style.display = 'block';
+    }
+
+    selectConvertAssigneeByIndex(i) {
+        const u = this.convertAssigneeResults[i];
+        if (u) this.setConvertAssignee(u);
+    }
+
+    setConvertAssignee(u) {
+        if (!u || !u.id) return;
+        document.getElementById('taskConvertAssigneeId').value = u.id;
+        const selected = document.getElementById('taskConvertAssigneeSelected');
+        const avatar = document.getElementById('taskConvertAssigneeAvatar');
+        const nameEl = document.getElementById('taskConvertAssigneeName');
+        const metaEl = document.getElementById('taskConvertAssigneeMeta');
+        const input = document.getElementById('taskConvertAssigneeSearchInput');
+        const dropdown = document.getElementById('taskConvertAssigneeDropdown');
+        if (avatar) avatar.src = u.avatar_url || '/static/images/default-avatar.png';
+        if (nameEl) nameEl.textContent = u.real_name || u.username;
+        if (metaEl) {
+            const dept = u.department_info ? (u.department_info.name || '') : '';
+            const pos = u.position || '';
+            metaEl.textContent = [dept, pos].filter(Boolean).join(' · ');
+        }
+        if (selected) selected.style.display = 'flex';
+        if (input) input.value = '';
+        if (dropdown) dropdown.style.display = 'none';
+    }
+
+    clearConvertAssignee(event) {
+        if (event) event.stopPropagation();
+        document.getElementById('taskConvertAssigneeId').value = '';
+        const selected = document.getElementById('taskConvertAssigneeSelected');
+        if (selected) selected.style.display = 'none';
     }
 
     /**
@@ -11049,7 +11327,7 @@ class ChatClient {
     async submitConvertTask(messageId) {
         const title = document.getElementById('taskConvertTitle').value.trim();
         const desc = document.getElementById('taskConvertDesc').value.trim();
-        const assigneeId = document.getElementById('taskConvertAssignee').value;
+        const assigneeId = document.getElementById('taskConvertAssigneeId').value;
         const dueDate = document.getElementById('taskConvertDueDate').value;
 
         if (!title) {
@@ -11560,8 +11838,10 @@ class ChatClient {
             console.error('录音失败:', error);
 
             let errorMessage = '录音失败';
-            if (error.name === 'NotAllowedError') {
-                errorMessage = '麦克风权限被拒绝，请在浏览器设置中允许访问麦克风';
+            if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                errorMessage = '麦克风权限被拒绝';
+                // 引导用户去系统设置开启麦克风权限（移动端 PWA 友好提示）
+                if (window.PermUtils) PermUtils.showPermissionGuide('microphone', '录音需要麦克风权限。');
             } else if (error.name === 'NotFoundError') {
                 errorMessage = '未检测到麦克风设备，请检查设备连接';
             } else if (error.name === 'NotReadableError') {

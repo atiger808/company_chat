@@ -367,6 +367,14 @@ class SubsidyPayApp {
             const data = await this.apiGet(SUBSIDY_API + '/withdrawals/all/?' + parts.join('&') + '&page_size=1000');
             const list = data.results || [];
             if (!list.length) { this.showToast('暂无数据可打印', true); return; }
+            // 🔧 打印留痕 + 「允许打印」权限门：无权限则拦截
+            const printRes = (window.WatermarkManager && WatermarkManager.reportPrint)
+                ? await WatermarkManager.reportPrint({page: 'subsidy_pay', target_type: 'subsidy_withdrawal', count: list.length})
+                : {allowed: true};
+            if (printRes && printRes.allowed === false) {
+                this.showToast('您没有打印权限，请联系管理员开通', true);
+                return;
+            }
             const now = new Date();
             const dateStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0')
                 + ' ' + String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
@@ -412,6 +420,12 @@ class SubsidyPayApp {
                 + '<button onclick="window.close()" style="padding:8px 24px;background:#fff;color:#606266;border:1px solid #dcdfe6;border-radius:6px;cursor:pointer;font-size:14px;">返回 / 关闭</button>'
                 + '</div></body></html>');
             win.document.close();
+            // 🔧 打印默认叠加水印（由管理控制台「打印时添加水印」开关控制）
+            const wm = (window.WatermarkManager && WatermarkManager.buildPrintWatermark) ? WatermarkManager.buildPrintWatermark() : null;
+            if (wm) {
+                if (win.document.head) win.document.head.insertAdjacentHTML('beforeend', '<style>' + wm.css + '</style>');
+                if (win.document.body) win.document.body.insertAdjacentHTML('beforeend', wm.html);
+            }
         } catch (e) {
             this.showToast((e && e.message) || '打印失败', true);
         }
@@ -486,6 +500,8 @@ class SubsidyPayApp {
             ];
             if (p.payee_name) lines.push(['收款人', p.payee_name]);
             if (p.bank_card) lines.push(['银行卡号', p.bank_card]);
+            if (p.bank_name) lines.push(['开户银行', p.bank_name]);
+            if (p.bank_address) lines.push(['开户银行地址', p.bank_address]);
             if (p.alipay_account) lines.push(['支付宝账号', p.alipay_account]);
             if (p.wechat_account) lines.push(['微信账号', p.wechat_account]);
             let leftHtml = '<div style="font-size:13px;font-weight:600;color:#16a085;margin-bottom:8px;"><i class="fas fa-clipboard-list"></i> 提现信息</div>';
@@ -561,6 +577,8 @@ class SubsidyPayApp {
                 payee = '<div style="font-size:13px;line-height:1.8;">'
                     + (p.payee_name ? '<div><span style="color:#909399;">收款人：</span><b>' + this._escape(p.payee_name) + '</b></div>' : '')
                     + (p.bank_card ? '<div><span style="color:#909399;">银行卡号：</span>' + this._escape(p.bank_card) + '</div>' : '')
+                    + (p.bank_name ? '<div><span style="color:#909399;">开户银行：</span>' + this._escape(p.bank_name) + '</div>' : '')
+                    + (p.bank_address ? '<div><span style="color:#909399;">开户银行地址：</span>' + this._escape(p.bank_address) + '</div>' : '')
                     + (p.alipay_account ? '<div><span style="color:#909399;">支付宝账号：</span>' + this._escape(p.alipay_account) + '</div>' : '')
                     + (p.wechat_account ? '<div><span style="color:#909399;">微信账号：</span>' + this._escape(p.wechat_account) + '</div>' : '')
                     + '</div>';
@@ -769,6 +787,7 @@ class SubsidyPayApp {
         document.getElementById('subsidyTaxRateThreshold').value = '6';
         document.getElementById('subsidyMinWithdrawAmount').value = '0';
         document.getElementById('subsidyDefaultOcrVersion').value = 'baidu_vat';
+        document.getElementById('subsidyOcrCacheTtl').value = '604800';
         document.getElementById('subsidyInvoiceVerifyEnabled').checked = false;
         var ihIds = ['ihName', 'ihTaxNo', 'ihAddress', 'ihPhone', 'ihBank', 'ihBankAccount', 'ihBankName', 'ihCompanyName', 'ihCompanyTaxNo'];
         ihIds.forEach(function (id) { var el = document.getElementById(id); if (el) el.value = ''; });
@@ -930,6 +949,7 @@ class SubsidyPayApp {
         document.getElementById('subsidyTaxRateThreshold').value = cfg.tax_rate_threshold != null ? (parseFloat(cfg.tax_rate_threshold) * 100) : 6;
         document.getElementById('subsidyMinWithdrawAmount').value = cfg.min_withdraw_amount != null ? cfg.min_withdraw_amount : 0;
         document.getElementById('subsidyDefaultOcrVersion').value = cfg.default_ocr_version || 'baidu_vat';
+        document.getElementById('subsidyOcrCacheTtl').value = cfg.ocr_cache_ttl != null ? cfg.ocr_cache_ttl : 604800;
         document.getElementById('subsidyInvoiceVerifyEnabled').checked = !!cfg.invoice_verify_enabled;
         var ihMap = {
             ihName: 'invoice_header_name', ihTaxNo: 'invoice_header_tax_no', ihAddress: 'invoice_header_address',
@@ -1063,6 +1083,7 @@ class SubsidyPayApp {
             tax_rate_threshold: (taxRatePct / 100).toFixed(5),
             min_withdraw_amount: minWd.toFixed(2),
             default_ocr_version: document.getElementById('subsidyDefaultOcrVersion').value,
+            ocr_cache_ttl: parseInt(document.getElementById('subsidyOcrCacheTtl') ? (document.getElementById('subsidyOcrCacheTtl').value || 604800) : 604800),
             invoice_verify_enabled: document.getElementById('subsidyInvoiceVerifyEnabled').checked,
             verifier_ids: this._verifierValues.map(function (v) { return v.id; }),
             payment_staff_ids: (this._payStaffValues || []).map(function (v) { return v.id; }),
@@ -1087,6 +1108,17 @@ class SubsidyPayApp {
             this._loadAccount();
         } catch (e) {
             this.showToast('保存失败：' + e.message, true);
+        }
+    }
+
+    // 清除发票识别缓存（修改识别版本/税率阈值后立即生效）
+    async _clearOcrCache() {
+        if (!confirm('确定清除全部发票识别缓存吗？清除后下次识别将重新进行（修改的识别版本/税率阈值立即生效）。')) return;
+        try {
+            const res = await this.apiPost(SUBSIDY_API + '/clear-ocr-cache/', {});
+            this.showToast((res && res.message) || '发票识别缓存已清除', false);
+        } catch (e) {
+            this.showToast('清除失败：' + e.message, true);
         }
     }
 

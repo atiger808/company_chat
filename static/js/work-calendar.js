@@ -7,6 +7,8 @@ class WorkCalendarApp {
         this._year = new Date().getFullYear();
         this._month = new Date().getMonth() + 1;
         this._isSuperAdmin = localStorage.getItem('user_type') === 'super_admin';
+        this._targetUserId = null;
+        this._rangeDays = '30';
         this._init();
     }
 
@@ -20,8 +22,35 @@ class WorkCalendarApp {
         if (this._isSuperAdmin) {
             const bar = document.getElementById('wcAdminBar');
             if (bar) { bar.style.display = 'flex'; }
+            const mbar = document.getElementById('wcMemberBar');
+            if (mbar) { mbar.style.display = 'flex'; }
         }
         this.loadMonth(this._year, this._month);
+        this._loadAllCharts();
+    }
+
+    _targetParam() {
+        return this._targetUserId ? '&user_id=' + this._targetUserId : '';
+    }
+
+    _rangeParams() {
+        var now = new Date();
+        var start, end;
+        if (this._rangeDays === 'custom') {
+            start = document.getElementById('wcStatStart') ? document.getElementById('wcStatStart').value : '';
+            end = document.getElementById('wcStatEnd') ? document.getElementById('wcStatEnd').value : '';
+            if (!start || !end) return null;
+        } else {
+            var days = parseInt(this._rangeDays) || 30;
+            var s = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1));
+            start = this._fmtDate(s);
+            end = this._fmtDate(now);
+        }
+        return 'start=' + start + '&end=' + end;
+    }
+
+    _fmtDate(d) {
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     }
 
     // ===== API 封装 =====
@@ -72,12 +101,23 @@ class WorkCalendarApp {
         const el = document.getElementById('wcYearMonth');
         if (el) el.textContent = year + '年' + month + '月';
         try {
-            const d = await this.apiGet(WC_API + '/?year=' + year + '&month=' + month);
+            const d = await this.apiGet(WC_API + '/?year=' + year + '&month=' + month + this._targetParam());
             if (!d) return;
             this._renderPending(d.pending || {});
             this._renderCalendar(d.days || {}, year, month);
+            this._renderMemberTitle(d.target_user);
         } catch (e) {
             this.showToast('加载工作日历失败', true);
+        }
+    }
+
+    _renderMemberTitle(target) {
+        var titleEl = document.getElementById('wcTitle');
+        if (!titleEl) return;
+        if (this._targetUserId && target) {
+            titleEl.innerHTML = '<i class="fas fa-tasks" style="color:#409eff;"></i> ' + this._escape(target.name || '') + ' 的工作汇总';
+        } else {
+            titleEl.innerHTML = '<i class="fas fa-tasks" style="color:#409eff;"></i> 工作汇总';
         }
     }
 
@@ -119,7 +159,9 @@ class WorkCalendarApp {
                 [info.invoices, '补', '#e6a23c'],
                 [info.withdrawals, '提', '#16a085'],
                 [info.tasks, '任', '#f56c6c'],
-                [info.docs, '文', '#9b59b6']
+                [info.docs, '文', '#9b59b6'],
+                [info.cloud, '云', '#00a1ff'],
+                [info.org, '组', '#2f9e44']
             ];
             badgeMap.forEach(function (b) {
                 if (b[0] > 0) badges += '<span class="wc-cal-badge" style="background:' + b[2] + ';">' + b[1] + '</span>';
@@ -161,7 +203,7 @@ class WorkCalendarApp {
     // ===== 某日详情 =====
     async showDay(dateStr) {
         try {
-            const d = await this.apiGet(WC_API + '/day/?date=' + encodeURIComponent(dateStr));
+            const d = await this.apiGet(WC_API + '/day/?date=' + encodeURIComponent(dateStr) + this._targetParam());
             if (!d) return;
             const title = document.getElementById('wcDayTitle');
             if (title) title.textContent = dateStr + ' 工作汇总';
@@ -185,7 +227,8 @@ class WorkCalendarApp {
                 body.innerHTML = events.map(function (e) {
                     const iconBg = {
                         approval: ['#ecf5ff', '#409eff'], subsidy: ['#e8f8f0', '#16a085'],
-                        task: ['#fdf6ec', '#e6a23c'], doc: ['#f3e8ff', '#9b59b6'], attendance: ['#f0f9eb', '#67c23a']
+                        task: ['#fdf6ec', '#e6a23c'], doc: ['#f3e8ff', '#9b59b6'], attendance: ['#f0f9eb', '#67c23a'],
+                        cloud: ['#e3f4ff', '#00a1ff'], org: ['#e7f5ea', '#2f9e44']
                     }[e.type] || ['#f0f2f5', '#909399'];
                     return '<div class="wc-event" onclick="window.location.href=\'' + this._escape(e.url || '#') + '\'">'
                         + '<div class="wc-event-icon" style="background:' + iconBg[0] + ';color:' + iconBg[1] + ';"><i class="' + this._escape(e.icon || 'fas fa-circle') + '"></i></div>'
@@ -205,6 +248,225 @@ class WorkCalendarApp {
     _closeDayModal() {
         const modal = document.getElementById('wcDayModal');
         if (modal) { modal.classList.remove('show'); setTimeout(function () { modal.style.display = 'none'; }, 150); }
+    }
+
+    // ===== 工作统计图表 =====
+    _setRange(days) {
+        this._rangeDays = days;
+        document.querySelectorAll('.wc-range-btn').forEach(function (b) {
+            b.classList.toggle('active', b.getAttribute('data-range') === days);
+        });
+        this._loadAllCharts();
+    }
+    _onCustomRange() {
+        this._rangeDays = 'custom';
+        document.querySelectorAll('.wc-range-btn').forEach(function (b) { b.classList.remove('active'); });
+        this._loadAllCharts();
+    }
+    _loadAllCharts() {
+        var params = this._rangeParams();
+        if (!params) return;
+        params += this._targetParam();
+        this._loadStats(params);
+        this._loadEfficiency(params);
+        this._loadLeaderboard(params);
+    }
+    async _loadStats(params) {
+        var wrap = document.getElementById('wcStatsChart');
+        var empty = document.getElementById('wcStatsEmpty');
+        if (!wrap) return;
+        try {
+            const d = await this.apiGet(WC_API + '/stats/?' + params);
+            if (!d) return;
+            var total = 0;
+            (d.approvals || []).forEach(function (n) { total += n; });
+            (d.invoices || []).forEach(function (n) { total += n; });
+            (d.withdrawals || []).forEach(function (n) { total += n; });
+            (d.tasks || []).forEach(function (n) { total += n; });
+            if (total <= 0) {
+                wrap.style.display = 'none';
+                if (empty) empty.style.display = 'block';
+                return;
+            }
+            wrap.style.display = 'block';
+            if (empty) empty.style.display = 'none';
+            if (!window.echarts) { wrap.innerHTML = '<div style="text-align:center;color:#909399;padding:60px 0;">图表组件加载失败</div>'; return; }
+            if (!this._statsChart) this._statsChart = echarts.init(wrap);
+            this._statsChart.setOption({
+                tooltip: {trigger: 'axis'},
+                legend: {data: ['审批', '核验发票', '支付提现', '任务'], textStyle: {color: '#909399'}},
+                grid: {left: 40, right: 16, top: 36, bottom: 28},
+                xAxis: {type: 'category', data: d.labels || [], axisLabel: {color: '#909399'}},
+                yAxis: {type: 'value', minInterval: 1, axisLabel: {color: '#909399'}},
+                series: [
+                    {name: '审批', type: 'line', smooth: true, data: d.approvals, itemStyle: {color: '#409eff'}},
+                    {name: '核验发票', type: 'line', smooth: true, data: d.invoices, itemStyle: {color: '#e6a23c'}},
+                    {name: '支付提现', type: 'line', smooth: true, data: d.withdrawals, itemStyle: {color: '#16a085'}},
+                    {name: '任务', type: 'line', smooth: true, data: d.tasks, itemStyle: {color: '#f56c6c'}}
+                ]
+            });
+            this._statsChart.resize();
+        } catch (e) {
+            this.showToast('加载工作统计失败', true);
+        }
+    }
+    async _loadEfficiency(params) {
+        var wrap = document.getElementById('wcEffChart');
+        var empty = document.getElementById('wcEffEmpty');
+        var summaryEl = document.getElementById('wcEffSummary');
+        if (!wrap) return;
+        try {
+            const d = await this.apiGet(WC_API + '/approval-efficiency/?' + params);
+            if (!d) return;
+            if (summaryEl) {
+                summaryEl.innerHTML = '<span>共 <b style="color:#409eff;">' + (d.count || 0) + '</b> 次审批</span>'
+                    + '<span>平均用时 <b style="color:#e6a23c;">' + this._fmtDur(d.avg_minutes) + '</b></span>'
+                    + '<span>最长用时 <b style="color:#f56c6c;">' + this._fmtDur(d.max_minutes) + '</b></span>';
+            }
+            var items = d.items || [];
+            if (!items.length) {
+                wrap.style.display = 'none';
+                if (empty) empty.style.display = 'block';
+                return;
+            }
+            wrap.style.display = 'block';
+            if (empty) empty.style.display = 'none';
+            if (!window.echarts) { wrap.innerHTML = '<div style="text-align:center;color:#909399;padding:40px 0;">图表组件加载失败</div>'; return; }
+            if (!this._effChart) this._effChart = echarts.init(wrap);
+            var list = items.slice(-20);
+            var avg = d.avg_minutes || 0;
+            this._effChart.setOption({
+                tooltip: {trigger: 'axis', formatter: function (ps) {
+                    var i = ps[0].dataIndex;
+                    var it = list[i];
+                    var ap = it.applicant || {};
+                    return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">'
+                        + '<img src="' + this._escape(ap.avatar || '/static/images/default-avatar.png') + '" style="width:26px;height:26px;border-radius:50%;object-fit:cover;">'
+                        + '<div><div style="font-weight:600;">' + this._escape(ap.name || '') + '</div>'
+                        + '<div style="font-size:11px;color:#909399;">' + this._escape([ap.department, ap.position].filter(Boolean).join(' · ')) + '</div></div></div>'
+                        + '<div style="font-weight:600;max-width:220px;word-break:break-all;">' + this._escape(it.title) + '</div>'
+                        + '<div>到达 ' + this._escape(Utils.formatDateTime(it.arrival)) + ' → 通过 ' + this._escape(Utils.formatDateTime(it.approved_at)) + '</div>'
+                        + '<div>用时：' + this._fmtDur(it.minutes) + '</div>';
+                }.bind(this)},
+                grid: {left: 44, right: 16, top: 24, bottom: 90},
+                xAxis: {type: 'category', data: list.map(function (it) { return it.title.length > 12 ? it.title.substring(0, 12) + '…' : it.title; }), axisLabel: {color: '#909399', rotate: 30, fontSize: 10}},
+                yAxis: {type: 'value', name: '分钟', nameTextStyle: {color: '#909399'}, axisLabel: {color: '#909399'}},
+                series: [{name: '审批用时', type: 'bar', barMaxWidth: 28, data: list.map(function (it) { return it.minutes; }), itemStyle: {color: function (p) { return p.value >= avg ? '#e6a23c' : '#409eff'; }}}]
+            });
+            this._effChart.resize();
+        } catch (e) {
+            this.showToast('加载审批效率失败', true);
+        }
+    }
+    async _loadLeaderboard(params) {
+        var card = document.getElementById('wcLeaderboardCard');
+        if (!card) return;
+        if (!this._isSuperAdmin) { card.style.display = 'none'; return; }
+        var wrap = document.getElementById('wcLeaderboardChart');
+        var empty = document.getElementById('wcLeaderboardEmpty');
+        try {
+            const d = await this.apiGet(WC_API + '/approval-leaderboard/?' + params);
+            if (!d) return;
+            var results = d.results || [];
+            if (!results.length) {
+                if (wrap) wrap.style.display = 'none';
+                if (empty) empty.style.display = 'block';
+                return;
+            }
+            card.style.display = 'block';
+            if (wrap) wrap.style.display = 'block';
+            if (empty) empty.style.display = 'none';
+            if (!window.echarts) { if (wrap) wrap.innerHTML = '<div style="text-align:center;color:#909399;padding:40px 0;">图表组件加载失败</div>'; return; }
+            if (!this._leaderboardChart) this._leaderboardChart = echarts.init(wrap);
+            var names = results.map(function (r) { return r.name || ('#' + r.user_id); });
+            var avgs = results.map(function (r) { return r.avg_minutes; });
+            var self = this;
+            this._leaderboardChart.setOption({
+                tooltip: {trigger: 'axis', axisPointer: {type: 'shadow'}, formatter: function (ps) {
+                    var i = ps[0].dataIndex;
+                    var r = results[i];
+                    return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">'
+                        + '<img src="' + self._escape(r.avatar || '/static/images/default-avatar.png') + '" style="width:26px;height:26px;border-radius:50%;object-fit:cover;">'
+                        + '<div><div style="font-weight:600;">' + self._escape(r.name || '') + '</div>'
+                        + '<div style="font-size:11px;color:#909399;">' + self._escape([r.department, r.position].filter(Boolean).join(' · ')) + '</div></div></div>'
+                        + '<div>审批数量：<b>' + r.count + '</b> 次</div>'
+                        + '<div>总用时：' + self._fmtDur(r.total_minutes) + '</div>'
+                        + '<div>平均用时：' + self._fmtDur(r.avg_minutes) + '</div>';
+                }},
+                grid: {left: 90, right: 56, top: 20, bottom: 20},
+                xAxis: {type: 'value', name: '平均用时(分钟)', nameTextStyle: {color: '#909399'}, axisLabel: {color: '#909399'}},
+                yAxis: {type: 'category', inverse: true, data: names, axisLabel: {color: '#606266', fontSize: 12}},
+                series: [{name: '平均用时', type: 'bar', barMaxWidth: 22, data: avgs, itemStyle: {color: function (p) { return p.value >= 1440 ? '#f56c6c' : (p.value >= 60 ? '#e6a23c' : '#409eff'); }}, label: {show: true, position: 'right', color: '#909399', fontSize: 11, formatter: function (p) { var r = results[p.dataIndex]; return r.count + '次'; }}}]
+            });
+            this._leaderboardChart.resize();
+        } catch (e) {
+            this.showToast('加载审批效率排行榜失败', true);
+        }
+    }
+
+    _fmtDur(mins) {
+        if (mins == null) return '0分钟';
+        if (mins < 60) return mins + '分钟';
+        var h = Math.floor(mins / 60);
+        var m = mins % 60;
+        return h + '小时' + (m ? m + '分钟' : '');
+    }
+
+    // ===== 超管查看成员 =====
+    async _onMemberSearch(e) {
+        var kw = (e.target.value || '').trim();
+        var res = document.getElementById('wcMemberRes');
+        if (!res) return;
+        if (!kw) { res.style.display = 'none'; return; }
+        try {
+            var resp = await fetch('/api/oa/attendance/members/?search=' + encodeURIComponent(kw), {headers: TokenManager.getHeaders()});
+            if (!resp.ok) return;
+            var json = await resp.json();
+            var users = json.results || [];
+            this._memberSearchUsers = users;
+            var self = this;
+            res.innerHTML = users.length ? users.map(function (u) {
+                return '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;" onclick="wcApp._selectMember(' + u.id + ')">'
+                    + '<img src="' + (u.avatar || '/static/images/default-avatar.png') + '" style="width:26px;height:26px;border-radius:50%;object-fit:cover;">'
+                    + '<span style="flex:1;font-size:13px;">' + self._escape(u.name || '') + '</span>'
+                    + (u.department_name ? '<span style="font-size:11px;color:#909399;">' + self._escape(u.department_name) + '</span>' : '')
+                    + '</div>';
+            }).join('') : '<div style="padding:8px 12px;color:#909399;font-size:13px;">未找到成员</div>';
+            res.style.display = 'block';
+        } catch (err) {}
+    }
+    _selectMember(id) {
+        var u = null;
+        (this._memberSearchUsers || []).forEach(function (x) { if (String(x.id) === String(id)) u = x; });
+        if (!u) return;
+        this._targetUserId = u.id;
+        var search = document.getElementById('wcMemberSearch');
+        if (search) search.value = '';
+        var res = document.getElementById('wcMemberRes');
+        if (res) res.style.display = 'none';
+        var tag = document.getElementById('wcMemberTag');
+        if (tag) {
+            tag.innerHTML = '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#ecf5ff;border-radius:14px;font-size:12px;color:#409eff;">'
+                + (u.avatar ? '<img src="' + this._escape(u.avatar) + '" style="width:18px;height:18px;border-radius:50%;object-fit:cover;">' : '<i class="fas fa-user" style="font-size:10px;color:#409eff;"></i>')
+                + '<span>' + this._escape(u.name || ('#' + u.id)) + '</span>'
+                + (u.department_name ? '<span style="font-size:11px;color:#a0c4ff;">' + this._escape(u.department_name) + '</span>' : '')
+                + '</span>';
+        }
+        var clearBtn = document.getElementById('wcMemberClearBtn');
+        if (clearBtn) clearBtn.style.display = '';
+        this.loadMonth(this._year, this._month);
+        this._loadAllCharts();
+    }
+    _clearMember() {
+        this._targetUserId = null;
+        var tag = document.getElementById('wcMemberTag');
+        if (tag) tag.innerHTML = '';
+        var clearBtn = document.getElementById('wcMemberClearBtn');
+        if (clearBtn) clearBtn.style.display = 'none';
+        var search = document.getElementById('wcMemberSearch');
+        if (search) search.value = '';
+        this.loadMonth(this._year, this._month);
+        this._loadAllCharts();
     }
 
     // ===== 每日通知配置 =====
@@ -310,3 +572,8 @@ class WorkCalendarApp {
 
 const wcApp = new WorkCalendarApp();
 window.wcApp = wcApp;
+
+window.addEventListener('resize', function () {
+    if (wcApp._statsChart) wcApp._statsChart.resize();
+    if (wcApp._effChart) wcApp._effChart.resize();
+});

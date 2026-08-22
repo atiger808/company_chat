@@ -39,11 +39,12 @@ def _apply_tax_rate_type(result, threshold):
 @app.task(bind=True, max_retries=1, default_retry_delay=5,
           acks_late=True, time_limit=180, soft_time_limit=150)
 def subsidy_ocr_task(self, image_path, ocr_version='baidu_vat', cache_key=None, delete_after=False,
-                     tax_rate_threshold=0):
+                     tax_rate_threshold=0, ocr_cache_ttl=604800):
     """异步识别票据（图片/PDF），返回解析字段 dict；失败返回 {'error': ...}
     识别成功后将结果写入 Redis 缓存（键=票据MD5+OCR版本），避免重复识别。
     delete_after=True 时才清理文件（仅用于临时文件，MEDIA 票据文件不能删）。
-    tax_rate_threshold>0 时按税率判定发票类型（>=阈值→专用，否则普通）。"""
+    tax_rate_threshold>0 时按税率判定发票类型（>=阈值→专用，否则普通）。
+    ocr_cache_ttl 为发票识别缓存时间（秒），默认 7 天（604800）。"""
     image_data = None
     try:
         with open(image_path, 'rb') as f:
@@ -80,6 +81,9 @@ def subsidy_ocr_task(self, image_path, ocr_version='baidu_vat', cache_key=None, 
                             logger.info(f'invoice_number: {invoice_number} 长度为20，使用二维码扫描结果')
                         else:
                             logger.info(f'invoice_number: {invoice_number} 长度不为20，使用原始结果')
+                    else:
+                        logger.info(f'未扫描到二维码，使用原始结果')
+                        result['invoice_number'] = str(invoice_number)[:20]
                 except Exception as e:
                     logger.warning(f'二维码扫描失败: {e}')
 
@@ -95,10 +99,10 @@ def subsidy_ocr_task(self, image_path, ocr_version='baidu_vat', cache_key=None, 
         # 按税率阈值判定发票类型
         if tax_rate_threshold and tax_rate_threshold > 0:
             result = _apply_tax_rate_type(result, tax_rate_threshold)
-        # 写入缓存（7天），供后续同一票据+版本直接复用
+        # 写入缓存（按配置的缓存时间，默认 7 天），供后续同一票据+版本直接复用
         try:
             from django.core.cache import cache
-            cache.set(cache_key, result, timeout=7 * 24 * 3600)
+            cache.set(cache_key, result, timeout=int(ocr_cache_ttl or 604800))
         except Exception as e:
             logger.warning(f'写入OCR缓存失败: {e}')
         return result
@@ -209,23 +213,26 @@ def compute_user_work_summary(user, tenant=None):
         has_in = AttendanceRecord.objects.filter(user=user, date=today, clock_type='clock_in').exists()
         has_out = AttendanceRecord.objects.filter(user=user, date=today, clock_type='clock_out').exists()
         clock_in_limit, clock_out_start = time(9, 0), time(18, 0)
+        is_night = False
         try:
             from .views import AttendanceViewSet
             from org.models import UserDepartment
             primary = UserDepartment.objects.filter(user=user, is_primary=True).select_related('department').first()
-            cfg = AttendanceViewSet()._get_attendance_config(tenant, primary.department_id if primary else None)
+            cfg = AttendanceViewSet()._get_attendance_config(tenant, primary.department_id if primary else None, user)
             if cfg:
                 if cfg.clock_in_enabled and cfg.clock_in_time:
                     clock_in_limit = cfg.clock_in_time
                 if cfg.clock_out_enabled and cfg.clock_out_time:
                     clock_out_start = cfg.clock_out_time
+                is_night = cfg.shift_type == 'night'
         except Exception:
             pass
         # 上班未打卡：过了上班时间点仍未打卡
         if not has_in and now_time >= clock_in_limit:
             miss_clock_in = True
-        # 下班未打卡：过了下班时间点，且当日时间已过 23 点
-        if not has_out and now_time >= clock_out_start and now_time >= time(23, 0):
+        # 下班未打卡：过了下班时间点，且当日时间已过 23 点。
+        # 夜班下班打卡在次日凌晨，不做当日"忘记下班"提醒。
+        if not is_night and not has_out and now_time >= clock_out_start and now_time >= time(23, 0):
             miss_clock_out = True
 
     return {

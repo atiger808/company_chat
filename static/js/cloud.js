@@ -2147,14 +2147,16 @@ class CloudApp {
         this._cloudKeyHandler = kh;
         document.addEventListener('keydown', kh);
 
-        // 🔧 触摸滑动：左右滑动切换图片（移动端）
+        // 🔧 触摸滑动：左右滑动切换图片（移动端）；双指捏合由 Utils.enableImagePinchZoom 处理
         var touchStartX = null, touchStartY = null, swiped = false;
         overlay.addEventListener('touchstart', function(e) {
+            if (e.touches.length >= 2) return;
             touchStartX = e.touches[0].clientX;
             touchStartY = e.touches[0].clientY;
             swiped = false;
         }, {passive: true});
         overlay.addEventListener('touchmove', function(e) {
+            if (e.touches.length >= 2) return;
             if (touchStartX !== null) {
                 var dx = e.touches[0].clientX - touchStartX;
                 var dy = e.touches[0].clientY - touchStartY;
@@ -2162,6 +2164,7 @@ class CloudApp {
             }
         }, {passive: true});
         overlay.addEventListener('touchend', function(e) {
+            if (e.changedTouches && e.changedTouches.length >= 2) { touchStartX = null; return; }
             if (touchStartX !== null) {
                 var endX = e.changedTouches[0].clientX;
                 var endY = e.changedTouches[0].clientY;
@@ -2180,8 +2183,10 @@ class CloudApp {
         });
         var mainImg = document.getElementById('cloudImgMain');
         if (mainImg) {
+            Utils.enableImagePinchZoom(mainImg);
             mainImg.addEventListener('click', function(e) {
                 e.stopPropagation();
+                if (mainImg._pz && mainImg._pz.scale > 1.01) return;  // 缩放中不关闭
                 if (swiped) { swiped = false; return; }
                 self._cloudImgClose();
             });
@@ -2196,7 +2201,7 @@ class CloudApp {
         this._cloudImgIdx += dir;
         var img = document.getElementById('cloudImgMain');
         var item = this._cloudImgList[this._cloudImgIdx];
-        if (img) { img.style.opacity = '0'; var self = this; setTimeout(function() { img.src = item.url; img.style.opacity = '1'; }, 100); }
+        if (img) { img.style.opacity = '0'; var self = this; setTimeout(function() { img.src = item.url; Utils.resetImageZoom(img); img.style.opacity = '1'; }, 100); }
         var ct = document.getElementById('cloudImgCounter');
         if (ct) ct.textContent = (this._cloudImgIdx + 1) + ' / ' + this._cloudImgList.length;
         var p = document.getElementById('cloudImgPrev');
@@ -2226,9 +2231,33 @@ class CloudApp {
     }
 
     /**
+     * 校验企业操作权限（允许文件下载/允许公开分享 等），无权限时提示并返回 false
+     */
+    async checkOpPermission(perm, tip) {
+        try {
+            const token = localStorage.getItem('access_token');
+            if (!token) return true;
+            const response = await fetch(`/api/cloud/settings/effective-permission/?perm=${encodeURIComponent(perm)}`, {
+                headers: TokenManager.getHeaders()
+            });
+            if (!response.ok) return true; // 接口异常默认放行，避免影响正常操作
+            const data = await response.json();
+            if (data && data.allowed === false) {
+                this.showToast(tip || '您没有权限执行此操作', 'error');
+                return false;
+            }
+            return true;
+        } catch (e) {
+            return true;
+        }
+    }
+
+    /**
      * 下载文件
      */
     async downloadFile(fileId) {
+        // 🔧 允许文件下载权限校验
+        if (!(await this.checkOpPermission('allow_download', '您没有文件下载权限，请联系管理员开通'))) return;
         try {
             const response = await fetch(`/api/cloud/files/${fileId}/download/`, {
                 headers: TokenManager.getHeaders()
@@ -2316,6 +2345,8 @@ class CloudApp {
      * 🔧 下载文件夹（打包下载）
      */
     async downloadFolder(folderId, folderName) {
+        // 🔧 允许文件下载权限校验
+        if (!(await this.checkOpPermission('allow_download', '您没有文件下载权限，请联系管理员开通'))) return;
         const confirmed = await this.showConfirmDialog(
             '下载文件夹',
             `确定要下载文件夹"${folderName}"吗？文件夹将被打包为 ZIP 文件。`,
@@ -5174,6 +5205,8 @@ class CloudApp {
      * 🔧 分享文件/文件夹（支持文件夹）
      */
     async shareFile(fileId, isFolder = false, sourceName = '') {
+        // 🔧 允许公开分享权限校验
+        if (!(await this.checkOpPermission('allow_public_share', '您没有公开分享权限，请联系管理员开通'))) return;
         this.currentShareFileId = fileId;
         this.currentShareType = isFolder ? 'folder' : 'file';
 

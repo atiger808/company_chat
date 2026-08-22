@@ -368,6 +368,12 @@ class CustomUser(AbstractUser):
         verbose_name='头像',
         validators=[FileExtensionValidator(allowed_extensions=['jpg', 'jpeg', 'png', 'gif', 'webp'])]
     )
+    avatar_original = models.ImageField(
+        upload_to='avatars/original/',
+        blank=True,
+        null=True,
+        verbose_name='头像原图',
+    )
     gender = models.CharField(
         max_length=10,
         choices=GENDER_CHOICES,
@@ -380,6 +386,8 @@ class CustomUser(AbstractUser):
     # ============ 收款账号（普惠补贴发放用） ============
     payee_name = models.CharField(max_length=50, blank=True, default='', verbose_name='收款人真实姓名')
     bank_card = models.CharField(max_length=40, blank=True, default='', verbose_name='银行卡号')
+    bank_name = models.CharField(max_length=200, blank=True, default='', verbose_name='开户银行')
+    bank_address = models.CharField(max_length=300, blank=True, default='', verbose_name='开户银行地址')
     alipay_account = models.CharField(max_length=100, blank=True, default='', verbose_name='支付宝账号')
     wechat_account = models.CharField(max_length=100, blank=True, default='', verbose_name='微信账号')
     alipay_qr = models.CharField(max_length=500, blank=True, default='', verbose_name='支付宝收款码')

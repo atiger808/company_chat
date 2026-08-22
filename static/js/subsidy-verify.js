@@ -178,7 +178,10 @@ class SubsidyVerifyApp {
         try {
             const data = await this.apiGet(SUBSIDY_API + '/all/?' + this._adminQuery());
             this._renderAdmin(data);
-        } catch (e) { this.showToast('加载核验列表失败', true); }
+        } catch (e) {
+            console.log('加载核验列表失败:::', e)
+            this.showToast('加载核验列表失败', true);
+        }
     }
     _adminQuery() {
         const ps = document.getElementById('vPageSize');
@@ -319,6 +322,14 @@ class SubsidyVerifyApp {
             const data = await this.apiGet(SUBSIDY_API + '/all/?' + parts.join('&'));
             const list = data.results || [];
             if (!list.length) { this.showToast('暂无数据可打印', true); return; }
+            // 🔧 打印留痕 + 「允许打印」权限门：无权限则拦截
+            const printRes = (window.WatermarkManager && WatermarkManager.reportPrint)
+                ? await WatermarkManager.reportPrint({page: 'subsidy_verify', target_type: 'subsidy_application', count: list.length})
+                : {allowed: true};
+            if (printRes && printRes.allowed === false) {
+                this.showToast('您没有打印权限，请联系管理员开通', true);
+                return;
+            }
             const now = new Date();
             const dateStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0')
                 + ' ' + String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
@@ -366,6 +377,12 @@ class SubsidyVerifyApp {
                 + '<button onclick="window.close()" style="padding:8px 24px;background:#fff;color:#606266;border:1px solid #dcdfe6;border-radius:6px;cursor:pointer;font-size:14px;">返回 / 关闭</button>'
                 + '</div></body></html>');
             win.document.close();
+            // 🔧 打印默认叠加水印（由管理控制台「打印时添加水印」开关控制）
+            const wm = (window.WatermarkManager && WatermarkManager.buildPrintWatermark) ? WatermarkManager.buildPrintWatermark() : null;
+            if (wm) {
+                if (win.document.head) win.document.head.insertAdjacentHTML('beforeend', '<style>' + wm.css + '</style>');
+                if (win.document.body) win.document.body.insertAdjacentHTML('beforeend', wm.html);
+            }
         } catch (e) {
             this.showToast((e && e.message) || '打印失败', true);
         }
@@ -408,6 +425,7 @@ class SubsidyVerifyApp {
         if (!wrap) return;
         const page = data.page || 1;
         const totalPages = data.total_pages || 1;
+        this._adminTotalPages = totalPages;
         if (totalPages <= 1) { wrap.style.display = 'none'; return; }
         wrap.style.display = 'flex';
         let html = '<button class="pagination-btn" onclick="subsidyVerifyApp.loadAdmin(1)"' + (page <= 1 ? ' disabled' : '') + '><i class="fas fa-angle-double-left"></i></button>'
@@ -489,7 +507,7 @@ class SubsidyVerifyApp {
                 + '<div style="font-size:13px;font-weight:600;color:#409eff;"><i class="fas fa-file-invoice"></i> 票据原件</div>'
                 + '<div style="display:flex;gap:6px;">'
                 + (this._invoiceVerifyEnabled && r.invoice_file
-                    ? '<button class="btn btn-sm btn-secondary" id="vInvoiceVerifyBtn" style="font-size:12px;" onclick="subsidyVerifyApp._verifyInvoice(' + r.id + ')"><i class="fas fa-shield-alt"></i> 发票验真</button>'
+                    ? '<button class="btn btn-sm btn-secondary" id="vInvoiceVerifyBtn" style="font-size:12px;" onclick="subsidyVerifyApp._verifyInvoice(' + r.id + ')" title="（百度智能云提供核验）"><i class="fas fa-shield-alt"></i> 发票验真</button>'
                     : '')
                 + (r.invoice_file ? '<button class="btn btn-sm btn-primary" id="vQrScanBtn" style="font-size:12px;" onclick="subsidyVerifyApp._scanQr(' + r.id + ')"><i class="fas fa-qrcode"></i> 二维码扫描</button>' : '')
                 + '</div></div>';
@@ -545,9 +563,9 @@ class SubsidyVerifyApp {
                 const idx = this._adminRecordIds.indexOf(id);
                 if (idx !== -1) {
                     navHtml = '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 12px;background:linear-gradient(90deg,#ecf5ff,#f0f9eb);border-radius:8px;margin-bottom:12px;">'
-                        + '<button class="btn btn-sm btn-secondary" onclick="subsidyVerifyApp._navDetail(-1)"' + (idx === 0 ? ' disabled' : '') + '><i class="fas fa-chevron-left"></i> 上一条</button>'
+                        + '<button class="btn btn-sm btn-secondary" onclick="subsidyVerifyApp._navDetail(-1)"><i class="fas fa-chevron-left"></i> 上一条</button>'
                         + '<span style="font-size:13px;color:#606266;font-weight:600;">' + (idx + 1) + ' / ' + this._adminRecordIds.length + '</span>'
-                        + '<button class="btn btn-sm btn-secondary" onclick="subsidyVerifyApp._navDetail(1)"' + (idx === this._adminRecordIds.length - 1 ? ' disabled' : '') + '>下一条 <i class="fas fa-chevron-right"></i></button>'
+                        + '<button class="btn btn-sm btn-secondary" onclick="subsidyVerifyApp._navDetail(1)">下一条 <i class="fas fa-chevron-right"></i></button>'
                         + '</div>';
                 }
             }
@@ -744,12 +762,22 @@ class SubsidyVerifyApp {
         }
     }
 
-    // 详情模态框：上一条 / 下一条切换
+    // 详情模态框：上一条 / 下一条切换（到本页首/末条时给出提示，引导用户翻页）
     _navDetail(delta) {
         if (!this._adminRecordIds || !this._adminRecordIds.length) return;
         const idx = this._adminRecordIds.indexOf(this._detailId);
         if (idx === -1) return;
-        const next = this._adminRecordIds[(idx + delta + this._adminRecordIds.length) % this._adminRecordIds.length];
+        if (delta < 0 && idx === 0) {
+            const total = this._adminTotalPages || 1;
+            this.showToast('已经是本页第一条了，当前第 ' + this.adminPage + '/' + total + ' 页，如需查看更多请翻页', true);
+            return;
+        }
+        if (delta > 0 && idx === this._adminRecordIds.length - 1) {
+            const total = this._adminTotalPages || 1;
+            this.showToast('已经是本页最后一条了，当前第 ' + this.adminPage + '/' + total + ' 页，如需查看更多请翻页', true);
+            return;
+        }
+        const next = this._adminRecordIds[idx + delta];
         if (next == null) return;
         this._showDetail(next);
     }
@@ -782,12 +810,13 @@ class SubsidyVerifyApp {
         el.style.display = 'block';
         el.innerHTML = '<div style="border:1px solid ' + (ok ? '#67c23a' : '#f56c6c') + ';border-radius:8px;background:' + (ok ? '#f0f9eb' : '#fef0f0') + ';padding:9px 12px;font-size:12px;color:' + (ok ? '#67c23a' : '#f56c6c') + ';">'
             + '<i class="fas ' + (ok ? 'fa-check-circle' : 'fa-times-circle') + '" style="margin-right:4px;"></i>'
-            + this._escape(d.result_display || (ok ? '验真通过' : '验真失败'))
+            + this._escape(d.result_display || (ok ? '验真通过' : '验真失败')) + '（百度智能云提供核验）'
             + (d.message ? '<div style="margin-top:4px;color:#909399;">' + this._escape(d.message) + '</div>' : '')
             + (d.cached ? '<div style="margin-top:4px;color:#c0c4cc;font-size:11px;">（已验真，复用结果）</div>' : '')
             + '</div>';
         if (btn) {
             btn.disabled = true;
+            btn.title = '（百度智能云提供核验）'
             btn.innerHTML = '<i class="fas ' + (ok ? 'fa-check-circle' : 'fa-times-circle') + '"></i> ' + (ok ? '验真通过' : '验真失败');
         }
     }
@@ -934,6 +963,7 @@ class SubsidyVerifyApp {
         document.getElementById('subsidyTaxRateThreshold').value = '6';
         document.getElementById('subsidyMinWithdrawAmount').value = '0';
         document.getElementById('subsidyDefaultOcrVersion').value = 'baidu_vat';
+        document.getElementById('subsidyOcrCacheTtl').value = '604800';
         document.getElementById('subsidyInvoiceVerifyEnabled').checked = false;
         var ihIds = ['ihName', 'ihTaxNo', 'ihAddress', 'ihPhone', 'ihBank', 'ihBankAccount', 'ihBankName', 'ihCompanyName', 'ihCompanyTaxNo'];
         ihIds.forEach(function (id) { var el = document.getElementById(id); if (el) el.value = ''; });
@@ -1095,6 +1125,7 @@ class SubsidyVerifyApp {
         document.getElementById('subsidyTaxRateThreshold').value = cfg.tax_rate_threshold != null ? (parseFloat(cfg.tax_rate_threshold) * 100) : 6;
         document.getElementById('subsidyMinWithdrawAmount').value = cfg.min_withdraw_amount != null ? cfg.min_withdraw_amount : 0;
         document.getElementById('subsidyDefaultOcrVersion').value = cfg.default_ocr_version || 'baidu_vat';
+        document.getElementById('subsidyOcrCacheTtl').value = cfg.ocr_cache_ttl != null ? cfg.ocr_cache_ttl : 604800;
         document.getElementById('subsidyInvoiceVerifyEnabled').checked = !!cfg.invoice_verify_enabled;
         var ihMap = {
             ihName: 'invoice_header_name', ihTaxNo: 'invoice_header_tax_no', ihAddress: 'invoice_header_address',
@@ -1228,6 +1259,7 @@ class SubsidyVerifyApp {
             tax_rate_threshold: (taxRatePct / 100).toFixed(5),
             min_withdraw_amount: minWd.toFixed(2),
             default_ocr_version: document.getElementById('subsidyDefaultOcrVersion').value,
+            ocr_cache_ttl: parseInt(document.getElementById('subsidyOcrCacheTtl') ? (document.getElementById('subsidyOcrCacheTtl').value || 604800) : 604800),
             invoice_verify_enabled: document.getElementById('subsidyInvoiceVerifyEnabled').checked,
             verifier_ids: this._verifierValues.map(function (v) { return v.id; }),
             payment_staff_ids: (this._payStaffValues || []).map(function (v) { return v.id; }),
@@ -1252,6 +1284,18 @@ class SubsidyVerifyApp {
             this._loadAccount();
         } catch (e) {
             this.showToast('保存失败：' + e.message, true);
+        }
+    }
+
+    // 清除发票识别缓存（修改识别版本/税率阈值后立即生效）
+    async _clearOcrCache() {
+        const confirmed = await this.showConfirmDialog('清除发票识别缓存', '确定清除全部发票识别缓存吗？清除后下次识别将重新进行（修改的识别版本/税率阈值立即生效）。', 'danger');
+        if (!confirmed) return;
+        try {
+            const res = await this.apiPost(SUBSIDY_API + '/clear-ocr-cache/', {});
+            this.showToast((res && res.message) || '发票识别缓存已清除', false);
+        } catch (e) {
+            this.showToast('清除失败：' + e.message, true);
         }
     }
 

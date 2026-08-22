@@ -404,6 +404,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
 }
 
+.btn-clock-makeup {
+    background: #fff;
+    color: #409eff;
+    border: 2px solid #fff;
+    font-size: 16px;
+    padding: 12px 26px;
+}
+
+.btn-clock-makeup:hover:not(:disabled) {
+    background: #f0f7ff;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
 .btn-clock:disabled {
     opacity: 0.5;
     cursor: not-allowed;
@@ -413,6 +427,26 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .btn-clock.clocked {
     background: rgba(0, 0, 0, 0.2);
     border-color: transparent;
+}
+
+/* 班次徽标（白班/夜班） */
+.shift-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+    line-height: 1.4;
+}
+.shift-badge.day {
+    background: rgba(64, 158, 255, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+}
+.shift-badge.night {
+    background: rgba(155, 89, 182, 0.75);
+    border: 1px solid rgba(255, 255, 255, 0.4);
 }
 
 /* 考勤统计卡片 */
@@ -608,12 +642,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     min-width: 0;
 }
 
+/* 🔧 修复移动端长文案横向溢出：让 flex 子项可收缩并对长文本省略号截断 */
+.approval-item-left > div,
+.approval-item-left > div > div {
+    min-width: 0;
+}
+
 .approval-item-title {
     font-size: 15px;
     font-weight: 600;
     color: var(--text-primary, #303133);
     margin-bottom: 6px;
-    white-space: nowrap;
+    /*white-space: nowrap;*/
     overflow: hidden;
     text-overflow: ellipsis;
 }
@@ -630,6 +670,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     display: flex;
     align-items: center;
     gap: 4px;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.approval-item-meta span .type-icon-badge {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .approval-item-right {
@@ -1290,6 +1342,22 @@ input[type="date"].date-styled::-webkit-calendar-picker-indicator:hover {
 [data-theme="dark"] input[type="date"].date-styled {
     background: #2d2d2d;
     color-scheme: dark;
+}
+/* 日期/时间选择器（通用）：深色模式下原生选择器跟随系统渲染，保证日期时间可读 */
+[data-theme="dark"] input[type="date"],
+[data-theme="dark"] input[type="datetime-local"],
+[data-theme="dark"] input[type="time"] {
+    color-scheme: dark;
+    color: #e5eaf3;
+    background: #2d2d2d;
+    border-color: #444;
+}
+input[type="date"],
+input[type="datetime-local"],
+input[type="time"] {
+    color: var(--text-primary, #303133);
+    background: #fff;
+    min-height: 36px;
 }
 
 /* 审批类型图标徽章 */

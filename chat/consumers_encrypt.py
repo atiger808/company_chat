@@ -547,6 +547,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'quote_file_info': event.get('quote_file_info'),  # 🔧 新增
                 'call_duration': event.get('call_duration'),
                 'task_data': event.get('task_data'),
+                'approval_data': event.get('approval_data'),
             })
 
     # 👇 新增：处理任务更新事件

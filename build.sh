@@ -76,6 +76,7 @@ $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/oa/attendance.ht
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/oa/subsidy.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/oa/subsidy-pay.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/oa/subsidy-verify.html" ${VERSION}
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/oa/work-calendar.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/org/org.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/org/org_mobile.html" ${VERSION}
 

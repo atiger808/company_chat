@@ -51,7 +51,11 @@
         css += '[data-theme="dark"] .notif-dropdown { background:#1e1e1e; border-color:#333; }';
         css += '[data-theme="dark"] .notif-item.unread { background:#1a2740; }';
         css += '[data-theme="dark"] .notif-item.unread:hover { background:#1f3050; }';
+        css += '[data-theme="dark"] .notif-item:hover { background:#2a2a2a; }';
+        css += '[data-theme="dark"] .notif-dropdown-header { background:#1e1e1e; border-color:#333; }';
+        css += '[data-theme="dark"] .notif-dropdown-header h3 { color:#e5eaf3; }';
         css += '[data-theme="dark"] .notif-bell-wrap:hover { background:#2d2d2d; }';
+        css += '[data-theme="dark"] .notif-list::-webkit-scrollbar-thumb { background:#444; }';
         // 🔧 移动端：扩大「全部标为已读」按钮点击区域，并覆盖 chat.css 中 .btn-text{display:none}
         // （该规则本意是隐藏通话界面文字，误伤了通知头部按钮），确保移动端可见可点。
         css += '@media (max-width: 768px) { .notif-dropdown-header { padding:10px 14px; } .notif-dropdown-header .btn-text { display:inline-block !important; padding:6px 8px; } }';

@@ -8,7 +8,7 @@
 
 from django.conf import settings
 from rest_framework import serializers
-from .models import Folder, FolderCollaboration, CloudFile, UploadSession, FileShare, FileComment, FileOperationLog, FileVersion, CloudSystemConfig, UserOnlyOfficePermission
+from .models import Folder, FolderCollaboration, CloudFile, UploadSession, FileShare, FileComment, FileOperationLog, FileVersion, CloudSystemConfig, UserOnlyOfficePermission, UserCloudOperationPermission
 from accounts.models import CustomUser, Department
 from accounts.serializers import UserDetailSerializer
 from loguru import logger
@@ -828,4 +828,46 @@ class UserOnlyOfficePermissionSerializer(serializers.ModelSerializer):
                 'user': '该用户已存在权限配置，请使用更新接口'
             })
 
+        return super().create(validated_data)
+
+
+class UserCloudOperationPermissionSerializer(serializers.ModelSerializer):
+    """🔧 用户企业操作权限配置序列化器（允许打印/允许文件下载/允许公开分享）"""
+    user_info = serializers.SerializerMethodField()
+    permissions = serializers.SerializerMethodField()
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+
+    class Meta:
+        model = UserCloudOperationPermission
+        fields = [
+            'id', 'user', 'user_info', 'permissions',
+            'allow_print', 'allow_download', 'allow_public_share',
+            'is_active', 'description', 'created_at', 'updated_at',
+            'created_by', 'created_by_name',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
+
+    def get_user_info(self, obj):
+        """获取用户信息"""
+        return {
+            'id': obj.user.id,
+            'username': obj.user.username,
+            'real_name': obj.user.real_name or '',
+            'avatar': obj.user.get_avatar_url() if hasattr(obj.user, 'get_avatar_url') else '',
+        }
+
+    def get_permissions(self, obj):
+        """获取权限字典"""
+        return obj.get_permissions_dict()
+
+    def create(self, validated_data):
+        """创建时自动设置创建者，并校验用户唯一"""
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            validated_data['created_by'] = request.user
+        user = validated_data.get('user')
+        if UserCloudOperationPermission.objects.filter(user=user).exists():
+            raise serializers.ValidationError({
+                'user': '该用户已存在操作权限配置，请使用更新接口'
+            })
         return super().create(validated_data)

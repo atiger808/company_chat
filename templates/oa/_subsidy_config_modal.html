@@ -1,4 +1,9 @@
 <!-- 普惠补贴配置模态框（共享：普惠补贴/财务核验/财务支付 三页 include） -->
+<style>
+    /* 头部/底部固定，中间内容区滚动 */
+    #subsidyConfigModal .modal-content { display: flex; flex-direction: column; overflow: hidden; }
+    #subsidyConfigModal .modal-body { flex: 1; min-height: 0; overflow-y: auto; }
+</style>
 <div id="subsidyConfigModal" class="modal" style="display:none;">
     <div class="modal-content" style="max-width:820px;">
         <div class="modal-header">
@@ -137,6 +142,21 @@
                                 <option value="baidu_general">百度通用文字识别</option>
                             </select>
                             <div style="font-size:12px;color:#909399;margin-top:4px;">员工上传发票后自动识别所使用版本</div>
+                        </div>
+
+                        <!-- 发票识别缓存 -->
+                        <div class="form-group" style="margin-top:16px;">
+                            <label style="font-size:13px;font-weight:600;display:block;margin-bottom:8px;">
+                                <i class="fas fa-database" style="color:#409eff;"></i> 发票识别缓存
+                            </label>
+                            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                <input type="number" id="subsidyOcrCacheTtl" class="form-input" value="604800" min="60" step="60" style="width:180px;">
+                                <span style="font-size:12px;color:#909399;">秒（默认 604800=7 天）</span>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                                <button type="button" class="btn btn-danger btn-sm" onclick="subsidyConfigUI._clearOcrCache()"><i class="fas fa-broom"></i> 清除发票识别缓存</button>
+                                <span style="font-size:12px;color:#909399;">修改识别版本或税率阈值后点击清除，立即生效，无需等待缓存过期</span>
+                            </div>
                         </div>
 
                         <!-- 开启发票验真 -->

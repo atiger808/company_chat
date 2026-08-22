@@ -879,6 +879,10 @@ body.task-body {
     color: var(--text-primary);
 }
 
+
+
+
+
 /* ==================== 暗色主题 ==================== */
 [data-theme="dark"] {
     --bg-primary: #1e1e1e;
@@ -1074,3 +1078,193 @@ body.task-body {
 [data-theme="dark"] ::-webkit-scrollbar-track { background: #121212; }
 [data-theme="dark"] ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
 [data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: #555; }
+
+/* ===== 执行人搜索选择器 ===== */
+.assignee-picker { position: relative; }
+.assignee-selected {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--input-bg, #fff); border: 1px solid var(--border-color, #ddd);
+    border-radius: 8px; padding: 6px 10px; margin-bottom: 8px;
+}
+.assignee-avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+.assignee-info { flex: 1; min-width: 0; }
+.assignee-name { font-size: 14px; font-weight: 500; color: var(--text-primary, #333); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.assignee-meta { font-size: 12px; color: var(--text-secondary, #888); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.assignee-clear {
+    border: none; background: transparent; color: var(--text-secondary, #888);
+    font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px; flex-shrink: 0;
+}
+.assignee-clear:hover { color: var(--danger-color, #e74c3c); }
+.assignee-search { position: relative; }
+.assignee-search > i {
+    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    color: var(--text-secondary, #999); font-size: 14px; z-index: 1; pointer-events: none;
+}
+.assignee-search .form-control { padding-left: 34px !important; }
+.assignee-dropdown {
+    /* 固定定位：避免被模态框 overflow 裁剪，位置由 JS 依据输入框定位 */
+    position: fixed; top: 0; left: 0; z-index: 20000;
+    background: var(--input-bg, #fff); border: 1px solid var(--border-color, #ddd);
+    border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+    max-height: 260px; overflow-y: auto; display: none;
+}
+.assignee-option { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; }
+.assignee-option:hover { background: var(--hover-bg, #f5f5f5); }
+.assignee-option .assignee-avatar { width: 36px; height: 36px; }
+.assignee-empty { padding: 12px; text-align: center; color: var(--text-secondary, #999); font-size: 13px; }
+
+/* 深色主题 */
+[data-theme="dark"] .assignee-selected { background: #1e1e1e; border-color: #333; }
+[data-theme="dark"] .assignee-search > i { color: #777; }
+[data-theme="dark"] .assignee-dropdown { background: #1e1e1e; border-color: #333; }
+[data-theme="dark"] .assignee-option:hover { background: #2a2a2a; }
+[data-theme="dark"] .assignee-name { color: #eee; }
+[data-theme="dark"] .assignee-meta { color: #999; }
+
+/* ===== 任务中心提示对话框 ===== */
+.confirm-dialog {
+    display: flex;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 12000;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+.confirm-dialog.show {
+    opacity: 1;
+    visibility: visible;
+}
+.confirm-dialog-content {
+    background: var(--bg-primary, #fff);
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+    width: 90%;
+    max-width: 400px;
+    transform: translateY(16px) scale(0.98);
+    transition: transform 0.2s ease;
+    overflow: hidden;
+}
+.confirm-dialog.show .confirm-dialog-content {
+    transform: translateY(0) scale(1);
+}
+.confirm-dialog-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color, #e5e7eb);
+}
+.confirm-dialog-header i {
+    font-size: 20px;
+    color: var(--primary-color, #409eff);
+    flex-shrink: 0;
+}
+.confirm-dialog-header span {
+    flex: 1;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary, #303133);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.confirm-dialog-header .close-btn {
+    border: none;
+    background: none;
+    font-size: 18px;
+    color: var(--text-light, #909399);
+    cursor: pointer;
+    line-height: 1;
+    padding: 2px 4px;
+}
+.confirm-dialog-header .close-btn:hover {
+    color: var(--text-primary, #303133);
+}
+.confirm-dialog-body {
+    padding: 20px;
+    color: var(--text-secondary, #606266);
+    font-size: 14px;
+    line-height: 1.7;
+    word-break: break-word;
+}
+.confirm-dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--border-color, #e5e7eb);
+    background: var(--bg-secondary, #f5f5f5);
+}
+.confirm-dialog-btn {
+    padding: 8px 22px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.15s;
+}
+.confirm-dialog-btn.confirm {
+    background: var(--primary-color, #409eff);
+    color: #fff;
+}
+.confirm-dialog-btn.confirm:hover {
+    filter: brightness(0.92);
+}
+.confirm-dialog-btn.cancel {
+    background: var(--bg-primary, #fff);
+    border: 1px solid var(--border-color, #dcdfe6);
+    color: var(--text-secondary, #606266);
+}
+.confirm-dialog-btn.cancel:hover {
+    color: var(--primary-color, #409eff);
+    border-color: var(--primary-color, #409eff);
+}
+.confirm-dialog-btn.danger {
+    background: var(--danger-color, #f56c6c);
+    color: #fff;
+}
+.confirm-dialog-btn.danger:hover {
+    filter: brightness(0.92);
+}
+
+/* showConfirm 使用 .modal，补上 footer 布局 */
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 16px 20px;
+    border-top: 1px solid var(--border-color, #e5e7eb);
+}
+
+/* Toast 强化（覆盖 chat_auth 的基础样式，更醒目） */
+.toast {
+    top: 24px;
+    right: 24px;
+    padding: 14px 22px;
+    font-size: 14px;
+    border-radius: 8px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
+    z-index: 12001;
+    max-width: 340px;
+}
+.toast-error { background: var(--danger-color, #f56c6c); }
+.toast-success { background: var(--success-color, #67c23a); }
+.toast-info { background: #409eff; }
+.toast-warning { background: #e6a23c; }
+
+/* 深色主题 */
+[data-theme="dark"] .confirm-dialog-content { background: #1e1e1e; border: 1px solid #333; }
+[data-theme="dark"] .confirm-dialog-header { border-bottom-color: #333; }
+[data-theme="dark"] .confirm-dialog-footer { background: #161616; border-top-color: #333; }
+[data-theme="dark"] .confirm-dialog-body { color: #ddd; }
+[data-theme="dark"] .confirm-dialog-header span { color: #eee; }
+[data-theme="dark"] .confirm-dialog-btn.cancel { background: #1e1e1e; border-color: #444; color: #bbb; }
+[data-theme="dark"] .modal-footer { border-top-color: #333; }
