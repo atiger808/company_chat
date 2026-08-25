@@ -48,7 +48,7 @@ from .serializers import (
 )
 from utils.cloud_permission_utils import (
     get_global_operation_permissions, save_global_operation_permissions,
-    get_effective_operation_permission,
+    get_effective_operation_permission, is_download_allowed,
 )
 from .permissions import OnlyOfficeCallbackPermission  # 🔧 导入自定义权限
 from .pagination import CloudPagination, SharePagination
@@ -1001,14 +1001,9 @@ class FolderViewSet(viewsets.ModelViewSet, UtilsTools):
         4. 记录详细操作日志
         """
 
-        try:
-            config = CloudSystemConfig.objects.filter(key='system.download_enabled').first()
-            if config:
-                download_enabled = config.get_value('system.download_enabled')
-                if not download_enabled:
-                    return Response({'error': '下载功能已禁用，请联系管理员！'}, status=status.HTTP_403_FORBIDDEN)
-        except Exception as e:
-            logger.error(f"Error: {e}")
+        # 🔧 下载权限：全局 system.download_enabled 或 该用户操作权限 allow_download
+        if not is_download_allowed(request.user):
+            return Response({'error': '下载功能已禁用，请联系管理员！'}, status=status.HTTP_403_FORBIDDEN)
 
         try:
             # 🔧 1. 验证文件夹权限
@@ -2456,14 +2451,9 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
         """
         logger.info(f"{request.user} Downloading file pk: {pk}")
 
-        try:
-            config = CloudSystemConfig.objects.filter(key='system.download_enabled').first()
-            if config:
-                download_enabled = config.get_value('system.download_enabled')
-                if not download_enabled:
-                    return Response({'error': '下载功能已禁用，请联系管理员！'}, status=status.HTTP_403_FORBIDDEN)
-        except Exception as e:
-            logger.error(f"Error: {e}")
+        # 🔧 下载权限：全局 system.download_enabled 或 该用户操作权限 allow_download
+        if not is_download_allowed(request.user):
+            return Response({'error': '下载功能已禁用，请联系管理员！'}, status=status.HTTP_403_FORBIDDEN)
 
         try:
             file_obj = CloudFile.objects.get(id=pk, owner=request.user, deleted_at__isnull=True)
@@ -2530,6 +2520,9 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
     @action(detail=True, methods=['get'])
     def downloadloop(self, request, pk=None):
         """下载文件"""
+        # 🔧 下载权限：全局 system.download_enabled 或 该用户操作权限 allow_download
+        if not is_download_allowed(request.user):
+            return Response({'error': '下载功能已禁用，请联系管理员！'}, status=status.HTTP_403_FORBIDDEN)
         try:
             file_obj = CloudFile.objects.get(id=pk, owner=request.user)
         except CloudFile.DoesNotExist:
@@ -7535,14 +7528,9 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
     def version_download(self, request, version_id=None):
         """下载指定版本的文件"""
         try:
-            try:
-                config = CloudSystemConfig.objects.filter(key='system.download_enabled').first()
-                if config:
-                    download_enabled = config.get_value('system.download_enabled')
-                    if not download_enabled:
-                        return Response({'error': '下载功能已禁用，请联系管理员！'}, status=status.HTTP_403_FORBIDDEN)
-            except Exception as e:
-                logger.error(f"Error: {e}")
+            # 🔧 下载权限：全局 system.download_enabled 或 该用户操作权限 allow_download
+            if not is_download_allowed(request.user):
+                return Response({'error': '下载功能已禁用，请联系管理员！'}, status=status.HTTP_403_FORBIDDEN)
 
             # 🔧 验证版本归属（通过 file__owner 确保只能下载自己的文件版本）
             version = DocumentVersion.objects.select_related('file__owner').get(
@@ -8983,7 +8971,12 @@ class CloudSystemSettingsViewSet(viewsets.GenericViewSet):
         GET /api/cloud/settings/effective-permission/?perm=allow_print
         """
         perm = request.query_params.get('perm', '')
-        allowed = get_effective_operation_permission(request.user, perm, self._op_tenant(request))
+        tenant = self._op_tenant(request)
+        # 🔧 下载权限 = 全局 system.download_enabled 或 该用户操作权限 allow_download（自定义覆盖全局）
+        if perm == 'allow_download':
+            allowed = is_download_allowed(request.user, tenant)
+        else:
+            allowed = get_effective_operation_permission(request.user, perm, tenant)
         return Response({'key': perm, 'allowed': bool(allowed)})
 
 

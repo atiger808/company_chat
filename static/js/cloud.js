@@ -6008,6 +6008,16 @@ class CloudApp {
         try {
             await frontendCloudConfig?.loadConfigs?.();
             this.applyFrontendConfigs();
+            // 🔧 自定义操作权限：当前用户生效的 allow_download 也启用下载（含全局 system.download_enabled）
+            try {
+                const resp = await fetch('/api/cloud/settings/effective-permission/?perm=allow_download', {
+                    headers: TokenManager.getHeaders()
+                });
+                if (resp.ok) {
+                    const d = await resp.json();
+                    if (d && d.allowed) this.downloadEnabled = true;
+                }
+            } catch (e) {}
             console.log('✅ 系统配置已应用');
         } catch (error) {
             console.warn('⚠️ 加载系统配置失败，使用默认值:', error);

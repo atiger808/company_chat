@@ -90,7 +90,7 @@ def subsidy_ocr_task(self, image_path, ocr_version='baidu_vat', cache_key=None, 
         else:
             from utils.baidu_ocr import recognize_vat_invoice
             result = recognize_vat_invoice(image_data)
-        logger.info(f'异步OCR({ocr_version}) 结果: {result}')
+        logger.info(f'异步OCR_VERSION：({ocr_version}) tax_rate_threshold：{tax_rate_threshold} 结果: {result}')
         if not result:
             return {'error': '未能从票据中识别出有效信息，请更换更清晰的图片或手动填写'}
         elif not result.get('invoice_number'):

@@ -293,6 +293,7 @@ class AttendanceViewSet(viewsets.ViewSet):
                 from accounts.models import CustomUser
                 notified_ids = set()
                 try:
+                    # 通知部门负责人
                     from org.models import UserDepartment
                     dept_rels = UserDepartment.objects.filter(user=request.user).select_related('department__manager')
                     for ud_rel in dept_rels:
@@ -309,19 +310,20 @@ class AttendanceViewSet(viewsets.ViewSet):
                             )
                 except Exception:
                     pass
-                admins = CustomUser.objects.filter(
-                    Q(user_type='super_admin') & Q(tenant=tenant)
-                ).exclude(id=request.user.id)
-                for admin in admins:
-                    if admin.id not in notified_ids:
-                        send_work_notification(
-                            user_id=admin.id,
-                            title='迟到提醒',
-                            content=f'{request.user.real_name or request.user.username} 今日上班打卡迟到',
-                            notification_type='attendance',
-                            related_url='/oa/attendance/',
-                            extra_data={'user_id': request.user.id, 'status': 'late', 'date': str(today)},
-                        )
+                # 通知企业超级管理员
+                # admins = CustomUser.objects.filter(
+                #     Q(user_type='super_admin') & Q(tenant_memberships__tenant=tenant, tenant_memberships__is_active=True)
+                # ).exclude(id=request.user.id).distinct()
+                # for admin in admins:
+                #     if admin.id not in notified_ids:
+                #         send_work_notification(
+                #             user_id=admin.id,
+                #             title='迟到提醒',
+                #             content=f'{request.user.real_name or request.user.username} 今日上班打卡迟到',
+                #             notification_type='attendance',
+                #             related_url='/oa/attendance/',
+                #             extra_data={'user_id': request.user.id, 'status': 'late', 'date': str(today)},
+                #         )
         data = AttendanceRecordSerializer(record, context={'request': request}).data
         return Response({'encrypt': True, 'data': encrypt_data(data)}, status=201)
 
@@ -1410,6 +1412,19 @@ class ApprovalViewSet(viewsets.ViewSet):
             except Exception:
                 pass
             qs = qs.filter(Q(id__in=cc_user_ids) | Q(id__in=cc_dept_ids))
+        elif scope_filter == 'todo':
+            # 待我审批：我仍有未处理（待审批）的审批人节点（仅统计已到达/当前节点，排除顺序审批中尚未到达的后续节点）
+            todo_ids = ApprovalAssignee.objects.filter(
+                user=user, status='pending',
+                node__order__lte=models.F('node__request__current_node_order')
+            ).values_list('node__request_id', flat=True).distinct()
+            qs = qs.filter(id__in=todo_ids)
+        elif scope_filter == 'done':
+            # 我已审批：我已处理过（通过/驳回/暂缓/办理中）的审批人节点
+            done_ids = ApprovalAssignee.objects.filter(
+                user=user
+            ).exclude(status='pending').values_list('node__request_id', flat=True).distinct()
+            qs = qs.filter(id__in=done_ids)
 
         if status_filter:
             qs = qs.filter(status=status_filter)

@@ -805,6 +805,24 @@ class ApprovalApp {
             + '</span>';
     }
 
+    // 🔧 重新编辑/草稿回填时：按已关联的需求单自动带出领用明细（回填剩余可领量）与产品金额
+    async _autoFillRequisitionDetail(key, target, requirementId) {
+        if (!requirementId || !target) return;
+        try {
+            const r = await fetch(OA_API_URL + '/material/requirement-detail/?id=' + requirementId, {headers: TokenManager.getHeaders()});
+            if (!r.ok) { this.showToast('加载需求单失败', true); return; }
+            const raw = await r.json();
+            const detail = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+            if (!detail) { this.showToast('加载需求单失败', true); return; }
+            this._fillDynStructFromRequirement(target, detail.items || []);
+            // 产品金额 = 关联需求单的预估金额（自动填充）
+            const amtInput = document.querySelector('input[data-k="amount"]');
+            if (amtInput && detail.amount != null && detail.amount !== '') amtInput.value = detail.amount;
+        } catch (e) {
+            this.showToast((e && e.message) || '加载需求单失败', true);
+        }
+    }
+
     // 从需求单自动带出明细到目标 struct_table（回填数量为剩余可领量；只读字段按只读渲染）
     _fillDynStructFromRequirement(target, items) {
         const tbl = document.querySelector('.dyn-struct-table[data-struct-key="' + target + '"]');
@@ -1632,6 +1650,8 @@ class ApprovalApp {
 
     _renderList(data, container) {
         const rows = data.results || [];
+        // 🔧 记录当前页审批ID列表（用于详情上一条/下一条切换）
+        this._listApprovalIds = rows.map(function (r) { return r.id; });
         if (!rows.length) {
             container.innerHTML = '<div class="empty-state"><i class="fas fa-inbox"></i><p>暂无审批记录</p></div>';
             return;
@@ -1683,6 +1703,7 @@ class ApprovalApp {
     }
 
     _renderPagination(data, container) {
+        this._listTotalPages = data.total_pages || 1; // 🔧 记录总页数（详情上一条/下一条提示用）
         if (!data.total_pages || data.total_pages <= 1) {
             container.style.display = 'none';
             return;
@@ -4673,9 +4694,22 @@ class ApprovalApp {
                 html += '</div></div>';
             }
 
+            // 🔧 详情顶部：上一条 / 下一条（当前页列表上下文）
+            var navHtml = '';
+            if (this._listApprovalIds && this._listApprovalIds.length) {
+                var listIdx = this._listApprovalIds.indexOf(d.id);
+                if (listIdx !== -1) {
+                    navHtml = '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 12px;background:linear-gradient(90deg,#ecf5ff,#f0f9eb);border-radius:8px;margin-bottom:12px;">'
+                        + '<button class="btn btn-sm btn-secondary" onclick="approvalApp._navDetail(-1)"><i class="fas fa-chevron-left"></i> 上一条</button>'
+                        + '<span style="font-size:13px;color:#606266;font-weight:600;">' + (listIdx + 1) + ' / ' + this._listApprovalIds.length + '</span>'
+                        + '<button class="btn btn-sm btn-secondary" onclick="approvalApp._navDetail(1)">下一条 <i class="fas fa-chevron-right"></i></button>'
+                        + '</div>';
+                }
+            }
+
             var detailContainer = document.getElementById(modalId);
             var bodyEl = detailContainer ? detailContainer.querySelector('.modal-body') : null;
-            if (bodyEl) bodyEl.innerHTML = html;
+            if (bodyEl) bodyEl.innerHTML = navHtml + html;
 
             // 设置副标题（截取过长标题）
             var subEl = detailContainer ? detailContainer.querySelector('.approval-detail-subtitle') : null;
@@ -5355,6 +5389,25 @@ class ApprovalApp {
         if (m) { m.classList.remove('show'); setTimeout(function () { m.style.display = 'none'; }, 150); }
     }
 
+    // 详情模态框：上一条 / 下一条切换（到本页首/末条时提示并引导翻页）
+    _navDetail(delta) {
+        if (!this._listApprovalIds || !this._listApprovalIds.length) return;
+        var idx = this._listApprovalIds.indexOf(this._detailApprovalId);
+        if (idx === -1) return;
+        var total = this._listTotalPages || 1;
+        if (delta < 0 && idx === 0) {
+            this.showToast('已经是本页第一条审批了，当前第 ' + this.currentPage + '/' + total + ' 页，如需查看更多请翻页', true);
+            return;
+        }
+        if (delta > 0 && idx === this._listApprovalIds.length - 1) {
+            this.showToast('已经是本页最后一条审批了，当前第 ' + this.currentPage + '/' + total + ' 页，如需查看更多请翻页', true);
+            return;
+        }
+        var next = this._listApprovalIds[idx + delta];
+        if (next == null) return;
+        this.showDetail(next);
+    }
+
     // ==================== 打印 ====================
     _printDetail() {
         var self = this;
@@ -5645,8 +5698,18 @@ class ApprovalApp {
         try {
             await this.apiPost(OA_API_URL + '/approval/' + id + '/' + action + '/', data);
             this.closeModal('actionModal');
-            this.closeModal('approvalDetailModal');
-            this.loadList(this.currentPage);
+            this.showToast('操作成功', false);
+            // 🔧 操作成功后不关闭详情模态框：刷新列表，并展示一条仍在当前列表中的审批，保证「上一条/下一条」导航可用。
+            //    若当前审批已被过滤移除（如 待我审批/待审批 下处理完），则自动切到列表第一条（下一条待办）继续审批。
+            await this.loadList(this.currentPage);
+            const _navIds = this._listApprovalIds || [];
+            const _navIdx = _navIds.indexOf(id);
+            if (_navIdx === -1 && _navIds.length) {
+                this.showToast('开始下一条审批！', false);
+                this.showDetail(_navIds[0]);
+            } else {
+                this.showDetail(id);
+            }
         } catch (e) {
             console.error('操作失败:', e);
             // this.showAlert('操作失败', e.message || '请重试');

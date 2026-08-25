@@ -71,3 +71,24 @@ def get_effective_operation_permission(user, perm, tenant=None):
         return bool(getattr(perm_record, perm, DEFAULT_OPERATION_PERMISSIONS[perm]))
     global_perms = get_global_operation_permissions(tenant)
     return bool(global_perms.get(perm, DEFAULT_OPERATION_PERMISSIONS[perm]))
+
+
+def is_download_allowed(user, tenant=None):
+    """企业网盘下载是否允许：
+    全局开关 system.download_enabled 开启时所有用户可下载；
+    关闭时仅允许该用户自定义操作权限 allow_download 为真的用户下载（防止未授权被下载）。
+    """
+    try:
+        from cloud.models import CloudSystemConfig
+        if CloudSystemConfig.get_value('system.download_enabled', False):
+            return True
+    except Exception:
+        pass
+    try:
+        from cloud.models import UserCloudOperationPermission
+        rec = UserCloudOperationPermission.objects.filter(user=user, is_active=True).first()
+        if rec is not None:
+            return bool(rec.allow_download)
+    except Exception:
+        pass
+    return False

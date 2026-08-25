@@ -1081,7 +1081,7 @@ class CloudSettingsApp {
                         <div class="permission-grid">
                             ${['allow_print','allow_download','allow_public_share'].map(k => `
                                 <label class="permission-item">
-                                    <input type="checkbox" id="new_op_perm_${k}">
+                                    <input type="checkbox" id="new_op_perm_${k}" checked>
                                     <span>${this.getOperationPermissionLabel(k)}</span>
                                 </label>`).join('')}
                         </div>
