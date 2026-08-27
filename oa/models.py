@@ -47,6 +47,8 @@ class AttendanceRecord(models.Model):
         verbose_name='打卡状态'
     )
     remark = models.TextField(blank=True, default='', verbose_name='备注')
+    # 补卡时间：迟到/早退补卡修正为正常、或漏卡补录时记录（用于审计）
+    makeup_at = models.DateTimeField(null=True, blank=True, verbose_name='补卡时间')
     # BD09坐标（百度地图）
     bd09_latitude = models.FloatField(null=True, blank=True, verbose_name='BD09纬度')
     bd09_longitude = models.FloatField(null=True, blank=True, verbose_name='BD09经度')
@@ -313,6 +315,7 @@ class WorkNotification(models.Model):
         ('subsidy_withdraw', '补贴提现待支付'),
         ('subsidy_withdraw_result', '补贴提现结果'),
         ('daily', '每日通知'),
+        ('work_summary', '每日工作总结'),
         ('hr', '人事通知'),
         ('system', '系统通知'),
     ]
@@ -1145,9 +1148,193 @@ class PrintLog(models.Model):
         return f'{self.user} {self.page} 打印 {self.created_at:%Y-%m-%d %H:%M}'
 
 
+class DailyWorkSummary(models.Model):
+    """每日工作总结：员工上传当日工作数据（图片/文档/表格）+ 总结文字，
+    系统按职位调用大模型进行分析推理，结果流式写入 analysis_result。"""
+    STATUS_CHOICES = [
+        ('pending', '待分析'),
+        ('analyzing', '分析中'),
+        ('done', '已完成'),
+        ('failed', '分析失败'),
+        ('disabled', '已停用'),
+    ]
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name='daily_work_summaries', verbose_name='员工')
+    tenant = models.ForeignKey('accounts.Tenant', null=True, blank=True, on_delete=models.SET_NULL,
+                               related_name='daily_work_summaries', verbose_name='所属企业')
+    summary_date = models.DateField(verbose_name='工作总结日期')
+    content = models.TextField(blank=True, default='', verbose_name='工作总结内容')
+    position = models.CharField(max_length=100, blank=True, default='', verbose_name='职位快照')
+    # 上传的工作数据文件 [{name, url, type, size}]
+    files = models.JSONField(default=list, verbose_name='工作数据文件')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name='分析状态')
+    analysis_result = models.TextField(blank=True, default='', verbose_name='大模型分析结果')
+    prompt_text = models.TextField(blank=True, default='', verbose_name='喂给大模型的提示词')
+    error_message = models.TextField(blank=True, default='', verbose_name='错误信息')
+    analyzed_at = models.DateTimeField(null=True, blank=True, verbose_name='分析完成时间')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        ordering = ['-summary_date', '-created_at']
+        verbose_name = '每日工作总结'
+        verbose_name_plural = '每日工作总结'
+        indexes = [
+            models.Index(fields=['user', 'summary_date']),
+            models.Index(fields=['tenant', 'summary_date']),
+        ]
+
+    def __str__(self):
+        return f'{self.user} {self.summary_date} 每日总结'
+
+
+class WorkSummaryRangeAnalysis(models.Model):
+    """指定员工、指定日期范围内每日工作总结的批量大模型分析（供部门负责人/超管进行阶段复盘）"""
+    STATUS_CHOICES = [
+        ('pending', '待分析'),
+        ('analyzing', '分析中'),
+        ('done', '已完成'),
+        ('failed', '分析失败'),
+        ('disabled', '已停用'),
+    ]
+    requester = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                                  related_name='work_summary_range_analyses', verbose_name='发起人')
+    target_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                                    related_name='work_summary_range_analyzed', verbose_name='被分析员工')
+    tenant = models.ForeignKey('accounts.Tenant', null=True, blank=True, on_delete=models.SET_NULL,
+                               related_name='work_summary_range_analyses', verbose_name='所属企业')
+    date_from = models.DateField(verbose_name='开始日期')
+    date_to = models.DateField(verbose_name='结束日期')
+    summary_count = models.IntegerField(default=0, verbose_name='纳入分析的总结条数')
+    prompt_text = models.TextField(blank=True, default='', verbose_name='喂给大模型的提示词')
+    analysis_result = models.TextField(blank=True, default='', verbose_name='大模型分析结果')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name='分析状态')
+    error_message = models.TextField(blank=True, default='', verbose_name='错误信息')
+    analyzed_at = models.DateTimeField(null=True, blank=True, verbose_name='分析完成时间')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = '每日工作总结范围分析'
+        verbose_name_plural = '每日工作总结范围分析'
+
+    def __str__(self):
+        return f'{self.target_user} {self.date_from}~{self.date_to} 范围分析'
+
+
+class WorkSummaryConfig(models.Model):
+    """每日工作总结大模型配置（每企业一条，超管维护）：启用开关 + 调用的火山方舟大模型ID + 风险管控"""
+    SCOPE_CHOICES = [
+        ('all', '全员'),
+        ('positions', '指定职位'),
+        ('departments', '指定部门'),
+        ('users', '指定用户'),
+    ]
+    tenant = models.OneToOneField('accounts.Tenant', on_delete=models.CASCADE,
+                                  related_name='work_summary_config', verbose_name='所属企业')
+    enabled = models.BooleanField(default=True, verbose_name='启用模型分析')
+    # 留空则用系统默认 ARK_MODEL；可填预设模型或自定义模型ID
+    model_id = models.CharField(max_length=100, blank=True, default='', verbose_name='调用的大模型ID')
+    # —— 第三方依赖风险管控：每日调用量 / 成本阈值 ——
+    limit_enabled = models.BooleanField(default=False, verbose_name='启用每日调用限额')
+    daily_call_limit = models.PositiveIntegerField(default=0, verbose_name='每日分析次数上限(0=不限)')
+    daily_cost_limit = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0'),
+                                           verbose_name='每日费用上限(元,0=不限)')
+    cost_per_1k_tokens = models.DecimalField(max_digits=10, decimal_places=4, default=Decimal('0.002'),
+                                             verbose_name='每千token估算成本(元)')
+    today_call_count = models.PositiveIntegerField(default=0, verbose_name='今日已分析次数')
+    today_cost = models.DecimalField(max_digits=10, decimal_places=4, default=Decimal('0'),
+                                     verbose_name='今日已消耗估算费用(元)')
+    today_date = models.DateField(null=True, blank=True, verbose_name='计数日期')
+    limit_notified = models.BooleanField(default=False, verbose_name='已达上限是否已通知')
+    near_limit_notified = models.BooleanField(default=False, verbose_name='接近上限是否已通知')
+    # —— 内部数据合规：提交给大模型前做敏感信息脱敏 ——
+    mask_sensitive = models.BooleanField(default=True, verbose_name='提交分析前脱敏敏感信息')
+    # —— 上线灰度试点：限定 AI 分析开放范围 ——
+    scope_type = models.CharField(max_length=20, choices=SCOPE_CHOICES, default='all', verbose_name='分析开放范围')
+    scope_value = models.JSONField(default=list, verbose_name='范围值(职位名列表/部门ID列表/用户ID列表)')
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+                                   related_name='work_summary_config_updates', verbose_name='最后配置人')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '每日总结大模型配置'
+        verbose_name_plural = '每日总结大模型配置'
+
+    def __str__(self):
+        return f'{self.tenant} 每日总结模型配置(启用={self.enabled}, 模型={self.model_id or "默认"})'
+
+    @classmethod
+    def get_config(cls, tenant):
+        cfg, _ = cls.objects.get_or_create(tenant=tenant, defaults={})
+        return cfg
+
+    def effective_model(self):
+        return self.model_id.strip() or (getattr(settings, 'ARK_MODEL', '') or 'doubao-seed-1-6-250615')
+
+    def ensure_today(self):
+        """按天重置今日调用计数（跨天自动清零）"""
+        from datetime import date as dt_date
+        today = dt_date.today()
+        if self.today_date != today:
+            self.today_date = today
+            self.today_call_count = 0
+            self.today_cost = Decimal('0')
+            self.limit_notified = False
+            self.near_limit_notified = False
+            self.save(update_fields=['today_date', 'today_call_count', 'today_cost',
+                                     'limit_notified', 'near_limit_notified'])
+
+    def limit_reached(self):
+        """今日调用量/成本是否已达上限"""
+        self.ensure_today()
+        if not self.limit_enabled:
+            return False
+        if self.daily_call_limit and self.today_call_count >= self.daily_call_limit:
+            return True
+        if self.daily_cost_limit and self.today_cost >= self.daily_cost_limit:
+            return True
+        return False
+
+    def in_scope(self, user):
+        """灰度试点：该用户是否在 AI 分析开放范围内"""
+        if (self.scope_type or 'all') == 'all':
+            return True
+        scope = list(self.scope_value or [])
+        if not scope:
+            return True
+        st = self.scope_type
+        try:
+            if st == 'positions':
+                return (getattr(user, 'position', '') or '').strip() in scope
+            if st == 'users':
+                return user.id in scope
+            if st == 'departments':
+                from org.models import UserDepartment
+                from accounts.models import Department
+                my_dept_ids = set(UserDepartment.objects.filter(user=user).values_list('department_id', flat=True))
+                scope_ids = set(scope)
+                if my_dept_ids & scope_ids:
+                    return True
+                # 命中上级部门也放行（父部门范围覆盖其子部门）
+                seen = set()
+                for did in my_dept_ids:
+                    cur = Department.objects.filter(id=did).first()
+                    while cur and cur.parent_id and cur.id not in seen:
+                        seen.add(cur.id)
+                        if cur.parent_id in scope_ids:
+                            return True
+                        cur = cur.parent
+                return False
+        except Exception:
+            pass
+        return True
+
+
 # 默认所有页面开启水印（首次创建时播种）
 DEFAULT_WATERMARK_PAGES = [
     'chat', 'admin', 'cloud', 'cloud_settings', 'cloud_editor',
     'oa_approval', 'oa_subsidy', 'oa_subsidy_verify', 'oa_subsidy_pay',
-    'oa_attendance', 'work_calendar', 'tasks', 'org', 'other',
+    'oa_attendance', 'work_calendar', 'work_summary', 'tasks', 'org', 'other',
 ]

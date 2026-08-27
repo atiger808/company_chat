@@ -778,7 +778,9 @@ class AdminStatisticsClient {
             'location': '位置',
             'call_audio': '语音通话',
             'call_video': '视频通话',
-            'task_card': '任务卡片'
+            'task_card': '任务卡片',
+            'approval_card': '审批卡片',
+            'work_summary_card': '工作总结'
         };
         return map[type] || type;
     }
@@ -798,7 +800,9 @@ class AdminStatisticsClient {
             'call_audio': '#cc1799',
             // 'call_video': '#ef404f',
             'call_video': '#5b5ef7',
-            'task_card': '#7bb6f3'
+            'task_card': '#7bb6f3',
+            'approval_card': '#409EFF',
+            'work_summary_card': '#9b59b6'
         }
         return map[type] || '#909399';
     }

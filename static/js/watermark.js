@@ -66,11 +66,112 @@ class WatermarkManager {
         });
     }
 
-    // 构建打印文档内嵌水印（{css, html}）；未开启水印/未开启打印水印时返回 null。
-    // 打印底色恒为白纸，强制用深色文字，避免父页面深色主题下打印水印变白不可见。
+    // 当前用户是否有「允许打印」权限（企业网盘操作权限：全局 + 用户自定义覆盖），结果缓存
+    static hasPrintPermission() {
+        if (WatermarkManager._printPermPromise) return WatermarkManager._printPermPromise;
+        WatermarkManager._printPermPromise = new Promise(function (resolve) {
+            try {
+                const token = localStorage.getItem('access_token');
+                if (!token) return resolve(true);
+                const headers = (window.TokenManager && TokenManager.getHeaders)
+                    ? TokenManager.getHeaders()
+                    : {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token};
+                fetch('/api/cloud/settings/effective-permission/?perm=allow_print', {headers: headers})
+                    .then(function (r) { return r.ok ? r.json() : null; })
+                    .then(function (raw) {
+                        if (!raw) return resolve(true);
+                        let d = raw;
+                        if (raw.encrypt && window.EncryptUtils) d = window.EncryptUtils.decryptPacket(raw);
+                        resolve(d.allowed !== false);
+                    })
+                    .catch(function () { resolve(true); });
+            } catch (e) { resolve(true); }
+        });
+        return WatermarkManager._printPermPromise;
+    }
+
+    // 无打印权限提示（全局 toast）
+    static notifyNoPrintPermission() {
+        try {
+            let el = document.getElementById('wmNoPrintTip');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'wmNoPrintTip';
+                el.style.cssText = 'position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:99999;padding:10px 20px;border-radius:8px;font-size:14px;color:#fff;background:#f56c6c;box-shadow:0 4px 16px rgba(0,0,0,.15);';
+                document.body.appendChild(el);
+            }
+            el.textContent = '您没有打印权限，无法打印';
+            el.style.display = 'block';
+            clearTimeout(el._t);
+            el._t = setTimeout(function () { el.style.display = 'none'; }, 3200);
+        } catch (e) {}
+    }
+
+    // 隐藏当前页面上所有触发打印的按钮（onclick/title/aria-label 含 print/Print，或按钮文字为「打印」）
+    static hidePrintButtons() {
+        try {
+            document.querySelectorAll('button, a').forEach(function (el) {
+                if (!el || !el.style || el.style.display === 'none') return;
+                const oc = (el.getAttribute && (el.getAttribute('onclick') || '')) || '';
+                const title = (el.getAttribute && (el.getAttribute('title') || el.getAttribute('aria-label') || '')) || '';
+                const txt = (el.textContent || '').trim();
+                // onclick 含 print 时排除「导出/打印」双入口的导出按钮（onclick 里带 'export' 引号的是导出）
+                const isPrint = /print/i.test(oc) && !/['"]export['"]/i.test(oc);
+                if (isPrint || /print/i.test(title) || /打印/.test(txt) || /打印/.test(title)) {
+                    el.style.display = 'none';
+                }
+            });
+        } catch (e) {}
+    }
+
+    // 各打印页面初始化后调用：无打印权限 → 隐藏打印按钮 + 提示 + 监听后续动态渲染的打印按钮
+    static applyPrintPermission() {
+        return this.hasPrintPermission().then(function (allowed) {
+            if (allowed) return true;
+            WatermarkManager.notifyNoPrintPermission();
+            WatermarkManager.hidePrintButtons();
+            WatermarkManager._injectNoPrintCss();
+            if (!WatermarkManager._printObserver && typeof MutationObserver !== 'undefined') {
+                WatermarkManager._printObserver = new MutationObserver(function () {
+                    if (WatermarkManager._printScanTimer) clearTimeout(WatermarkManager._printScanTimer);
+                    WatermarkManager._printScanTimer = setTimeout(function () { WatermarkManager.hidePrintButtons(); }, 120);
+                });
+                WatermarkManager._printObserver.observe(document.body, {childList: true, subtree: true});
+            }
+            // 兜底：定时重扫，确保任何后渲染/被恢复显示的打印按钮始终隐藏
+            if (!WatermarkManager._printScanInterval) {
+                WatermarkManager._printScanInterval = setInterval(function () { WatermarkManager.hidePrintButtons(); }, 2000);
+            }
+            return false;
+        });
+    }
+
+    // 无打印权限时注入全局 CSS：永久隐藏所有触发打印的按钮（含模态框/下拉框等动态渲染的按钮），
+    // 不依赖 JS 扫描时序，确保如 OA 审批详情模态框内的打印按钮也能被隐藏
+    static _injectNoPrintCss() {
+        try {
+            if (document.getElementById('wmNoPrintStyle')) return;
+            const st = document.createElement('style');
+            st.id = 'wmNoPrintStyle';
+            st.textContent = 'button[onclick*="print" i]:not([onclick*="\'export\'" i]),'
+                + 'a[onclick*="print" i]:not([onclick*="\'export\'" i]),'
+                + 'button[title*="打印"],a[title*="打印"],'
+                + 'button[aria-label*="打印"],a[aria-label*="打印"]{display:none !important;}';
+            (document.head || document.documentElement).appendChild(st);
+        } catch (e) {}
+    }
+
+    // 构建打印文档内嵌水印（{css, html}）。
+    // 依据管理控制台水印设置：全局水印开启时，只要「页面水印开关」开启 或 「打印时添加水印」开关开启，
+    // 打印就叠加水印；两个开关均显式关闭时才不加，避免页面已显示水印但打印却不叠加的不一致。
+    // 打印底色恒为白纸，强制用深色文字，避免深色主题下打印水印变白不可见。
     static buildPrintWatermark() {
         const cfg = WatermarkManager._lastConfig;
-        if (!cfg || !cfg.enabled || !cfg.print_enabled) return null;
+        if (!cfg || !cfg.enabled) return null;
+        const _k = WatermarkManager._detectPageKey();
+        const pageOn = (cfg.page_enabled || {})[_k] !== false;
+        const printOn = cfg.print_enabled !== false;
+        if (!pageOn && !printOn) return null;
         const user = WatermarkManager._getCurrentUser();
         const baseText = (cfg.company_name || '义乌吉通集团') + ' · ' + (user.name || '') + ' · ' + WatermarkManager._nowText();
         const text = cfg.text ? (baseText + ' · ' + cfg.text) : baseText;
@@ -126,6 +227,7 @@ class WatermarkManager {
         if (path.indexOf('/oa/subsidy') === 0) return 'oa_subsidy';
         if (path.indexOf('/oa/attendance') === 0) return 'oa_attendance';
         if (path.indexOf('/oa/work-calendar') === 0) return 'work_calendar';
+        if (path.indexOf('/oa/work-summary') === 0) return 'work_summary';
         if (path.indexOf('/tasks') === 0) return 'tasks';
         if (path.indexOf('/org') === 0) return 'org';
         return 'other';

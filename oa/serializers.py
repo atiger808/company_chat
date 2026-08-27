@@ -23,6 +23,7 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
             'clock_time', 'date', 'latitude', 'longitude', 'location',
             'device', 'status', 'status_display', 'remark', 'reverse_geocoding',
             'bd09_latitude', 'bd09_longitude', 'ip_address', 'user_agent',
+            'makeup_at',
         ]
         read_only_fields = ['user', 'clock_time']
 

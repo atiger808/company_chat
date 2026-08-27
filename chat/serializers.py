@@ -70,6 +70,13 @@ class ChatRoomSerializer(serializers.ModelSerializer):
                     last_msg.content = content_text
                 except Exception as e:
                     logger.error(f"Error in get_last_message: {e}")
+            elif last_msg.message_type == 'work_summary_card':
+                try:
+                    card_data = json.loads(last_msg.content)
+                    content_text = f"📄 {card_data.get('sender_name', '')} 分享了每日工作总结（{card_data.get('summary_date', '')}）"
+                    last_msg.content = content_text
+                except Exception as e:
+                    logger.error(f"Error in get_last_message: {e}")
             # logger.info(f"Hit cache for {obj.id} last msg: {last_msg}")
             # # 返回序列化后的数据
             return MessageSerializer(last_msg, context=self.context).data
@@ -107,6 +114,13 @@ class ChatRoomSerializer(serializers.ModelSerializer):
                     try:
                         card_data = json.loads(last_msg.content)
                         content_text = f"📨 {card_data.get('applicant_name', '')} 给您发送了一条审批: {card_data.get('title', '')}"
+                        last_msg.content = content_text
+                    except Exception as e:
+                        logger.error(f"Error in get_last_message: {e}")
+                elif last_msg.message_type == 'work_summary_card':
+                    try:
+                        card_data = json.loads(last_msg.content)
+                        content_text = f"📄 {card_data.get('sender_name', '')} 分享了每日工作总结（{card_data.get('summary_date', '')}）"
                         last_msg.content = content_text
                     except Exception as e:
                         logger.error(f"Error in get_last_message: {e}")

@@ -1704,6 +1704,50 @@ input[type="time"] {
   overflow-y: auto !important;
 }
 
+
+/* ==================== 工作总结模态框最大化 ==================== */
+.ws-modal-content.maximized {
+  position: fixed !important;
+  top: 20px !important;
+  left: 20px !important;
+  right: 20px !important;
+  bottom: 20px !important;
+  max-width: none !important;
+  width: auto !important;
+  max-height: none !important;
+  height: auto !important;
+  margin: 0 !important;
+  transform: none !important;
+  border-radius: 12px !important;
+  z-index: 2001;
+}
+.ws-modal-content.maximized .ws-modal-body {
+  max-height: calc(100vh - 140px) !important;
+  overflow-y: auto !important;
+}
+
+/* 模型配置模态框最大化 */
+.ws-model-box.maximized {
+  position: fixed !important;
+  top: 20px !important;
+  left: 20px !important;
+  right: 20px !important;
+  bottom: 20px !important;
+  max-width: none !important;
+  width: auto !important;
+  max-height: none !important;
+  height: auto !important;
+  margin: 0 !important;
+  transform: none !important;
+  border-radius: 12px !important;
+  z-index: 2001;
+}
+.ws-model-box.maximized .ws-modal-body {
+  max-height: calc(100vh - 140px) !important;
+  overflow-y: auto !important;
+}
+
+
 /* 审批类型管理：真全屏 + 图标选择器 */
 #approvalTypeManageModal .modal-content.maximized {
   top: 0 !important;

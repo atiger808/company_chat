@@ -24,6 +24,10 @@ class SubsidyVerifyApp {
             window.location.href = this.chat_login_url;
             return;
         }
+        // 打印权限：无权限则隐藏打印按钮并提示
+        if (window.WatermarkManager && WatermarkManager.applyPrintPermission) {
+            WatermarkManager.applyPrintPermission();
+        }
         // 先完成账户加载（拿到 is_verifier），确保默认加载数据
         await this._loadAccount();
         this.loadAdmin(1);

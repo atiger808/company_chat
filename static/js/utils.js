@@ -866,6 +866,7 @@ class Utils {
 }
 
 
+window.Utils = Utils;
 // static/js/utils.js - 添加 FrontendConfigManager 类
 
 /**

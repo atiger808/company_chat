@@ -2903,7 +2903,7 @@ class AdminConsole {
             ['oa_approval', 'OA审批'], ['oa_subsidy', '普惠补贴'],
             ['oa_subsidy_verify', '财务核验'], ['oa_subsidy_pay', '财务支付'],
             ['oa_attendance', '考勤打卡'], ['work_calendar', '工作日历'],
-            ['tasks', '任务中心'], ['org', '组织架构'], ['other', '其他页面']
+            ['work_summary', '每日工作总结'], ['tasks', '任务中心'], ['org', '组织架构'], ['other', '其他页面']
         ];
         var self = this;
         wrap.innerHTML = defs.map(function (d) {

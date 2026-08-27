@@ -151,6 +151,10 @@ class ApprovalApp {
             window.location.href = this.chat_login_url;
             return;
         }
+        // 打印权限：无权限则隐藏打印按钮并提示
+        if (window.WatermarkManager && WatermarkManager.applyPrintPermission) {
+            WatermarkManager.applyPrintPermission();
+        }
         // 管理员按钮：先按本地信息立即显示（不等待列表/类型加载），再以接口实时校正
         var isAdmin = this._isAdminFromStorage();
         console.log('isAdmin:', isAdmin);
@@ -3355,6 +3359,20 @@ class ApprovalApp {
     // ==================== 提交审批 ====================
 
     async submitApproval() {
+        // 防重复提交：提交期间禁用按钮并阻止重复进入，避免同一审批被重复创建
+        if (this._submitting) return;
+        this._submitting = true;
+        const sab = document.getElementById('submitApprovalBtn');
+        const sabHtml = sab ? sab.innerHTML : '';
+        if (sab) { sab.disabled = true; sab.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 提交中...'; }
+        try {
+            await this._doSubmitApproval();
+        } finally {
+            this._submitting = false;
+            if (sab) { sab.disabled = false; sab.innerHTML = sabHtml; }
+        }
+    }
+    async _doSubmitApproval() {
         const type = document.getElementById('newApprovalType').value;
         const title = document.getElementById('newApprovalTitle').value.trim();
         const content = document.getElementById('newApprovalContent').value.trim();
@@ -3467,6 +3485,20 @@ class ApprovalApp {
     }
 
     async saveDraft() {
+        // 防重复提交：保存期间禁用按钮并阻止重复进入，避免同一草稿被重复创建
+        if (this._submitting) return;
+        this._submitting = true;
+        const sdb = document.getElementById('saveDraftBtn');
+        const sdbHtml = sdb ? sdb.innerHTML : '';
+        if (sdb) { sdb.disabled = true; sdb.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 保存中...'; }
+        try {
+            await this._doSaveDraft();
+        } finally {
+            this._submitting = false;
+            if (sdb) { sdb.disabled = false; sdb.innerHTML = sdbHtml; }
+        }
+    }
+    async _doSaveDraft() {
         var f = this._gatherFormData();
         if (!f.title && !f.approval_type) {
             var confirmed = await this.showConfirmDialog('存草稿', '标题和审批类型为空，确定要保存为草稿吗？', 'confirm');

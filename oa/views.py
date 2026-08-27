@@ -23,7 +23,7 @@ from .models import (
     SubsidyWithdrawal, SubsidyInvoiceVerifyRecord,
     MaterialItem, MaterialRequirement, MaterialRequisition,
     MaterialRequirementItem, MaterialRequisitionItem, DocumentSequence,
-    WatermarkConfig, DEFAULT_WATERMARK_PAGES, PrintLog,
+    WatermarkConfig, DEFAULT_WATERMARK_PAGES, PrintLog, DailyWorkSummary,
 )
 from .type_utils import (
     ensure_builtin_types, resolve_approval_type,
@@ -433,9 +433,9 @@ class AttendanceViewSet(viewsets.ViewSet):
             return Response({'error': '当前考勤未开启补卡功能（每月补卡次数为0）'}, status=400)
 
         used = AttendanceRecord.objects.filter(
-            user=request.user, remark='补卡',
+            user=request.user,
             date__year=today.year, date__month=today.month,
-        ).count()
+        ).filter(Q(remark='补卡') | Q(makeup_at__isnull=False)).count()
         if used >= allowance:
             return Response({
                 'error': f'本月补卡次数已用完（{allowance}次）',
@@ -444,31 +444,43 @@ class AttendanceViewSet(viewsets.ViewSet):
                 'makeup_remaining': 0,
             }, status=400)
 
-        if AttendanceRecord.objects.filter(user=request.user, date=makeup_date, clock_type=clock_type).exists():
-            return Response({'error': '该日期已存在上班/下班打卡记录，无需补卡'}, status=400)
-
         if clock_type == 'clock_in':
             cfg_time = config.clock_in_time if config and config.clock_in_time else dt_time(9, 0)
             label = '上班'
         else:
             cfg_time = config.clock_out_time if config and config.clock_out_time else dt_time(18, 0)
             label = '下班'
-        clock_dt = dt_datetime.combine(makeup_date, cfg_time)
-        aware_dt = timezone.make_aware(clock_dt) if timezone.is_naive(clock_dt) else clock_dt
-        record = AttendanceRecord.objects.create(
-            user=request.user, clock_type=clock_type, date=makeup_date,
-            tenant=tenant,
-            status='normal', remark='补卡',
-            location='', device='补卡',
-        )
-        # clock_time 为 auto_now_add，创建后更新为配置时间
-        record.clock_time = aware_dt
-        record.save(update_fields=['clock_time'])
-        logger.info(f'{request.user} 补卡 {clock_type} {makeup_date} 时间:{aware_dt}')
+
+        # 已存在该日期该类型的打卡记录：正常记录不可补卡；迟到/早退记录可补卡修正为正常
+        existing = AttendanceRecord.objects.filter(user=request.user, date=makeup_date, clock_type=clock_type).first()
+        if existing:
+            if existing.status == 'normal':
+                return Response({'error': '该日期已正常打卡，无需补卡'}, status=400)
+            # 迟到/早退 → 补卡修正为正常，并记录补卡时间
+            existing.status = 'normal'
+            existing.makeup_at = now
+            existing.remark = '补卡'
+            existing.save(update_fields=['status', 'makeup_at', 'remark'])
+            record = existing
+            logger.info(f'{request.user} 补卡(修正迟到/早退) {clock_type} {makeup_date}')
+        else:
+            clock_dt = dt_datetime.combine(makeup_date, cfg_time)
+            aware_dt = timezone.make_aware(clock_dt) if timezone.is_naive(clock_dt) else clock_dt
+            record = AttendanceRecord.objects.create(
+                user=request.user, clock_type=clock_type, date=makeup_date,
+                tenant=tenant,
+                status='normal', remark='补卡',
+                location='', device='补卡',
+                makeup_at=now,
+            )
+            # clock_time 为 auto_now_add，创建后更新为配置时间
+            record.clock_time = aware_dt
+            record.save(update_fields=['clock_time'])
+            logger.info(f'{request.user} 补卡 {clock_type} {makeup_date} 时间:{aware_dt}')
         send_work_notification(
             user_id=request.user.id,
             title='补卡成功',
-            content=f'已补{label}卡（{makeup_date}，时间 {cfg_time.strftime("%H:%M")}）',
+            content=f'已补{label}卡（{makeup_date}）' + ('，原迟到/早退记录已修正为正常' if existing else f'，时间 {cfg_time.strftime("%H:%M")}'),
             notification_type='attendance',
             related_url='/oa/attendance/',
             extra_data={'clock_type': clock_type, 'date': str(makeup_date), 'makeup': True},
@@ -863,23 +875,32 @@ class AttendanceViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def attendance_configs(self, request):
-        """获取考勤配置列表 + 子公司列表"""
+        """获取考勤配置列表 + 子公司列表。
+        超管：可查看/配置集团、子公司、部门全部配置；
+        普通管理员：仅可查看/配置本部门（含子部门）的部门级配置，集团/子公司配置不返回。"""
         from .serializers import AttendanceConfigSerializer
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
         if not tenant:
             return Response({'results': [], 'sub_tenants': []})
         from django.db.models import Q
-        query = Q(tenant=tenant)
-        try:
-            sub_ids = list(tenant.sub_tenants.filter(is_active=True).values_list('id', flat=True))
-            if sub_ids:
-                query |= Q(tenant_id__in=sub_ids)
-        except Exception:
-            pass
+        managed = None
+        if request.user.user_type != 'super_admin':
+            managed = self._get_managed_department_ids(request.user)
+            query = Q(tenant=tenant, sub_tenant=None, department_id__in=managed) if managed else Q(pk__in=[])
+        else:
+            query = Q(tenant=tenant)
+            try:
+                sub_ids = list(tenant.sub_tenants.filter(is_active=True).values_list('id', flat=True))
+                if sub_ids:
+                    query |= Q(tenant_id__in=sub_ids)
+            except Exception:
+                pass
         configs = AttendanceConfig.objects.filter(query).select_related('department', 'sub_tenant')
         data = AttendanceConfigSerializer(configs, many=True).data
         extra = {'sub_tenants': list(tenant.sub_tenants.filter(is_active=True).values(
             'id', 'name', 'short_name', 'tenant_type'))} if hasattr(tenant, 'sub_tenants') else {'sub_tenants': []}
+        if managed is not None:
+            extra['managed_dept_ids'] = managed
         return Response({'results': data, **extra})
 
     @action(detail=False, methods=['post'])
@@ -907,6 +928,13 @@ class AttendanceViewSet(viewsets.ViewSet):
                 dept = Department.objects.get(id=int(department_id), tenant=tenant)
             except (ValueError, Department.DoesNotExist):
                 return Response({'error': '部门不存在'}, status=400)
+        # 普通管理员：只能配置本部门（含子部门）考勤规则，集团/子公司不可配置
+        if request.user.user_type != 'super_admin':
+            if sub_tenant_id:
+                return Response({'error': '普通管理员无权配置子公司考勤规则'}, status=403)
+            managed = self._get_managed_department_ids(request.user)
+            if not dept or dept.id not in managed:
+                return Response({'error': '普通管理员只能配置本部门（含子部门）的考勤规则'}, status=403)
         from .serializers import AttendanceConfigSerializer
         clock_in_time = request.data.get('clock_in_time')
         clock_out_time = request.data.get('clock_out_time')
@@ -964,15 +992,17 @@ class AttendanceViewSet(viewsets.ViewSet):
 
     @action(detail=True, methods=['delete'])
     def delete_attendance_config(self, request, pk=None):
-        """删除考勤配置"""
-        if request.user.user_type != 'super_admin':
-            return Response({'error': '仅超级管理员可操作'}, status=403)
+        """删除考勤配置（超管可删全部；普通管理员仅可删本部门（含子部门）配置）"""
         try:
             config = AttendanceConfig.objects.get(id=pk)
-            config.delete()
-            return Response({'message': 'ok'})
         except AttendanceConfig.DoesNotExist:
             return Response({'error': '配置不存在'}, status=404)
+        if request.user.user_type != 'super_admin':
+            managed = self._get_managed_department_ids(request.user)
+            if config.sub_tenant_id or not config.department_id or config.department_id not in managed:
+                return Response({'error': '普通管理员只能删除本部门（含子部门）的考勤配置'}, status=403)
+        config.delete()
+        return Response({'message': 'ok'})
 
     @action(detail=False, methods=['get'])
     def resolve_my_config(self, request):
@@ -999,7 +1029,7 @@ class AttendanceViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def members(self, request):
-        """当前企业成员列表，供个人考勤配置选择成员"""
+        """当前企业成员列表，供个人考勤配置选择成员（普通管理员仅返回本部门成员）"""
         from accounts.models import CustomUser
         from django.db.models import Q
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
@@ -1007,6 +1037,14 @@ class AttendanceViewSet(viewsets.ViewSet):
         qs = CustomUser.objects.filter(is_active=True)
         if tenant:
             qs = qs.filter(tenant_memberships__tenant=tenant, tenant_memberships__is_active=True)
+        if request.user.user_type != 'super_admin':
+            managed = self._get_managed_department_ids(request.user)
+            if managed:
+                from org.models import UserDepartment
+                member_ids = set(UserDepartment.objects.filter(department_id__in=managed).values_list('user_id', flat=True))
+                qs = qs.filter(id__in=member_ids)
+            else:
+                qs = qs.none()
         if keyword:
             qs = qs.filter(Q(real_name__icontains=keyword) | Q(username__icontains=keyword))
         qs = qs.distinct().order_by('real_name', 'username')[:100]
@@ -1024,11 +1062,19 @@ class AttendanceViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def user_attendance_configs(self, request):
-        """个人考勤配置列表"""
+        """个人考勤配置列表（普通管理员仅返回本部门成员的配置，超管返回全部）"""
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
         qs = UserAttendanceConfig.objects.select_related('user').all()
         if tenant:
             qs = qs.filter(user__tenant_memberships__tenant=tenant, user__tenant_memberships__is_active=True)
+        if request.user.user_type != 'super_admin':
+            managed = self._get_managed_department_ids(request.user)
+            if managed:
+                from org.models import UserDepartment
+                member_ids = set(UserDepartment.objects.filter(department_id__in=managed).values_list('user_id', flat=True))
+                qs = qs.filter(user_id__in=member_ids)
+            else:
+                qs = qs.none()
         qs = qs.distinct().order_by('-updated_at')
         from .serializers import UserAttendanceConfigSerializer
         data = UserAttendanceConfigSerializer(qs, many=True).data
@@ -1048,6 +1094,12 @@ class AttendanceViewSet(viewsets.ViewSet):
         if tenant:
             if not target_user.tenant_memberships.filter(tenant=tenant, is_active=True).exists():
                 return Response({'error': '该成员不属于当前企业'}, status=400)
+        # 普通管理员：只能为本人所在部门（含子部门）的成员配置个人考勤规则
+        if request.user.user_type != 'super_admin':
+            managed = self._get_managed_department_ids(request.user)
+            from org.models import UserDepartment
+            if not managed or not UserDepartment.objects.filter(user_id=target_user.id, department_id__in=managed).exists():
+                return Response({'error': '普通管理员只能配置本部门成员的考勤规则'}, status=403)
 
         shift_type = request.data.get('shift_type', 'day')
         if shift_type not in ('day', 'night'):
@@ -4616,10 +4668,9 @@ class PrintLogViewSet(viewsets.ViewSet):
             count = int(request.data.get('count') or 0)
         except (TypeError, ValueError):
             count = 0
-        # 🔧 校验「允许打印」权限：无权限则拦截且不写日志（前端据 allowed=false 阻止打印）
+        # 校验「允许打印」权限（用户自定义覆盖全局），结果随响应返回，前端据 allowed=false 阻止打印
         allowed = get_effective_operation_permission(request.user, 'allow_print', tenant)
-        if not allowed:
-            return Response({'encrypt': True, 'data': encrypt_data({'ok': False, 'allowed': False})})
+        # 打印操作一律记录到打印日志（含无权限的尝试），便于管理员查看打印统计与权限分配
         try:
             PrintLog.objects.create(
                 tenant=tenant,
@@ -4632,7 +4683,687 @@ class PrintLogViewSet(viewsets.ViewSet):
             )
         except Exception as e:
             logger.warning(f'记录打印日志失败: {e}')
-        return Response({'encrypt': True, 'data': encrypt_data({'ok': True, 'allowed': True})})
+        return Response({'encrypt': True, 'data': encrypt_data({'ok': True, 'allowed': bool(allowed)})})
+
+
+def _build_summary_pdf(s, dept_name):
+    """生成每日工作总结真实 PDF 文件（优先 reportlab 内置中文 CID 字体，可正确渲染中文）"""
+    import html as _html
+    title = '每日工作总结'
+    lines = [
+        f'员工：{s.user.real_name or s.user.username}',
+        f'所属部门：{dept_name}',
+        f'职位：{s.position}',
+        f'日期：{s.summary_date}',
+        f'状态：{s.get_status_display()}',
+        '',
+        '当日工作总结：',
+        s.content or '（未填写总结文字）',
+        '',
+        '大模型分析建议：',
+        s.analysis_result or '（模型未返回内容）',
+    ]
+    text = '\n'.join(lines)
+    # 1) reportlab：内置 STSong-Light CID 字体，原生支持中文
+    try:
+        from io import BytesIO
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        from reportlab.pdfgen import canvas
+        pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+        buf = BytesIO()
+        width, height = A4
+        margin = 20 * mm
+        c = canvas.Canvas(buf, pagesize=A4)
+        y = height - margin
+        c.setFont('STSong-Light', 16)
+        c.drawString(margin, y, title)
+        y -= 34
+        c.setFont('STSong-Light', 11)
+        for ln in text.split('\n'):
+            if y < margin:
+                c.showPage()
+                c.setFont('STSong-Light', 11)
+                y = height - margin
+            c.drawString(margin, y, ln)
+            y -= 16
+        c.showPage()
+        c.save()
+        return buf.getvalue()
+    except Exception:
+        pass
+    # 2) weasyprint：HTML → PDF（可含中文，需系统依赖）
+    try:
+        from weasyprint import HTML
+        body = ''.join(f'<p>{_html.escape(ln)}</p>' for ln in lines)
+        html_doc = f'<html><head><meta charset="utf-8"><style>body{{font-family:"SimSun","Microsoft YaHei",sans-serif;line-height:1.7;}}</style></head><body><h2>{_html.escape(title)}</h2>{body}</body></html>'
+        return HTML(string=html_doc).write_pdf()
+    except Exception:
+        pass
+    # 3) fpdf2：仅英文兼容（无中文字体时中文会乱码，作为最后兜底）
+    try:
+        from fpdf import FPDF
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font('helvetica', 'B', 16)
+        pdf.cell(0, 10, 'Daily Work Summary')
+        pdf.ln(12)
+        pdf.set_font('helvetica', '', 10)
+        for ln in lines:
+            pdf.multi_cell(0, 6, ln)
+            pdf.ln(1)
+        return bytes(pdf.output())
+    except Exception:
+        pass
+    return {'error': '服务器未安装 PDF 生成库（reportlab/fpdf2/weasyprint），请管理员执行 pip install reportlab'}
+
+
+class DailyWorkSummaryViewSet(viewsets.ViewSet):
+    """每日工作总结：员工上传当日工作数据（图片/文档/表格）+ 总结文字，
+    系统按职位调用火山方舟大模型（Celery 流式）分析推理，结果保存到数据库供前端流式展示。"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _tenant(self, request):
+        return getattr(request, 'tenant', None) or request.user.get_active_tenant()
+
+    def _primary_dept_name(self, user):
+        try:
+            from org.models import UserDepartment
+            ud = UserDepartment.objects.filter(user=user, is_primary=True).select_related('department').first()
+            if ud and ud.department:
+                return ud.department.name
+        except Exception:
+            pass
+        return (user.department.name if user.department else '') or ''
+
+    def _can_view_all(self, user):
+        """部门负责人 / 超级管理员可查看团队总结"""
+        if user.user_type == 'super_admin':
+            return True
+        try:
+            from accounts.models import Department
+            return Department.objects.filter(Q(manager=user) | Q(deputy_managers=user)).exists()
+        except Exception:
+            return False
+
+    def _managed_dept_ids(self, user):
+        """用户负责的部门（含其所有子部门）id 集合"""
+        from accounts.models import Department
+        ids = set()
+        roots = list(Department.objects.filter(Q(manager=user) | Q(deputy_managers=user)))
+        stack = list(roots)
+        while stack:
+            d = stack.pop()
+            if d.id in ids:
+                continue
+            ids.add(d.id)
+            stack.extend(d.children.all())
+        return ids
+
+    def _scoped_user_ids(self, user):
+        """部门负责人可见的成员用户 id 集合（含子部门成员），超管返回 None 表示不限制"""
+        if user.user_type == 'super_admin':
+            return None
+        from org.models import UserDepartment
+        dept_ids = self._managed_dept_ids(user)
+        if not dept_ids:
+            return set()
+        return set(UserDepartment.objects.filter(department_id__in=dept_ids).values_list('user_id', flat=True))
+
+    def _can_view_summary(self, user, s):
+        """判断某用户能否查看该总结：本人 / 超管 / 其负责部门成员"""
+        if s.user_id == user.id:
+            return True
+        if user.user_type == 'super_admin':
+            return True
+        from org.models import UserDepartment
+        dept_ids = self._managed_dept_ids(user)
+        if not dept_ids:
+            return False
+        return UserDepartment.objects.filter(user_id=s.user_id, department_id__in=dept_ids).exists()
+
+    def _summary_data(self, s, with_result=False):
+        d = {
+            'id': s.id,
+            'user': s.user_id,
+            'user_name': s.user.real_name or s.user.username,
+            'user_avatar': s.user.get_avatar_url() if hasattr(s.user, 'get_avatar_url') else '',
+            'department': self._primary_dept_name(s.user),
+            'position': s.position,
+            'summary_date': str(s.summary_date),
+            'content': s.content,
+            'files': s.files or [],
+            'status': s.status,
+            'created_at': s.created_at.isoformat(),
+            'analyzed_at': s.analyzed_at.isoformat() if s.analyzed_at else None,
+            'error_message': s.error_message,
+        }
+        if with_result:
+            d['analysis_result'] = s.analysis_result
+            d['prompt_text'] = s.prompt_text
+        return d
+
+    def _file_type(self, name):
+        ext = os.path.splitext(name or '')[1].lower()
+        if ext in ('.jpg', '.jpeg', '.png', '.gif', '.webp'):
+            return 'image'
+        if ext in ('.xls', '.xlsx', '.csv'):
+            return 'table'
+        if ext in ('.doc', '.docx', '.pdf', '.txt', '.md'):
+            return 'doc'
+        return 'file'
+
+    @action(detail=False, methods=['post'], parser_classes=[MultiPartParser, FormParser])
+    def upload(self, request):
+        files = request.FILES.getlist('files')
+        if not files and request.FILES.get('file'):
+            files = [request.FILES['file']]
+        if not files:
+            return Response({'error': '请选择要上传的文件'}, status=400)
+        from django.core.files.storage import default_storage
+        out = []
+        try:
+            for f in files:
+                ext = os.path.splitext(f.name)[1].lower() or ''
+                path = 'work_summary/' + timezone.now().strftime('%Y%m') + '/' + uuid.uuid4().hex + ext
+                saved = default_storage.save(path, f)
+                out.append({'name': f.name, 'url': default_storage.url(saved), 'type': self._file_type(f.name), 'size': f.size})
+        except Exception as e:
+            logger.warning(f'每日总结文件上传失败: {e}')
+            return Response({'error': f'上传失败：{e}'}, status=500)
+        return Response({'encrypt': True, 'data': encrypt_data({'files': out})})
+
+    def create(self, request):
+        from datetime import date as dt_date
+        summary_date = request.data.get('summary_date')
+        content = (request.data.get('content') or '').strip()
+        if not summary_date:
+            return Response({'error': '请选择工作总结日期'}, status=400)
+        try:
+            d = dt_date.fromisoformat(str(summary_date))
+        except (ValueError, TypeError):
+            return Response({'error': '日期格式错误'}, status=400)
+        files = request.data.get('files')
+        if isinstance(files, str):
+            try:
+                files = json.loads(files)
+            except Exception:
+                files = []
+        if not isinstance(files, list):
+            files = []
+        user = request.user
+        tenant = self._tenant(request)
+        from .models import WorkSummaryConfig
+        cfg = WorkSummaryConfig.get_config(tenant)
+        status = 'pending' if cfg.enabled else 'disabled'
+        if status == 'pending':
+            # 灰度试点：不在分析范围内的员工仅保存总结，不调用大模型
+            if not cfg.in_scope(user):
+                status = 'not_allowed'
+            else:
+                # 当日调用量/成本限额已满：降级为仅保存总结
+                from .tasks import check_summary_quota
+                blocked, _reason = check_summary_quota(cfg)
+                if blocked:
+                    status = 'limited'
+        s = DailyWorkSummary.objects.create(
+            user=user, tenant=tenant, summary_date=d, content=content,
+            position=user.position or '', files=files, status=status)
+        if status == 'pending':
+            try:
+                from .tasks import analyze_work_summary_task
+                analyze_work_summary_task.delay(s.id)
+            except Exception as e:
+                logger.warning(f'触发每日总结分析失败: {e}')
+        return Response({'encrypt': True, 'data': encrypt_data(self._summary_data(s))}, status=201)
+
+    def list(self, request):
+        """我的每日工作总结（可按日期/总结内容/账号名搜索）"""
+        user = request.user
+        qs = DailyWorkSummary.objects.filter(user=user).select_related('user').order_by('-summary_date', '-created_at')
+        date_from = request.query_params.get('date_from', '').strip()
+        date_to = request.query_params.get('date_to', '').strip()
+        if date_from:
+            qs = qs.filter(summary_date__gte=date_from)
+        if date_to:
+            qs = qs.filter(summary_date__lte=date_to)
+        search = request.query_params.get('search', '').strip()
+        if search:
+            qs = qs.filter(Q(content__icontains=search) | Q(user__username__icontains=search) | Q(user__real_name__icontains=search))
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 20))
+        total = qs.count()
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        items = qs[(page - 1) * page_size:page * page_size]
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'results': [self._summary_data(x, True) for x in items],
+            'count': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages,
+        })})
+
+    @action(detail=False, methods=['get'])
+    def all(self, request):
+        """团队每日工作总结（部门负责人/超管）：部门过滤 + 日期过滤 + 搜索员工"""
+        if not self._can_view_all(request.user):
+            return Response({'error': '仅部门负责人或超级管理员可查看'}, status=403)
+        tenant = self._tenant(request)
+        qs = DailyWorkSummary.objects.select_related('user').order_by('-summary_date', '-created_at')
+        if tenant:
+            ids = [tenant.id]
+            try:
+                ids += [t.id for t in tenant.sub_tenants.filter(is_active=True)]
+            except Exception:
+                pass
+            qs = qs.filter(tenant_id__in=ids)
+        # 部门负责人（非超管）：只能查看自己负责部门（含子部门）成员的总结
+        if request.user.user_type != 'super_admin':
+            scoped = self._scoped_user_ids(request.user)
+            qs = qs.filter(user_id__in=scoped) if scoped else qs.none()
+        dept_id = request.query_params.get('department_id', '').strip()
+        if dept_id:
+            try:
+                from org.models import UserDepartment
+                member_ids = list(UserDepartment.objects.filter(department_id=int(dept_id)).values_list('user_id', flat=True))
+                qs = qs.filter(user_id__in=member_ids)
+            except Exception:
+                pass
+        date_from = request.query_params.get('date_from', '').strip()
+        date_to = request.query_params.get('date_to', '').strip()
+        if date_from:
+            qs = qs.filter(summary_date__gte=date_from)
+        if date_to:
+            qs = qs.filter(summary_date__lte=date_to)
+        user_id = request.query_params.get('user_id', '').strip()
+        if user_id:
+            try:
+                qs = qs.filter(user_id=int(user_id))
+            except (ValueError, TypeError):
+                pass
+        search = request.query_params.get('search', '').strip()
+        if search:
+            qs = qs.filter(Q(user__username__icontains=search) | Q(user__real_name__icontains=search))
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 20))
+        total = qs.count()
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        items = qs[(page - 1) * page_size:page * page_size]
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'results': [self._summary_data(x, True) for x in items],
+            'count': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages,
+        })})
+
+    def retrieve(self, request, pk=None):
+        try:
+            s = DailyWorkSummary.objects.select_related('user').get(id=pk)
+        except DailyWorkSummary.DoesNotExist:
+            return Response({'error': '工作总结不存在'}, status=404)
+        if not self._can_view_summary(request.user, s):
+            return Response({'error': '无权查看该工作总结'}, status=403)
+        return Response({'encrypt': True, 'data': encrypt_data(self._summary_data(s, True))})
+
+    def destroy(self, request, pk=None):
+        """仅超级管理员可删除工作总结"""
+        if request.user.user_type != 'super_admin':
+            return Response({'error': '仅超级管理员可删除工作总结'}, status=403)
+        try:
+            s = DailyWorkSummary.objects.get(id=pk)
+        except DailyWorkSummary.DoesNotExist:
+            return Response({'error': '工作总结不存在'}, status=404)
+        s.delete()
+        return Response({'encrypt': True, 'data': encrypt_data({'ok': True})})
+
+    @action(detail=True, methods=['post'])
+    def analyze(self, request, pk=None):
+        """重新触发大模型分析"""
+        try:
+            s = DailyWorkSummary.objects.select_related('user').get(id=pk)
+        except DailyWorkSummary.DoesNotExist:
+            return Response({'error': '工作总结不存在'}, status=404)
+        if not self._can_view_summary(request.user, s):
+            return Response({'error': '无权操作'}, status=403)
+        try:
+            from .tasks import analyze_work_summary_task
+            analyze_work_summary_task.delay(s.id)
+        except Exception as e:
+            logger.warning(f'重跑每日总结分析失败: {e}')
+            return Response({'error': f'触发失败：{e}'}, status=500)
+        return Response({'encrypt': True, 'data': encrypt_data({'ok': True})})
+
+    @action(detail=True, methods=['post'])
+    def share(self, request, pk=None):
+        """将工作总结及其分析结果以私聊卡片形式分享给指定用户（对方点击卡片直达总结详情）"""
+        import json as _json
+        from chat.models import ChatRoom, Message
+        user = request.user
+        s = DailyWorkSummary.objects.select_related('user').filter(id=pk).first()
+        if not s:
+            return Response({'error': '工作总结不存在'}, status=404)
+        if not self._can_view_summary(request.user, s):
+            return Response({'error': '无权分享该工作总结'}, status=403)
+        target_id = request.data.get('target_user_id')
+        if not target_id:
+            return Response({'error': '请选择要分享的用户'}, status=400)
+        try:
+            from accounts.models import CustomUser
+            target = CustomUser.objects.get(id=int(target_id), is_active=True)
+        except (ValueError, TypeError, CustomUser.DoesNotExist):
+            return Response({'error': '目标用户不存在'}, status=404)
+        if target.id == user.id:
+            return Response({'error': '不能分享给自己'}, status=400)
+        # get-or-create 私聊房间（与审批私聊保持一致）
+        room = ChatRoom.objects.filter(room_type='private', members=user).filter(members__id=target.id).first()
+        if not room:
+            room = ChatRoom.objects.create(room_type='private', name='', creator=user)
+            room.members.add(user, target)
+        card_data = {
+            'summary_id': s.id,
+            'user_name': s.user.real_name or s.user.username,
+            'summary_date': str(s.summary_date),
+            'position': s.position,
+            'status': s.status,
+            'content': (s.content or '')[:200],
+            'analysis': (s.analysis_result or '')[:200],
+            'sender_name': user.real_name or user.username,
+            'sender_id': user.id,
+        }
+        preview_text = f"📄 {card_data['sender_name']} 分享了每日工作总结（{s.summary_date}）"
+        message = Message.objects.create(
+            chat_room=room, sender=user,
+            content=_json.dumps(card_data, ensure_ascii=False),
+            message_type='work_summary_card',
+        )
+        try:
+            from asgiref.sync import async_to_sync
+            from channels.layers import get_channel_layer
+            async_to_sync(get_channel_layer().group_send)(
+                f'chat_{room.id}',
+                {
+                    'type': 'chat_message',
+                    'chat_room': room.id,
+                    'message_id': str(message.id),
+                    'sender': {
+                        'id': user.id,
+                        'username': user.username,
+                        'real_name': user.real_name,
+                        'avatar': user.avatar.url if getattr(user, 'avatar', None) else None,
+                    },
+                    'sender_id': user.id,
+                    'sender_name': user.real_name or user.username,
+                    'content': preview_text,
+                    'message_type': 'work_summary_card',
+                    'timestamp': message.timestamp.isoformat(),
+                    'work_summary_data': card_data,
+                }
+            )
+        except Exception as e:
+            logger.warning(f'分享工作总结 WebSocket 广播失败: {e}')
+        # 同步发一条工作通知，点击直达总结详情
+        send_work_notification(
+            target.id,
+            '每日工作总结分享',
+            f'{user.real_name or user.username} 给您分享了一条每日工作总结（{s.summary_date}），请查看',
+            notification_type='work_summary',
+            related_url=f'/oa/work-summary/?id={s.id}',
+            extra_data={'summary_id': s.id, 'action': 'shared'},
+        )
+        return Response({'encrypt': True, 'data': encrypt_data({'success': True, 'message': '已分享'})})
+
+    @action(detail=True, methods=['get'])
+    def export_pdf(self, request, pk=None):
+        """将工作总结及分析结果导出为真实 PDF 文件（非打印）"""
+        from django.http import HttpResponse
+        from urllib.parse import quote
+        s = DailyWorkSummary.objects.select_related('user').filter(id=pk).first()
+        if not s:
+            return Response({'error': '工作总结不存在'}, status=404)
+        if not self._can_view_summary(request.user, s):
+            return Response({'error': '无权导出该工作总结'}, status=403)
+        pdf_bytes = _build_summary_pdf(s, self._primary_dept_name(s.user))
+        if isinstance(pdf_bytes, dict) and pdf_bytes.get('error'):
+            return Response(pdf_bytes, status=500)
+        filename = f"每日工作总结_{s.summary_date}_{s.user.real_name or s.user.username}.pdf"
+        resp = HttpResponse(pdf_bytes, content_type='application/pdf')
+        resp['Content-Disposition'] = f'attachment; filename*=UTF-8\'\'{quote(filename)}'
+        return resp
+
+    def _config_data(self, request, cfg):
+        from utils.ark_llm import ARK_MODEL_PRESETS
+        try:
+            cfg.ensure_today()
+        except Exception:
+            pass
+        return {
+            'enabled': cfg.enabled,
+            'model_id': cfg.model_id,
+            'effective_model': cfg.effective_model(),
+            'presets': ARK_MODEL_PRESETS,
+            'is_super_admin': request.user.user_type == 'super_admin',
+            'updated_at': cfg.updated_at.isoformat() if cfg.updated_at else None,
+            'limit_enabled': cfg.limit_enabled,
+            'daily_call_limit': cfg.daily_call_limit,
+            'daily_cost_limit': float(cfg.daily_cost_limit or 0),
+            'cost_per_1k_tokens': float(cfg.cost_per_1k_tokens or 0),
+            'today_call_count': cfg.today_call_count,
+            'today_cost': float(cfg.today_cost or 0),
+            'mask_sensitive': cfg.mask_sensitive,
+            'scope_type': cfg.scope_type,
+            'scope_value': list(cfg.scope_value or []),
+            'scope_users_info': self._scope_users_info(cfg),
+        }
+
+    def _scope_users_info(self, cfg):
+        """灰度范围-指定用户：解析用户ID为姓名/头像，供前端标签展示"""
+        if (cfg.scope_type or 'all') != 'users':
+            return []
+        ids = [x for x in (cfg.scope_value or [])]
+        if not ids:
+            return []
+        from accounts.models import CustomUser
+        try:
+            us = CustomUser.objects.filter(id__in=ids)
+            return [{'id': u.id, 'name': u.real_name or u.username,
+                     'avatar': u.get_avatar_url() if hasattr(u, 'get_avatar_url') else ''} for u in us]
+        except Exception:
+            return []
+
+    @action(detail=False, methods=['get', 'post'])
+    def config(self, request):
+        """每日总结大模型配置：GET 读取（登录即可）；POST 保存（仅超级管理员）"""
+        from .models import WorkSummaryConfig
+        tenant = self._tenant(request)
+        if not tenant:
+            from utils.ark_llm import ARK_MODEL_PRESETS
+            return Response({'encrypt': True, 'data': encrypt_data({
+                'enabled': True, 'model_id': '',
+                'effective_model': settings.ARK_MODEL or 'doubao-seed-1-6-250615',
+                'presets': ARK_MODEL_PRESETS,
+                'is_super_admin': request.user.user_type == 'super_admin',
+                'updated_at': None,
+            })})
+        if request.method == 'POST':
+            if request.user.user_type != 'super_admin':
+                return Response({'error': '仅超级管理员可配置'}, status=403)
+            cfg = WorkSummaryConfig.get_config(tenant)
+            if 'enabled' in request.data:
+                cfg.enabled = bool(request.data.get('enabled'))
+            model_id = (request.data.get('model_id') or '').strip()
+            if model_id:
+                cfg.model_id = model_id[:100]
+            elif 'model_id' in request.data:
+                cfg.model_id = ''
+            # —— 风险管控：调用限额 / 成本 / 数据脱敏 / 灰度范围 ——
+            for f in ('limit_enabled', 'mask_sensitive'):
+                if f in request.data:
+                    setattr(cfg, f, bool(request.data.get(f)))
+            for f in ('daily_call_limit', 'daily_cost_limit', 'cost_per_1k_tokens'):
+                if f in request.data and request.data.get(f) not in (None, ''):
+                    try:
+                        setattr(cfg, f, request.data.get(f))
+                    except Exception:
+                        pass
+            scope_type = (request.data.get('scope_type') or 'all').strip()
+            if scope_type in dict(WorkSummaryConfig.SCOPE_CHOICES):
+                cfg.scope_type = scope_type
+            if 'scope_value' in request.data:
+                sv = request.data.get('scope_value')
+                cfg.scope_value = sv if isinstance(sv, list) else []
+            cfg.updated_by = request.user
+            cfg.save()
+            logger.info(f'超管 {request.user} 更新每日总结模型配置: enabled={cfg.enabled}, model={cfg.model_id or "默认"}')
+            return Response({'encrypt': True, 'data': encrypt_data(self._config_data(request, cfg))})
+        cfg = WorkSummaryConfig.get_config(tenant)
+        return Response({'encrypt': True, 'data': encrypt_data(self._config_data(request, cfg))})
+
+    @action(detail=False, methods=['get'])
+    def members(self, request):
+        """当前企业成员列表，供范围分析选择员工（部门负责人/超管）"""
+        if not self._can_view_all(request.user):
+            return Response({'error': '仅部门负责人或超级管理员可查看'}, status=403)
+        from accounts.models import CustomUser
+        from django.db.models import Q as QF
+        tenant = self._tenant(request)
+        keyword = request.query_params.get('search', '').strip()
+        qs = CustomUser.objects.filter(is_active=True)
+        if tenant:
+            ids = [tenant.id]
+            try:
+                ids += [t.id for t in tenant.sub_tenants.filter(is_active=True)]
+            except Exception:
+                pass
+            qs = qs.filter(tenant_memberships__tenant_id__in=ids, tenant_memberships__is_active=True)
+        if keyword:
+            qs = qs.filter(QF(real_name__icontains=keyword) | QF(username__icontains=keyword))
+        # 部门负责人（非超管）只能选择自己负责部门（含子部门）成员
+        if request.user.user_type != 'super_admin':
+            scoped = self._scoped_user_ids(request.user)
+            qs = qs.filter(id__in=scoped) if scoped else qs.none()
+        qs = qs.distinct().order_by('real_name', 'username')[:100]
+        ids = [u.id for u in qs]
+        from org.models import UserDepartment
+        dept_map = dict(UserDepartment.objects.filter(user_id__in=ids, is_primary=True).select_related('department').values_list('user_id', 'department__name'))
+        results = [{
+            'id': u.id,
+            'name': u.real_name or u.username,
+            'avatar': u.get_avatar_url() if hasattr(u, 'get_avatar_url') else '',
+            'position': u.position or '',
+            'department_name': dept_map.get(u.id) or '',
+        } for u in qs]
+        return Response({'encrypt': True, 'data': encrypt_data({'results': results})})
+
+    def _range_data(self, a):
+        return {
+            'id': a.id,
+            'target_user': a.target_user_id,
+            'target_name': a.target_user.real_name or a.target_user.username,
+            'target_avatar': a.target_user.get_avatar_url() if hasattr(a.target_user, 'get_avatar_url') else '',
+            'target_position': a.target_user.position or '',
+            'requester': a.requester_id,
+            'requester_name': (a.requester.real_name or a.requester.username) if a.requester_id else '',
+            'date_from': str(a.date_from),
+            'date_to': str(a.date_to),
+            'summary_count': a.summary_count,
+            'status': a.status,
+            'analysis_result': a.analysis_result,
+            'prompt_text': a.prompt_text,
+            'error_message': a.error_message,
+            'created_at': a.created_at.isoformat(),
+            'analyzed_at': a.analyzed_at.isoformat() if a.analyzed_at else None,
+        }
+
+    @action(detail=False, methods=['get', 'post'])
+    def range(self, request):
+        """范围分析：GET 我的批量分析记录列表；POST 触发指定员工+日期范围的批量分析"""
+        from .models import WorkSummaryRangeAnalysis
+        if not self._can_view_all(request.user):
+            return Response({'error': '仅部门负责人或超级管理员可查看'}, status=403)
+        if request.method == 'POST':
+            from accounts.models import CustomUser
+            from datetime import date as dt_date
+            user_id = request.data.get('user_id')
+            date_from = request.data.get('date_from', '').strip()
+            date_to = request.data.get('date_to', '').strip()
+            if not user_id:
+                return Response({'error': '请选择要分析的员工'}, status=400)
+            try:
+                target = CustomUser.objects.get(id=int(user_id), is_active=True)
+            except (ValueError, TypeError, CustomUser.DoesNotExist):
+                return Response({'error': '员工不存在'}, status=400)
+            tenant = self._tenant(request)
+            if tenant:
+                ids = [tenant.id]
+                try:
+                    ids += [t.id for t in tenant.sub_tenants.filter(is_active=True)]
+                except Exception:
+                    pass
+                if not target.tenant_memberships.filter(tenant_id__in=ids, is_active=True).exists():
+                    return Response({'error': '该员工不属于当前企业'}, status=400)
+            # 部门负责人（非超管）只能分析自己负责部门成员
+            if request.user.user_type != 'super_admin':
+                scoped = self._scoped_user_ids(request.user)
+                if target.id not in scoped:
+                    return Response({'error': '该员工不属于您负责的部门，无权分析'}, status=403)
+            try:
+                d_from = dt_date.fromisoformat(date_from)
+                d_to = dt_date.fromisoformat(date_to)
+            except (ValueError, TypeError):
+                return Response({'error': '日期格式错误'}, status=400)
+            if d_from > d_to:
+                return Response({'error': '开始日期不能晚于结束日期'}, status=400)
+            from .models import WorkSummaryConfig
+            cfg = WorkSummaryConfig.get_config(tenant)
+            status = 'pending' if cfg.enabled else 'disabled'
+            if status == 'pending':
+                if not cfg.in_scope(target):
+                    status = 'not_allowed'
+                else:
+                    from .tasks import check_summary_quota
+                    blocked, _reason = check_summary_quota(cfg)
+                    if blocked:
+                        status = 'limited'
+            a = WorkSummaryRangeAnalysis.objects.create(
+                requester=request.user, target_user=target, tenant=tenant,
+                date_from=d_from, date_to=d_to, status=status)
+            if status == 'pending':
+                try:
+                    from .tasks import analyze_work_summary_range_task
+                    analyze_work_summary_range_task.delay(a.id)
+                except Exception as e:
+                    logger.warning(f'触发每日总结范围分析失败: {e}')
+            return Response({'encrypt': True, 'data': encrypt_data(self._range_data(a))}, status=201)
+        # GET 列表：超管可查看本企业（含子公司）全部批量分析记录；部门负责人/普通查看自己发起的
+        qs = WorkSummaryRangeAnalysis.objects.select_related('target_user', 'requester').order_by('-created_at')
+        if request.user.user_type == 'super_admin':
+            tenant = self._tenant(request)
+            if tenant:
+                tids = [tenant.id]
+                try:
+                    tids += [t.id for t in tenant.sub_tenants.filter(is_active=True)]
+                except Exception:
+                    pass
+                qs = qs.filter(tenant_id__in=tids)
+        else:
+            qs = qs.filter(requester=request.user)
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 20))
+        total = qs.count()
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        items = qs[(page - 1) * page_size:page * page_size]
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'results': [self._range_data(x) for x in items],
+            'count': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages,
+        })})
+
+    @action(detail=True, methods=['get'])
+    def range_detail(self, request, pk=None):
+        """范围分析详情（供前端轮询流式结果）"""
+        from .models import WorkSummaryRangeAnalysis
+        a = WorkSummaryRangeAnalysis.objects.select_related('target_user').filter(id=pk).first()
+        if not a:
+            return Response({'error': '范围分析记录不存在'}, status=404)
+        if a.requester_id != request.user.id and not self._can_view_all(request.user):
+            return Response({'error': '无权查看'}, status=403)
+        return Response({'encrypt': True, 'data': encrypt_data(self._range_data(a))})
 
 
 class WorkCalendarViewSet(viewsets.ViewSet):
@@ -4758,7 +5489,7 @@ class WorkCalendarViewSet(viewsets.ViewSet):
         start, end = date(year, month, 1), date(year, month, last)
         days = {}
         for d in range(1, last + 1):
-            days[f'{year:04d}-{month:02d}-{d:02d}'] = {'approvals': 0, 'invoices': 0, 'withdrawals': 0, 'tasks': 0, 'docs': 0, 'cloud': 0, 'org': 0, 'clock_in': None, 'clock_out': None}
+            days[f'{year:04d}-{month:02d}-{d:02d}'] = {'approvals': 0, 'invoices': 0, 'withdrawals': 0, 'tasks': 0, 'docs': 0, 'cloud': 0, 'org': 0, 'work_summary': 0, 'clock_in': None, 'clock_out': None}
 
         def _bump(qs, key):
             for dt in qs:
@@ -4767,6 +5498,7 @@ class WorkCalendarViewSet(viewsets.ViewSet):
                     days[ds][key] += 1
 
         _bump(ApprovalRequest.objects.filter(applicant=user, created_at__date__range=[start, end]).values_list('created_at', flat=True), 'approvals')
+        _bump(DailyWorkSummary.objects.filter(user=user, summary_date__range=[start, end]).values_list('summary_date', flat=True), 'work_summary')
         _bump(SubsidyApplication.objects.filter(applicant=user, created_at__date__range=[start, end]).values_list('created_at', flat=True), 'invoices')
         _bump(SubsidyWithdrawal.objects.filter(user=user, requested_at__date__range=[start, end]).values_list('requested_at', flat=True), 'withdrawals')
         _bump(Task.objects.filter(Q(assignee=user) | Q(creator=user), status='done', updated_at__date__range=[start, end]).values_list('updated_at', flat=True), 'tasks')
@@ -4842,6 +5574,8 @@ class WorkCalendarViewSet(viewsets.ViewSet):
             add('org', icon, f'{label}：{dept_name}', fmt(oc.created_at), '/org/')
         for r in AttendanceRecord.objects.filter(user=user, date=d).order_by('clock_time'):
             add('attendance', 'fas fa-clock', f'{r.get_clock_type_display()}打卡', fmt(r.clock_time), '/oa/attendance/')
+        for ws in DailyWorkSummary.objects.filter(user=user, summary_date=d).order_by('created_at'):
+            add('work_summary', 'fas fa-file-signature', f'每日工作总结（{ws.position or "未填职位"}）', fmt(ws.created_at), f'/oa/work-summary/?id={ws.id}')
         events.sort(key=lambda e: e['time'], reverse=True)
         return events
 
@@ -5104,6 +5838,110 @@ class WorkCalendarViewSet(viewsets.ViewSet):
         return Response({'encrypt': True, 'data': encrypt_data({
             'start': start.isoformat(), 'end': end.isoformat(),
             'results': results,
+        })})
+
+    @action(detail=False, methods=['get'])
+    def work_summary_stats(self, request):
+        """全员每日工作总结完成情况统计（仅超管）：按日趋势 / 部门 / 岗位 / 成员维度，用于监督总结完成与沉淀经验"""
+        if request.user.user_type != 'super_admin':
+            return Response({'error': '仅超级管理员可查看'}, status=403)
+        tenant = self._tenant(request)
+        if not tenant:
+            return Response({'error': '未找到所属企业'}, status=400)
+        from datetime import date as dt_date, timedelta
+        from accounts.models import CustomUser
+        from org.models import UserDepartment
+        from .models import DailyWorkSummary
+        tenant_ids = [tenant.id]
+        try:
+            tenant_ids += [t.id for t in tenant.sub_tenants.filter(is_active=True)]
+        except Exception:
+            pass
+        now_date = timezone.localdate()
+        try:
+            start_s = request.query_params.get('start', '').strip()
+            end_s = request.query_params.get('end', '').strip()
+            start = dt_date.fromisoformat(start_s) if start_s else (now_date - timedelta(days=29))
+            end = dt_date.fromisoformat(end_s) if end_s else now_date
+        except ValueError:
+            return Response({'error': '日期格式错误，请使用 YYYY-MM-DD'}, status=400)
+        if start > end:
+            start, end = end, start
+        dates = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+        total_days = len(dates)
+        # 活跃成员（含子企业）
+        members = list(CustomUser.objects.filter(
+            is_active=True, tenant_memberships__tenant_id__in=tenant_ids, tenant_memberships__is_active=True,
+        ).distinct())
+        member_ids = [u.id for u in members]
+        member_count = len(member_ids)
+        # 主部门映射
+        dept_map = dict(UserDepartment.objects.filter(
+            user_id__in=member_ids, is_primary=True).select_related('department').values_list('user_id', 'department__name'))
+        # 范围内全部总结（user_id -> 日期集合）
+        submitted_dates = {}
+        for r in DailyWorkSummary.objects.filter(
+                user_id__in=member_ids, summary_date__range=[start, end]).values('user_id', 'summary_date'):
+            submitted_dates.setdefault(r['user_id'], set()).add(r['summary_date'])
+        # 每日趋势
+        daily = []
+        for d in dates:
+            cnt = sum(1 for u in members if d in submitted_dates.get(u.id, set()))
+            daily.append({'date': str(d), 'submitted': cnt, 'total': member_count,
+                          'rate': round(cnt / max(member_count, 1) * 100, 1)})
+        # 成员维度（完成率升序，便于监督落后者）
+        by_member = []
+        for u in members:
+            s = len(submitted_dates.get(u.id, set()))
+            missed = [d for d in dates if d not in submitted_dates.get(u.id, set())]
+            by_member.append({
+                'user_id': u.id, 'name': u.real_name or u.username,
+                'avatar': u.get_avatar_url() if hasattr(u, 'get_avatar_url') else '',
+                'department': dept_map.get(u.id) or '', 'position': u.position or '',
+                'submitted': s, 'total': total_days,
+                'rate': round(s / max(total_days, 1) * 100, 1),
+                'missed_count': len(missed),
+                'missed_days': [str(d) for d in missed][:10],
+            })
+        by_member.sort(key=lambda x: (x['rate'], x['name']))
+        # 部门维度
+        dept_stats = {}
+        for u in members:
+            dept = dept_map.get(u.id) or '未分组'
+            d = dept_stats.setdefault(dept, {'member_count': 0, 'submitted_days': 0})
+            d['member_count'] += 1
+            d['submitted_days'] += len(submitted_dates.get(u.id, set()))
+        by_department = [{'name': k, 'member_count': v['member_count'], 'submitted_days': v['submitted_days'],
+                          'total_days': total_days,
+                          'rate': round(v['submitted_days'] / max(v['member_count'] * total_days, 1) * 100, 1)}
+                         for k, v in dept_stats.items()]
+        by_department.sort(key=lambda x: x['rate'])
+        # 岗位维度
+        pos_stats = {}
+        for u in members:
+            pos = u.position or '未填职位'
+            d = pos_stats.setdefault(pos, {'member_count': 0, 'submitted_days': 0})
+            d['member_count'] += 1
+            d['submitted_days'] += len(submitted_dates.get(u.id, set()))
+        by_position = [{'name': k, 'member_count': v['member_count'], 'submitted_days': v['submitted_days'],
+                        'total_days': total_days,
+                        'rate': round(v['submitted_days'] / max(v['member_count'] * total_days, 1) * 100, 1)}
+                       for k, v in pos_stats.items()]
+        by_position.sort(key=lambda x: x['rate'])
+        # 总体
+        total_submitted_days = sum(len(submitted_dates.get(u.id, set())) for u in members)
+        submitted_members = sum(1 for u in members if submitted_dates.get(u.id))
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'range': {'start': str(start), 'end': str(end), 'days': total_days},
+            'overview': {
+                'member_count': member_count, 'submitted_members': submitted_members,
+                'total_submitted_days': total_submitted_days,
+                'overall_rate': round(total_submitted_days / max(member_count * total_days, 1) * 100, 1),
+            },
+            'daily': daily,
+            'by_department': by_department,
+            'by_position': by_position,
+            'by_member': by_member[:200],
         })})
 
     # ===== 每日通知配置 =====

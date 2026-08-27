@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>每日工作总结 - 义乌吉通集团</title>
+    <link rel="icon" type="image/svg+xml"
+          href="data:image/png;base64,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">
+
+<!--    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">-->
+    <link rel="stylesheet" href="/static/css/oa.css?v=20260826-7161b85">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body { background: var(--bg-primary, #f5f7fa); }
+        .oa-content { padding: 16px; max-width: 960px; margin: 0 auto; }
+        .ws-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+        .ws-tabs .ws-tab { padding: 8px 18px; border: 1px solid var(--border-color,#dcdfe6); border-radius: 20px; background: #fff; color: #606266; font-size: 14px; cursor: pointer; transition: all .2s; }
+        .ws-tabs .ws-tab.active { background: #409eff; border-color: #409eff; color: #fff; }
+        .ws-card { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.05); }
+        .ws-card h3 { margin: 0 0 12px; font-size: 15px; }
+        .ws-form-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+        .ws-form-row label { font-size: 13px; font-weight: 600; display: block; margin-bottom: 4px; color: #606266; }
+        .ws-upload-box { border: 1px dashed #c0c4cc; border-radius: 8px; padding: 14px; text-align: center; color: #909399; cursor: pointer; font-size: 13px; transition: all .2s; }
+        .ws-upload-box:hover { border-color: #409eff; color: #409eff; }
+        .ws-upload-box.ws-upload-drag { border-color: #409eff; background: #ecf5ff; color: #409eff; border-style: solid; }
+        .ws-upload-box.ws-upload-drag i { color: #409eff; }
+        .ws-files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+        .ws-file-tag { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; background: #f5f7fa; border-radius: 14px; font-size: 12px; }
+        .ws-file-tag i { color: #409eff; }
+        .ws-file-tag .rm { cursor: pointer; color: #f56c6c; }
+        .ws-list-item { border: 1px solid #ebeef5; border-radius: 10px; padding: 14px; margin-bottom: 12px; background: #fff; }
+        .ws-item-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+        .ws-item-head .ws-date { font-size: 14px; font-weight: 600; color: #303133; }
+        .ws-badge { padding: 2px 10px; border-radius: 10px; font-size: 12px; }
+        .ws-badge.pending { background: #fdf6ec; color: #e6a23c; }
+        .ws-badge.analyzing { background: #ecf5ff; color: #409eff; }
+        .ws-badge.done { background: #f0f9eb; color: #67c23a; }
+        .ws-badge.failed { background: #fef0f0; color: #f56c6c; }
+        .ws-badge.disabled { background: #f4f4f5; color: #909399; }
+        .ws-banner { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 8px; background: #fdf6ec; color: #e6a23c; font-size: 13px; margin-bottom: 12px; }
+        .ws-model-modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.5); display: none; align-items: center; justify-content: center; z-index: 1002; }
+        .ws-model-modal.show { display: flex; }
+        .ws-model-box { background: #fff; border-radius: 12px; width: 92%; max-width: 560px; max-height: 86vh; overflow-y: auto; padding: 18px 20px; }
+        .ws-model-row { margin-bottom: 14px; }
+        .ws-model-row label { font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px; color: #606266; }
+        .ws-switch { position: relative; display: inline-block; width: 44px; height: 22px; vertical-align: middle; }
+        .ws-switch input { opacity: 0; width: 0; height: 0; }
+        .ws-switch .ws-slider { position: absolute; inset: 0; border-radius: 22px; background: #c0c4cc; transition: .25s; cursor: pointer; }
+        .ws-switch .ws-slider::before { content: ''; position: absolute; width: 18px; height: 18px; left: 2px; top: 2px; border-radius: 50%; background: #fff; transition: .25s; }
+        .ws-switch input:checked + .ws-slider { background: #409eff; }
+        .ws-switch input:checked + .ws-slider::before { transform: translateX(22px); }
+        .ws-model-hint { font-size: 12px; color: #909399; margin-top: 6px; }
+        /* 打印预览模态框 */
+        .ws-print-modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.55); display: none; align-items: stretch; justify-content: center; z-index: 1003; }
+        .ws-print-modal.show { display: flex; }
+        .ws-print-shell { width: 100%; max-width: 720px; background: #fff; display: flex; flex-direction: column; margin: 12px; border-radius: 10px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,.2); }
+        .ws-print-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #ebeef5; }
+        .ws-print-body { flex: 1; overflow: auto; padding: 16px 20px; background: #f5f7fa; }
+        .ws-print-area { background: #fff; border-radius: 8px; padding: 26px 28px; box-shadow: 0 1px 6px rgba(0,0,0,.06); line-height: 1.8; color: #303133; }
+        .ws-print-area h1 { color: #9b59b6; } .ws-print-area h2 { color: #409eff; }
+        .ws-print-area p { margin: 6px 0; }
+        .ws-print-area ul, .ws-print-area ol { padding-left: 22px; margin: 6px 0; }
+        .ws-print-area pre { background: #f4f5f7; padding: 10px; border-radius: 6px; overflow: auto; }
+        .ws-print-area blockquote { border-left: 3px solid #9b59b6; margin: 8px 0; padding: 6px 12px; background: #f6f2ff; }
+        .ws-print-area hr { border: none; border-top: 1px solid #dcdfe6; }
+        .ws-print-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid #ebeef5; }
+        @media print {
+            /* 只打印预览内容：隐藏 body 其余元素（display:none 而非 visibility，避免隐藏内容仍占版面导致第 2 页起排版混乱/重影悬浮） */
+            body > :not(.ws-print-modal) { display: none !important; }
+            .ws-print-modal { display: block !important; position: static !important; background: #fff !important; padding: 0 !important; overflow: visible !important; }
+            .ws-print-shell { max-width: none !important; width: 100% !important; margin: 0 !important; border-radius: 0 !important; box-shadow: none !important; overflow: visible !important; }
+            .ws-print-head, .ws-print-foot { display: none !important; }
+            .ws-print-body { overflow: visible !important; padding: 0 !important; background: #fff !important; }
+            .ws-print-area { position: static !important; box-shadow: none !important; border-radius: 0 !important; padding: 12px !important; }
+        }
+        [data-theme="dark"] .ws-print-shell { background: #1e1e1e; }
+        [data-theme="dark"] .ws-print-head, [data-theme="dark"] .ws-print-foot { border-color: #333; }
+        [data-theme="dark"] .ws-print-body { background: #141414; }
+        [data-theme="dark"] .ws-print-area { background: #1e1e1e; color: #e0e0e0; }
+        [data-theme="dark"] .ws-print-area pre { background: #2a2a2a; }
+        [data-theme="dark"] .ws-print-area blockquote { background: rgba(155,89,182,.12); }
+        .ws-content { font-size: 13px; color: #606266; white-space: pre-wrap; word-break: break-word; }
+        .ws-analysis { margin-top: 10px; background: #f8f9fb; border: 1px solid #ebeef5; border-radius: 8px; padding: 10px 12px; font-size: 13px; color: #303133; white-space: pre-wrap; word-break: break-word; }
+        .ws-analysis .ws-analysis-title { color: #9b59b6; font-weight: 600; margin-bottom: 6px; }
+        .ws-analysis .cursor-blink::after { content: '▍'; color: #9b59b6; animation: blink 1s infinite; }
+        @keyframes blink { 0%,100%{opacity:1;} 50%{opacity:0;} }
+        /* markdown 内容渲染 */
+        .ws-analysis-body { white-space: normal; line-height: 1.75; }
+        .ws-analysis-body p { margin: 6px 0; }
+        .ws-analysis-body h1, .ws-analysis-body h2, .ws-analysis-body h3, .ws-analysis-body h4 { margin: 10px 0 6px; font-weight: 600; }
+        .ws-analysis-body h1 { font-size: 16px; } .ws-analysis-body h2 { font-size: 15px; } .ws-analysis-body h3, .ws-analysis-body h4 { font-size: 14px; }
+        .ws-analysis-body ul, .ws-analysis-body ol { margin: 6px 0; padding-left: 22px; }
+        .ws-analysis-body li { margin: 3px 0; }
+        .ws-analysis-body code { background: rgba(0,0,0,.06); padding: 1px 5px; border-radius: 4px; font-size: 12px; font-family: Consolas, Monaco, monospace; }
+        .ws-analysis-body pre { background: #f2f3f5; border: 1px solid #ebeef5; border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 8px 0; }
+        .ws-analysis-body pre code { background: none; padding: 0; }
+        .ws-analysis-body blockquote { margin: 8px 0; padding: 6px 12px; border-left: 3px solid #9b59b6; background: rgba(155,89,182,.06); border-radius: 4px; }
+        .ws-analysis-body hr { border: none; border-top: 1px solid #dcdfe6; margin: 10px 0; }
+        .ws-analysis-body a { color: #409eff; text-decoration: none; }
+        .ws-analysis-body a:hover { text-decoration: underline; }
+        .ws-typing-caret { display: inline-block; width: 8px; height: 15px; background: linear-gradient(180deg, #9b59b6, #409eff); box-shadow: 0 0 8px rgba(155,89,182,.85); vertical-align: text-bottom; margin-left: 2px; border-radius: 2px; animation: blink 1s infinite; }
+        /* 流式生成科技感扫描光带 */
+        .ws-analysis.ws-typing-active { position: relative; overflow: hidden; }
+        .ws-analysis.ws-typing-active::before { content: ''; position: absolute; top: 0; left: -60%; width: 50%; height: 2px; background: linear-gradient(90deg, transparent, #9b59b6, #409eff, transparent); animation: wsScan 1.4s linear infinite; z-index: 2; }
+        @keyframes wsScan { 0% { left: -60%; } 100% { left: 110%; } }
+        /* AI 分析中：科技感动态提示（扩散光环 + 脑图标 + 渐变流动文字 + 跳动圆点） */
+        .ws-ai-thinking { display: flex; align-items: center; gap: 12px; padding: 16px 12px; }
+        .ws-ai-rings { position: relative; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .ws-ai-brain { font-size: 17px; color: #9b59b6; position: relative; z-index: 2; animation: wsBrain 2s ease-in-out infinite; }
+        .ws-ai-ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid rgba(155,89,182,.55); animation: wsRing 1.8s ease-out infinite; }
+        .ws-ai-ring.r2 { animation-delay: .6s; border-color: rgba(64,158,255,.55); }
+        .ws-ai-ring.r3 { animation-delay: 1.2s; border-color: rgba(103,194,58,.55); }
+        @keyframes wsRing { 0% { transform: scale(.25); opacity: 1; } 100% { transform: scale(1.55); opacity: 0; } }
+        @keyframes wsBrain { 0%,100% { transform: scale(1); filter: drop-shadow(0 0 2px rgba(155,89,182,.4)); } 50% { transform: scale(1.12); filter: drop-shadow(0 0 8px rgba(155,89,182,.9)); } }
+        .ws-ai-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+        .ws-ai-text { font-size: 13px; font-weight: 600; color: #9b59b6; background: linear-gradient(90deg,#9b59b6,#409eff,#9b59b6); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: wsTextShine 2.4s linear infinite; }
+        @keyframes wsTextShine { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+        .ws-ai-sub { font-size: 11px; color: #909399; }
+        .ws-ai-dots { display: inline-flex; gap: 4px; flex-shrink: 0; }
+        .ws-ai-dots i { width: 5px; height: 5px; border-radius: 50%; background: #409eff; animation: wsDot 1.2s ease-in-out infinite; }
+        .ws-ai-dots i:nth-child(2) { animation-delay: .2s; } .ws-ai-dots i:nth-child(3) { animation-delay: .4s; }
+        @keyframes wsDot { 0%,100% { opacity: .25; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-3px); } }
+        .ws-analysis.ws-thinking-active { border-color: rgba(155,89,182,.5); box-shadow: 0 0 16px rgba(155,89,182,.18); }
+        /* 大模型分析建议：折叠/展开 */
+        .ws-analysis-body-wrap { position: relative; }
+        .ws-analysis-body-wrap.ws-collapsed { max-height: 150px; overflow: hidden; }
+        .ws-analysis-body-wrap.ws-collapsed::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 36px; background: linear-gradient(180deg, transparent, #f8f9fb); pointer-events: none; }
+        .ws-analysis-toggle { margin-top: 6px; text-align: right; }
+        .ws-collapse-btn { border: none; background: none; color: #409eff; font-size: 12px; cursor: pointer; padding: 2px 8px; }
+        .ws-collapse-btn:hover { text-decoration: underline; }
+        .ws-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+        .ws-user { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+        .ws-user img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; }
+        .ws-pagination { display: flex; justify-content: center; gap: 8px; align-items: center; margin-top: 12px; }
+        .ws-empty { text-align: center; color: #909399; padding: 40px 0; font-size: 14px; }
+        .ws-modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.5); display: none; align-items: center; justify-content: center; z-index: 1000; }
+        .ws-modal.show { display: flex; }
+        .ws-modal-content { background: #fff; border-radius: 12px; width: 92%; max-width: 720px; max-height: 86vh; display: flex; flex-direction: column; }
+        .ws-modal-body { padding: 16px 20px; overflow-y: auto; }
+        .ws-filter { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+        .ws-filter input, .ws-filter select { padding: 6px 10px; border: 1px solid #dcdfe6; border-radius: 6px; font-size: 13px; }
+        /* 工作数据文件缩略图/图标 */
+        .ws-files { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+        .ws-file-thumb { position: relative; display: inline-flex; flex-direction: column; align-items: center; gap: 4px; width: 96px; background: #f5f7fa; border: 1px solid #ebeef5; border-radius: 8px; padding: 6px; cursor: pointer; transition: all .2s; }
+        .ws-file-thumb:hover { border-color: #409eff; }
+        .ws-file-thumb img { width: 84px; height: 84px; object-fit: cover; border-radius: 6px; background: #fff; }
+        .ws-file-thumb .ws-file-name { font-size: 11px; color: #606266; max-width: 84px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ws-file-doc { position: relative; display: inline-flex; flex-direction: column; align-items: center; gap: 4px; width: 96px; background: #f5f7fa; border: 1px solid #ebeef5; border-radius: 8px; padding: 6px; text-decoration: none; transition: all .2s; }
+        .ws-file-doc:hover { border-color: #409eff; }
+        .ws-file-doc .ws-file-icon { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; background: #ecf5ff; border-radius: 8px; color: #409eff; font-size: 18px; }
+        .ws-file-doc .ws-file-name { font-size: 11px; color: #606266; max-width: 84px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ws-file-doc .ws-file-save { position: absolute; top: 4px; right: 6px; font-size: 12px; color: #67c23a; opacity: .85; }
+        /* 工作数据文件：上传到网盘 / 在线编辑 / 已保存 图标 */
+        .ws-file-upload, .ws-file-edit, .ws-file-saved { position: absolute; top: 4px; left: 6px; z-index: 2; width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; background: rgba(255,255,255,.92); box-shadow: 0 1px 4px rgba(0,0,0,.15); }
+        .ws-file-upload { color: #409eff; cursor: pointer; }
+        .ws-file-upload:hover { background: #ecf5ff; }
+        .ws-file-edit { color: #9b59b6; cursor: pointer; }
+        .ws-file-edit:hover { background: #f3e8ff; }
+        .ws-file-saved { color: #67c23a; cursor: default; }
+        .ws-file-rm { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; background: rgba(245,108,108,.9); color: #fff; font-size: 10px; display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 2; }
+        /* 范围分析-成员选择 */
+        .ws-range-user-picker { position: relative; min-width: 220px; }
+        .ws-range-user-picker input { width: 100%; }
+        .ws-range-user-list { position: relative; top: calc(100% + 2px); left: 0; right: 0; background: #fff; border: 1px solid #dcdfe6; border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,.12); z-index: 50; display: none; max-height: 260px; overflow: auto; }
+        .ws-range-user-list.show { display: block; }
+        .ws-range-user-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; border-bottom: 1px solid #f0f0f0; }
+        .ws-range-user-item:hover { background: #f5f7fa; }
+        .ws-range-user-item img { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+        .ws-range-user-meta { flex: 1; min-width: 0; }
+        .ws-range-user-meta > div { font-size: 13px; color: #303133; }
+        .ws-range-user-sub { font-size: 11px; color: #909399; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        /* 深色主题 */
+        [data-theme="dark"] .ws-card, [data-theme="dark"] .ws-list-item, [data-theme="dark"] .ws-modal-content { background: #1e1e1e; }
+        [data-theme="dark"] .ws-file-thumb, [data-theme="dark"] .ws-file-doc { background: #2d2d2d; border-color: #333; }
+        [data-theme="dark"] .ws-file-thumb .ws-file-name, [data-theme="dark"] .ws-file-doc .ws-file-name { color: #d0d0d0; }
+        [data-theme="dark"] .ws-file-doc .ws-file-icon { background: #333; color: #66b1ff; }
+        [data-theme="dark"] .ws-file-upload, [data-theme="dark"] .ws-file-edit, [data-theme="dark"] .ws-file-saved { background: rgba(45,45,45,.92); }
+        [data-theme="dark"] .ws-file-upload:hover { background: #1a2740; }
+        [data-theme="dark"] .ws-file-edit:hover { background: #2d2240; }
+        [data-theme="dark"] .ws-range-user-list { background: #1e1e1e; border-color: #333; }
+        [data-theme="dark"] .ws-range-user-item { border-bottom-color: #333; }
+        [data-theme="dark"] .ws-range-user-item:hover { background: #2d2d2d; }
+        [data-theme="dark"] .ws-range-user-meta > div { color: #e0e0e0; }
+        [data-theme="dark"] .ws-banner { background: #3a2e1a; color: #e6a23c; }
+        [data-theme="dark"] .ws-analysis-body code { background: rgba(255,255,255,.1); }
+        [data-theme="dark"] .ws-analysis-body pre { background: #2a2a2a; border-color: #333; }
+        [data-theme="dark"] .ws-analysis-body blockquote { background: rgba(155,89,182,.12); }
+        [data-theme="dark"] .ws-analysis-body hr { border-top-color: #333; }
+        [data-theme="dark"] .ws-analysis-body a { color: #66b1ff; }
+        [data-theme="dark"] .ws-model-box { background: #1e1e1e; }
+        [data-theme="dark"] .ws-model-row label { color: #d0d0d0; }
+        [data-theme="dark"] .ws-tabs .ws-tab { background: #2d2d2d; color: #b0b0b0; border-color: #333; }
+        [data-theme="dark"] .ws-content { color: #d0d0d0; }
+        [data-theme="dark"] .ws-analysis { background: #2a2a2a; border-color: #333; color: #e0e0e0; }
+        [data-theme="dark"] .ws-analysis-body-wrap.ws-collapsed::after { background: linear-gradient(180deg, transparent, #2a2a2a); }
+        [data-theme="dark"] .ws-ai-sub { color: #888; }
+        [data-theme="dark"] .ws-collapse-btn { color: #66b1ff; }
+        [data-theme="dark"] .ws-file-tag { background: #2d2d2d; }
+        [data-theme="dark"] .ws-upload-box { border-color: #444; color: #888; }
+        [data-theme="dark"] .ws-upload-box.ws-upload-drag { border-color: #66b1ff; background: rgba(64,158,255,.12); color: #66b1ff; }
+    </style>
+</head>
+<body class="oa-body">
+
+<header class="oa-top-bar">
+    <div class="top-left">
+        <a href="/oa/work-calendar/" class="top-bar-btn" title="返回工作日历"><i class="fas fa-arrow-left"></i> <span class="top-bar-text">返回</span></a>
+        <span class="top-bar-title top-bar-text"><i class="fas fa-file-signature"></i> <span class="top-bar-text">每日工作总结</span></span>
+    </div>
+    <div class="top-center">
+        <a href="/chat/" class="top-bar-btn top-bar-text"><i class="fas fa-comments"></i> <span class="top-bar-text">聊天</span></a>
+        <a href="/cloud/" class="top-bar-btn top-bar-text"><i class="fas fa-cloud"></i> <span class="top-bar-text">网盘</span></a>
+        <a href="/oa/approval/" class="top-bar-btn"><i class="fas fa-check-double"></i> <span class="top-bar-text">OA审批</span></a>
+        <a href="/oa/attendance/" class="top-bar-btn"><i class="fas fa-clock"></i> <span class="top-bar-text">考勤</span></a>
+        <a href="/oa/subsidy/" class="top-bar-btn"><i class="fas fa-hand-holding-usd"></i> <span class="top-bar-text">普惠补贴</span></a>
+        <a href="/oa/work-calendar/" class="top-bar-btn"><i class="fas fa-calendar-alt"></i> <span class="top-bar-text">工作日历</span></a>
+        <a href="/oa/work-summary/" class="top-bar-btn" style="color:#ffd04b;"><i class="fas fa-file-signature"></i> <span class="top-bar-text">每日总结</span></a>
+    </div>
+    <div class="top-right">
+        <button class="btn-icon" id="themeToggleBtn" title="切换主题" onclick="toggleWsTheme()" style="border:none;background:transparent;cursor:pointer;font-size:16px;color:#fff;"><i class="fas fa-moon"></i></button>
+        <div class="notif-bell-wrap" id="notifBellWrap" title="工作通知" style="margin-right:4px;color:#fff;"><i class="fas fa-bell"></i><span class="notif-badge hide" id="notifBadge">0</span></div>
+        <div style="position:relative;display:flex;align-items:center;gap:4px;">
+            <div class="user-avatar-wrap" id="oaUserAvatarWrap" onclick="toggleWsUserMenu(event)">
+                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260826-7161b83" alt="头像">
+            </div>
+            <i class="fas fa-chevron-down" style="font-size:10px;color:rgba(255,255,255,0.7);cursor:pointer;" onclick="toggleWsUserMenu(event)"></i>
+            <div class="oa-user-dropdown" id="oaUserDropdown">
+                <div class="dd-item" onclick="window.location.href='/oa/attendance/'"><i class="fas fa-clock"></i> 考勤打卡</div>
+                <div class="dd-item" onclick="window.location.href='/oa/approval/'"><i class="fas fa-check-double"></i> OA审批</div>
+                <div class="dd-item" onclick="window.location.href='/oa/subsidy/'"><i class="fas fa-hand-holding-usd"></i> 普惠补贴</div>
+                <div class="dd-divider"></div>
+                <div class="dd-item" onclick="window.location.href='/oa/work-calendar/'"><i class="fas fa-calendar-alt"></i> 工作日历</div>
+                <div class="dd-item" onclick="window.location.href='/oa/work-summary/'"><i class="fas fa-file-signature"></i> 每日工作总结</div>
+                <div class="dd-divider"></div>
+                <div class="dd-item" onclick="window.location.href='/chat/'"><i class="fas fa-comments"></i> 聊天</div>
+                <div class="dd-item" onclick="window.location.href='/cloud/'"><i class="fas fa-cloud"></i> 网盘</div>
+                <div class="dd-divider"></div>
+                <div class="dd-item" onclick="window.location.href='/tasks/'"><i class="fas fa-tasks"></i> 任务</div>
+                <div class="dd-item" onclick="window.location.href='/org/'"><i class="fas fa-sitemap"></i> 组织架构</div>
+                <div class="dd-divider"></div>
+                <div class="dd-item" id="adminConsoleBtn" style="display:none;" onclick="event.stopPropagation();window.location.href='/control/'">
+                    <i class="fas fa-shield-alt"></i> 管理控制台
+                </div>
+                <div class="dd-item danger" onclick="apiConsole.logoutDialog()"><i class="fas fa-sign-out-alt"></i> 退出登录</div>
+            </div>
+        </div>
+        <!-- 仅管理员/超级管理员显示「管理控制台」 -->
+        <script>
+            (function () {
+                var t = localStorage.getItem('user_type');
+                if (t === 'admin' || t === 'super_admin') {
+                    var b = document.getElementById('adminConsoleBtn');
+                    if (b) b.style.display = 'flex';
+                }
+            })();
+        </script>
+    </div>
+</header>
+
+<div class="oa-content" id="wsPageBody">
+    <div class="ws-banner" id="wsDisabledBanner" style="display:none;"><i class="fas fa-exclamation-triangle"></i> 模型分析功能已停用，提交的总结将不再调用大模型分析，超级管理员可点击「模型设置」开启。</div>
+    <div class="ws-banner" id="wsTodayBanner" style="display:none;background:#eaf4ff;color:#409eff;"><i class="fas fa-bell"></i> 今日工作总结未完成，请及时提交今日工作总结</div>
+    <div class="ws-tabs">
+        <button class="ws-tab active" id="wsTabMy" onclick="workSummaryApp.switchTab('my')"><i class="fas fa-user"></i> 我的总结</button>
+        <button class="ws-tab" id="wsTabTeam" onclick="workSummaryApp.switchTab('team')" style="display:none;"><i class="fas fa-users"></i> 团队总结</button>
+        <button class="ws-tab" id="wsTabRange" onclick="workSummaryApp.switchTab('range')" style="display:none;"><i class="fas fa-chart-line"></i> 批量分析</button>
+        <div style="flex:1;"></div>
+        <button class="ws-tab" id="wsModelConfigBtn" onclick="workSummaryApp.openConfigModal()" style="display:none;border-color:#9b59b6;color:#9b59b6;"><i class="fas fa-cog"></i> 模型设置</button>
+    </div>
+
+    <!-- 我的总结 -->
+    <div id="wsMyView">
+        <div class="ws-card">
+            <h3><i class="fas fa-pen-square" style="color:#409eff;"></i> 提交今日工作总结</h3>
+            <div class="ws-form-row">
+                <div style="flex:1;min-width:150px;">
+                    <label>工作总结日期</label>
+                    <input type="date" id="wsDate" class="form-input" style="width:100%;">
+                </div>
+            </div>
+            <div class="ws-form-row">
+                <div style="flex:1;">
+                    <label>工作数据文件（图片/文档/表格，可多选）</label>
+                    <div class="ws-upload-box" id="wsUploadBox" onclick="document.getElementById('wsFilesInput').click()"
+                         ondragover="return workSummaryApp.onDragOver(event)" ondragenter="return workSummaryApp.onDragOver(event)"
+                         ondragleave="workSummaryApp.onDragLeave(event)" ondrop="workSummaryApp.onDropFiles(event)">
+                        <i class="fas fa-cloud-upload-alt" style="font-size:20px;margin-bottom:4px;display:block;"></i>
+                        点击选择 / 拖拽上传当天的工作截图、文档、表格等（支持图片、PDF、Word、MD、表格等多种类型，可多选）
+                        <input type="file" id="wsFilesInput" multiple style="display:none;" onchange="workSummaryApp.onFilesSelected(event)">
+                    </div>
+                    <div class="ws-files" id="wsFilesList"></div>
+                </div>
+            </div>
+            <div class="ws-form-row">
+                <div style="flex:1;">
+                    <label>当日工作总结</label>
+                    <textarea id="wsContent" class="form-textarea" rows="4" placeholder="请描述今天完成的工作、遇到的问题、解决的思路方法、达到的效果、明日计划等..."></textarea>
+                </div>
+            </div>
+            <div class="ws-banner" id="wsSecurityNotice" style="display:none;background:#ecf5ff;color:#409eff;font-size:12px;padding:8px 12px;">
+                <i class="fas fa-shield-alt"></i> 为保护信息安全，提交分析前将自动对手机号、邮箱、证件号等敏感信息做脱敏处理，再进行 AI 分析。
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
+                <button class="btn btn-primary" onclick="workSummaryApp.submit()"><i class="fas fa-paper-plane"></i> 提交并分析</button>
+            </div>
+        </div>
+        <h3 style="font-size:15px;margin:4px 0 12px;"><i class="fas fa-history" style="color:#409eff;"></i> 我的总结记录</h3>
+        <div class="ws-filter" id="wsMySearchBar">
+            <input type="date" id="wsMyDateFrom" title="开始日期">
+            <input type="date" id="wsMyDateTo" title="结束日期">
+            <input type="text" id="wsMyKeyword" placeholder="搜索总结内容 / 账号名..." style="min-width:180px;flex:1;"
+                   onkeydown="if(event.key==='Enter')workSummaryApp.loadMy(1)">
+            <button class="btn btn-primary btn-sm" onclick="workSummaryApp.loadMy(1)"><i class="fas fa-search"></i> 搜索</button>
+            <button class="btn btn-secondary btn-sm" onclick="workSummaryApp.resetMyFilter()"><i class="fas fa-undo"></i> 重置</button>
+        </div>
+        <div id="wsMyList"><div class="ws-empty"><i class="fas fa-spinner fa-spin"></i> 加载中...</div></div>
+        <div class="ws-pagination" id="wsMyPagination" style="display:none;"></div>
+    </div>
+
+    <!-- 团队总结 -->
+    <div id="wsTeamView" style="display:none;">
+        <div class="ws-card">
+            <div class="ws-filter">
+                <select id="wsDeptFilter"><option value="">全部部门</option></select>
+                <input type="date" id="wsDateFrom" title="开始日期">
+                <input type="date" id="wsDateTo" title="结束日期">
+                <div class="ws-range-user-picker" style="min-width:180px;">
+                    <input type="text" id="wsSearch" placeholder="搜索员工姓名/账号..." autocomplete="off"
+                           oninput="workSummaryApp.searchTeamUsers()" onfocus="workSummaryApp.searchTeamUsers()"
+                           onkeydown="if(event.key==='Enter')workSummaryApp.loadTeam(1)">
+                    <input type="hidden" id="wsTeamUserId">
+                    <div class="ws-range-user-list" id="wsTeamUserList"></div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="workSummaryApp.loadTeam(1)"><i class="fas fa-search"></i> 搜索</button>
+                <button class="btn btn-secondary btn-sm" onclick="workSummaryApp.resetTeamFilter()"><i class="fas fa-undo"></i> 重置</button>
+            </div>
+        </div>
+        <div id="wsTeamList"><div class="ws-empty"><i class="fas fa-spinner fa-spin"></i> 加载中...</div></div>
+        <div class="ws-pagination" id="wsTeamPagination" style="display:none;"></div>
+    </div>
+
+    <!-- 批量分析（指定员工 + 日期范围） -->
+    <div id="wsRangeView" style="display:none;">
+        <div class="ws-card">
+            <h3><i class="fas fa-chart-line" style="color:#9b59b6;"></i> 批量分析员工每日工作总结</h3>
+            <div class="ws-form-row">
+                <div style="flex:1;min-width:200px;">
+                    <label>选择员工</label>
+                    <div class="ws-range-user-picker">
+                        <input type="text" id="wsRangeUserInput" class="form-input" placeholder="搜索姓名/账号选择员工" autocomplete="off"
+                               oninput="workSummaryApp.searchRangeUsers()" onfocus="workSummaryApp.searchRangeUsers()">
+                        <input type="hidden" id="wsRangeUserId">
+                        <div class="ws-range-user-list" id="wsRangeUserList"></div>
+                    </div>
+                </div>
+                <div>
+                    <label>开始日期</label>
+                    <input type="date" id="wsRangeDateFrom" class="form-input">
+                </div>
+                <div>
+                    <label>结束日期</label>
+                    <input type="date" id="wsRangeDateTo" class="form-input">
+                </div>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
+                <button class="btn btn-primary" onclick="workSummaryApp.startRangeAnalysis()"><i class="fas fa-robot"></i> 开始分析</button>
+            </div>
+            <div style="font-size:12px;color:#909399;margin-top:8px;"><i class="fas fa-info-circle"></i> 系统将汇总所选员工在该日期范围内的每日工作总结，按该员工职位生成提示词，调用大模型进行阶段性综合分析。</div>
+        </div>
+        <h3 style="font-size:15px;margin:4px 0 12px;"><i class="fas fa-history" style="color:#9b59b6;"></i> 批量分析记录</h3>
+        <div id="wsRangeList"><div class="ws-empty"><i class="fas fa-spinner fa-spin"></i> 加载中...</div></div>
+        <div class="ws-pagination" id="wsRangePagination" style="display:none;"></div>
+    </div>
+</div>
+
+<!-- 模型配置模态框（超管） -->
+<div class="ws-model-modal" id="wsModelModal">
+    <div class="ws-model-box">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+            <h3 style="margin:0;font-size:16px;"><i class="fas fa-cog" style="color:#9b59b6;"></i> 每日总结大模型配置</h3>
+            <div style="display:flex;gap:6px;align-items:center;">
+                <button class="maximize-btn" onclick="workSummaryApp.toggleMaximize(this)" title="最大化"><i class="fas fa-expand"></i></button>
+                <button class="close-btn" onclick="workSummaryApp.closeConfigModal()">&times;</button>
+            </div>
+
+        </div>
+        <div class="ws-model-row">
+            <label>启用模型分析</label>
+            <label class="ws-switch">
+                <input type="checkbox" id="wsModelEnabled" onchange="workSummaryApp._updateEnabledText()">
+                <span class="ws-slider"></span>
+            </label>
+            <span id="wsModelEnabledText" style="font-size:13px;color:#606266;margin-left:6px;">已启用</span>
+        </div>
+        <div class="ws-model-row">
+            <label>调用的大模型</label>
+            <select id="wsModelSelect" class="form-input" style="width:100%;" onchange="workSummaryApp.onModelSelectChange()">
+                <option value="">使用系统默认模型</option>
+            </select>
+            <div class="ws-model-hint">系统默认模型：<span id="wsDefaultModel"></span></div>
+        </div>
+        <div class="ws-model-row" id="wsModelCustomRow" style="display:none;">
+            <label>自定义模型 ID</label>
+            <input type="text" id="wsModelCustom" class="form-input" style="width:100%;" placeholder="输入火山方舟模型ID，如 doubao-seed-2-1-pro-260628">
+        </div>
+        <div class="ws-model-row">
+            <label>当前生效模型</label>
+            <div id="wsEffectiveModel" style="font-size:13px;color:#67c23a;word-break:break-all;"></div>
+        </div>
+        <!-- 内部数据合规：敏感信息脱敏 -->
+        <div class="ws-model-row">
+            <label>数据安全 · 敏感信息脱敏</label>
+            <label class="ws-switch">
+                <input type="checkbox" id="wsMaskSensitive" onchange="workSummaryApp._updateMaskText()">
+                <span class="ws-slider"></span>
+            </label>
+            <span id="wsMaskText" style="font-size:13px;color:#606266;margin-left:6px;">已开启</span>
+            <div class="ws-model-hint">开启后，提交给大模型分析前会自动对手机号/邮箱/证件号/银行卡等敏感信息做脱敏，符合集团数据安全管控规范。</div>
+        </div>
+        <!-- 第三方依赖风险管控：每日调用量/成本限额 -->
+        <div class="ws-model-row">
+            <label>第三方依赖风险管控 · 每日调用限额</label>
+            <label class="ws-switch">
+                <input type="checkbox" id="wsLimitEnabled" onchange="workSummaryApp._updateLimitUi()">
+                <span class="ws-slider"></span>
+            </label>
+            <span id="wsLimitText" style="font-size:13px;color:#606266;margin-left:6px;">未启用</span>
+            <div class="ws-model-hint">开启后，每日调用量/费用达到上限即停止调用大模型（降级兜底），并自动向超级管理员发送告警通知。</div>
+        </div>
+        <div id="wsLimitFields" style="display:none;">
+            <div class="ws-model-row">
+                <label>每日分析次数上限（0=不限）</label>
+                <input type="number" id="wsDailyCallLimit" class="form-input" style="width:100%;" min="0" placeholder="0">
+            </div>
+            <div class="ws-model-row">
+                <label>每日费用上限（元，0=不限）</label>
+                <input type="number" id="wsDailyCostLimit" class="form-input" style="width:100%;" min="0" step="0.01" placeholder="0">
+            </div>
+            <div class="ws-model-row">
+                <label>每千 token 估算成本（元）</label>
+                <input type="number" id="wsCostPer1k" class="form-input" style="width:100%;" min="0" step="0.0001" placeholder="0.002">
+            </div>
+            <div class="ws-model-hint">今日已分析 <span id="wsTodayCalls">0</span> 次，估算费用 ¥<span id="wsTodayCost">0</span>。</div>
+        </div>
+        <!-- 上线灰度试点：AI 分析开放范围 -->
+        <div class="ws-model-row">
+            <label>上线灰度试点 · AI 分析开放范围</label>
+            <select id="wsScopeType" class="form-input" style="width:100%;" onchange="workSummaryApp._updateScopeUi()">
+                <option value="all">全员</option>
+                <option value="positions">仅指定职位</option>
+                <option value="departments">仅指定部门</option>
+                <option value="users">仅指定用户</option>
+            </select>
+            <div class="ws-model-hint">仅范围内的员工提交总结时才会调用大模型分析；范围外员工总结正常保存但不分析，用于小范围灰度验证。</div>
+        </div>
+        <div id="wsScopePositions" style="display:none;">
+            <div class="ws-model-row">
+                <label>职位列表（每行一个职位名）</label>
+                <textarea id="wsScopePositionsInput" class="form-textarea" rows="4" placeholder="例如：&#10;外贸销售&#10;供应链&#10;研发工程师"></textarea>
+            </div>
+        </div>
+        <div id="wsScopeDepts" style="display:none;">
+            <div class="ws-model-row">
+                <label>选择部门（含子部门）</label>
+                <div id="wsScopeDeptList" style="max-height:180px;overflow:auto;border:1px solid #ebeef5;border-radius:8px;padding:8px;font-size:13px;"></div>
+            </div>
+        </div>
+        <div id="wsScopeUsers" style="display:none;">
+            <div class="ws-model-row">
+                <label>选择用户</label>
+                <div class="ws-range-user-picker">
+                    <input type="text" id="wsScopeUserInput" class="form-input" placeholder="搜索姓名/账号添加" autocomplete="off"
+                           oninput="workSummaryApp.searchScopeUsers()" onfocus="workSummaryApp.searchScopeUsers()">
+                    <div class="ws-range-user-list" id="wsScopeUserList"></div>
+                </div>
+                <div id="wsScopeUserTags" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;"></div>
+            </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+            <button class="btn btn-secondary" onclick="workSummaryApp.closeConfigModal()">取消</button>
+            <button class="btn btn-primary" onclick="workSummaryApp.saveConfig()"><i class="fas fa-check"></i> 保存配置</button>
+        </div>
+    </div>
+</div>
+
+<!-- 导出模态框 -->
+<div class="ws-model-modal" id="wsExportModal">
+    <div class="ws-model-box" style="max-width:440px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+            <h3 style="margin:0;font-size:16px;"><i class="fas fa-download" style="color:#9b59b6;"></i> 导出工作总结与分析结果</h3>
+            <button class="close-btn" onclick="workSummaryApp.closeExportModal()">&times;</button>
+        </div>
+        <div class="ws-model-row">
+            <label>导出格式</label>
+            <select id="wsExportFormat" class="form-input" style="width:100%;">
+                <option value="doc">Word 文档（.doc）</option>
+                <option value="pdf">PDF 文档</option>
+                <option value="md">Markdown 文档（.md）</option>
+            </select>
+        </div>
+        <div class="ws-model-row">
+            <label>保存位置</label>
+            <select id="wsExportDest" class="form-input" style="width:100%;">
+                <option value="cloud">保存到我的网盘</option>
+                <option value="local">本地下载</option>
+            </select>
+            <div class="ws-model-hint">PDF 为真实 PDF 文件（后端生成），可直接下载或保存到网盘；需要打印请使用列表/详情页的「打印」按钮。</div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+            <button class="btn btn-secondary" onclick="workSummaryApp.closeExportModal()">取消</button>
+            <button class="btn btn-primary" onclick="workSummaryApp.doExport()"><i class="fas fa-download"></i> 导出</button>
+        </div>
+    </div>
+</div>
+
+<!-- 分享到私聊模态框 -->
+<div class="ws-model-modal" id="wsShareModal">
+    <div class="ws-model-box" style="max-width:460px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+            <h3 style="margin:0;font-size:16px;"><i class="fas fa-share-alt" style="color:#9b59b6;"></i> 分享工作总结</h3>
+            <button class="close-btn" onclick="workSummaryApp.closeShareModal()">&times;</button>
+        </div>
+        <div class="ws-model-row">
+            <label>选择分享给的用户（将以私聊卡片发送）</label>
+            <div class="ws-range-user-picker">
+                <input type="text" id="wsShareUserInput" class="form-input" placeholder="搜索姓名/账号选择用户" autocomplete="off"
+                       oninput="workSummaryApp.searchShareUsers()" onfocus="workSummaryApp.searchShareUsers()">
+                <div class="ws-range-user-list" id="wsShareUserList"></div>
+            </div>
+        </div>
+        <div class="ws-model-hint" style="margin-bottom:6px;">对方会在私聊中收到「每日工作总结」卡片，点击可直接查看详情。</div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+            <button class="btn btn-secondary" onclick="workSummaryApp.closeShareModal()">取消</button>
+            <button class="btn btn-primary" onclick="workSummaryApp.doShare()"><i class="fas fa-paper-plane"></i> 分享</button>
+        </div>
+    </div>
+</div>
+
+<!-- 打印预览模态框（带关闭/返回按钮，移动端可关闭） -->
+<div class="ws-print-modal" id="wsPrintModal">
+    <div class="ws-print-shell">
+        <div class="ws-print-head">
+            <h3 style="margin:0;font-size:16px;"><i class="fas fa-print" style="color:#9b59b6;"></i> 打印预览</h3>
+            <button class="close-btn" onclick="workSummaryApp.closePrintModal()" title="关闭/返回">&times;</button>
+        </div>
+        <div class="ws-print-body">
+            <div class="ws-print-area" id="wsPrintArea"></div>
+        </div>
+        <div class="ws-print-foot">
+            <button class="btn btn-secondary" onclick="workSummaryApp.closePrintModal()"><i class="fas fa-arrow-left"></i> 返回</button>
+            <button class="btn btn-primary" onclick="workSummaryApp.doPrint()"><i class="fas fa-print"></i> 打印</button>
+        </div>
+    </div>
+</div>
+
+<!-- 详情模态框 -->
+<div class="ws-modal" id="wsDetailModal">
+    <div class="ws-modal-content">
+        <div class="ws-modal-head" style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid #ebeef5;">
+            <h3 style="margin:0;font-size:16px;"><i class="fas fa-file-signature" style="color:#409eff;"></i> 工作总结详情</h3>
+            <div style="display:flex;gap:6px;align-items:center;">
+                <button class="maximize-btn" onclick="workSummaryApp.toggleMaximize(this)" title="最大化"><i class="fas fa-expand"></i></button>
+                <button class="close-btn" onclick="workSummaryApp.closeDetail()">&times;</button>
+            </div>
+
+        </div>
+        <div class="ws-modal-body" id="wsDetailBody"></div>
+        <div style="padding:12px 20px;border-top:1px solid #ebeef5;display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;" id="wsDetailFooter">
+            <button class="btn btn-secondary" onclick="workSummaryApp.closeDetail()">关闭</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/dist/spark-md5.min.js?v=20260826-7161b83"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260826-7161b83"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260826-7161b83"></script>
+<script src="/static/js/encrypts.js?v=20260826-7161b83"></script>
+<script src="/static/js/utils.js?v=20260826-7161b84"></script>
+<script src="/static/js/api.js?v=20260826-7161b83"></script>
+<script src="/static/js/tenant.js?v=20260826-7161b83"></script>
+<script src="/static/js/notifications.js?v=20260826-5b7f3e9"></script>
+<script>
+    function toggleWsTheme() {
+        var cur = document.documentElement.getAttribute('data-theme') || 'light';
+        var next = cur === 'light' ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('theme', next);
+        var i = document.querySelector('#themeToggleBtn i');
+        if (i) i.className = next === 'light' ? 'fas fa-moon' : 'fas fa-sun';
+    }
+    function toggleWsUserMenu(e) {
+        e.stopPropagation();
+        var dd = document.getElementById('oaUserDropdown');
+        if (dd) dd.classList.toggle('show');
+    }
+    document.addEventListener('click', function (e) {
+        if (!e.target.closest('.oa-user-dropdown') && !e.target.closest('.user-avatar-wrap')) {
+            var dd = document.getElementById('oaUserDropdown');
+            if (dd) dd.classList.remove('show');
+        }
+        if (!e.target.closest('.ws-range-user-picker')) {
+            ['wsRangeUserList', 'wsTeamUserList', 'wsShareUserList', 'wsScopeUserList'].forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) { el.innerHTML = ''; el.classList.remove('show'); }
+            });
+        }
+    });
+    (function () {
+        var t = localStorage.getItem('theme');
+        if (t) document.documentElement.setAttribute('data-theme', t);
+        fetch('/api/auth/me/', {headers: TokenManager.getHeaders()}).then(function (r) { return r.json(); }).then(function (u) {
+            var el = document.getElementById('adminAvatar');
+            if (el && u && u.avatar_url) el.src = u.avatar_url;
+        }).catch(function () {});
+    })();
+</script>
+<script src="/static/js/work-summary.js?v=20260827-7b1e4f8"></script>
+<script src="/static/js/watermark.js?v=20260827-6e4b8c1"></script>
+<script>WatermarkManager.init();</script>
+</body>
+</html>

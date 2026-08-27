@@ -3052,6 +3052,7 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
         name = request.data.get('name', '')
         if not url:
             return Response({'error': '缺少url参数'}, status=400)
+        folder_name = request.data.get('folder_name', '') or ''
         # 处理相对路径，拼接完整URL
         if url.startswith('/'):
             base = f"{request.scheme}://{request.get_host()}"
@@ -3079,11 +3080,11 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                 'already_exists': True,
             })
 
-        safe_folder_name = '文档（来自审批）'
+        safe_folder_name = folder_name or '文档（来自审批）'
         folder, _ = Folder.objects.get_or_create(
             owner=request.user,
             name=safe_folder_name,
-            defaults={'parent': None, 'description': '从OA审批同步', 'is_public': False}
+            defaults={'parent': None, 'description': '从系统模块同步', 'is_public': False}
         )
         cloud_file = CloudFile(
             folder=folder, owner=request.user,

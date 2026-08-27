@@ -1,0 +1,325 @@
+数分钟内完成你的首次 API 调用。
+快速入门(新手版)
+为零基础用户设计的快速入门
+
+方舟文档 MCP
+极简配置，协同 AI 完成大模型开发
+
+Agent Plan
+一站式智能体开发方案，快速搭建专属 AI Agent
+
+1 获取并配置 API Key
+获取 API Key：在控制台左下角选择 API Key 管理，创建你的 API Key。
+配置环境变量：在终端中运行下面命令（替换your_api_key_here 为你的方舟API Key），配置 API Key 到环境变量。
+配置持久化环境变量方法参见 环境变量配置指南。
+
+MacOS
+Linux
+Windows_CMD
+Windows_PowerShell
+
+Bash
+复制
+export ARK_API_KEY="your_api_key_here"
+
+2 开通模型服务
+访问 开通管理页面 开通模型服务。
+3 安装 SDK
+安装官方或三方 SDK。
+
+Python
+Go
+Java
+
+运行环境中需安装 Python 版本 3.7 或以上。
+安装方舟 SDK：
+
+Bash
+复制
+pip install 'volcengine-python-sdk[ark]'
+
+Windows CMD 不支持单引号作为引用符。如在 Windows CMD 中执行，请改用双引号：pip install "volcengine-python-sdk[ark]"
+安装 OpenAI SDK：
+
+Bash
+复制
+pip install openai
+
+4 发起 API 请求
+以下按输入输出类别列举的典型任务，选择任意示例代码体验如何通过 API 调用及体验大模型及方舟平台能力。
+文本生成
+传入文本类信息给模型，进行问答、分析、改写、摘要、编程、翻译等任务，并返回文本结果。
+
+输入
+
+输出预览
+
+Hello
+
+思考：Got it, let's see. The user said "hello". I need to respond in a friendly and welcoming way. Since the system prompt mentions a professional but friendly tone, I should keep it natural. Maybe something like "Hello! How can I assist you today?" That's simple, polite, and open-ended to encourage the user to share what they need help with.
+回答：Hello! How can I assist you today? Whether you have a question, need help with something specific, or just want to chat, feel free to let me know. 😊
+
+Python
+Curl
+Go
+Java
+OpenAI SDK
+
+Python
+复制
+import os
+from volcenginesdkarkruntime import Ark
+
+client = Ark(
+    base_url='https://ark.cn-beijing.volces.com/api/v3',
+    api_key=os.getenv('ARK_API_KEY'),
+)
+
+response = client.responses.create(
+    model="doubao-seed-2-1-pro-260628",
+    input="hello", # Replace with your prompt
+    # thinking={"type": "disabled"}, #  Manually disable deep thinking
+)
+
+for item in response.output:
+    if item.type == "reasoning":
+        for summary in item.summary:
+            if summary.type == "summary_text":
+                print(f"思考：{summary.text}")
+    elif item.type == "message":
+        for content in item.content:
+            if content.type == "output_text":
+                print(f"回答：{content.text}")
+
+文本生成：文本生成使用指南。
+深度思考：深度思考能力使用指南。
+迁移至 Responses API：新用户推荐，更简洁的上下文管理能力、强大的工具调用能力。
+Chat API：存量业务迭代推荐，广泛使用的 API。
+多模态理解
+传入图片、视频、PDF文件给模型，进行分析、内容审核、问答、视觉定位等基于多模态理解相关任务，并返回文本结果。
+
+输入
+
+输出预览
+
+支持输入图片的模型系列是哪个？
+
+思考：用户现在需要找支持输入图片的模型系列，看表格里的输入列中的图像列，哪个模型对应的图像输入是√。看表格，Doubao-1.5-vision那一行的输入图像列是√，其他两个Doubao-1.5-pro和lite的输入图像都是×，所以答案是Doubao-1.5-vision。
+回答：支持输入图片的模型系列是Doubao-1.5-vision
+
+Python
+Curl
+Go
+Java
+OpenAI SDK
+
+Python
+复制
+import os
+from volcenginesdkarkruntime import Ark
+
+client = Ark(
+    base_url='https://ark.cn-beijing.volces.com/api/v3',
+    api_key=os.getenv('ARK_API_KEY'),
+)
+
+response = client.responses.create(
+    model="doubao-seed-2-1-pro-260628",
+    input=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_image",
+                    "image_url": "https://ark-project.tos-cn-beijing.volces.com/doc_image/ark_demo_img_1.png"
+                },
+                {
+                    "type": "input_text",
+                    "text": "支持输入图片的模型系列是哪个？"
+                },
+            ],
+        }
+    ]
+)
+
+for item in response.output:
+    if item.type == "reasoning":
+        for summary in item.summary:
+            if summary.type == "summary_text":
+                print(f"思考：{summary.text}")
+    elif item.type == "message":
+        for content in item.content:
+            if content.type == "output_text":
+                print(f"回答：{content.text}")
+
+多模态理解：多模态理解详细使用指南。
+视觉定位 Grounding：图片中找到对应目标并返回坐标任务。
+GUI Agent 能力：在计算机/移动设备中完成自动化任务。
+文件输入(File API)：传入图片、视频、文档接口。
+图片生成
+传入图片、文字给模型，进行以下场景&任务：
+广告、海报、组图等图片生成；
+增改元素、颜色更换等图片编辑；
+油墨、水墨等风格切换。
+
+提示词
+
+输出预览
+
+充满活力的特写编辑肖像，模特眼神犀利，头戴雕塑感帽子，色彩拼接丰富，眼部焦点锐利，景深较浅，具有Vogue杂志封面的美学风格，采用中画幅拍摄，工作室灯光效果强烈。
+
+Python
+Curl
+Java
+Go
+OpenAI
+
+Python
+复制
+import os
+# Install SDK:  pip install 'volcengine-python-sdk[ark]'
+from volcenginesdkarkruntime import Ark
+
+client = Ark(
+    # The base URL for model invocation
+    base_url="https://ark.cn-beijing.volces.com/api/v3",
+    # Get API Key：https://console.volcengine.com/ark/region:cn-beijing/apikey
+    api_key=os.getenv('ARK_API_KEY'),
+)
+
+imagesResponse = client.images.generate(
+    # Replace with Model ID
+    model="doubao-seedream-5-0-260128",
+    prompt="充满活力的特写编辑肖像，模特眼神犀利，头戴雕塑感帽子，色彩拼接丰富，眼部焦点锐利，景深较浅，具有Vogue杂志封面的美学风格，采用中画幅拍摄，工作室灯光效果强烈。",
+    size="2K",
+    response_format="url",
+    watermark=False
+)
+
+print(imagesResponse.data[0].url)
+
+Doubao Seedream 4.0-5.0 教程：主流生图模型能力以及如何通过 API 调用。
+Seedream 4.0-5.0 提示词指南：使用生图模型时，如何编写提示词。
+视频生成
+通过文本描述、图像素材、视频素材，快速生成高质量、风格多样的视频内容。
+
+提示词
+
+输出画面预览
+
+一位身穿绿色亮片礼服的女性站在粉红色背景前，周围飘落着五彩斑斓的彩纸
+
+Python
+Java
+Go
+
+Python
+复制
+import os
+import time
+# Install SDK:  pip install 'volcengine-python-sdk[ark]'
+from volcenginesdkarkruntime import Ark
+
+client = Ark(
+    base_url="https://ark.cn-beijing.volces.com/api/v3", # The base URL for model invocation
+    api_key=os.environ.get("ARK_API_KEY"), # Get API Key：https://console.volcengine.com/ark/region:cn-beijing/apikey
+)
+
+if __name__ == "__main__":
+    print("----- create request -----")
+    create_result = client.content_generation.tasks.create(
+        model="doubao-seedance-2-0-260128", # Replace with Model ID
+        content=[
+            {
+                # Combination of text prompt and parameters
+                "type": "text",
+                "text": "一位身穿绿色亮片礼服的女性站在粉红色背景前，周围飘落着五彩斑斓的彩纸 --wm true --dur 5"
+            }
+        ]
+    )
+    print(create_result)
+
+# Polling query section
+    print("----- polling task status -----")
+    task_id = create_result.id
+    max_wait = 600  # Maximum wait time in seconds
+    interval = 10   # Initial polling interval
+    start = time.time()
+
+while time.time() - start < max_wait:
+        get_result = client.content_generation.tasks.get(task_id=task_id)
+        status = get_result.status
+        if status == "succeeded":
+            print("----- task succeeded -----")
+            print(get_result)
+            break
+        elif status == "failed":
+            print("----- task failed -----")
+            print(f"Error: {get_result.error}")
+            break
+        else:
+            print(f"Current status: {status}, retrying after {interval:.0f}s...")
+            time.sleep(interval)
+            interval = min(interval * 1.5, 30)
+    else:
+        raise TimeoutError(f"Task {task_id} timed out after {max_wait}s. "
+                            f"Task may still be running - check status manually.")
+
+视频生成教程：学习如何使用模型的视频生成能力，包括文本生成视频、首尾帧生视频、首帧生成视频等。
+Seedance-1.0-pro&pro-fast 提示词指南：使用生视频模型时，如何编写提示词。
+工具使用
+通过工具/插件让模型具体读取外部数据及函数的能力，包括
+内置工具：联网搜索、图片处理、知识库检索等已集成至方舟平台的工具。
+三方工具：兼容MCP 的三方工具。
+自定义工具：您自行定义及开发的工具。
+
+输入
+
+输出预览
+
+What's the weather like in Beijing?
+
+According to the latest weather data as of March 10, 2026, the current weather in Beijing is sunny with a gentle wind (less than level 3). The temperature around 11:30 AM is approximately 9°C, and it is expected to reach a high of 12°C during the day. The weather will remain clear at night with a low temperature of 1°C.
+Source : Weather forecasts updated on March 10, 2026, from the Central Meteorological Observatory.
+Note: Data is accurate as of the latest available update at 05:30 AM on March 10.
+
+Python
+Curl
+Java
+Go
+OpenAI SDK
+
+Python
+复制
+import os
+from volcenginesdkarkruntime import Ark
+
+client = Ark(
+    base_url="https://ark.cn-beijing.volces.com/api/v3",
+    api_key=os.getenv("ARK_API_KEY"),
+)
+
+response = client.responses.create(
+    model="doubao-seed-2-1-pro-260628",
+    input=[{"role": "user", "content": "What's the weather like in Beijing?"}],
+    tools=[
+        {
+            "type": "web_search",
+            "max_keyword": 2,
+        }
+    ],
+)
+
+for item in response.output:
+    if item.type == "message":
+        for content in item.content:
+            if content.type == "output_text":
+                print(content.text)
+
+工具调用：学习如何让模型使用内置工具，如网页搜索、知识库检索、豆包助手等能力。
+Function Calling（函数调用）：学习如何让模型调用自定义的工具。
+云部署 MCP / Remote MCP：学习如何让模型使用 MCP 服务。
+
+5 下一步
+现在你已经完成了首次方舟模型服务的 API 调用，你可以探索模型的更多能力，包括：
+模型列表：快速浏览方舟提供的模型全集以及各个模型所具备的能力，快速根据你的实际场景匹配到合适的模型。

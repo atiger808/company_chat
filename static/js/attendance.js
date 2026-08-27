@@ -24,6 +24,10 @@ class AttendanceApp {
             window.location.href = this.chat_login_url;
             return;
         }
+        // 打印权限：无权限则隐藏打印按钮并提示
+        if (window.WatermarkManager && WatermarkManager.applyPrintPermission) {
+            WatermarkManager.applyPrintPermission();
+        }
         this.updateClock();
         this._initTimer = setInterval(() => this.updateClock(), 1000);
         await this.loadToday();
@@ -542,17 +546,20 @@ class AttendanceApp {
         }
     }
 
-    openMakeupModal() {
+    async openMakeupModal() {
         var now = new Date();
-        var y = now.getFullYear();
-        var m = String(now.getMonth() + 1).padStart(2, '0');
-        var d = String(now.getDate()).padStart(2, '0');
-        var todayStr = y + '-' + m + '-' + d;
-        var dateInput = document.getElementById('makeupDate');
-        if (dateInput) {
-            dateInput.max = todayStr;
-            dateInput.value = todayStr;
-        }
+        this._mkYear = now.getFullYear();
+        this._mkMonth = now.getMonth() + 1;
+        var dateHidden = document.getElementById('makeupDate');
+        if (dateHidden) dateHidden.value = '';
+        this._mkSelectedDate = null;
+        this._mkDays = [];
+        // 加载本月考勤日历，用于高亮迟到/早退与漏卡日期
+        try {
+            var cdata = await this.apiGet(OA_API_URL + '/attendance/calendar-stats/?year=' + this._mkYear + '&month=' + this._mkMonth);
+            this._mkDays = (cdata && cdata.days) || [];
+        } catch (e) { /* 高亮加载失败不影响补卡 */ }
+        this.renderMakeupCalendar();
         var used = this._makeupUsed || 0;
         var allowance = (this._makeupAllowance != null) ? this._makeupAllowance : 3;
         var tip = document.getElementById('makeupRemainingTip');
@@ -563,6 +570,82 @@ class AttendanceApp {
         setTimeout(function () {
             document.getElementById('attendanceMakeupModal').classList.add('show');
         }, 10);
+    }
+
+    // 渲染补卡日历：仅当日及之前「迟到/早退（琥珀）」「漏卡（红）」可点选；
+    // 正常打卡/未来/休息日/节假日/请假日不可选；未获取到考勤数据时全部置灰并提示。
+    renderMakeupCalendar() {
+        var grid = document.getElementById('makeupCalGrid');
+        var legend = document.getElementById('makeupCalLegend');
+        var hint = document.getElementById('makeupCalHint');
+        if (!grid) return;
+        var ct = document.getElementById('makeupClockType') ? document.getElementById('makeupClockType').value : 'clock_in';
+        var y = this._mkYear, month = this._mkMonth;
+        var now = new Date();
+        var todayStr = y + '-' + String(month).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+        var dataOk = !!(this._mkDays && this._mkDays.length);
+        if (hint) {
+            if (!dataOk) {
+                hint.innerHTML = '<i class="fas fa-exclamation-triangle"></i> 未获取到考勤数据，暂无法选择补卡日期，请刷新后重试';
+                hint.style.background = '#fdf6ec';
+                hint.style.color = '#e6a23c';
+            } else {
+                hint.innerHTML = '<i class="fas fa-info-circle"></i> 仅可选择今日及之前的「迟到/早退」或「漏卡」日期（休息日/节假日/请假日除外），点击高亮日期选择';
+                hint.style.background = '#ecf5ff';
+                hint.style.color = '#409eff';
+            }
+        }
+        var week = ['日', '一', '二', '三', '四', '五', '六'];
+        var html = week.map(function (w) {
+            return '<div style="text-align:center;font-size:11px;color:var(--text-light,#909399);padding:2px 0;">' + w + '</div>';
+        }).join('');
+        var firstDay = new Date(y, month - 1, 1).getDay();
+        var dim = new Date(y, month, 0).getDate();
+        for (var i = 0; i < firstDay; i++) html += '<div></div>';
+        for (var day = 1; day <= dim; day++) {
+            var ds = y + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+            var info = {};
+            (this._mkDays || []).forEach(function (x) { if (x.date === ds) info = x; });
+            var rec = ct === 'clock_in' ? (info.clock_in || null) : (info.clock_out || null);
+            var recStatus = rec ? rec.status : '';
+            var isFuture = info.day_status === 'future';
+            var isRest = info.day_status === 'rest' || info.day_status === 'leave';
+            var notYet = (ds === todayStr) && !rec; // 今天尚未打该卡 → 应直接打卡，不补卡
+            // 严格按规则判定：必须有考勤数据且为迟到/早退或漏卡才可选择，其余日期一律不可选
+            var hasInfo = !!info.day_status;
+            var eligible = false, kind = '';
+            if (dataOk && hasInfo && !isFuture && !isRest && !notYet) {
+                if (!rec) { eligible = true; kind = 'miss'; }
+                else if (recStatus === 'late' || recStatus === 'early_leave') { eligible = true; kind = 'late'; }
+            }
+            var isSel = this._mkSelectedDate === ds;
+            var bg = eligible ? (kind === 'late' ? '#fdf6ec' : '#fef0f0') : '#f5f7fa';
+            var color = eligible ? '#303133' : (isFuture ? '#c0c4cc' : '#909399');
+            var border = isSel ? '2px solid #409eff' : '1px solid #ebeef5';
+            var cursor = eligible ? 'pointer' : 'not-allowed';
+            var mark = '';
+            if (eligible && kind === 'late') mark = '<i class="fas fa-edit" style="font-size:8px;color:#e6a23c;display:block;line-height:1;"></i>';
+            else if (eligible && kind === 'miss') mark = '<i class="fas fa-exclamation" style="font-size:8px;color:#f56c6c;display:block;line-height:1;"></i>';
+            html += '<div class="makeup-day' + (isSel ? ' selected' : '') + '" data-date="' + ds + '"'
+                + (eligible ? ' onclick="attendanceApp.selectMakeupDate(\'' + ds + '\')"' : '')
+                + ' title="' + (eligible ? (kind === 'late' ? '迟到/早退，可补卡' : '漏卡，可补卡') : '不可补卡') + '"'
+                + ' style="cursor:' + cursor + ';border-radius:6px;padding:5px 2px;text-align:center;font-size:12px;border:' + border + ';background:' + bg + ';color:' + color + ';">'
+                + day + mark
+                + '</div>';
+        }
+        grid.innerHTML = html;
+        if (legend) {
+            legend.innerHTML = '<span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#fef0f0;border:1px solid #fde2e2;vertical-align:-2px;margin-right:3px;"></span>漏卡可补</span>'
+                + '<span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#fdf6ec;border:1px solid #f5dab1;vertical-align:-2px;margin-right:3px;"></span>迟到/早退可补</span>'
+                + '<span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#f5f7fa;vertical-align:-2px;margin-right:3px;"></span>正常/不可补</span>';
+        }
+    }
+
+    selectMakeupDate(ds) {
+        this._mkSelectedDate = ds;
+        var dateHidden = document.getElementById('makeupDate');
+        if (dateHidden) dateHidden.value = ds;
+        this.renderMakeupCalendar();
     }
 
     closeMakeupModal() {
@@ -1020,26 +1103,28 @@ class AttendanceApp {
     }
 
     async openConfigModal() {
+        var ut = localStorage.getItem('user_type');
+        // 普通用户无考勤配置权限，不开放配置模态框
+        if (ut !== 'admin' && ut !== 'super_admin') {
+            if (this.showToast) this.showToast('您没有考勤配置权限', true);
+            return;
+        }
+        var isSuperAdmin = ut === 'super_admin';
+        this._attIsSuperAdmin = isSuperAdmin;
         this._configEditKey = null;
         this._configDeleteId = null;
-        this._configAttType = 'global';
         this._attConfigUser = null;
-        document.getElementById('attConfigType').value = 'global';
-        // 重置类型卡片状态
+        // 普通管理员：只能配置本部门/个人考勤，集团与子公司配置入口隐藏；默认切到部门
+        this._configAttType = isSuperAdmin ? 'global' : 'department';
         document.querySelectorAll('.config-type-card[data-att-type]').forEach(function(c) {
-            c.classList.remove('active');
-            c.style.borderColor = '';
-            c.style.background = '';
+            var t = c.getAttribute('data-att-type');
+            c.style.display = (isSuperAdmin || t === 'department' || t === 'user') ? '' : 'none';
         });
-        var gc = document.querySelector('.config-type-card[data-att-type="global"]');
-        if (gc) { gc.classList.add('active'); gc.style.borderColor = '#409eff'; gc.style.background = '#ecf5ff'; }
+        this._selectAttConfigType(this._configAttType);
         document.getElementById('attendanceConfigForm').style.display = 'none';
         document.getElementById('attendanceConfigFooter').style.display = 'none';
         document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
         document.getElementById('attendanceConfigEmpty').style.display = 'block';
-        document.getElementById('attConfigSubTenantRow').style.display = 'none';
-        document.getElementById('attConfigDeptRow').style.display = 'none';
-        document.getElementById('attConfigUserRow').style.display = 'none';
         var rightSel = document.getElementById('attConfigSubTenantSelect');
         if (rightSel) rightSel.innerHTML = '<option value="">请选择子公司</option>';
         await this._loadAttSubTenants();
@@ -1196,6 +1281,12 @@ class AttendanceApp {
             if (!resp.ok) return;
             var data = await resp.json();
             var depts = data.results || [];
+            // 普通管理员：仅展示其可配置的本部门（含子部门）范围
+            if (this._attManagedDeptIds) {
+                var allowed = {};
+                (this._attManagedDeptIds || []).forEach(function (id) { allowed[String(id)] = true; });
+                depts = depts.filter(function (d) { return allowed[String(d.id)]; });
+            }
             var tree = {};
             depts.forEach(function (d) {
                 var pid = d.parent_id != null ? d.parent_id : 0;
@@ -1334,6 +1425,8 @@ class AttendanceApp {
             var resp = await fetch(url, { headers: TokenManager.getHeaders() });
             if (!resp.ok) return;
             var json = await resp.json();
+            // 记录管理员可配置的部门范围（后端返回 managed_dept_ids），供部门选择器过滤
+            this._attManagedDeptIds = (json && json.managed_dept_ids) ? json.managed_dept_ids : null;
             var configs = json.results || [];
             var self = this;
             if (!configs.length) {

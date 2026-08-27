@@ -33,6 +33,10 @@ class SubsidyApp {
             window.location.href = this.chat_login_url;
             return;
         }
+        // 打印权限：无权限则隐藏打印按钮并提示
+        if (window.WatermarkManager && WatermarkManager.applyPrintPermission) {
+            WatermarkManager.applyPrintPermission();
+        }
         this._loadAccount();
         this._loadPaymentInfo();
         this.loadMy(1);

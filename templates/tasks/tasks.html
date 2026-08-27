@@ -6,8 +6,8 @@
     <title>任务中心 - 义乌吉通集团</title>
     <link rel="icon" type="image/svg+xml" href="/media/avatars/tasks-blue.svg?v=20260820-d0a1b2c">
     <!-- 复用项目基础样式 -->
-    <link rel="stylesheet" href="/static/css/chat_auth.css?v=20260822-1491961">
-    <link rel="stylesheet" href="/static/css/tasks.css?v=20260822-1491961">
+    <link rel="stylesheet" href="/static/css/chat_auth.css?v=20260826-7161b83">
+    <link rel="stylesheet" href="/static/css/tasks.css?v=20260826-7161b83">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- 引入 SortableJS 用于看板拖拽 -->
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
@@ -32,7 +32,7 @@
         <a href="/oa/attendance/" class="nav-btn btn-text"><i class="fas fa-clock"></i> <span class="btn-text">考勤</span></a>
         <a href="/oa/subsidy/" class="nav-btn"><i class="fas fa-hand-holding-usd"></i> <span class="btn-text">普惠补贴</span></a>
         <a href="/oa/work-calendar/" class="nav-btn"><i class="fas fa-calendar-alt"></i> <span class="btn-text">工作日历</span></a>
-
+        <a href="/oa/work-summary/" class="nav-btn btn-text"><i class="fas fa-file-signature"></i> <span class="btn-text">每日工作总结</span></a>
     </div>
     <div class="header-center btn-text">
         <h1><i class="fas fa-tasks"></i> 任务中心</h1>
@@ -47,7 +47,7 @@
             <span class="notif-badge hide" id="notifBadge">0</span>
         </div>
         <div class="user-info" id="currentUser" title="当前用户" onclick="taskApp.toggleUserDropdown(event)">
-            <img src="/static/images/default-avatar.png?v=20260822-1491961" alt="头像" class="user-avatar">
+            <img src="/static/images/default-avatar.png?v=20260826-7161b83" alt="头像" class="user-avatar">
             <span class="user-name btn-text">加载中...</span>
             <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
             <div class="user-dropdown" id="userDropdown" style="display:none;">
@@ -60,6 +60,17 @@
                 <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/subsidy/'">
                     <i class="fas fa-hand-holding-usd"></i> 普惠补贴
                 </div>
+
+                <div class="dropdown-divider"></div>
+
+                <div class="dropdown-item" id="workCalendarBtn" onclick="event.stopPropagation();window.location.href='/oa/work-calendar/'">
+                    <i class="fas fa-calendar-alt"></i> 工作日历
+                </div>
+
+                <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/work-summary/'">
+                    <i class="fas fa-file-signature"></i> 每日工作总结
+                </div>
+
                 <div class="dropdown-divider"></div>
 
                 <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/chat/'">
@@ -70,10 +81,6 @@
                 </div>
 
                 <div class="dropdown-divider"></div>
-
-                <div class="dropdown-item" id="workCalendarBtn" onclick="event.stopPropagation();window.location.href='/oa/work-calendar/'">
-                    <i class="fas fa-calendar-alt"></i> 工作日历
-                </div>
 
                 <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/tasks/'">
                     <i class="fas fa-tasks"></i> 任务
@@ -228,7 +235,7 @@
                     <div class="assignee-picker">
                         <input type="hidden" id="taskAssigneeId" value="">
                         <div class="assignee-selected" id="taskAssigneeSelected" style="display:none;">
-                            <img id="taskAssigneeAvatar" class="assignee-avatar" src="/static/images/default-avatar.png?v=20260822-1491961" alt="头像">
+                            <img id="taskAssigneeAvatar" class="assignee-avatar" src="/static/images/default-avatar.png?v=20260826-7161b83" alt="头像">
                             <div class="assignee-info">
                                 <div class="assignee-name" id="taskAssigneeName"></div>
                                 <div class="assignee-meta" id="taskAssigneeMeta"></div>
@@ -274,16 +281,16 @@
     </div>
 </div>
 
-<script src="/static/js/utils.js?v=20260822-1491961"></script>
-<script src="/static/js/api.js?v=20260822-1491961"></script>
-<script src="/static/js/tasks.js?v=20260822-1491961"></script>
-<script src="/static/js/notifications.js?v=20260822-1491961"></script>
+<script src="/static/js/utils.js?v=20260826-7161b84"></script>
+<script src="/static/js/api.js?v=20260826-7161b83"></script>
+<script src="/static/js/tasks.js?v=20260826-7161b83"></script>
+<script src="/static/js/notifications.js?v=20260826-5b7f3e9"></script>
 
 <!-- 🔧 加密依赖：水印配置响应为加密包，需要 EncryptUtils 解密（缺此则水印静默不显示） -->
-<script src="/static/js/dist/crypto-js.min.js?v=20260822-1491961"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260822-1491961"></script>
-<script src="/static/js/encrypts.js?v=20260822-1491961"></script>
-<script src="/static/js/watermark.js?v=20260822-c2d3e4f"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260826-7161b83"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260826-7161b83"></script>
+<script src="/static/js/encrypts.js?v=20260826-7161b83"></script>
+<script src="/static/js/watermark.js?v=20260827-6e4b8c1"></script>
 <script>WatermarkManager.init();</script>
 </body>
 </html>

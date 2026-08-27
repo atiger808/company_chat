@@ -6,7 +6,8 @@ Web 请求立即返回 task_id，前端轮询 /api/oa/subsidy/ocr-status/ 获取
 避免同步 OCR 长时间占用 Gunicorn worker。
 """
 import os
-from datetime import time
+import time as _time
+from datetime import time, timedelta
 
 from company_chat.celery_app import app
 from django.utils import timezone
@@ -133,6 +134,18 @@ def _tenant_ids(tenant):
     return ids
 
 
+def _primary_dept_name(user):
+    """用户主部门名称"""
+    try:
+        from org.models import UserDepartment
+        ud = UserDepartment.objects.filter(user=user, is_primary=True).select_related('department').first()
+        if ud and ud.department:
+            return ud.department.name
+    except Exception:
+        pass
+    return (user.department.name if getattr(user, 'department', None) else '') or ''
+
+
 def _is_verifier(user, tenant):
     """是否财务核验人员（复用 SubsidyViewSet 的配置解析）"""
     if user.user_type == 'super_admin':
@@ -235,6 +248,11 @@ def compute_user_work_summary(user, tenant=None):
         if not is_night and not has_out and now_time >= clock_out_start and now_time >= time(23, 0):
             miss_clock_out = True
 
+    # 今日/昨日每日工作总结完成情况
+    from .models import DailyWorkSummary
+    today_summary_done = DailyWorkSummary.objects.filter(user=user, summary_date=today).exists()
+    yesterday_summary_done = DailyWorkSummary.objects.filter(user=user, summary_date=today - timedelta(days=1)).exists()
+
     return {
         'pending_approvals': pending_approvals,
         'pending_invoices': pending_invoices,
@@ -242,6 +260,8 @@ def compute_user_work_summary(user, tenant=None):
         'pending_tasks': pending_tasks,
         'miss_clock_in': miss_clock_in,
         'miss_clock_out': miss_clock_out,
+        'today_summary_done': today_summary_done,
+        'yesterday_summary_done': yesterday_summary_done,
     }
 
 
@@ -263,6 +283,12 @@ def build_daily_digest(summary):
         content += '；今日上班卡未打'
     if summary['miss_clock_out']:
         content += '；今日下班卡未打'
+    # 昨日每日工作总结完成情况提示
+    yesterday_done = bool(summary.get('yesterday_summary_done'))
+    if yesterday_done:
+        content += '；昨日工作总结已完成'
+    else:
+        content += '；昨日工作总结未完成，请及时补充'
     content += '。点击查看工作日历。'
     extra = {
         'type': 'daily',
@@ -272,6 +298,7 @@ def build_daily_digest(summary):
         'tasks': summary['pending_tasks'],
         'miss_clock_in': summary['miss_clock_in'],
         'miss_clock_out': summary['miss_clock_out'],
+        'yesterday_summary_done': yesterday_done,
     }
     return '今日工作汇总', content, extra
 
@@ -323,3 +350,221 @@ def run_daily_digest(self):
         logger.info(f'每日工作汇总发送完成，共 {sent} 条')
     except Exception as e:
         logger.warning(f'每日工作汇总任务异常: {e}')
+
+
+# ==================== 每日工作总结 → 大模型分析 ====================
+
+def check_summary_quota(cfg):
+    """第三方依赖风险管控：检查今日 AI 分析调用量/费用限额是否已满。
+    返回 (blocked, reason)。触发接近(80%)/已达(100%)阈值时向超管发工作通知（每天仅一次）。
+    已达上限时停止调用大模型（降级兜底），保证模块不因超支而失控。"""
+    from decimal import Decimal as _D
+    try:
+        cfg.ensure_today()
+    except Exception:
+        pass
+    if not cfg.limit_enabled:
+        return False, ''
+    blocked = False
+    reason = ''
+    near_parts = []
+    if cfg.daily_call_limit and cfg.today_call_count >= cfg.daily_call_limit:
+        blocked = True
+        reason = f'今日 AI 分析次数已达上限（{cfg.today_call_count}/{cfg.daily_call_limit} 次），今日将不再调用大模型分析'
+    elif cfg.daily_call_limit and cfg.today_call_count >= int(cfg.daily_call_limit * _D('0.8')):
+        near_parts.append(f'今日 AI 分析次数接近上限（{cfg.today_call_count}/{cfg.daily_call_limit} 次）')
+    if cfg.daily_cost_limit:
+        if float(cfg.today_cost) >= float(cfg.daily_cost_limit):
+            if not blocked:
+                blocked = True
+                reason = f'今日 AI 分析费用已达上限（约 ¥{float(cfg.today_cost):.2f}/{float(cfg.daily_cost_limit):.2f} 元），今日将不再调用大模型分析'
+        elif float(cfg.today_cost) >= float(cfg.daily_cost_limit) * 0.8:
+            near_parts.append(f'今日 AI 分析费用接近上限（约 ¥{float(cfg.today_cost):.2f}/{float(cfg.daily_cost_limit):.2f} 元）')
+    notify = []
+    if blocked and not cfg.limit_notified:
+        cfg.limit_notified = True
+        notify.append(reason)
+    if near_parts and not cfg.near_limit_notified:
+        cfg.near_limit_notified = True
+        notify.extend(near_parts)
+    if notify:
+        try:
+            cfg.save(update_fields=['limit_notified', 'near_limit_notified'])
+        except Exception:
+            pass
+        try:
+            from .views import send_work_notification
+            from accounts.models import CustomUser
+            admins = CustomUser.objects.filter(user_type='super_admin',
+                                               tenant_memberships__tenant=cfg.tenant).distinct()
+            if not admins.exists():
+                admins = CustomUser.objects.filter(user_type='super_admin')
+            for ad in admins:
+                send_work_notification(ad.id, '每日工作总结 AI 分析限额告警',
+                                       '；'.join(notify), notification_type='system',
+                                       related_url='/oa/work-summary/')
+        except Exception:
+            pass
+    return blocked, reason
+
+
+def record_analysis_usage(cfg, usage):
+    """分析成功后累计今日调用次数与估算成本，用于限额与成本核算"""
+    from decimal import Decimal as _D
+    try:
+        cfg.ensure_today()
+        cfg.today_call_count += 1
+        if usage:
+            total_tokens = (usage.get('total_tokens')
+                            or ((usage.get('prompt_tokens') or 0) + (usage.get('completion_tokens') or 0)))
+            if total_tokens:
+                cfg.today_cost += (_D(total_tokens) / _D(1000)) * cfg.cost_per_1k_tokens
+        cfg.save(update_fields=['today_call_count', 'today_cost'])
+    except Exception:
+        pass
+
+
+@app.task(bind=True, max_retries=2, default_retry_delay=10,
+          acks_late=True, time_limit=240, soft_time_limit=210)
+def analyze_work_summary_task(self, summary_id):
+    """每日工作总结 → 火山方舟大模型流式分析，结果流式写入 DailyWorkSummary.analysis_result。
+    含第三方依赖降级兜底：调用失败自动重试 2 次，仍失败则标记 failed（总结已保存，用户可稍后点「重新分析」）；
+    灰度范围外用户标记 not_allowed；当日限额已满标记 limited，均不再调用大模型。"""
+    from .models import DailyWorkSummary, WorkSummaryConfig
+    summary = DailyWorkSummary.objects.filter(id=summary_id).first()
+    if not summary:
+        return {'error': '工作总结不存在'}
+    user = summary.user
+    try:
+        cfg = WorkSummaryConfig.get_config(summary.tenant)
+        if not cfg.enabled:
+            DailyWorkSummary.objects.filter(id=summary_id).update(
+                status='disabled', analysis_result='', error_message='模型分析功能已停用')
+            return {'ok': False, 'reason': 'disabled'}
+        # 灰度试点：不在分析范围内的员工不调用大模型（总结仍正常保存）
+        if not cfg.in_scope(user):
+            DailyWorkSummary.objects.filter(id=summary_id).update(
+                status='not_allowed', analysis_result='', error_message='当前岗位/部门暂未开放 AI 分析（灰度试点中）')
+            return {'ok': False, 'reason': 'not_allowed'}
+        # 当日调用量/成本限额已满：降级为不调用大模型
+        blocked, reason = check_summary_quota(cfg)
+        if blocked:
+            DailyWorkSummary.objects.filter(id=summary_id).update(
+                status='limited', analysis_result='', error_message=reason)
+            return {'ok': False, 'reason': 'limited'}
+        DailyWorkSummary.objects.filter(id=summary_id).update(status='analyzing', analysis_result='', error_message='')
+        from utils.ark_llm import get_position_system_prompt, build_user_content, stream_ark_completions
+        system_prompt = get_position_system_prompt(summary.position)
+        tenant_name = summary.tenant.name if summary.tenant else ''
+        user_content = build_user_content(summary.position, user.real_name or user.username,
+                                          summary.content, summary.files or [],
+                                          tenant_name=tenant_name, department_name=_primary_dept_name(user),
+                                          mask=cfg.mask_sensitive)
+        prompt_text = f'{system_prompt}\n\n----------\n{user_content}'
+        DailyWorkSummary.objects.filter(id=summary_id).update(prompt_text=prompt_text)
+        # 流式落库：每累计约 300 字符或 1.5 秒即写入一次数据库，保证前端能看到增量内容并流畅打字
+        buf = []
+        pending = 0
+        last_flush = _time.time()
+
+        def flush():
+            DailyWorkSummary.objects.filter(id=summary_id).update(analysis_result=''.join(buf))
+
+        def on_chunk(chunk):
+            nonlocal pending, last_flush
+            buf.append(chunk)
+            pending += len(chunk)
+            now = _time.time()
+            if pending >= 300 or now - last_flush >= 1.5:
+                flush()
+                pending = 0
+                last_flush = now
+
+        full, usage = stream_ark_completions(system_prompt, user_content, on_chunk, model=cfg.effective_model())
+        flush()
+        record_analysis_usage(cfg, usage)
+        DailyWorkSummary.objects.filter(id=summary_id).update(
+            status='done', analysis_result=full or '（模型未返回内容）',
+            analyzed_at=timezone.now(), error_message='')
+        logger.info(f'每日工作总结分析完成: {summary_id} ({user.username}) 长度={len(full or "")}')
+        return {'ok': True}
+    except Exception as e:
+        # 重试耗尽后标记失败并友好提示（总结已保存，用户可稍后点「重新分析」），避免状态悬在 analyzing
+        if self.request.retries >= (self.max_retries or 0):
+            DailyWorkSummary.objects.filter(id=summary_id).update(
+                status='failed', error_message='大模型服务暂时不可用，请稍后点击「重新分析」重试')
+            logger.warning(f'每日工作总结分析重试耗尽: {summary_id} {e}')
+            return {'error': 'max retries exceeded'}
+        raise self.retry(exc=e)
+
+
+@app.task(bind=True, max_retries=2, default_retry_delay=10,
+          acks_late=True, time_limit=240, soft_time_limit=210)
+def analyze_work_summary_range_task(self, analysis_id):
+    """指定员工 + 日期范围内多天每日总结的批量大模型分析，结果流式写入 WorkSummaryRangeAnalysis.analysis_result"""
+    from .models import WorkSummaryRangeAnalysis, DailyWorkSummary, WorkSummaryConfig
+    a = WorkSummaryRangeAnalysis.objects.select_related('target_user').filter(id=analysis_id).first()
+    if not a:
+        return {'error': '范围分析记录不存在'}
+    try:
+        cfg = WorkSummaryConfig.get_config(a.tenant)
+        if not cfg.enabled:
+            WorkSummaryRangeAnalysis.objects.filter(id=analysis_id).update(
+                status='disabled', analysis_result='', error_message='模型分析功能已停用')
+            return {'ok': False, 'reason': 'disabled'}
+        target = a.target_user
+        # 灰度试点 + 当日限额：范围分析同样受管控
+        if not cfg.in_scope(target):
+            WorkSummaryRangeAnalysis.objects.filter(id=analysis_id).update(
+                status='not_allowed', analysis_result='', error_message='该员工当前暂未开放 AI 分析（灰度试点中）')
+            return {'ok': False, 'reason': 'not_allowed'}
+        blocked, reason = check_summary_quota(cfg)
+        if blocked:
+            WorkSummaryRangeAnalysis.objects.filter(id=analysis_id).update(
+                status='limited', analysis_result='', error_message=reason)
+            return {'ok': False, 'reason': 'limited'}
+        WorkSummaryRangeAnalysis.objects.filter(id=analysis_id).update(status='analyzing', analysis_result='', error_message='')
+        qs = DailyWorkSummary.objects.filter(user=target, summary_date__range=[a.date_from, a.date_to]).order_by('summary_date')
+        entries = [{'date': str(s.summary_date), 'content': s.content, 'files': s.files or []} for s in qs]
+        from utils.ark_llm import get_position_system_prompt, build_range_user_content, stream_ark_completions
+        system_prompt = get_position_system_prompt(target.position)
+        tenant_name = a.tenant.name if a.tenant else ''
+        user_content = build_range_user_content(target.real_name or target.username, target.position,
+                                                str(a.date_from), str(a.date_to), entries,
+                                                tenant_name=tenant_name, department_name=_primary_dept_name(target),
+                                                mask=cfg.mask_sensitive)
+        prompt_text = f'{system_prompt}\n\n----------\n{user_content}'
+        WorkSummaryRangeAnalysis.objects.filter(id=analysis_id).update(prompt_text=prompt_text, summary_count=len(entries))
+        # 流式落库：每累计约 300 字符或 1.5 秒写入一次，保证前端打字流式可见
+        buf = []
+        pending = 0
+        last_flush = _time.time()
+
+        def flush():
+            WorkSummaryRangeAnalysis.objects.filter(id=analysis_id).update(analysis_result=''.join(buf))
+
+        def on_chunk(chunk):
+            nonlocal pending, last_flush
+            buf.append(chunk)
+            pending += len(chunk)
+            now = _time.time()
+            if pending >= 300 or now - last_flush >= 1.5:
+                flush()
+                pending = 0
+                last_flush = now
+
+        full, usage = stream_ark_completions(system_prompt, user_content, on_chunk, model=cfg.effective_model())
+        flush()
+        record_analysis_usage(cfg, usage)
+        WorkSummaryRangeAnalysis.objects.filter(id=analysis_id).update(
+            status='done', analysis_result=full or '（模型未返回内容）',
+            analyzed_at=timezone.now(), error_message='')
+        logger.info(f'每日总结范围分析完成: {analysis_id} 目标={target.username} 条数={len(entries)}')
+        return {'ok': True}
+    except Exception as e:
+        if self.request.retries >= (self.max_retries or 0):
+            WorkSummaryRangeAnalysis.objects.filter(id=analysis_id).update(
+                status='failed', error_message='大模型服务暂时不可用，请稍后重试')
+            logger.warning(f'每日总结范围分析重试耗尽: {analysis_id} {e}')
+            return {'error': 'max retries exceeded'}
+        raise self.retry(exc=e)

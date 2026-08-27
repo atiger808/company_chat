@@ -161,7 +161,8 @@ class WorkCalendarApp {
                 [info.tasks, '任', '#f56c6c'],
                 [info.docs, '文', '#9b59b6'],
                 [info.cloud, '云', '#00a1ff'],
-                [info.org, '组', '#2f9e44']
+                [info.org, '组', '#2f9e44'],
+                [info.work_summary, '总', '#7c4dff']
             ];
             badgeMap.forEach(function (b) {
                 if (b[0] > 0) badges += '<span class="wc-cal-badge" style="background:' + b[2] + ';">' + b[1] + '</span>';
@@ -228,7 +229,7 @@ class WorkCalendarApp {
                     const iconBg = {
                         approval: ['#ecf5ff', '#409eff'], subsidy: ['#e8f8f0', '#16a085'],
                         task: ['#fdf6ec', '#e6a23c'], doc: ['#f3e8ff', '#9b59b6'], attendance: ['#f0f9eb', '#67c23a'],
-                        cloud: ['#e3f4ff', '#00a1ff'], org: ['#e7f5ea', '#2f9e44']
+                        cloud: ['#e3f4ff', '#00a1ff'], org: ['#e7f5ea', '#2f9e44'], work_summary: ['#f3e8ff', '#7c4dff']
                     }[e.type] || ['#f0f2f5', '#909399'];
                     return '<div class="wc-event" onclick="window.location.href=\'' + this._escape(e.url || '#') + '\'">'
                         + '<div class="wc-event-icon" style="background:' + iconBg[0] + ';color:' + iconBg[1] + ';"><i class="' + this._escape(e.icon || 'fas fa-circle') + '"></i></div>'
@@ -270,6 +271,7 @@ class WorkCalendarApp {
         this._loadStats(params);
         this._loadEfficiency(params);
         this._loadLeaderboard(params);
+        if (this._isSuperAdmin) this._loadSummaryStats(this._rangeParams());
     }
     async _loadStats(params) {
         var wrap = document.getElementById('wcStatsChart');
@@ -402,6 +404,118 @@ class WorkCalendarApp {
         } catch (e) {
             this.showToast('加载审批效率排行榜失败', true);
         }
+    }
+
+    // ===== 每日工作总结完成情况统计（仅超管） =====
+    _refreshSummaryStats() { this._loadSummaryStats(this._rangeParams()); }
+    async _loadSummaryStats(params) {
+        var card = document.getElementById('wcSummaryStatsCard');
+        if (!card) return;
+        if (!this._isSuperAdmin) { card.style.display = 'none'; return; }
+        card.style.display = 'block';
+        if (!params) return;
+        try {
+            const d = await this.apiGet(WC_API + '/work-summary-stats/?' + params);
+            if (!d) return;
+            var empty = document.getElementById('wcSummaryEmpty');
+            if (d.overview && d.overview.member_count > 0) {
+                this._renderSummaryOverview(d);
+                this._renderSummaryDaily(d);
+                this._renderSummaryBar(d.by_department, 'wcSummaryDeptChart');
+                this._renderSummaryBar(d.by_position, 'wcSummaryPosChart');
+                this._renderSummaryMembers(d.by_member);
+                if (empty) empty.style.display = 'none';
+            } else {
+                if (empty) empty.style.display = 'block';
+            }
+            var rangeEl = document.getElementById('wcSummaryRange');
+            if (rangeEl && d.range) rangeEl.textContent = d.range.start + ' ~ ' + d.range.end + '（' + d.range.days + '天）';
+        } catch (e) {
+            this.showToast('加载每日总结完成统计失败', true);
+        }
+    }
+    _renderSummaryOverview(d) {
+        var o = d.overview || {}, r = d.range || {};
+        var wrap = document.getElementById('wcSummaryOverview');
+        if (!wrap) return;
+        var rate = o.overall_rate || 0;
+        var rateColor = rate >= 60 ? '#67c23a' : (rate >= 30 ? '#e6a23c' : '#f56c6c');
+        var items = [
+            ['成员总数', o.member_count ?? 0, '#409eff'],
+            ['已提交成员', o.submitted_members ?? 0, '#67c23a'],
+            ['总完成天数', o.total_submitted_days ?? 0, '#e6a23c'],
+            ['整体完成率', rate + '%', rateColor],
+            ['统计天数', r.days ?? 0, '#909399']
+        ];
+        wrap.innerHTML = items.map(function (it) {
+            return '<div style="display:flex;flex-direction:column;align-items:center;background:#f8f9fb;border:1px solid #ebeef5;border-radius:10px;padding:10px 18px;min-width:92px;">'
+                + '<div style="font-size:22px;font-weight:700;color:' + it[2] + ';">' + it[1] + '</div>'
+                + '<div style="font-size:12px;color:#909399;margin-top:2px;">' + it[0] + '</div></div>';
+        }).join('');
+    }
+    _renderSummaryDaily(d) {
+        var wrap = document.getElementById('wcSummaryDailyChart');
+        if (!wrap) return;
+        var list = d.daily || [];
+        if (!window.echarts) { wrap.innerHTML = '<div style="text-align:center;color:#909399;padding:40px 0;">图表组件加载失败</div>'; return; }
+        if (!this._summaryDailyChart) this._summaryDailyChart = echarts.init(wrap);
+        this._summaryDailyChart.setOption({
+            tooltip: {trigger: 'axis'},
+            grid: {left: 40, right: 20, top: 26, bottom: 28},
+            xAxis: {type: 'category', data: list.map(function (x) { return x.date.slice(5); }), axisLabel: {color: '#909399'}},
+            yAxis: {type: 'value', min: 0, max: 100, axisLabel: {formatter: '{value}%', color: '#909399'}},
+            series: [{
+                name: '提交率', type: 'line', smooth: true, data: list.map(function (x) { return x.rate; }),
+                itemStyle: {color: '#7c4dff'}, areaStyle: {color: 'rgba(124,77,255,.12)'},
+                markLine: {symbol: 'none', data: [{type: 'average', name: '平均'}], lineStyle: {color: '#e6a23c', type: 'dashed'}}
+            }]
+        });
+        this._summaryDailyChart.resize();
+    }
+    _renderSummaryBar(list, chartId) {
+        var wrap = document.getElementById(chartId);
+        if (!wrap) return;
+        var arr = list || [];
+        if (!window.echarts) { wrap.innerHTML = '<div style="text-align:center;color:#909399;padding:40px 0;">图表组件加载失败</div>'; return; }
+        if (!this._summaryBarCharts) this._summaryBarCharts = {};
+        if (!this._summaryBarCharts[chartId]) this._summaryBarCharts[chartId] = echarts.init(wrap);
+        // 取完成率最低的后 12 项，便于发现落后部门/岗位
+        var top = arr.slice(-12);
+        var names = top.map(function (x) { return x.name; });
+        var rates = top.map(function (x) { return x.rate; });
+        this._summaryBarCharts[chartId].setOption({
+            tooltip: {trigger: 'axis', axisPointer: {type: 'shadow'}, formatter: function (ps) {
+                var x = top[ps[0].dataIndex];
+                return '<b>' + x.name + '</b><br/>成员 ' + x.member_count + ' 人 · 完成 ' + x.submitted_days + '/' + (x.member_count * x.total_days) + ' 天<br/>完成率 ' + x.rate + '%';
+            }},
+            grid: {left: 110, right: 44, top: 16, bottom: 20},
+            xAxis: {type: 'value', min: 0, max: 100, axisLabel: {formatter: '{value}%', color: '#909399'}},
+            yAxis: {type: 'category', inverse: true, data: names, axisLabel: {color: '#606266', fontSize: 11}},
+            series: [{type: 'bar', barMaxWidth: 16, data: rates, itemStyle: {color: function (p) { return p.value >= 60 ? '#67c23a' : (p.value >= 30 ? '#e6a23c' : '#f56c6c'); }}, label: {show: true, position: 'right', color: '#909399', fontSize: 11, formatter: '{c}%'}}]
+        });
+        this._summaryBarCharts[chartId].resize();
+    }
+    _renderSummaryMembers(list) {
+        var wrap = document.getElementById('wcSummaryMember');
+        if (!wrap) return;
+        if (!list || !list.length) { wrap.innerHTML = '<div style="color:#909399;text-align:center;padding:30px 0;">暂无成员数据</div>'; return; }
+        var self = this;
+        wrap.innerHTML = list.map(function (m) {
+            var rateColor = m.rate >= 60 ? '#67c23a' : (m.rate >= 30 ? '#e6a23c' : '#f56c6c');
+            var missed = m.missed_days || [];
+            var missedTag = missed.length
+                ? '<span style="flex-shrink:0;font-size:10px;color:#f56c6c;background:#fef0f0;border-radius:8px;padding:1px 6px;cursor:default;" title="缺勤日期：' + self._escape(missed.join(', ')) + '">缺' + m.missed_count + '天</span>'
+                : '<span style="flex-shrink:0;font-size:10px;color:#67c23a;background:#f0f9eb;border-radius:8px;padding:1px 6px;">已完成</span>';
+            return '<div style="display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid #f0f0f0;">'
+                + '<img src="' + (m.avatar || '/static/images/default-avatar.png') + '" style="width:26px;height:26px;border-radius:50%;object-fit:cover;flex-shrink:0;">'
+                + '<div style="flex:1;min-width:0;">'
+                + '<div style="font-size:13px;color:#303133;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape(m.name) + '</div>'
+                + '<div style="font-size:11px;color:#909399;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape([m.department, m.position].filter(Boolean).join(' · ') || '未分组') + '</div></div>'
+                + '<div style="font-size:11px;color:#909399;flex-shrink:0;">' + m.submitted + '/' + m.total + '天</div>'
+                + '<div style="width:52px;flex-shrink:0;text-align:right;font-size:13px;font-weight:600;color:' + rateColor + ';">' + m.rate + '%</div>'
+                + missedTag
+                + '</div>';
+        }).join('');
     }
 
     _fmtDur(mins) {
@@ -576,4 +690,11 @@ window.wcApp = wcApp;
 window.addEventListener('resize', function () {
     if (wcApp._statsChart) wcApp._statsChart.resize();
     if (wcApp._effChart) wcApp._effChart.resize();
+    if (wcApp._leaderboardChart) wcApp._leaderboardChart.resize();
+    if (wcApp._summaryDailyChart) wcApp._summaryDailyChart.resize();
+    if (wcApp._summaryBarCharts) {
+        Object.keys(wcApp._summaryBarCharts).forEach(function (k) {
+            if (wcApp._summaryBarCharts[k]) wcApp._summaryBarCharts[k].resize();
+        });
+    }
 });

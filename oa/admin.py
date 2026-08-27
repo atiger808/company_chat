@@ -15,6 +15,8 @@ from .models import (
     MaterialRequirement, MaterialRequirementItem,
     MaterialRequisition, MaterialRequisitionItem,
     DocumentSequence, WatermarkConfig, PrintLog,
+    DailyWorkSummary, WorkSummaryRangeAnalysis,
+    WorkSummaryConfig,
 )
 
 
@@ -222,4 +224,29 @@ class PrintLogAdmin(admin.ModelAdmin):
     search_fields = ['id', 'user__username', 'user__real_name', 'page', 'target_type', 'target_id', 'ip']
     list_filter = ['page', 'target_type', 'created_at']
     date_hierarchy = 'created_at'
+    list_per_page = 20
+
+
+
+@admin.register(DailyWorkSummary)
+class DailyWorkSummaryAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user', 'tenant', 'summary_date', 'status', 'position', 'analyzed_at', 'updated_at', 'created_at']
+    search_fields = ['id', 'user__username', 'user__real_name', 'tenant__name', 'content']
+    list_filter = ['status', 'position']
+    list_per_page = 20
+
+
+@admin.register(WorkSummaryRangeAnalysis)
+class WorkSummaryRangeAnalysisAdmin(admin.ModelAdmin):
+    list_display = ['id', 'requester', 'target_user', 'tenant', 'status', 'analyzed_at', 'updated_at', 'created_at']
+    search_fields = ['id', 'requester__username', 'requester__real_name', 'tenant__name', 'target_user__username', 'target_user__real_name']
+    list_filter = ['status',]
+    list_per_page = 20
+
+
+@admin.register(WorkSummaryConfig)
+class WorkSummaryConfigAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'tenant', 'updated_by', 'model_id', 'enabled', 'limit_enabled', 'limit_notified', 'near_limit_notified', 'today_call_count', 'today_cost', 'updated_at']
+    search_fields = ['id', 'updated_by__username', 'updated_by__real_name', 'tenant__name']
+    list_filter = ['enabled', 'scope_type', 'limit_enabled', 'near_limit_notified', 'limit_notified']
     list_per_page = 20

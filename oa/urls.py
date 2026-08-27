@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import AttendanceViewSet, ApprovalViewSet, ApprovalTypeViewSet, WorkNotificationViewSet, SubsidyViewSet, WorkCalendarViewSet, MaterialViewSet
+from .views import AttendanceViewSet, ApprovalViewSet, ApprovalTypeViewSet, WorkNotificationViewSet, SubsidyViewSet, WorkCalendarViewSet, MaterialViewSet, DailyWorkSummaryViewSet
 
 urlpatterns = [
     # 考勤打卡
@@ -21,6 +21,8 @@ urlpatterns = [
     path('attendance/save-user-attendance-config/', AttendanceViewSet.as_view({'post': 'save_user_attendance_config'}), name='save-user-attendance-config'),
     path('attendance/delete-user-attendance-config/<int:pk>/', AttendanceViewSet.as_view({'delete': 'delete_user_attendance_config'}), name='delete-user-attendance-config'),
     path('attendance/calendar-stats/', AttendanceViewSet.as_view({'get': 'calendar_stats'}), name='attendance-calendar-stats'),
+    # 兼容旧版前端调用的下划线写法（calendar_stats）
+    path('attendance/calendar_stats/', AttendanceViewSet.as_view({'get': 'calendar_stats'}), name='attendance-calendar-stats-alias'),
     path('attendance/calendar-day-detail/', AttendanceViewSet.as_view({'get': 'calendar_day_detail'}), name='attendance-calendar-day-detail'),
 
     # OA审批
@@ -99,6 +101,7 @@ urlpatterns = [
     path('work-calendar/stats/', WorkCalendarViewSet.as_view({'get': 'stats'}), name='work-calendar-stats'),
     path('work-calendar/approval-efficiency/', WorkCalendarViewSet.as_view({'get': 'approval_efficiency'}), name='work-calendar-approval-efficiency'),
     path('work-calendar/approval-leaderboard/', WorkCalendarViewSet.as_view({'get': 'approval_leaderboard'}), name='work-calendar-approval-leaderboard'),
+    path('work-calendar/work-summary-stats/', WorkCalendarViewSet.as_view({'get': 'work_summary_stats'}), name='work-calendar-work-summary-stats'),
     path('work-calendar/digest-config/', WorkCalendarViewSet.as_view({'get': 'digest_config', 'post': 'digest_config'}), name='work-calendar-digest-config'),
     path('work-calendar/digest-send/', WorkCalendarViewSet.as_view({'post': 'digest_send'}), name='work-calendar-digest-send'),
 
@@ -112,6 +115,19 @@ urlpatterns = [
     path('material/requirements/', MaterialViewSet.as_view({'get': 'requirements'}), name='material-requirements'),
     path('material/requisitions/', MaterialViewSet.as_view({'get': 'requisitions'}), name='material-requisitions'),
     path('material/requirement-status/', MaterialViewSet.as_view({'post': 'requirement_status'}), name='material-requirement-status'),
+
+    # 每日工作总结（上传/提交/我的/团队/详情/删除/重跑分析/范围分析/成员）
+    path('work-summary/upload/', DailyWorkSummaryViewSet.as_view({'post': 'upload'}), name='work-summary-upload'),
+    path('work-summary/all/', DailyWorkSummaryViewSet.as_view({'get': 'all'}), name='work-summary-all'),
+    path('work-summary/config/', DailyWorkSummaryViewSet.as_view({'get': 'config', 'post': 'config'}), name='work-summary-config'),
+    path('work-summary/members/', DailyWorkSummaryViewSet.as_view({'get': 'members'}), name='work-summary-members'),
+    path('work-summary/range/', DailyWorkSummaryViewSet.as_view({'get': 'range', 'post': 'range'}), name='work-summary-range'),
+    path('work-summary/range/<int:pk>/', DailyWorkSummaryViewSet.as_view({'get': 'range_detail'}), name='work-summary-range-detail'),
+    path('work-summary/<int:pk>/', DailyWorkSummaryViewSet.as_view({'get': 'retrieve', 'delete': 'destroy'}), name='work-summary-detail'),
+    path('work-summary/<int:pk>/analyze/', DailyWorkSummaryViewSet.as_view({'post': 'analyze'}), name='work-summary-analyze'),
+    path('work-summary/<int:pk>/share/', DailyWorkSummaryViewSet.as_view({'post': 'share'}), name='work-summary-share'),
+    path('work-summary/<int:pk>/export-pdf/', DailyWorkSummaryViewSet.as_view({'get': 'export_pdf'}), name='work-summary-export-pdf'),
+    path('work-summary/', DailyWorkSummaryViewSet.as_view({'get': 'list', 'post': 'create'}), name='work-summary-list'),
 
     # 工作通知
     path('notifications/', WorkNotificationViewSet.as_view({'get': 'list'}), name='notification-list'),

@@ -41,6 +41,7 @@
         css += '.notif-item-icon.subsidy_withdraw_result { background:#16a085; }';
         css += '.notif-item-icon.hr { background:#6c5ce7; }';
         css += '.notif-item-icon.daily { background:#409eff; }';
+        css += '.notif-item-icon.work_summary { background:#9b59b6; }';
         css += '.notif-item-icon.system { background:#909399; }';
         css += '.notif-item-body { flex:1; min-width:0; }';
         css += '.notif-item-title { font-size:14px; font-weight:500; color:var(--text-primary,#303133); margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }';
@@ -165,11 +166,11 @@
     }
 
     function typeIcon(t) {
-        return { 'approval': 'fas fa-check-double', 'attendance': 'fas fa-clock', 'task': 'fas fa-tasks', 'collab': 'fas fa-users', 'subsidy': 'fas fa-hand-holding-usd', 'subsidy_apply': 'fas fa-file-invoice', 'subsidy_result': 'fas fa-clipboard-check', 'subsidy_withdraw': 'fas fa-money-check-alt', 'subsidy_withdraw_result': 'fas fa-wallet', 'daily': 'fas fa-calendar-day', 'hr': 'fas fa-user-tie', 'system': 'fas fa-bell' }[t] || 'fas fa-bell';
+        return { 'approval': 'fas fa-check-double', 'attendance': 'fas fa-clock', 'task': 'fas fa-tasks', 'collab': 'fas fa-users', 'subsidy': 'fas fa-hand-holding-usd', 'subsidy_apply': 'fas fa-file-invoice', 'subsidy_result': 'fas fa-clipboard-check', 'subsidy_withdraw': 'fas fa-money-check-alt', 'subsidy_withdraw_result': 'fas fa-wallet', 'daily': 'fas fa-calendar-day', 'work_summary': 'fas fa-file-signature', 'hr': 'fas fa-user-tie', 'system': 'fas fa-bell' }[t] || 'fas fa-bell';
     }
 
     function typeColor(t) {
-        return { 'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'subsidy': '#16a085', 'subsidy_apply': '#16a085', 'subsidy_result': '#67c23a', 'subsidy_withdraw': '#e6a23c', 'subsidy_withdraw_result': '#16a085', 'daily': '#409eff', 'hr': '#6c5ce7', 'system': '#909399' }[t] || '#909399';
+        return { 'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'subsidy': '#16a085', 'subsidy_apply': '#16a085', 'subsidy_result': '#67c23a', 'subsidy_withdraw': '#e6a23c', 'subsidy_withdraw_result': '#16a085', 'daily': '#409eff', 'work_summary': '#9b59b6', 'hr': '#6c5ce7', 'system': '#909399' }[t] || '#909399';
     }
 
     function escapeHtml(text) {
@@ -189,6 +190,8 @@
             u = '/oa/subsidy/?application_id=' + ed.application_id;
         } else if (n && n.type === 'task' && ed.task_id && u.indexOf('task_id') === -1) {
             u = '/tasks/?task_id=' + ed.task_id;
+        } else if (n && n.type === 'work_summary' && ed.summary_id && u.indexOf('summary_id') === -1) {
+            u = '/oa/work-summary/?id=' + ed.summary_id;
         } else if (n && n.type === 'daily') {
             u = '/oa/work-calendar/';
         }

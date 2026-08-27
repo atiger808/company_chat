@@ -352,6 +352,133 @@ class VersionManager {
             }, 100);
         }
     }
+
+    // ================= 版本更新日志弹窗（持久查看，不受顶部横幅 2 分钟自动消失影响） =================
+    openVersionLog() {
+        const exist = document.getElementById('versionLogModal');
+        if (exist) { exist.classList.add('show'); return; }
+        this._injectVersionLogStyle();
+        const ov = document.createElement('div');
+        ov.id = 'versionLogModal';
+        ov.className = 'version-log-modal';
+        ov.innerHTML = '<div class="version-log-shell">'
+            + '<div class="version-log-head"><div>'
+            + '<div class="version-log-title"><i class="fas fa-history"></i> 版本更新日志</div>'
+            + '<div class="version-log-sub" id="versionLogSub">加载中...</div></div>'
+            + '<button class="version-log-close" onclick="versionManager.closeVersionLog()" title="关闭"><i class="fas fa-times"></i></button></div>'
+            + '<div class="version-log-body" id="versionLogBody"><div class="version-log-loading"><i class="fas fa-spinner fa-spin"></i> 正在加载...</div></div>'
+            + '<div class="version-log-foot"><button class="version-log-btn" onclick="versionManager.closeVersionLog()">关闭</button></div>'
+            + '</div>';
+        document.body.appendChild(ov);
+        ov.classList.add('show');
+        this._loadVersionLog();
+    }
+
+    closeVersionLog() {
+        const ov = document.getElementById('versionLogModal');
+        if (!ov) return;
+        ov.classList.remove('show');
+        setTimeout(() => { if (ov && ov.parentNode) ov.parentNode.removeChild(ov); }, 200);
+    }
+
+    // 解析版本日志：以「N. 」开头的行作为一条新条目，其余缩进行归入上一条的子项
+    _parseVersionLog(text) {
+        const rawLines = String(text || '').split('<br>').map(l => l.trim()).filter(Boolean);
+        const entries = [];
+        let cur = null;
+        rawLines.forEach(line => {
+            const m = line.match(/^(\d+)\.\s*(.*)$/);
+            if (m) {
+                cur = { num: parseInt(m[1], 10), title: (m[2] || '').trim() || line, parts: [] };
+                entries.push(cur);
+            } else if (cur) {
+                cur.parts.push(line);
+            } else {
+                entries.push({ num: null, title: line, parts: [] });
+            }
+        });
+        return entries;
+    }
+
+    _escLog(t) {
+        return String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    async _loadVersionLog() {
+        const body = document.getElementById('versionLogBody');
+        const sub = document.getElementById('versionLogSub');
+        try {
+            const resp = await fetch('/api/chat/version/?t=' + Date.now(), {
+                method: 'GET',
+                cache: 'no-cache',
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const v = await resp.json();
+            const entries = this._parseVersionLog(v.update_message);
+            if (sub) sub.textContent = '当前版本 ' + (v.static_version || '-') + (v.build_time ? ' · 更新时间 ' + v.build_time : '');
+            if (!body) return;
+            if (!entries.length) {
+                body.innerHTML = '<div class="version-log-empty"><i class="fas fa-inbox"></i> 暂无版本更新日志</div>';
+                return;
+            }
+            const self = this;
+            body.innerHTML = entries.map(e => {
+                const isNew = e.num === 0;
+                const partsHtml = e.parts.length
+                    ? '<div class="version-log-parts">' + e.parts.map(p => '<i class="fas fa-angle-right"></i> ' + self._escLog(p)).join('<br>') + '</div>'
+                    : '';
+                return '<div class="version-log-item' + (isNew ? ' latest' : '') + '">'
+                    + '<div class="version-log-badge' + (isNew ? ' latest' : '') + '">' + (e.num != null ? e.num : '·') + '</div>'
+                    + '<div class="version-log-content">' + self._escLog(e.title) + partsHtml + '</div>'
+                    + '</div>';
+            }).join('');
+        } catch (e) {
+            if (body) body.innerHTML = '<div class="version-log-empty"><i class="fas fa-exclamation-circle"></i> 加载失败，请稍后重试</div>';
+        }
+    }
+
+    _injectVersionLogStyle() {
+        if (document.getElementById('versionLogStyle')) return;
+        const css = [
+            '.version-log-modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;z-index:10005;padding:16px;-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);}',
+            '.version-log-modal.show{display:flex;}',
+            '.version-log-shell{width:100%;max-width:680px;max-height:82vh;background:#fff;border-radius:14px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 18px 60px rgba(0,0,0,.25);}',
+            '.version-log-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 20px;border-bottom:1px solid #ebeef5;background:linear-gradient(135deg,#ecf5ff,#f0f9eb);}',
+            '.version-log-title{font-size:16px;font-weight:700;color:#303133;}',
+            '.version-log-title i{color:#409eff;margin-right:6px;}',
+            '.version-log-sub{font-size:12px;color:#909399;margin-top:4px;}',
+            '.version-log-close{border:none;background:rgba(0,0,0,.05);width:30px;height:30px;border-radius:50%;cursor:pointer;color:#606266;font-size:15px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}',
+            '.version-log-close:hover{background:rgba(245,108,108,.12);color:#f56c6c;}',
+            '.version-log-body{flex:1;overflow-y:auto;padding:16px 20px;}',
+            '.version-log-loading,.version-log-empty{text-align:center;color:#909399;padding:40px 0;font-size:14px;}',
+            '.version-log-item{display:flex;gap:12px;position:relative;padding-bottom:16px;}',
+            '.version-log-item:not(:last-child)::after{content:\'\';position:absolute;left:14px;top:36px;bottom:2px;width:2px;background:#e4e7ed;}',
+            '.version-log-badge{width:28px;height:28px;border-radius:50%;background:#f2f3f5;color:#909399;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:2px solid #e4e7ed;z-index:1;}',
+            '.version-log-badge.latest{background:linear-gradient(135deg,#409eff,#7c4dff);color:#fff;border-color:#409eff;box-shadow:0 0 0 4px rgba(64,158,255,.15);}',
+            '.version-log-content{flex:1;min-width:0;font-size:13px;line-height:1.8;color:#303133;background:#f8f9fb;border:1px solid #ebeef5;border-radius:10px;padding:10px 14px;word-break:break-word;}',
+            '.version-log-item.latest .version-log-content{background:linear-gradient(135deg,#ecf5ff,#f6f2ff);border-color:#c6e2ff;}',
+            '.version-log-parts{margin-top:8px;color:#606266;font-size:12.5px;}',
+            '.version-log-parts i{color:#409eff;margin-right:4px;font-size:10px;}',
+            '.version-log-foot{display:flex;justify-content:flex-end;padding:12px 20px;border-top:1px solid #ebeef5;}',
+            '.version-log-btn{border:none;background:#409eff;color:#fff;padding:8px 22px;border-radius:8px;cursor:pointer;font-size:13px;}',
+            '.version-log-btn:hover{background:#337ecc;}',
+            '[data-theme="dark"] .version-log-shell{background:#1e1e1e;}',
+            '[data-theme="dark"] .version-log-head{background:linear-gradient(135deg,#1a2740,#2a2438);border-color:#333;}',
+            '[data-theme="dark"] .version-log-title{color:#e5eaf3;}',
+            '[data-theme="dark"] .version-log-close{background:rgba(255,255,255,.08);color:#b0b0b0;}',
+            '[data-theme="dark"] .version-log-item:not(:last-child)::after{background:#333;}',
+            '[data-theme="dark"] .version-log-badge{background:#2d2d2d;color:#909399;border-color:#444;}',
+            '[data-theme="dark"] .version-log-content{background:#2a2a2a;border-color:#333;color:#e0e0e0;}',
+            '[data-theme="dark"] .version-log-item.latest .version-log-content{background:linear-gradient(135deg,#1a2740,#2a2438);border-color:#3a4a6b;}',
+            '[data-theme="dark"] .version-log-parts{color:#b0b0b0;}',
+            '[data-theme="dark"] .version-log-foot{border-color:#333;}'
+        ].join('\n');
+        const style = document.createElement('style');
+        style.id = 'versionLogStyle';
+        style.textContent = css;
+        document.head.appendChild(style);
+    }
 }
 
 
@@ -1171,7 +1298,8 @@ class ChatClient {
             room.last_message = {
                 content: data.content,
                 timestamp: data.timestamp,
-                sender: data.sender
+                sender: data.sender,
+                message_type: data.message_type
             };
             room.updated_at = data.timestamp;
 
@@ -1344,6 +1472,10 @@ class ChatClient {
             return;
         }
 
+        // 🔧 关键修复：生成连接序号。每次建立连接（切换聊天室 / 重连）都会递增，
+        //    用于作废旧连接的迟到回调——避免网络不稳定时旧聊天室的延时重连把
+        //    currentRoomId 改回旧房间，导致用户在新聊天室发送却发到了旧聊天室。
+        const seq = (this._wsSeq = (this._wsSeq || 0) + 1);
 
         this.currentRoomId = parseInt(roomId);
         this.isConnected = false;
@@ -1360,10 +1492,13 @@ class ChatClient {
 
         try {
             this.ws = new WebSocket(wsUrl);
+            // 记录该 socket 所属聊天室与序号，供发送与回调校验
+            this.ws._roomId = parseInt(roomId);
+            this.ws._seq = seq;
 
             // 🔧 关键修复：添加连接超时
             const connectionTimeout = setTimeout(() => {
-                if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+                if (this.ws && this.ws._seq === seq && this.ws.readyState === WebSocket.CONNECTING) {
                     console.warn('WebSocket connection timeout');
                     this.ws.close();
                     this.showError('WebSocket 连接超时，请检查网络连接');
@@ -1373,6 +1508,10 @@ class ChatClient {
 
             this.ws.onopen = () => {
                 clearTimeout(connectionTimeout);
+                if (!this.ws || this.ws._seq !== seq) { // 迟到的旧连接，直接关闭
+                    if (this.ws) this.ws.close(1000);
+                    return;
+                }
                 console.log('WebSocket connected successfully roomId: ', roomId);
                 this.isConnected = true;
                 this.updateConnectionStatus(true);
@@ -1381,6 +1520,7 @@ class ChatClient {
             };
 
             this.ws.onmessage = (event) => {
+                if (!this.ws || this.ws._seq !== seq) return; // 忽略旧连接消息，避免错乱渲染
                 try {
                     let data = JSON.parse(event.data);
 
@@ -1394,14 +1534,20 @@ class ChatClient {
 
             this.ws.onclose = (event) => {
                 clearTimeout(connectionTimeout);
+                if (!this.ws || this.ws._seq !== seq) return; // 旧连接关闭，忽略
                 console.log('WebSocket disconnected. Code:', event.code, 'Reason:', event.reason);
                 this.isConnected = false;
                 this.updateConnectionStatus(false);
 
-                // 只有在当前房间时才重连
+                // 只有当前聊天室且连接被异常断开时才延时重连；
+                // 重连前再次校验序号，避免切换聊天室后旧的重连把 currentRoomId 改回旧房间
                 if (parseInt(this.currentRoomId) === parseInt(roomId) && event.code !== 1000) {
                     console.log('Attempting to reconnect in 3 seconds...');
-                    setTimeout(() => this.connectWebSocket(roomId), 3000);
+                    setTimeout(() => {
+                        if (this._wsSeq === seq) {
+                            this.connectWebSocket(roomId);
+                        }
+                    }, 3000);
                 }
             };
 
@@ -1840,7 +1986,8 @@ class ChatClient {
                     room.last_message = {
                         content: latestMessage.content,
                         timestamp: latestMessage.timestamp,
-                        sender: latestMessage.sender
+                        sender: latestMessage.sender,
+                        message_type: latestMessage.message_type
                     };
                     room.updated_at = latestMessage.timestamp;
                     console.log('roomId：', roomId)
@@ -3091,6 +3238,49 @@ class ChatClient {
         container.innerHTML = cardHtml;
     }
 
+    renderWorkSummaryCardInChat(data, container) {
+        container.className = '';
+        if (!data || !data.summary_id) {
+            container.innerHTML = '<div class="message-text" style="color:#909399;"><i class="fas fa-file-signature"></i> [每日工作总结卡片]</div>';
+            return;
+        }
+        const statusMap = {done: '已完成', analyzing: '分析中', failed: '分析失败', pending: '待分析', disabled: '已停用'};
+        const statusColor = {done: '#67C23A', analyzing: '#409EFF', failed: '#F56C6C', pending: '#E6A23C', disabled: '#909399'};
+        const statusText = statusMap[data.status] || '待分析';
+        const color = statusColor[data.status] || '#E6A23C';
+        const userName = this.escapeHtml(data.user_name || '员工');
+        const date = this.escapeHtml(data.summary_date || '');
+        const position = this.escapeHtml(data.position || '');
+        const content = this.escapeHtml(data.content || '（未填写总结文字）');
+        const analysis = this.escapeHtml(data.analysis || '');
+        const summaryId = data.summary_id;
+        const cardHtml = `
+            <div class="message-content message-left approval-card-message" data-summary-id="${summaryId}"
+                 onclick="window.open('/oa/work-summary/?id=${summaryId}', '_blank')"
+                 style="max-width: 340px; padding: 0; overflow: hidden; border-radius: 8px; border: 1px solid #e4e7ed; background: #fff; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); cursor: pointer; transition: all 0.3s;">
+                <div style="padding: 12px 16px; background: linear-gradient(135deg, #f3e8ff 0%, #e9d5ff 100%); border-bottom: 1px solid #e4e7ed; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: 600; color: #303133; font-size: 14px; display: flex; align-items: center; gap: 6px;">
+                        <i class="fas fa-file-signature" style="color: #9b59b6;"></i> 每日工作总结
+                    </span>
+                    <span style="font-size: 10px; padding: 4px 8px; border-radius: 10px; color: #fff; background: ${color}; white-space: nowrap;">${statusText}</span>
+                </div>
+                <div style="padding: 12px 16px;">
+                    <div style="font-size: 13px; color: #303133; margin-bottom: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px;">
+                        <i class="fas fa-user-circle" style="color:#9b59b6;"></i> ${userName}
+                        <span style="font-size:11px;color:#909399;font-weight:400;">${date}</span>
+                    </div>
+                    ${position ? `<div style="font-size: 11px; color: #a47bd1; margin-bottom: 8px;"><i class="fas fa-user-tie" style="width:14px;"></i> ${position}</div>` : ''}
+                    <div style="font-size: 12px; color: #606266; line-height: 1.6; margin-bottom: 8px; max-height: 60px; overflow: hidden;">${content}</div>
+                    ${analysis ? `<div style="font-size: 12px; color: #7c4dff; line-height: 1.6; background:#f8f6ff; border-radius:6px; padding:8px 10px; max-height: 72px; overflow: hidden;">🤖 ${analysis}</div>` : ''}
+                </div>
+                <div style="padding: 8px 16px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;">
+                    点击查看每日总结 <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
+                </div>
+            </div>
+        `;
+        container.innerHTML = cardHtml;
+    }
+
     // 更新聊天列表中的用户状态
     updateChatListUserStatus(userId, isOnline) {
         // 私聊：通过 data-user-id 查找
@@ -3295,13 +3485,16 @@ class ChatClient {
         Utils.scrollToBottom(document.getElementById('messagesList'));
 
         // 🔧 关键修复 3: 通过 WebSocket 发送（传递临时 ID 和正确的 roomId）
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        //    仅当 socket 属于目标聊天室时才直发，否则走队列，杜绝发到别的聊天室
+        const wsReady = this.ws && this.ws.readyState === WebSocket.OPEN &&
+            parseInt(this.ws._roomId) === parseInt(roomId);
+        if (wsReady) {
             this.ws.send(JSON.stringify(this.encryptPacket({
                 type: "chat_message",
                 ...messageData
             })));
         } else {
-            // WebSocket 不可用时加入队列（同样包含引用信息）
+            // WebSocket 不可用或 socket 与目标聊天室不一致时加入队列（同样包含引用信息）
             const queueMessage = messageData;
             this.messageQueue.push(queueMessage);
             this.showError('网络连接不稳定，消息将在连接恢复后发送');
@@ -3349,6 +3542,41 @@ class ChatClient {
             this.renderChatRooms();
             this.renderGroups();
         }
+    }
+
+    // 聊天室列表「最后一条消息」预览文案（卡片消息显示友好样式而非原始 JSON）
+    _lastMessagePreview(lastMessage) {
+        if (!lastMessage) return '暂无消息';
+        const mt = lastMessage.message_type;
+        const c = lastMessage.content || '';
+        if (mt === 'work_summary_card') {
+            if (c.indexOf('{') === 0) {
+                try {
+                    const d = JSON.parse(c);
+                    return '📄 ' + (d.user_name || d.sender_name || '员工') + ' 的每日工作总结' + (d.summary_date ? '（' + d.summary_date + '）' : '');
+                } catch (e) {}
+            }
+            return c || '📄 每日工作总结';
+        }
+        if (mt === 'approval_card') {
+            if (c.indexOf('{') === 0) {
+                try {
+                    const d = JSON.parse(c);
+                    return '📨 ' + (d.applicant_name || '') + ' 的审批' + (d.title ? '：' + d.title : '');
+                } catch (e) {}
+            }
+            return c || '📨 审批卡片';
+        }
+        if (mt === 'task_card') {
+            if (c.indexOf('{') === 0) {
+                try {
+                    const d = JSON.parse(c);
+                    return '📋 ' + (d.title || '任务');
+                } catch (e) {}
+            }
+            return c || '📋 任务卡片';
+        }
+        return lastMessage.content || '暂无消息';
     }
 
     // 更新聊天室未读数
@@ -4385,7 +4613,7 @@ class ChatClient {
 
 
             let roomAvatar, isOnline, isOnline_html = '', username = '',
-                lastMessageText = lastMessage.content || '暂无消息',
+                lastMessageText = this._lastMessagePreview(lastMessage),
                 lastMessageTimestamp = lastMessage.timestamp || '';
             let otherUserId = null; // 🔧 新增：存储对方用户ID
 
@@ -4931,6 +5159,20 @@ class ChatClient {
                         <div style="font-weight:500;font-size:13px;color:#303133;display:flex;align-items:center;gap:6px;margin-bottom:4px;">
                             <i class="fas fa-clipboard-check" style="color:#409EFF;"></i>
                             <span>${this.escapeHtml(appType ? appType + ' · ' : '')}审批卡片${appTitle ? '：' + this.escapeHtml(appTitle) : ''}</span>
+                        </div>
+                    </div>
+                `;
+        } else if (message.message_type === 'work_summary_card') {
+            let wsTitle = '';
+            try {
+                const wsData = typeof message.content === 'string' ? JSON.parse(message.content) : (message.work_summary_data || {});
+                wsTitle = (wsData.summary_date ? wsData.summary_date + ' ' : '') + (wsData.user_name || '');
+            } catch (e) { wsTitle = ''; }
+            previewContent = `
+                    <div class="forward-task-card-preview" title="每日工作总结卡片" style="padding:6px 8px;border-left:3px solid #9b59b6;display:flex;align-items:center;gap:8px;">
+                        <div style="font-weight:500;font-size:13px;color:#303133;display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+                            <i class="fas fa-file-signature" style="color:#9b59b6;"></i>
+                            <span>每日工作总结${wsTitle ? '：' + this.escapeHtml(wsTitle) : ''}</span>
                         </div>
                     </div>
                 `;
@@ -5563,6 +5805,27 @@ class ChatClient {
                         </div>`;
 
 
+            case 'work_summary_card':
+                let qWsDate = '';
+                try {
+                    const wsData = (typeof content === 'string' && (content.startsWith('{') || content.startsWith('['))) ? JSON.parse(content) : (message?.work_summary_data || {});
+                    qWsDate = (wsData.summary_date || '') + (wsData.user_name ? ' ' + wsData.user_name : '');
+                } catch (e) {}
+                const qWsTitle0 = qWsDate || content || '[每日工作总结]';
+                const qWsTitle = qWsTitle0.length > 40 ? qWsTitle0.substring(0, 40) + '...' : qWsTitle0;
+                return `<div class="quoted-file-link" style="padding: 6px 8px; border-left: 3px solid #9b59b6; background: #f6f2ff; border-radius: 4px;"
+                             onclick="${getClickHandler()}"
+                             title="点击跳转到原消息">
+                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+                                <i class="fas fa-file-signature" style="color:#9b59b6;font-size:12px;"></i>
+                                <span style="font-weight:500;font-size:12px;color:#303133;">${escape(qWsTitle)}</span>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#909399;">
+                                <span>每日工作总结</span>
+                                <i class="fas fa-location-arrow" style="margin-left:auto;color:#ccc;"></i>
+                            </div>
+                        </div>`;
+
             case 'location':
                 return `<span class="quote-icon-wrapper"><i class="fas fa-map-marker-alt"></i> [位置]</span>`;
 
@@ -5801,6 +6064,24 @@ class ChatClient {
                 } catch (e) {
                     console.error('解析审批卡片数据失败', e);
                     container.innerHTML = '<div class="message-text" style="color:#909399;"><i class="fas fa-clipboard-check"></i> [审批卡片]</div>';
+                }
+                break;
+            case 'work_summary_card':
+                try {
+                    let wsData = message.work_summary_data || null;
+                    if (!wsData && message.content) {
+                        try {
+                            const parsed = JSON.parse(message.content);
+                            if (parsed && parsed.summary_id !== undefined) {
+                                wsData = parsed;
+                            }
+                        } catch (_) {
+                        }
+                    }
+                    this.renderWorkSummaryCardInChat(wsData, container);
+                } catch (e) {
+                    console.error('解析工作总结卡片数据失败', e);
+                    container.innerHTML = '<div class="message-text" style="color:#909399;"><i class="fas fa-file-signature"></i> [每日工作总结卡片]</div>';
                 }
                 break;
             default:
@@ -6182,11 +6463,11 @@ class ChatClient {
             // 与顶部工作通知面板保持一致：优先用 notifications.js 的全局图标/配色，缺失时本地兜底
             var typeIcon2 = function (t) {
                 if (typeof typeIcon === 'function') return typeIcon(t);
-                return 'fas ' + ({'approval': 'fa-check-double', 'attendance': 'fa-clock', 'task': 'fa-tasks', 'collab': 'fa-users', 'subsidy': 'fa-hand-holding-usd', 'subsidy_apply': 'fa-file-invoice', 'subsidy_result': 'fa-clipboard-check', 'subsidy_withdraw': 'fa-money-check-alt', 'subsidy_withdraw_result': 'fa-wallet', 'daily': 'fa-calendar-day', 'hr': 'fa-user-tie', 'system': 'fa-bell'}[t] || 'fa-bell');
+                return 'fas ' + ({'approval': 'fa-check-double', 'attendance': 'fa-clock', 'task': 'fa-tasks', 'collab': 'fa-users', 'subsidy': 'fa-hand-holding-usd', 'subsidy_apply': 'fa-file-invoice', 'subsidy_result': 'fa-clipboard-check', 'subsidy_withdraw': 'fa-money-check-alt', 'subsidy_withdraw_result': 'fa-wallet', 'daily': 'fa-calendar-day', 'work_summary': 'fa-file-signature', 'hr': 'fa-user-tie', 'system': 'fa-bell'}[t] || 'fa-bell');
             };
             var typeColor2 = function (t) {
                 if (typeof typeColor === 'function') return typeColor(t);
-                return {'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'subsidy': '#16a085', 'subsidy_apply': '#16a085', 'subsidy_result': '#67c23a', 'subsidy_withdraw': '#e6a23c', 'subsidy_withdraw_result': '#16a085', 'daily': '#409eff', 'hr': '#6c5ce7', 'system': '#909399'}[t] || '#909399';
+                return {'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'subsidy': '#16a085', 'subsidy_apply': '#16a085', 'subsidy_result': '#67c23a', 'subsidy_withdraw': '#e6a23c', 'subsidy_withdraw_result': '#16a085', 'daily': '#409eff', 'work_summary': '#9b59b6', 'hr': '#6c5ce7', 'system': '#909399'}[t] || '#909399';
             };
             var formatTime2 = function (iso) {
                 if (!iso) return '';
@@ -9050,7 +9331,9 @@ class ChatClient {
 
 
             // 🔧 关键修复 3: 通过 WebSocket 发送文件消息（携带 temp_id 和正确的 roomId）
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            //    仅当 socket 属于目标聊天室时才直发，否则走队列，杜绝发到别的聊天室
+            if (this.ws && this.ws.readyState === WebSocket.OPEN &&
+                parseInt(this.ws._roomId) === parseInt(roomId)) {
                 const wsMessage = {
                     type: 'chat_message',
                     content: content,
@@ -9066,7 +9349,7 @@ class ChatClient {
 
                 this.showSuccess(uploadResult.exists ? '文件发送成功（已存在）' : '文件发送成功');
             } else {
-                // WebSocket 不可用时加入队列
+                // WebSocket 不可用或 socket 与目标聊天室不一致时加入队列
                 this.messageQueue.push({
                     chat_room: parseInt(roomId),  // 🔧 使用保存的 roomId
                     content: content,
@@ -12572,6 +12855,11 @@ class ChatClient {
         document.getElementById('changePasswordBtn')?.addEventListener('click', () => {
             this.openChangePasswordModal();
             menu.classList.remove('show');
+        });
+
+        document.getElementById('versionLogBtn')?.addEventListener('click', () => {
+            menu.classList.remove('show');
+            versionManager.openVersionLog();
         });
 
         document.getElementById('logoutBtn')?.addEventListener('click', () => {

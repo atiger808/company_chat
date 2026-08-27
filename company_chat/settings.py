@@ -413,7 +413,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20260606-55ec1e7'
+STATIC_VERSION = '20260826-7161b83'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -549,6 +549,7 @@ API_MODEL_MAP = {
     "/api/oa/attendance/save-user-attendance-config/": "保存个人考勤配置",
     "/api/oa/attendance/delete-user-attendance-config/<int:pk>/": "删除个人考勤配置",
     "/api/oa/attendance/calendar-stats/": "考勤日历统计",
+    "/api/oa/attendance/calendar_stats/": "考勤日历统计",
     "/api/oa/attendance/calendar-day-detail/": "考勤日历日期详情",
     "/api/oa/approval/": "OA审批",
     "/api/oa/approval/types/": "审批类型管理",
@@ -627,6 +628,18 @@ API_MODEL_MAP = {
     "/api/oa/work-calendar/approval-leaderboard/": "工作日历-审批效率排行榜",
     "/api/oa/work-calendar/digest-config/": "每日通知配置",
     "/api/oa/work-calendar/digest-send/": "每日通知手动发送",
+    "/api/oa/work-calendar/work-summary-stats/": "每日总结完成情况统计",
+    "/api/oa/work-summary/": "每日工作总结",
+    "/api/oa/work-summary/upload/": "每日总结文件上传",
+    "/api/oa/work-summary/all/": "每日总结团队列表",
+    "/api/oa/work-summary/config/": "每日总结模型配置",
+    "/api/oa/work-summary/members/": "每日总结成员列表",
+    "/api/oa/work-summary/range/": "每日总结范围分析",
+    "/api/oa/work-summary/range/<int:pk>/": "每日总结范围分析详情",
+    "/api/oa/work-summary/<int:pk>/": "每日总结详情",
+    "/api/oa/work-summary/<int:pk>/analyze/": "每日总结重新分析",
+    "/api/oa/work-summary/<int:pk>/share/": "每日总结分享私聊",
+    "/api/oa/work-summary/<int:pk>/export-pdf/": "每日总结导出PDF",
     "/api/system/watermark-config/": "企业水印配置",
     "/api/system/print-log/": "打印记录",
     "/api/oa/notifications/": "工作通知",
@@ -1150,3 +1163,9 @@ PUSH_PROXY = config('PUSH_PROXY', default='')
 # （见项目根目录 push_relay.py）。PUSH_RELAY_SECRET 需与中继端配置一致。
 PUSH_RELAY_URL = config('PUSH_RELAY_URL', default='')
 PUSH_RELAY_SECRET = config('PUSH_RELAY_SECRET', default='')
+
+
+# 火山方舟大模型API_KEY
+ARK_API_KEY = config('ARK_API_KEY', default='')
+# 火山方舟模型名（或推理接入点 ID ep-xxx），如豆包模型 doubao-seed-1-6-250615 / doubao-pro-32k
+ARK_MODEL = config('ARK_MODEL', default='doubao-seed-2-0-lite-260428')
