@@ -5720,8 +5720,9 @@ class ApprovalApp {
         }
 
         if (action === 'approve') {
-            var confirmed = await this.showConfirmDialog('确认发送私聊卡片', '是否确认通过审批？', 'confirm');
-            if (!confirmed) return;
+            // var confirmed = await this.showConfirmDialog('确认通过?', '是否确认通过审批？', 'confirm');
+            // if (!confirmed) return;
+
             // 「通知发起人回传票据」开关：开启才让后端发送请及时回传票据/凭证通知
             var notifyCb = document.getElementById('actionNotifyReceipt');
             if (notifyCb && notifyCb.checked) data.notify_receipt_return = true;

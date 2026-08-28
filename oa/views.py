@@ -764,8 +764,19 @@ class AttendanceViewSet(viewsets.ViewSet):
             'leave': sum(1 for e in result if e['day_status'] == 'leave'),
             'rest': sum(1 for e in result if e['day_status'] == 'rest'),
         }
+        # 当前用户生效考勤配置的打卡时间（补卡日历据此判断「今日」漏卡是否可补、并提示将按配置时间补卡）
+        from org.models import UserDepartment as _UD
+        _primary = _UD.objects.filter(user=request.user, is_primary=True).select_related('department').first()
+        _dept_id = _primary.department_id if _primary else None
+        _cfg = self._get_attendance_config(tenant, _dept_id, request.user)
+        _cfg_time = {
+            'clock_in': _cfg.clock_in_time.strftime('%H:%M') if _cfg and _cfg.clock_in_time else '09:00',
+            'clock_out': _cfg.clock_out_time.strftime('%H:%M') if _cfg and _cfg.clock_out_time else '18:00',
+            'shift_type': _cfg.shift_type if _cfg else 'day',
+        }
         return Response({'encrypt': True, 'data': encrypt_data({
             'year': year, 'month': month, 'days': result, 'summary': summary,
+            'config_time': _cfg_time,
         })})
 
     @action(detail=False, methods=['get'])

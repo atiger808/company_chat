@@ -1105,6 +1105,7 @@ class ChatClient {
 
         // 消息长度限制
         this.maxMessageLength = frontendConfig.get('chat.max_message_length', 2000);
+        localStorage.setItem('max_message_length', this.maxMessageLength);
 
         // 消息可撤回时间限制
         this.messageCanrevokeMinutes = frontendConfig.get('chat.message_canrevoke_minutes', 10);

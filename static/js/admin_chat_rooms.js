@@ -371,7 +371,8 @@ class AdminChatRoomsClient {
         let html = '';
         rooms.forEach(room => {
             const lastMessage = room.last_message || {};
-            const roomName = room.display_name || '未知聊天室';
+            let roomName = room.display_name || '未知聊天室';
+            roomName = roomName.indexOf(' - ') > 0 ? roomName : `${roomName} - 我`;
             const roomType = room.room_type === 'private' ? '私聊' : '群聊';
             const roomTypeClass = room.room_type === 'private' ? 'private' : 'group';
 

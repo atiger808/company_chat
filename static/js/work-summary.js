@@ -7,6 +7,7 @@ class WorkSummaryApp {
         this.myPageSize = 20;
         this.teamPage = 1;
         this.teamPageSize = 20;
+        this.maxMessageLength = localStorage.getItem('max_message_length') || 5000;
         this.myFiles = [];
         this._canViewAll = false;
         this._isSuperAdmin = false;
@@ -851,6 +852,8 @@ class WorkSummaryApp {
         const content = (document.getElementById('wsContent').value || '').trim();
         if (!dateEl.value) { this.toast('请选择工作总结日期', true); return; }
         if (!content && !this.myFiles.length) { this.toast('请填写工作总结或上传工作数据', true); return; }
+        if (!content) { this.toast('请填写工作总结', true); return; }
+        if (this.maxMessageLength && content.length > this.maxMessageLength) { this.toast('工作总结内容过长，请精简后重试', true); return; }
         var confirmed = await this.showConfirmDialog('确认提交工作总结？', '确认提交工作总结？');
         if (!confirmed) return;
         try {

@@ -558,6 +558,7 @@ class AttendanceApp {
         try {
             var cdata = await this.apiGet(OA_API_URL + '/attendance/calendar-stats/?year=' + this._mkYear + '&month=' + this._mkMonth);
             this._mkDays = (cdata && cdata.days) || [];
+            this._mkCfgTime = (cdata && cdata.config_time) || null;  // {clock_in, clock_out, shift_type}
         } catch (e) { /* 高亮加载失败不影响补卡 */ }
         this.renderMakeupCalendar();
         var used = this._makeupUsed || 0;
@@ -584,13 +585,17 @@ class AttendanceApp {
         var now = new Date();
         var todayStr = y + '-' + String(month).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
         var dataOk = !!(this._mkDays && this._mkDays.length);
+        var cfgT = this._mkCfgTime || {};
+        var shiftNight = cfgT.shift_type === 'night';
+        var nowHM = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+        var typeTime = ct === 'clock_in' ? (cfgT.clock_in || '09:00') : (cfgT.clock_out || '18:00');
         if (hint) {
             if (!dataOk) {
                 hint.innerHTML = '<i class="fas fa-exclamation-triangle"></i> 未获取到考勤数据，暂无法选择补卡日期，请刷新后重试';
                 hint.style.background = '#fdf6ec';
                 hint.style.color = '#e6a23c';
             } else {
-                hint.innerHTML = '<i class="fas fa-info-circle"></i> 仅可选择今日及之前的「迟到/早退」或「漏卡」日期（休息日/节假日/请假日除外），点击高亮日期选择';
+                hint.innerHTML = '<i class="fas fa-info-circle"></i> 可选择今日及之前的「迟到/早退」或「漏卡」日期（休息日/节假日/请假日除外）；今日漏打的' + (ct === 'clock_in' ? '上班卡' : '下班卡') + '在打卡时间 ' + typeTime + ' 过后也可补，点击高亮日期选择';
                 hint.style.background = '#ecf5ff';
                 hint.style.color = '#409eff';
             }
@@ -610,12 +615,15 @@ class AttendanceApp {
             var recStatus = rec ? rec.status : '';
             var isFuture = info.day_status === 'future';
             var isRest = info.day_status === 'rest' || info.day_status === 'leave';
-            var notYet = (ds === todayStr) && !rec; // 今天尚未打该卡 → 应直接打卡，不补卡
+            // 今日漏卡：该卡配置打卡时间已过才可补（夜班下班卡属次日，不在今日补）
+            var todayMissOk = (ds === todayStr) && !rec
+                && !(shiftNight && ct === 'clock_out')
+                && (nowHM >= typeTime);
             // 严格按规则判定：必须有考勤数据且为迟到/早退或漏卡才可选择，其余日期一律不可选
             var hasInfo = !!info.day_status;
             var eligible = false, kind = '';
-            if (dataOk && hasInfo && !isFuture && !isRest && !notYet) {
-                if (!rec) { eligible = true; kind = 'miss'; }
+            if (dataOk && hasInfo && !isFuture && !isRest) {
+                if (!rec) { eligible = ds === todayStr ? todayMissOk : true; kind = 'miss'; }
                 else if (recStatus === 'late' || recStatus === 'early_leave') { eligible = true; kind = 'late'; }
             }
             var isSel = this._mkSelectedDate === ds;
@@ -638,6 +646,17 @@ class AttendanceApp {
             legend.innerHTML = '<span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#fef0f0;border:1px solid #fde2e2;vertical-align:-2px;margin-right:3px;"></span>漏卡可补</span>'
                 + '<span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#fdf6ec;border:1px solid #f5dab1;vertical-align:-2px;margin-right:3px;"></span>迟到/早退可补</span>'
                 + '<span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#f5f7fa;vertical-align:-2px;margin-right:3px;"></span>正常/不可补</span>';
+        }
+        // 已选日期提示：将按考勤配置时间补卡
+        var tipEl = document.getElementById('makeupTimeTip');
+        if (tipEl) {
+            if (this._mkSelectedDate) {
+                var tipT = ct === 'clock_in' ? (cfgT.clock_in || '09:00') : (cfgT.clock_out || '18:00');
+                tipEl.innerHTML = '<i class="fas fa-clock" style="margin-right:4px;"></i> 将按考勤配置时间 <b>' + tipT + '</b> 补' + (ct === 'clock_in' ? '上班' : '下班') + '卡（' + this._mkSelectedDate + '）';
+                tipEl.style.display = 'block';
+            } else {
+                tipEl.style.display = 'none';
+            }
         }
     }
 

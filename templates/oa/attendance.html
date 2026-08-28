@@ -41,8 +41,9 @@
                         class="top-bar-text">考勤</span></a>
                 <a href="/oa/subsidy/" class="top-bar-btn"><i class="fas fa-hand-holding-usd"></i> <span
                         class="top-bar-text">普惠补贴</span></a>
-                <a href="/oa/work-calendar/" class="top-bar-btn"><i class="fas fa-calendar-alt"></i> <span
-                        class="top-bar-text">工作日历</span></a><a href="/oa/work-summary/" class="top-bar-btn"><i class="fas fa-file-signature"></i> <span class="top-bar-text">每日总结</span></a>
+                <a href="/oa/work-calendar/" class="top-bar-btn top-bar-text"><i class="fas fa-calendar-alt"></i> <span
+                        class="top-bar-text">工作日历</span></a>
+                <a href="/oa/work-summary/" class="top-bar-btn"><i class="fas fa-file-signature"></i> <span class="top-bar-text">每日总结</span></a>
             </div>
             <div class="top-right">
                 <button id="attendanceConfigBtn" class="top-bar-btn" onclick="attendanceApp.openConfigModal()"
@@ -306,6 +307,8 @@
                      style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:12px;color:var(--text-secondary,#606266);"></div>
                 <div id="makeupCalHint"
                      style="margin-top:8px;padding:8px 10px;border-radius:8px;font-size:12px;background:#ecf5ff;color:#409eff;"></div>
+                <div id="makeupTimeTip"
+                     style="display:none;margin-top:8px;padding:8px 10px;border-radius:8px;font-size:13px;background:#f0f9eb;color:#67c23a;"></div>
             </div>
             <div id="makeupRemainingTip"
                  style="margin-top:12px;padding:8px 12px;background:#f0f9eb;border-radius:8px;font-size:13px;color:#67c23a;"></div>
@@ -570,7 +573,7 @@
 <script src="/static/js/utils.js?v=20260826-7161b84"></script>
 <script src="/static/js/api.js?v=20260826-7161b83"></script>
 <script src="/static/js/tenant.js?v=20260826-7161b83"></script>
-<script src="/static/js/attendance.js?v=20260827-5f8a3d7"></script>
+<script src="/static/js/attendance.js?v=20260828-5f8a3d7"></script>
 <script src="/static/js/notifications.js?v=20260826-5b7f3e9"></script>
 
 <script>
