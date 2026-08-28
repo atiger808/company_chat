@@ -272,6 +272,7 @@ class WorkCalendarApp {
         this._loadEfficiency(params);
         this._loadLeaderboard(params);
         if (this._isSuperAdmin) this._loadSummaryStats(this._rangeParams());
+        this._loadOrgActivity(params);
     }
     async _loadStats(params) {
         var wrap = document.getElementById('wcStatsChart');
@@ -526,6 +527,464 @@ class WorkCalendarApp {
         return h + '小时' + (m ? m + '分钟' : '');
     }
 
+    // ===== 成员关系与活跃度可视化 =====
+    _ACT_TYPES() {
+        return [
+            ['chat', '聊天', '#409eff'],
+            ['approval', '审批', '#e6a23c'],
+            ['attendance', '考勤', '#67c23a'],
+            ['summary', '总结', '#7c4dff'],
+            ['task', '任务', '#f56c6c'],
+            ['cloud', '网盘', '#00a1ff'],
+            ['doc', '文档', '#9b59b6']
+        ];
+    }
+    async _loadOrgActivity(params) {
+        var card = document.getElementById('wcOrgActivityCard');
+        if (!card) return;
+        try {
+            const d = await this.apiGet(WC_API + '/org-activity/?' + params);
+            if (!d) return;
+            this._orgData = d;
+            this._heatSel = null;
+            this._treeSel = null;
+            var rangeEl = document.getElementById('wcOrgActivityRange');
+            if (rangeEl && d.range) rangeEl.textContent = d.range.start + ' ~ ' + d.range.end;
+            var uid = parseInt(localStorage.getItem('user_id'), 10);
+            this._radarTargetId = uid || ((d.members || [])[0] ? (d.members[0]).id : null);
+            this._renderNetwork(d);
+            this._renderHeatmap(d);
+            this._renderTree(d);
+            this._renderRadar(this._radarTargetId, d);
+        } catch (e) {
+            this.showToast('加载成员关系数据失败', true);
+        }
+    }
+    _renderNetwork(d) {
+        var wrap = document.getElementById('wcNetworkChart');
+        if (!wrap) return;
+        var nodes = (d.network && d.network.nodes) || [];
+        var links = (d.network && d.network.links) || [];
+        var total = (d.network && d.network.total_members) || nodes.length;
+        if (!nodes.length) {
+            wrap.innerHTML = '<div style="text-align:center;color:#909399;font-size:13px;padding:100px 0;"><i class="fas fa-project-diagram" style="font-size:30px;display:block;margin-bottom:8px;color:#c0c4cc;"></i>该时间段内暂无成员活跃数据</div>';
+            return;
+        }
+        if (!window.echarts) { wrap.innerHTML = '<div style="text-align:center;color:#909399;padding:100px 0;">图表组件加载失败</div>'; return; }
+        if (!this._networkChart) this._networkChart = echarts.init(wrap);
+        var self = this;
+        var isMobile = window.innerWidth < 768;
+        var catMap = {}, cats = [];
+        nodes.forEach(function (n) {
+            if (!(n.category in catMap)) { catMap[n.category] = cats.length; cats.push(n.category); }
+        });
+        var palette = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#9b59b6', '#00a1ff', '#16a085', '#e74c3c', '#8e44ad', '#d35400', '#2f9e44', '#5c6bc0', '#ec407a', '#795548'];
+        var chartNodes = nodes.map(function (n) {
+            var ci = catMap[n.category];
+            // 不覆盖 color：让 ECharts 按 category 从全局 color 取色，保证同部门同色且与右侧图例一致
+            // id 字符串化：避免数字 id 与数组索引混淆导致连线错连
+            return {id: String(n.id), name: n.name, category: ci, value: n.value,
+                    symbolSize: Math.max(16, Math.min(58, 12 + Math.sqrt(n.value || 0) * 1.7)),
+                    activity: n.activity || {}, dept: n.category, avatar: n.avatar, position: n.position || '',
+                    itemStyle: {borderColor: '#fff', borderWidth: 1}};
+        });
+        var typeColorMap = {'chat': '#409eff', 'approval': '#e6a23c', 'task': '#f56c6c', 'doc': '#9b59b6', 'share': '#00a1ff'};
+        var typeLabelMap = {'chat': '私聊消息', 'approval': 'OA审批', 'task': '任务指派', 'doc': '协作文档', 'share': '网盘分享'};
+        // 逐条互动线段：同一对成员的多条边以不同曲率扇形展开，互不合并，边数直观体现互动频率
+        var pairGroups = {};
+        links.forEach(function (l) {
+            var key = Math.min(l.source, l.target) + '-' + Math.max(l.source, l.target);
+            (pairGroups[key] = pairGroups[key] || []).push(l);
+        });
+        var chartLinks = [];
+        Object.keys(pairGroups).forEach(function (key) {
+            var arr = pairGroups[key];
+            arr.forEach(function (l, i) {
+                var cur = (i - (arr.length - 1) / 2) * 0.09;
+                var lc = typeColorMap[l.type] || '#909399';
+                chartLinks.push({
+                    source: String(l.source), target: String(l.target), type: l.type,
+                    time: l.time || '', title: l.title || '',
+                    value: 1,
+                    lineStyle: {width: 1.5, color: lc, opacity: 0.85, curveness: cur}
+                });
+            });
+        });
+        var nodeNameMap = {};
+        chartNodes.forEach(function (n) { nodeNameMap[n.id] = n.name; });
+        this._networkChart.setOption({
+            color: palette,
+            tooltip: {
+                formatter: function (p) {
+                    if (p.dataType === 'edge' && p.data) {
+                        var lb = typeLabelMap[p.data.type] || '互动';
+                        var lc = typeColorMap[p.data.type] || '#909399';
+                        var html = '<b>' + self._escape(nodeNameMap[p.data.source] || '') + ' ↔ ' + self._escape(nodeNameMap[p.data.target] || '') + '</b>'
+                            + '<br/><span style="color:' + lc + ';">' + self._escape(lb) + '</span>'
+                            + (p.data.title ? '<br/>' + self._escape(p.data.title) : '')
+                            + (p.data.time ? '<br/>时间：' + self._escape(p.data.time.slice(0, 16).replace('T', ' ')) : '')
+                            + '<div style="font-size:11px;color:#909399;margin-top:4px;">点击查看该次互动</div>';
+                        return html;
+                    }
+                    if (p.dataType === 'node' && p.data) {
+                        var a = p.data.activity || {};
+                        var name = self._escape(p.data.name || '');
+                        var av = self._escape(p.data.avatar || '/static/images/default-avatar.png');
+                        var dept = self._escape(p.data.dept || '');
+                        var pos = self._escape(p.data.position || '');
+                        var act = [];
+                        self._ACT_TYPES().forEach(function (t) { act.push('<span style="color:' + t[2] + ';">' + t[1] + ' ' + (a[t[0]] || 0) + '</span>'); });
+                        return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
+                            + '<img src="' + av + '" style="width:30px;height:30px;border-radius:50%;object-fit:cover;">'
+                            + '<div><div style="font-weight:600;">' + name + '</div>'
+                            + '<div style="font-size:11px;color:#909399;">' + [dept, pos].filter(Boolean).join(' · ') + '</div></div></div>'
+                            + '<div style="font-weight:600;">总活跃度 ' + (p.data.value || 0) + '</div>'
+                            + '<div style="display:flex;gap:8px;flex-wrap:wrap;max-width:240px;">' + act.join('') + '</div>'
+                            + '<div style="font-size:11px;color:#909399;margin-top:4px;">点击选中该成员，可切换至「个人雷达」查看画像</div>';
+                    }
+                    return '';
+                }
+            },
+            legend: [{data: cats, textStyle: {color: '#909399'}, type: 'scroll',
+                orient: isMobile ? 'horizontal' : 'vertical',
+                left: isMobile ? 10 : null, right: isMobile ? 10 : 8,
+                top: isMobile ? 4 : 20, bottom: isMobile ? 0 : null,
+                width: isMobile ? null : 90}],
+            series: [{
+                type: 'graph', layout: 'force', roam: true, draggable: true,
+                selectedMode: 'single',
+                data: chartNodes, links: chartLinks,
+                categories: cats.map(function (c) { return {name: c}; }),
+                force: {repulsion: isMobile ? 120 : 170, edgeLength: isMobile ? 45 : 65, gravity: 0.05},
+                label: {show: true, position: 'right', fontSize: isMobile ? 9 : 10, color: '#606266'},
+                lineStyle: {color: '#c0c4cc', curveness: 0, opacity: 0.6},
+                emphasis: {focus: 'adjacency', itemStyle: {borderColor: '#ffd04b', borderWidth: 3, shadowBlur: 12, shadowColor: 'rgba(255,208,75,.55)'}, lineStyle: {width: 3, opacity: 0.9}},
+                select: {itemStyle: {borderColor: '#ffd04b', borderWidth: 3, shadowBlur: 14, shadowColor: 'rgba(255,208,75,.65)'}, label: {fontWeight: 'bold', fontSize: 11}}
+            }]
+        });
+        this._networkChart.off('click');
+        this._networkChart.on('click', function (p) {
+            var tip = document.getElementById('wcNetworkTip');
+            if (p.dataType === 'edge' && p.data) {
+                var lb = typeLabelMap[p.data.type] || '互动';
+                var lc = typeColorMap[p.data.type] || '#909399';
+                var tstr = p.data.time ? ' · ' + self._escape(p.data.time.slice(0, 16).replace('T', ' ')) : '';
+                var ttl = p.data.title ? ' · ' + self._escape(p.data.title) : '';
+                if (tip) tip.innerHTML = '<i class="fas fa-link" style="color:' + lc + ';"></i> 互动详情：<b>' + self._escape(nodeNameMap[p.data.source] || '') + ' ↔ ' + self._escape(nodeNameMap[p.data.target] || '') + '</b> · <span style="color:' + lc + ';">' + self._escape(lb) + '</span>' + ttl + tstr;
+                return;
+            }
+            if (p.dataType === 'node' && p.data && p.data.id) {
+                self._radarSelect(p.data.id);
+                if (tip) tip.innerHTML = '<i class="fas fa-check-circle" style="color:#67c23a;"></i> 已选中：<b>' + self._escape(p.data.name || '') + '</b>（' + self._escape(p.data.dept || '') + '）· 总活跃度 ' + (p.data.value || 0) + '，可切换到「个人雷达」查看画像';
+            }
+        });
+        this._networkChart.resize();
+    }
+    _renderHeatmap(d) {
+        var wrap = document.getElementById('wcHeatmapChart');
+        if (!wrap) return;
+        var nodes = (d.network && d.network.nodes) || [];
+        if (!nodes.length) {
+            wrap.innerHTML = '<div style="text-align:center;color:#909399;font-size:13px;padding:100px 0;"><i class="fas fa-th-large" style="font-size:30px;display:block;margin-bottom:8px;color:#c0c4cc;"></i>该时间段内暂无成员活跃数据</div>';
+            return;
+        }
+        if (!window.echarts) { wrap.innerHTML = '<div style="text-align:center;color:#909399;padding:100px 0;">图表组件加载失败</div>'; return; }
+        if (!this._heatmapChart) this._heatmapChart = echarts.init(wrap);
+        var self = this;
+        var types = this._ACT_TYPES();
+        var top = nodes.slice(0, 40);
+        var data = [], maxV = 1;
+        top.forEach(function (n, yi) {
+            var a = n.activity || {};
+            types.forEach(function (t, xi) {
+                var v = a[t[0]] || 0;
+                if (v > maxV) maxV = v;
+                var item = {value: [xi, yi, v]};
+                if (self._heatSel && self._heatSel[0] === xi && self._heatSel[1] === yi) {
+                    item.itemStyle = {borderColor: '#ffd04b', borderWidth: 2, shadowBlur: 12, shadowColor: 'rgba(255,208,75,.6)'};
+                }
+                data.push(item);
+            });
+        });
+        this._heatmapChart.setOption({
+            tooltip: {position: 'top', formatter: function (p) {
+                var n = top[p.value[1]]; var t = types[p.value[0]];
+                var sel = self._heatSel && self._heatSel[0] === p.value[0] && self._heatSel[1] === p.value[1];
+                return '<b>' + self._escape(n.name || '') + '</b><br/>' + t[1] + '：' + p.value[2]
+                    + (sel ? '<br/><span style="color:#e6a23c;">已选中</span>' : '')
+                    + '<div style="font-size:11px;color:#909399;margin-top:4px;">点击选中该成员，可切换至「个人雷达」查看画像</div>';
+            }},
+            grid: {left: 120, right: 30, top: 30, bottom: 90},
+            xAxis: {type: 'category', data: types.map(function (t) { return t[1]; }), axisLabel: {color: '#909399'}, splitArea: {show: true}},
+            yAxis: {type: 'category', data: top.map(function (n) { return n.name; }), axisLabel: {color: '#606266', fontSize: 11}, splitArea: {show: true}},
+            visualMap: {min: 0, max: maxV, calculable: true, orient: 'horizontal', left: 'center', bottom: 12,
+                inRange: {color: ['#f0f2f5', '#cfe3ff', '#7fbfe8', '#409eff', '#7c4dff']}, textStyle: {color: '#909399'}},
+            dataZoom: [
+                {type: 'inside', xAxisIndex: [0], zoomOnMouseWheel: true},
+                {type: 'inside', yAxisIndex: [0], zoomOnMouseWheel: true},
+                {type: 'slider', xAxisIndex: [0], height: 14, bottom: 48, textStyle: {color: '#909399'}},
+                {type: 'slider', yAxisIndex: [0], width: 12, right: 14, textStyle: {color: '#909399'}}
+            ],
+            series: [{type: 'heatmap', data: data, label: {show: false}, emphasis: {itemStyle: {shadowBlur: 12, shadowColor: 'rgba(0,0,0,.3)', borderColor: '#ffd04b', borderWidth: 2}}}]
+        });
+        this._heatmapChart.off('click');
+        this._heatmapChart.on('click', function (p) {
+            if (p && p.value && p.value.length >= 2) {
+                self._heatSel = [p.value[0], p.value[1]];
+                var n = top[p.value[1]];
+                if (n && n.id != null) self._radarSelect(n.id);
+                self._renderHeatmap(self._orgData);
+            }
+        });
+        this._heatmapChart.resize();
+    }
+    _renderTree(d) {
+        var wrap = document.getElementById('wcTreeChart');
+        if (!wrap) return;
+        var treeData = d.org_tree || [];
+        if (!treeData.length) {
+            wrap.innerHTML = '<div style="text-align:center;color:#909399;font-size:13px;padding:100px 0;"><i class="fas fa-sitemap" style="font-size:30px;display:block;margin-bottom:8px;color:#c0c4cc;"></i>暂无组织架构数据</div>';
+            return;
+        }
+        if (!window.echarts) { wrap.innerHTML = '<div style="text-align:center;color:#909399;padding:100px 0;">图表组件加载失败</div>'; return; }
+        if (!this._treeChart) this._treeChart = echarts.init(wrap);
+        var self = this;
+        // 节点配色：租户根=深色，直属部门=蓝，子公司=橙，未分组=灰，成员=多彩（选中节点金色高亮）
+        var pal = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#9b59b6', '#00a1ff', '#16a085', '#e74c3c', '#8e44ad', '#ec407a'];
+        var ci = 0;
+        (function mark(node) {
+            if (!node) return;
+            node.itemStyle = node.itemStyle || {};
+            if (node.type === 'member') {
+                var c = pal[ci % pal.length];
+                ci++;
+                if (self._treeSel === node.id) {
+                    node.itemStyle.color = '#ffd04b';
+                    node.itemStyle.borderColor = '#e6a23c';
+                    node.itemStyle.borderWidth = 2;
+                    node.itemStyle.shadowBlur = 10;
+                    node.itemStyle.shadowColor = 'rgba(255,208,75,.6)';
+                } else {
+                    node.itemStyle.color = c;
+                    node.itemStyle.borderWidth = 0;
+                    node.itemStyle.shadowBlur = 0;
+                }
+            } else if (node.type === 'tenant') {
+                node.itemStyle.color = '#2c3e50';
+                node.itemStyle.borderColor = '#7c4dff';
+                node.itemStyle.borderWidth = 1;
+            } else if (node.type === 'virtual') {
+                node.itemStyle.color = '#909399';
+            } else { // dept：按部门类型着色（公司/子公司类型与普通部门区分，不单独列出）
+                var dtColor = {'company': '#e67e22', 'department': '#409eff', 'group': '#67c23a', 'virtual': '#909399'};
+                node.itemStyle.color = dtColor[node.dept_type] || '#409eff';
+            }
+            (node.children || []).forEach(function (c) { mark(c); });
+        })(treeData[0]);
+        this._treeChart.setOption({
+            tooltip: {trigger: 'item', triggerOn: 'mousemove', formatter: function (info) {
+                var t = info.data;
+                var typeLabelMap = {'company': '公司', 'department': '部门', 'group': '小组', 'virtual': '虚拟组织'};
+                if (t.type === 'member') {
+                    return '<div style="display:flex;align-items:center;gap:6px;"><img src="' + self._escape(t.avatar || '/static/images/default-avatar.png') + '" style="width:22px;height:22px;border-radius:50%;object-fit:cover;"><b>' + self._escape(t.name || '') + '</b></div>'
+                        + '活跃度：' + (t.value != null ? t.value : 0)
+                        + (self._treeSel === t.id ? '<br/><span style="color:#e6a23c;">已选中</span>' : '')
+                        + '<div style="font-size:11px;color:#909399;margin-top:4px;">点击选中该成员，可切换至「个人雷达」查看画像</div>';
+                }
+                if (t.type === 'tenant') {
+                    return '<b>' + self._escape(t.name || '') + '</b><br/><span style="color:#7c4dff;">' + self._escape(t.label || '企业') + ' · 根节点</span>';
+                }
+                if (t.type === 'virtual') {
+                    return '<b>' + self._escape(t.name || '') + '</b>';
+                }
+                // dept：按部门类型显示（公司/子公司类型与普通部门区分）
+                var dtColor = {'company': '#e67e22', 'department': '#409eff', 'group': '#67c23a', 'virtual': '#909399'};
+                var dc = dtColor[t.dept_type] || '#409eff';
+                return '<b>' + self._escape(t.name || '') + '</b><br/><span style="color:' + dc + ';">' + self._escape(typeLabelMap[t.dept_type] || '部门') + '</span>';
+            }},
+            series: [{
+                type: 'tree', data: treeData, orient: 'LR', symbol: 'circle', symbolSize: 7,
+                initialTreeDepth: 3, roam: true,
+                label: {position: 'left', verticalAlign: 'middle', align: 'right', fontSize: 12, color: '#606266'},
+                leaves: {label: {position: 'right', verticalAlign: 'middle', align: 'left'}},
+                expandAndCollapse: true,
+                lineStyle: {color: '#c0c4cc'},
+                emphasis: {itemStyle: {borderColor: '#ffd04b', borderWidth: 2, shadowBlur: 10, shadowColor: 'rgba(255,208,75,.5)'}}
+            }]
+        });
+        this._treeChart.off('click');
+        this._treeChart.on('click', function (p) {
+            if (p.data && p.data.id != null) {
+                self._treeSel = p.data.id;
+                self._radarSelect(p.data.id);
+                self._renderTree(self._orgData);
+            }
+        });
+        this._treeChart.resize();
+    }
+    _renderRadar(memberId, d) {
+        var wrap = document.getElementById('wcRadarChart');
+        if (!wrap) return;
+        var act = d.activity || {};
+        var m = null;
+        (d.members || []).forEach(function (x) { if (String(x.id) === String(memberId)) m = x; });
+        if (!m) { m = (d.members || [])[0] || null; }
+        if (!m) { wrap.innerHTML = '<div style="text-align:center;color:#909399;font-size:13px;padding:80px 0;">暂无成员数据</div>'; return; }
+        var a = act[String(m.id)] || {chat: 0, approval: 0, attendance: 0, summary: 0, task: 0, cloud: 0, doc: 0};
+        var types = this._ACT_TYPES();
+        var values = types.map(function (t) { return a[t[0]] || 0; });
+        var maxV = Math.max.apply(null, values.concat([1]));
+        var indicator = types.map(function (t) { return {name: t[1], max: Math.ceil(maxV * 1.2)}; });
+        if (!window.echarts) { wrap.innerHTML = '<div style="text-align:center;color:#909399;padding:80px 0;">图表组件加载失败</div>'; return; }
+        if (!this._radarChart) this._radarChart = echarts.init(wrap);
+        var self = this;
+        this._radarChart.setOption({
+            tooltip: {formatter: function (p) {
+                var lines = p.value.map(function (v, i) { return types[i][1] + '：' + v; });
+                return '<b>' + self._escape(m.name || '') + '</b><br/>' + lines.join('<br/>');
+            }},
+            radar: {indicator: indicator, radius: '62%', center: ['50%', '52%'], axisName: {color: '#606266', fontSize: 12}},
+            series: [{type: 'radar', symbol: 'circle', symbolSize: 5, data: [{
+                name: m.name, value: values,
+                areaStyle: {opacity: 0.16}, lineStyle: {width: 2, color: '#7c4dff'}, itemStyle: {color: '#7c4dff'}
+            }]}]
+        });
+        this._radarChart.resize();
+        var targetEl = document.getElementById('wcRadarTarget');
+        if (targetEl) targetEl.innerHTML = '当前查看：<b>' + this._escape(m.name || '') + '</b>' + (m.department ? '（' + this._escape(m.department) + '）' : '');
+        var sumEl = document.getElementById('wcRadarSummary');
+        if (sumEl) {
+            var total = values.reduce(function (s, v) { return s + v; }, 0);
+            sumEl.innerHTML = '总活跃度 <b>' + total + '</b>：' + types.map(function (t, i) { return '<span style="color:' + t[2] + ';">' + t[1] + ' ' + values[i] + '</span>'; }).join(' · ');
+        }
+    }
+    _radarSelect(id) {
+        this._radarTargetId = id;
+        if (this._orgData) this._renderRadar(id, this._orgData);
+    }
+    _radarSelectSelf() {
+        var uid = parseInt(localStorage.getItem('user_id'), 10);
+        this._radarSelect(uid || null);
+    }
+    _onRadarSearch(e) {
+        var res = document.getElementById('wcRadarRes');
+        if (!res) return;
+        var kw = (e.target.value || '').trim();
+        if (!kw) { res.style.display = 'none'; return; }
+        if (this._radarSearchTimer) clearTimeout(this._radarSearchTimer);
+        var self = this;
+        this._radarSearchTimer = setTimeout(function () { self._doRadarSearch(kw); }, 250);
+    }
+    async _doRadarSearch(kw) {
+        var res = document.getElementById('wcRadarRes');
+        if (!res) return;
+        res.innerHTML = '<div style="padding:8px 12px;color:#909399;font-size:13px;">正在搜索...</div>';
+        res.style.display = 'block';
+        var list = null;
+        try {
+            var resp = await fetch('/api/oa/work-calendar/member-search/?q=' + encodeURIComponent(kw), {headers: TokenManager.getHeaders()});
+            if (resp.ok) {
+                var json = await resp.json();
+                var d = json.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(json) : json;
+                list = d.results || [];
+            }
+        } catch (err) { /* 后端失败回退客户端 */ }
+        if (!list) {
+            if (this._orgData && (this._orgData.members || []).length) {
+                var lower = kw.toLowerCase();
+                list = (this._orgData.members || []).filter(function (m) {
+                    return (m.name || '').toLowerCase().indexOf(lower) >= 0
+                        || (m.department || '').indexOf(kw) >= 0;
+                }).slice(0, 20);
+            } else {
+                res.innerHTML = '<div style="padding:8px 12px;color:#909399;font-size:13px;">搜索失败，请刷新后重试</div>';
+                return;
+            }
+        }
+        if (!list.length) {
+            res.innerHTML = '<div style="padding:8px 12px;color:#909399;font-size:13px;">未找到匹配的成员</div>';
+            res.style.display = 'block';
+            return;
+        }
+        var self = this;
+        res.innerHTML = list.map(function (m) {
+            return '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;" onclick="wcApp._radarPick(' + m.id + ')">'
+                + '<img src="' + self._escape(m.avatar || '/static/images/default-avatar.png') + '" style="width:26px;height:26px;border-radius:50%;object-fit:cover;">'
+                + '<span style="flex:1;font-size:13px;">' + self._escape(m.name || '') + '</span>'
+                + (m.department ? '<span style="font-size:11px;color:#909399;">' + self._escape(m.department) + '</span>' : '')
+                + '</div>';
+        }).join('');
+        res.style.display = 'block';
+    }
+    _radarPick(id) {
+        var input = document.getElementById('wcRadarSearch');
+        var m = null;
+        (this._orgData.members || []).forEach(function (x) { if (String(x.id) === String(id)) m = x; });
+        if (input && m) input.value = m.name || '';
+        this._radarSelect(id);
+        this._hideRadarRes();
+    }
+    _hideRadarRes() {
+        var res = document.getElementById('wcRadarRes');
+        if (res) res.style.display = 'none';
+    }
+    _switchVizTab(tab) {
+        this._exitAllFullscreen();
+        document.querySelectorAll('.wc-viz-tab').forEach(function (b) {
+            b.classList.toggle('active', b.getAttribute('data-tab') === tab);
+        });
+        document.querySelectorAll('.wc-viz-pane').forEach(function (p) {
+            p.style.display = p.getAttribute('data-pane') === tab ? '' : 'none';
+        });
+        var self = this;
+        setTimeout(function () {
+            if (tab === 'network' && self._networkChart) self._networkChart.resize();
+            if (tab === 'heatmap' && self._heatmapChart) self._heatmapChart.resize();
+            if (tab === 'tree' && self._treeChart) self._treeChart.resize();
+            if (tab === 'radar' && self._radarChart) self._radarChart.resize();
+        }, 60);
+    }
+    _resetNetworkView() {
+        if (!this._networkChart) return;
+        if (this._orgData) {
+            this._networkChart.clear();
+            this._renderNetwork(this._orgData);
+        }
+    }
+    _resetTreeView() {
+        if (!this._treeChart) return;
+        if (this._orgData) {
+            this._treeChart.clear();
+            this._renderTree(this._orgData);
+        }
+    }
+    // 图表全屏切换（CSS 固定定位模拟全屏，兼容移动端/iOS）
+    _toggleChartFullscreen(wrapId) {
+        var wrap = document.getElementById(wrapId);
+        if (!wrap) return;
+        var isFs = wrap.classList.toggle('wc-fs');
+        var btn = document.querySelector('[data-fs-wrap="' + wrapId + '"]');
+        if (btn) {
+            btn.classList.toggle('wc-fs-btn-active', isFs);
+            var icon = btn.querySelector('i');
+            if (icon) icon.className = isFs ? 'fas fa-compress' : 'fas fa-expand';
+            var span = btn.querySelector('span');
+            if (span) span.textContent = isFs ? '退出全屏' : '全屏';
+        }
+        var chart = this['_' + wrap.getAttribute('data-chart')];
+        if (chart) setTimeout(function () { chart.resize(); }, 80);
+    }
+    _exitAllFullscreen() {
+        document.querySelectorAll('.wc-chart-wrap.wc-fs').forEach(function (w) { w.classList.remove('wc-fs'); });
+        document.querySelectorAll('.wc-fs-btn-active').forEach(function (b) {
+            b.classList.remove('wc-fs-btn-active');
+            var icon = b.querySelector('i');
+            if (icon) icon.className = 'fas fa-expand';
+            var span = b.querySelector('span');
+            if (span) span.textContent = '全屏';
+        });
+    }
+
     // ===== 超管查看成员 =====
     async _onMemberSearch(e) {
         var kw = (e.target.value || '').trim();
@@ -697,4 +1156,8 @@ window.addEventListener('resize', function () {
             if (wcApp._summaryBarCharts[k]) wcApp._summaryBarCharts[k].resize();
         });
     }
+    if (wcApp._networkChart) wcApp._networkChart.resize();
+    if (wcApp._heatmapChart) wcApp._heatmapChart.resize();
+    if (wcApp._treeChart) wcApp._treeChart.resize();
+    if (wcApp._radarChart) wcApp._radarChart.resize();
 });

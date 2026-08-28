@@ -629,6 +629,8 @@ API_MODEL_MAP = {
     "/api/oa/work-calendar/digest-config/": "每日通知配置",
     "/api/oa/work-calendar/digest-send/": "每日通知手动发送",
     "/api/oa/work-calendar/work-summary-stats/": "每日总结完成情况统计",
+    "/api/oa/work-calendar/org-activity/": "成员关系与活跃度可视化",
+    "/api/oa/work-calendar/member-search/": "成员关系-成员搜索",
     "/api/oa/work-summary/": "每日工作总结",
     "/api/oa/work-summary/upload/": "每日总结文件上传",
     "/api/oa/work-summary/all/": "每日总结团队列表",

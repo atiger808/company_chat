@@ -5673,6 +5673,276 @@ class WorkCalendarViewSet(viewsets.ViewSet):
             'target_user': self._target_info(target),
         })})
 
+    @action(detail=False, methods=['get'])
+    def org_activity(self, request):
+        """成员关系网络 + 活跃度聚合：静态组织架构 × 动态行为数据（聊天/审批/考勤/总结/任务/网盘/文档）
+        GET /api/oa/work-calendar/org-activity/?start=YYYY-MM-DD&end=YYYY-MM-DD
+        返回 org_tree（架构树）、network（关系图节点/边）、members（雷达选择）、activity（每人分维度活跃度）"""
+        from datetime import date as dt_date, timedelta
+        from accounts.models import CustomUser, Tenant, Department as OrgDept
+        from org.models import UserDepartment
+        from chat.models import Message, ChatRoom
+        from tasks.models import Task
+        from cloud.models import FileOperationLog
+        from .models import ApprovalRequest, ApprovalAssignee, AttendanceRecord, DailyWorkSummary
+
+        now_date = timezone.localdate()
+        start = end = None
+        try:
+            start_s = request.query_params.get('start', '').strip()
+            if start_s:
+                start = dt_date.fromisoformat(start_s)
+            end_s = request.query_params.get('end', '').strip()
+            if end_s:
+                end = dt_date.fromisoformat(end_s)
+        except ValueError:
+            return Response({'error': '日期格式错误，请使用 YYYY-MM-DD'}, status=400)
+        if start is None:
+            start = now_date - timedelta(days=29)
+        if end is None:
+            end = now_date
+        if start > end:
+            start, end = end, start
+
+        tenant = self._tenant(request)
+        tenant_ids = [tenant.id] if tenant else []
+        if tenant:
+            try:
+                tenant_ids += [t.id for t in tenant.sub_tenants.filter(is_active=True)]
+            except Exception:
+                pass
+
+        members_qs = CustomUser.objects.filter(is_active=True)
+        if tenant_ids:
+            members_qs = members_qs.filter(
+                tenant_memberships__tenant_id__in=tenant_ids,
+                tenant_memberships__is_active=True,
+            ).distinct()
+        members = list(members_qs)
+        user_ids = [u.id for u in members]
+        id_set = set(user_ids)
+        empty = {'encrypt': True, 'data': encrypt_data({
+            'org_tree': [], 'network': {'nodes': [], 'links': []},
+            'members': [], 'activity': {}, 'range': {'start': start.isoformat(), 'end': end.isoformat()},
+        })}
+        if not user_ids:
+            return Response(empty)
+
+        # 成员基础信息 + 主部门
+        ud_map = {}
+        for ud in UserDepartment.objects.filter(user_id__in=user_ids, is_primary=True).select_related('department'):
+            ud_map[ud.user_id] = {'dept_id': ud.department_id,
+                                  'dept_name': ud.department.name if ud.department else ''}
+        member_info = {}
+        for u in members:
+            d = ud_map.get(u.id, {})
+            member_info[u.id] = {
+                'id': u.id, 'name': u.real_name or u.username,
+                'avatar': u.get_avatar_url() if hasattr(u, 'get_avatar_url') else '',
+                'department': d.get('dept_name', ''), 'dept_id': d.get('dept_id'),
+                'position': u.position or '',
+            }
+
+        act = {uid: {'chat': 0, 'approval': 0, 'attendance': 0, 'summary': 0,
+                     'task': 0, 'cloud': 0, 'doc': 0} for uid in user_ids}
+
+        def _add(qs, key):
+            for uid in qs:
+                if uid in act:
+                    act[uid][key] += 1
+
+        _add(Message.objects.filter(sender_id__in=user_ids, timestamp__date__range=[start, end], is_deleted=False)
+             .values_list('sender_id', flat=True), 'chat')
+        _add(ApprovalRequest.objects.filter(applicant_id__in=user_ids, created_at__date__range=[start, end])
+             .values_list('applicant_id', flat=True), 'approval')
+        _add(ApprovalAssignee.objects.filter(user_id__in=user_ids, operated_at__isnull=False,
+                                             operated_at__date__range=[start, end])
+             .values_list('user_id', flat=True), 'approval')
+        _add(AttendanceRecord.objects.filter(user_id__in=user_ids, date__range=[start, end])
+             .values_list('user_id', flat=True), 'attendance')
+        _add(DailyWorkSummary.objects.filter(user_id__in=user_ids, summary_date__range=[start, end])
+             .values_list('user_id', flat=True), 'summary')
+        _add(Task.objects.filter(creator_id__in=user_ids, created_at__date__range=[start, end])
+             .values_list('creator_id', flat=True), 'task')
+        _add(Task.objects.filter(assignee_id__in=user_ids, status='done', updated_at__date__range=[start, end])
+             .values_list('assignee_id', flat=True), 'task')
+        _add(FileOperationLog.objects.filter(user_id__in=user_ids, created_at__date__range=[start, end])
+             .exclude(operation='edit_save').values_list('user_id', flat=True), 'cloud')
+        _add(FileOperationLog.objects.filter(user_id__in=user_ids, operation='edit_save',
+                                             created_at__date__range=[start, end])
+             .values_list('user_id', flat=True), 'doc')
+
+        # —— 两两互动边：每次互动生成一条线段（含类型/时间/标题），逐条显示、点击可看该次互动 ——
+        from django.db.models import Max as MaxAgg
+        MAX_EDGE_PER_PAIR = 15
+        MAX_EDGES = 600
+        edges = []
+        pair_count = {}
+
+        def _push_edge(a, b, etype, time_iso, title):
+            if a in id_set and b in id_set and a != b and len(edges) < MAX_EDGES:
+                key = (a, b) if a < b else (b, a)
+                n = pair_count.get(key, 0)
+                if n >= MAX_EDGE_PER_PAIR:
+                    return
+                pair_count[key] = n + 1
+                edges.append({'source': a, 'target': b, 'type': etype,
+                              'time': time_iso, 'title': title or ''})
+
+        # 私聊：每条消息一条线段
+        room_pair = {}
+        for rm in ChatRoom.objects.filter(room_type='private', members__id__in=user_ids).distinct().prefetch_related('members'):
+            mids = [m.id for m in rm.members.all() if m.id in id_set]
+            if len(mids) == 2:
+                room_pair[rm.id] = (mids[0], mids[1])
+        if room_pair:
+            for rid, mts in Message.objects.filter(chat_room_id__in=list(room_pair.keys()),
+                                                   timestamp__date__range=[start, end], is_deleted=False) \
+                    .order_by('-timestamp') \
+                    .values_list('chat_room_id', 'timestamp')[:2000]:
+                p = room_pair[rid]
+                _push_edge(p[0], p[1], 'chat', mts.isoformat(), '私聊消息')
+                if len(edges) >= MAX_EDGES:
+                    break
+        # 审批：发起人 → 审批人（每次审批一条线段）
+        for asg in ApprovalAssignee.objects.filter(
+                user_id__in=user_ids, status__in=['approved', 'rejected'],
+                operated_at__isnull=False, operated_at__date__range=[start, end],
+        ).select_related('node__request__applicant'):
+            _push_edge(asg.node.request.applicant_id, asg.user_id, 'approval',
+                       timezone.localtime(asg.operated_at).isoformat(), asg.node.request.title)
+        # 任务：创建人 → 负责人（每次指派一条线段）
+        for t in Task.objects.filter(created_at__date__range=[start, end],
+                                     creator_id__in=user_ids, assignee_id__in=user_ids) \
+                .only('creator_id', 'assignee_id', 'created_at', 'title'):
+            _push_edge(t.creator_id, t.assignee_id, 'task',
+                       timezone.localtime(t.created_at).isoformat(), t.title)
+        # 协作文档：同一文档多名编辑者两两协作（每次协作一条线段）
+        edit_rows = FileOperationLog.objects.filter(operation='edit_save', user_id__in=user_ids,
+                                                    created_at__date__range=[start, end]) \
+            .values('file_id', 'user_id').annotate(last=MaxAgg('created_at'))
+        file_editors = {}
+        file_time = {}
+        for row in edit_rows:
+            fid, uid = row['file_id'], row['user_id']
+            if fid is None:
+                continue
+            file_editors.setdefault(fid, set()).add(uid)
+            if fid not in file_time or (row['last'] and row['last'] > file_time[fid]):
+                file_time[fid] = row['last']
+        processed_files = 0
+        for fid, uid_set in file_editors.items():
+            ul = list(uid_set)
+            if len(ul) >= 2:
+                processed_files += 1
+                if processed_files > 60:
+                    break
+                t_iso = timezone.localtime(file_time[fid]).isoformat() if file_time.get(fid) else None
+                for i in range(len(ul)):
+                    for j in range(i + 1, len(ul)):
+                        _push_edge(ul[i], ul[j], 'doc', t_iso, '协作文档')
+        # 网盘分享：分享者 → 指定用户（每次分享一条线段）
+        from cloud.models import FileShare
+        share_qs = FileShare.objects.filter(owner_id__in=user_ids, is_active=True,
+                                            created_at__date__range=[start, end]) \
+            .prefetch_related('allowed_users')
+        for share in share_qs:
+            for au in share.allowed_users.all():
+                if au.id in id_set and au.id != share.owner_id:
+                    _push_edge(share.owner_id, au.id, 'share',
+                               timezone.localtime(share.created_at).isoformat(), '网盘分享')
+
+        # —— 组织架构树：根=当前企业/集团名，部门按类型着色（公司/子公司类型区别于普通部门，不单独列出） ——
+        depts = list(OrgDept.objects.filter(tenant_id__in=tenant_ids))
+        dept_by_id = {d.id: d for d in depts}
+        children_of = {}
+        for d in depts:
+            children_of.setdefault(d.parent_id, []).append(d)
+
+        def _build_dept(did):
+            d = dept_by_id[did]
+            node = {'name': d.name, 'type': 'dept', 'dept_type': d.department_type, 'children': []}
+            for c in children_of.get(did, []):
+                node['children'].append(_build_dept(c.id))
+            for uid, info in member_info.items():
+                if info['dept_id'] == did:
+                    a = act[uid]
+                    node['children'].append({'name': info['name'], 'id': uid, 'type': 'member',
+                                             'avatar': info['avatar'], 'value': sum(a.values())})
+            return node
+
+        root_children = []
+        for c in children_of.get(None, []):
+            root_children.append(_build_dept(c.id))
+        # 未分组成员（无主部门）挂在根下
+        orphans = [info for info in member_info.values() if info['dept_id'] not in dept_by_id]
+        if orphans:
+            root_children.append({'name': '未分组', 'type': 'virtual', 'children': [
+                {'name': o['name'], 'id': o['id'], 'type': 'member', 'avatar': o['avatar'],
+                 'value': sum(act[o['id']].values())} for o in orphans]})
+        if not root_children:
+            root_children.append({'name': '暂无部门', 'type': 'virtual', 'children': []})
+        ttype_label = dict(Tenant.TENANT_TYPE_CHOICES).get(tenant.tenant_type, '企业') if tenant else '企业'
+        org_tree = [{'name': (tenant.name if tenant else '企业'), 'type': 'tenant',
+                     'label': ttype_label, 'children': root_children}]
+
+        # —— 关系网络节点/边：展示全部成员，保证任意互动对均有节点可连线 ——
+        all_nodes = []
+        for uid in user_ids:
+            a = act[uid]
+            all_nodes.append({'id': uid, 'name': member_info[uid]['name'],
+                              'avatar': member_info[uid]['avatar'],
+                              'category': member_info[uid]['department'] or '未分组',
+                              'position': member_info[uid]['position'],
+                              'value': sum(a.values()), 'activity': a})
+        all_nodes.sort(key=lambda n: n['value'], reverse=True)
+        top_nodes = all_nodes
+        top_ids = {n['id'] for n in top_nodes}
+        # 逐条互动边：每条边=一次互动（含类型/时间/标题），仅保留两端都在展示节点的边
+        links = [e for e in edges if e['source'] in top_ids and e['target'] in top_ids]
+
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'org_tree': org_tree,
+            'network': {'nodes': top_nodes, 'links': links, 'total_members': len(user_ids)},
+            'members': [{'id': info['id'], 'name': info['name'], 'avatar': info['avatar'],
+                         'department': info['department'], 'position': info['position']}
+                        for info in member_info.values()],
+            'activity': {str(uid): a for uid, a in act.items()},
+            'range': {'start': start.isoformat(), 'end': end.isoformat()},
+        })})
+
+    @action(detail=False, methods=['get'])
+    def member_search(self, request):
+        """按姓名/账号搜索企业成员（含子企业），供个人雷达选择成员（所有登录用户可用）"""
+        from accounts.models import CustomUser
+        from django.db.models import Q
+        tenant = self._tenant(request)
+        tenant_ids = [tenant.id] if tenant else []
+        if tenant:
+            try:
+                tenant_ids += [t.id for t in tenant.sub_tenants.filter(is_active=True)]
+            except Exception:
+                pass
+        kw = request.query_params.get('q', '').strip()
+        qs = CustomUser.objects.filter(is_active=True)
+        if tenant_ids:
+            qs = qs.filter(tenant_memberships__tenant_id__in=tenant_ids,
+                           tenant_memberships__is_active=True).distinct()
+        if kw:
+            qs = qs.filter(Q(real_name__icontains=kw) | Q(username__icontains=kw))
+        qs = qs.order_by('real_name', 'username')[:30]
+        uids = [u.id for u in qs]
+        from org.models import UserDepartment
+        dept_map = dict(UserDepartment.objects.filter(
+            user_id__in=uids, is_primary=True).select_related('department')
+            .values_list('user_id', 'department__name'))
+        results = [{
+            'id': u.id, 'name': u.real_name or u.username,
+            'avatar': u.get_avatar_url() if hasattr(u, 'get_avatar_url') else '',
+            'department': dept_map.get(u.id, ''), 'position': u.position or '',
+        } for u in qs]
+        return Response({'encrypt': True, 'data': encrypt_data({'results': results})})
+
     def _node_reach_times(self, request_ids):
         """节点到达时间：节点1=最近一次提交/重新提交时间；后续节点=上一节点最后一个操作时间。
         撤销后重新提交（re_edit）会删除并重建全部审批人与节点，

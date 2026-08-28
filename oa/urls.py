@@ -102,6 +102,8 @@ urlpatterns = [
     path('work-calendar/approval-efficiency/', WorkCalendarViewSet.as_view({'get': 'approval_efficiency'}), name='work-calendar-approval-efficiency'),
     path('work-calendar/approval-leaderboard/', WorkCalendarViewSet.as_view({'get': 'approval_leaderboard'}), name='work-calendar-approval-leaderboard'),
     path('work-calendar/work-summary-stats/', WorkCalendarViewSet.as_view({'get': 'work_summary_stats'}), name='work-calendar-work-summary-stats'),
+    path('work-calendar/org-activity/', WorkCalendarViewSet.as_view({'get': 'org_activity'}), name='work-calendar-org-activity'),
+    path('work-calendar/member-search/', WorkCalendarViewSet.as_view({'get': 'member_search'}), name='work-calendar-member-search'),
     path('work-calendar/digest-config/', WorkCalendarViewSet.as_view({'get': 'digest_config', 'post': 'digest_config'}), name='work-calendar-digest-config'),
     path('work-calendar/digest-send/', WorkCalendarViewSet.as_view({'post': 'digest_send'}), name='work-calendar-digest-send'),
 

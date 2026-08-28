@@ -1273,8 +1273,10 @@ class WorkSummaryApp {
     async _saveBlobToCloud(text, d, ext, mime) {
         const file = new File([new Blob([text], {type: (mime || 'text/plain') + ';charset=utf-8'})], this._exportFilename(d, ext), {type: mime || 'text/plain'});
         try {
-            const r = await Utils.uploadToCloud(file, null, '每日工作总结导出', '');
-            this.toast('已保存到我的网盘（' + this._exportFilename(d, ext) + '）', false);
+            // 自动创建/复用「文档（来自每日工作总结）」文件夹，与上传到网盘保持一致
+            const folderId = await this._resolveCloudFolderId('文档（来自每日工作总结）');
+            const r = await Utils.uploadToCloud(file, folderId, '每日工作总结导出', '');
+            this.toast('已保存到我的网盘 → 文档（来自每日工作总结）（' + this._exportFilename(d, ext) + '）', false);
         } catch (e) {
             this.toast('保存到网盘失败：' + (e.message || ''), true);
         }
@@ -1300,11 +1302,36 @@ class WorkSummaryApp {
     async _savePdfBlobToCloud(blob, d) {
         const file = new File([blob], this._exportFilename(d, 'pdf'), {type: 'application/pdf'});
         try {
-            await Utils.uploadToCloud(file, null, '每日工作总结导出', '');
-            this.toast('PDF 已保存到我的网盘', false);
+            // 自动创建/复用「文档（来自每日工作总结）」文件夹，与上传到网盘保持一致
+            const folderId = await this._resolveCloudFolderId('文档（来自每日工作总结）');
+            await Utils.uploadToCloud(file, folderId, '每日工作总结导出', '');
+            this.toast('PDF 已保存到我的网盘 → 文档（来自每日工作总结）', false);
         } catch (e) {
             this.toast('保存到网盘失败：' + (e.message || ''), true);
         }
+    }
+
+    // 取或建「文档（来自每日工作总结）」文件夹并返回 folder id（与 saveFileToCloud 上传到网盘保持一致）
+    async _resolveCloudFolderId(folderName) {
+        const hd = TokenManager.getHeaders();
+        try {
+            const resp = await fetch('/api/cloud/folders/?search=' + encodeURIComponent(folderName), {headers: hd});
+            if (resp.ok) {
+                const json = await resp.json();
+                const list = Array.isArray(json) ? json : (json.results || []);
+                for (let i = 0; i < list.length; i++) {
+                    if (list[i].name === folderName) return list[i].id;
+                }
+            }
+        } catch (e) { /* 查询失败则尝试创建 */ }
+        const createResp = await fetch('/api/cloud/folders/', {
+            method: 'POST',
+            headers: Object.assign({}, hd, {'Content-Type': 'application/json'}),
+            body: JSON.stringify({name: folderName})
+        });
+        if (!createResp.ok) throw new Error('创建网盘文件夹失败');
+        const created = await createResp.json();
+        return created.id || null;
     }
 
     // ===== 打印预览（带关闭/返回按钮，移动端可关闭） =====
