@@ -1,5 +1,8 @@
 // static/js/work-calendar.js - 工作日历
 const WC_API = '/api/oa/work-calendar';
+const WS_NET_PALETTE = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#9b59b6', '#00a1ff', '#16a085', '#e74c3c', '#8e44ad', '#d35400', '#2f9e44', '#5c6bc0', '#ec407a', '#795548'];
+const WS_NET_TYPE_COLOR = {'chat': '#409eff', 'approval': '#e6a23c', 'task': '#f56c6c', 'doc': '#9b59b6', 'share': '#00a1ff'};
+const WS_NET_TYPE_LABEL = {'chat': '私聊消息', 'approval': 'OA审批', 'task': '任务指派', 'doc': '协作文档', 'share': '网盘分享'};
 
 class WorkCalendarApp {
     constructor() {
@@ -565,7 +568,6 @@ class WorkCalendarApp {
         if (!wrap) return;
         var nodes = (d.network && d.network.nodes) || [];
         var links = (d.network && d.network.links) || [];
-        var total = (d.network && d.network.total_members) || nodes.length;
         if (!nodes.length) {
             wrap.innerHTML = '<div style="text-align:center;color:#909399;font-size:13px;padding:100px 0;"><i class="fas fa-project-diagram" style="font-size:30px;display:block;margin-bottom:8px;color:#c0c4cc;"></i>该时间段内暂无成员活跃数据</div>';
             return;
@@ -574,51 +576,21 @@ class WorkCalendarApp {
         if (!this._networkChart) this._networkChart = echarts.init(wrap);
         var self = this;
         var isMobile = window.innerWidth < 768;
-        var catMap = {}, cats = [];
-        nodes.forEach(function (n) {
-            if (!(n.category in catMap)) { catMap[n.category] = cats.length; cats.push(n.category); }
-        });
-        var palette = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#9b59b6', '#00a1ff', '#16a085', '#e74c3c', '#8e44ad', '#d35400', '#2f9e44', '#5c6bc0', '#ec407a', '#795548'];
-        var chartNodes = nodes.map(function (n) {
-            var ci = catMap[n.category];
-            // 不覆盖 color：让 ECharts 按 category 从全局 color 取色，保证同部门同色且与右侧图例一致
-            // id 字符串化：避免数字 id 与数组索引混淆导致连线错连
-            return {id: String(n.id), name: n.name, category: ci, value: n.value,
-                    symbolSize: Math.max(16, Math.min(58, 12 + Math.sqrt(n.value || 0) * 1.7)),
-                    activity: n.activity || {}, dept: n.category, avatar: n.avatar, position: n.position || '',
-                    itemStyle: {borderColor: '#fff', borderWidth: 1}};
-        });
-        var typeColorMap = {'chat': '#409eff', 'approval': '#e6a23c', 'task': '#f56c6c', 'doc': '#9b59b6', 'share': '#00a1ff'};
-        var typeLabelMap = {'chat': '私聊消息', 'approval': 'OA审批', 'task': '任务指派', 'doc': '协作文档', 'share': '网盘分享'};
-        // 逐条互动线段：同一对成员的多条边以不同曲率扇形展开，互不合并，边数直观体现互动频率
-        var pairGroups = {};
-        links.forEach(function (l) {
-            var key = Math.min(l.source, l.target) + '-' + Math.max(l.source, l.target);
-            (pairGroups[key] = pairGroups[key] || []).push(l);
-        });
-        var chartLinks = [];
-        Object.keys(pairGroups).forEach(function (key) {
-            var arr = pairGroups[key];
-            arr.forEach(function (l, i) {
-                var cur = (i - (arr.length - 1) / 2) * 0.09;
-                var lc = typeColorMap[l.type] || '#909399';
-                chartLinks.push({
-                    source: String(l.source), target: String(l.target), type: l.type,
-                    time: l.time || '', title: l.title || '',
-                    value: 1,
-                    lineStyle: {width: 1.5, color: lc, opacity: 0.85, curveness: cur}
-                });
-            });
-        });
-        var nodeNameMap = {};
-        chartNodes.forEach(function (n) { nodeNameMap[n.id] = n.name; });
+        this._activeDeptFilter = null;
+        this._netRawNodes = nodes;
+        this._netRawLinks = links;
+        var built = this._buildNetworkData(nodes, links);
+        this._netCatMap = built.catMap;
+        this._netCats = built.cats;
+        this._renderDeptList();
+        var nodeNameMap = built.nodeNameMap;
         this._networkChart.setOption({
-            color: palette,
+            color: WS_NET_PALETTE,
             tooltip: {
                 formatter: function (p) {
                     if (p.dataType === 'edge' && p.data) {
-                        var lb = typeLabelMap[p.data.type] || '互动';
-                        var lc = typeColorMap[p.data.type] || '#909399';
+                        var lb = WS_NET_TYPE_LABEL[p.data.type] || '互动';
+                        var lc = WS_NET_TYPE_COLOR[p.data.type] || '#909399';
                         var html = '<b>' + self._escape(nodeNameMap[p.data.source] || '') + ' ↔ ' + self._escape(nodeNameMap[p.data.target] || '') + '</b>'
                             + '<br/><span style="color:' + lc + ';">' + self._escape(lb) + '</span>'
                             + (p.data.title ? '<br/>' + self._escape(p.data.title) : '')
@@ -645,16 +617,11 @@ class WorkCalendarApp {
                     return '';
                 }
             },
-            legend: [{data: cats, textStyle: {color: '#909399'}, type: 'scroll',
-                orient: isMobile ? 'horizontal' : 'vertical',
-                left: isMobile ? 10 : null, right: isMobile ? 10 : 8,
-                top: isMobile ? 4 : 20, bottom: isMobile ? 0 : null,
-                width: isMobile ? null : 90}],
             series: [{
                 type: 'graph', layout: 'force', roam: true, draggable: true,
                 selectedMode: 'single',
-                data: chartNodes, links: chartLinks,
-                categories: cats.map(function (c) { return {name: c}; }),
+                data: built.chartNodes, links: built.chartLinks,
+                categories: built.cats.map(function (c) { return {name: c}; }),
                 force: {repulsion: isMobile ? 120 : 170, edgeLength: isMobile ? 45 : 65, gravity: 0.05},
                 label: {show: true, position: 'right', fontSize: isMobile ? 9 : 10, color: '#606266'},
                 lineStyle: {color: '#c0c4cc', curveness: 0, opacity: 0.6},
@@ -666,8 +633,8 @@ class WorkCalendarApp {
         this._networkChart.on('click', function (p) {
             var tip = document.getElementById('wcNetworkTip');
             if (p.dataType === 'edge' && p.data) {
-                var lb = typeLabelMap[p.data.type] || '互动';
-                var lc = typeColorMap[p.data.type] || '#909399';
+                var lb = WS_NET_TYPE_LABEL[p.data.type] || '互动';
+                var lc = WS_NET_TYPE_COLOR[p.data.type] || '#909399';
                 var tstr = p.data.time ? ' · ' + self._escape(p.data.time.slice(0, 16).replace('T', ' ')) : '';
                 var ttl = p.data.title ? ' · ' + self._escape(p.data.title) : '';
                 if (tip) tip.innerHTML = '<i class="fas fa-link" style="color:' + lc + ';"></i> 互动详情：<b>' + self._escape(nodeNameMap[p.data.source] || '') + ' ↔ ' + self._escape(nodeNameMap[p.data.target] || '') + '</b> · <span style="color:' + lc + ';">' + self._escape(lb) + '</span>' + ttl + tstr;
@@ -680,6 +647,111 @@ class WorkCalendarApp {
         });
         this._networkChart.resize();
     }
+
+    // 构建网络图数据（节点 id 字符串化防错连；同对成员多边扇形展开；连线细 1px）
+    _buildNetworkData(rawNodes, rawLinks, catMap) {
+        if (!catMap) {
+            catMap = {};
+            (rawNodes || []).forEach(function (n) {
+                if (!(n.category in catMap)) { catMap[n.category] = Object.keys(catMap).length; }
+            });
+        }
+        var cats = [];
+        Object.keys(catMap).forEach(function (k) { cats[catMap[k]] = k; });
+        var chartNodes = (rawNodes || []).map(function (n) {
+            var ci = catMap[n.category];
+            return {id: String(n.id), name: n.name, category: ci, value: n.value,
+                    symbolSize: Math.max(16, Math.min(58, 12 + Math.sqrt(n.value || 0) * 1.7)),
+                    activity: n.activity || {}, dept: n.category, avatar: n.avatar, position: n.position || '',
+                    itemStyle: {borderColor: '#fff', borderWidth: 1}};
+        });
+        var pairGroups = {};
+        (rawLinks || []).forEach(function (l) {
+            var key = Math.min(l.source, l.target) + '-' + Math.max(l.source, l.target);
+            (pairGroups[key] = pairGroups[key] || []).push(l);
+        });
+        var chartLinks = [];
+        Object.keys(pairGroups).forEach(function (key) {
+            var arr = pairGroups[key];
+            arr.forEach(function (l, i) {
+                var cur = (i - (arr.length - 1) / 2) * 0.09;
+                var lc = WS_NET_TYPE_COLOR[l.type] || '#909399';
+                chartLinks.push({
+                    source: String(l.source), target: String(l.target), type: l.type,
+                    time: l.time || '', title: l.title || '', value: 1,
+                    lineStyle: {width: 1, color: lc, opacity: 0.85, curveness: cur}
+                });
+            });
+        });
+        var nodeNameMap = {};
+        chartNodes.forEach(function (n) { nodeNameMap[n.id] = n.name; });
+        return {chartNodes: chartNodes, chartLinks: chartLinks, nodeNameMap: nodeNameMap, cats: cats, catMap: catMap};
+    }
+
+    // 右侧部门筛选列表：悬停筛选该部门成员关系网，移出恢复全图
+    _renderDeptList() {
+        var side = document.getElementById('wcNetworkDeptList');
+        var wrap = document.getElementById('wcNetworkDeptItems');
+        if (!wrap) return;
+        var self = this;
+        var cats = this._netCats || [];
+        var deptCount = {};
+        (this._netRawNodes || []).forEach(function (n) { deptCount[n.category] = (deptCount[n.category] || 0) + 1; });
+        if (side) side.style.display = cats.length ? 'flex' : 'none';
+        wrap.innerHTML = cats.map(function (c, i) {
+            var color = WS_NET_PALETTE[i % WS_NET_PALETTE.length];
+            return '<div class="wc-dept-item" data-dept="' + self._escape(c) + '" title="悬停筛选' + self._escape(c) + '成员关系网">'
+                + '<span class="dot" style="background:' + color + ';"></span>'
+                + '<span class="nm">' + self._escape(c) + '</span>'
+                + '<span class="cnt">' + (deptCount[c] || 0) + '</span>'
+                + '</div>';
+        }).join('');
+        if (side && !side._attached) {
+            side._attached = true;
+            side.addEventListener('mouseover', function (e) {
+                var item = e.target.closest ? e.target.closest('.wc-dept-item') : null;
+                if (item) self._filterNetworkDept(item.getAttribute('data-dept'));
+            });
+            side.addEventListener('mouseleave', function () { self._clearDeptFilter(); });
+        }
+    }
+    _filterNetworkDept(deptName) {
+        if (this._activeDeptFilter === deptName) return;
+        this._activeDeptFilter = deptName || null;
+        var ids = {};
+        (this._netRawNodes || []).forEach(function (n) {
+            if (!deptName || n.category === deptName) ids[n.id] = true;
+        });
+        var fnodes = (this._netRawNodes || []).filter(function (n) { return ids[n.id]; });
+        var flinks = (this._netRawLinks || []).filter(function (l) { return ids[l.source] && ids[l.target]; });
+        var built = this._buildNetworkData(fnodes, flinks, this._netCatMap);
+        if (this._networkChart) this._networkChart.setOption({series: [{data: built.chartNodes, links: built.chartLinks}]});
+        this._highlightDeptItem(deptName);
+    }
+    _clearDeptFilter() {
+        if (!this._activeDeptFilter) return;
+        this._filterNetworkDept(null);
+    }
+    _highlightDeptItem(deptName) {
+        document.querySelectorAll('#wcNetworkDeptItems .wc-dept-item').forEach(function (el) {
+            el.classList.toggle('active', el.getAttribute('data-dept') === deptName);
+        });
+    }
+
+    _toggleDeptList(toggleBtn){
+        var activityList = document.getElementById('wcNetworkDeptItems');
+        if (!activityList) return;
+        var isHidden = activityList.style.display === 'none';
+        activityList.style.display = isHidden ? 'block' : 'none';
+        toggleBtn.className = isHidden ? 'fas fa-eye' : 'fas fa-eye-slash';
+        toggleBtn.title = isHidden ? '隐藏部门' : '显示部门';
+    }
+
+    _scrollDeptList(dir) {
+        var box = document.getElementById('wcNetworkDeptItems');
+        if (!box) return;
+        box.scrollTop += dir * 130;
+    }
     _renderHeatmap(d) {
         var wrap = document.getElementById('wcHeatmapChart');
         if (!wrap) return;
@@ -691,8 +763,10 @@ class WorkCalendarApp {
         if (!window.echarts) { wrap.innerHTML = '<div style="text-align:center;color:#909399;padding:100px 0;">图表组件加载失败</div>'; return; }
         if (!this._heatmapChart) this._heatmapChart = echarts.init(wrap);
         var self = this;
+        var isMobile = window.innerWidth < 768;
         var types = this._ACT_TYPES();
-        var top = nodes.slice(0, 40);
+        // 移动端减少左侧留白、展示更少成员（行更高更清晰），图表横向撑满
+        var top = nodes.slice(0, isMobile ? 20 : 40);
         var data = [], maxV = 1;
         top.forEach(function (n, yi) {
             var a = n.activity || {};
@@ -714,17 +788,18 @@ class WorkCalendarApp {
                     + (sel ? '<br/><span style="color:#e6a23c;">已选中</span>' : '')
                     + '<div style="font-size:11px;color:#909399;margin-top:4px;">点击选中该成员，可切换至「个人雷达」查看画像</div>';
             }},
-            grid: {left: 120, right: 30, top: 30, bottom: 90},
+            grid: {left: isMobile ? 62 : 120, right: isMobile ? 12 : 30, top: 28, bottom: isMobile ? 100 : 88},
             xAxis: {type: 'category', data: types.map(function (t) { return t[1]; }), axisLabel: {color: '#909399'}, splitArea: {show: true}},
-            yAxis: {type: 'category', data: top.map(function (n) { return n.name; }), axisLabel: {color: '#606266', fontSize: 11}, splitArea: {show: true}},
+            yAxis: {type: 'category', data: top.map(function (n) { return n.name; }), axisLabel: {color: '#606266', fontSize: isMobile ? 10 : 11}, splitArea: {show: true}},
             visualMap: {min: 0, max: maxV, calculable: true, orient: 'horizontal', left: 'center', bottom: 12,
                 inRange: {color: ['#f0f2f5', '#cfe3ff', '#7fbfe8', '#409eff', '#7c4dff']}, textStyle: {color: '#909399'}},
             dataZoom: [
                 {type: 'inside', xAxisIndex: [0], zoomOnMouseWheel: true},
-                {type: 'inside', yAxisIndex: [0], zoomOnMouseWheel: true},
+                {type: 'inside', yAxisIndex: [0], zoomOnMouseWheel: true}
+            ].concat(isMobile ? [] : [
                 {type: 'slider', xAxisIndex: [0], height: 14, bottom: 48, textStyle: {color: '#909399'}},
                 {type: 'slider', yAxisIndex: [0], width: 12, right: 14, textStyle: {color: '#909399'}}
-            ],
+            ]),
             series: [{type: 'heatmap', data: data, label: {show: false}, emphasis: {itemStyle: {shadowBlur: 12, shadowColor: 'rgba(0,0,0,.3)', borderColor: '#ffd04b', borderWidth: 2}}}]
         });
         this._heatmapChart.off('click');

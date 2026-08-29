@@ -23,9 +23,9 @@
     <meta name="msapplication-TileColor" content="#409EFF">
     <meta name="msapplication-TileImage" content="/static/icons/icon-144x144.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20260826-7161b83">-->
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260826-7161b83">
-    <link rel="stylesheet" href="/static/css/org.css?v=20260826-7161b83">
+    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20260828-1ca2622">-->
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260828-1ca2622">
+    <link rel="stylesheet" href="/static/css/org.css?v=20260828-1ca2622">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
 
     <!-- 🔧 iOS 专用样式修复 -->
@@ -215,7 +215,7 @@
         </div>
 
         <div class="user-profile">
-            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260826-7161b83"
+            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260828-1ca2622"
                  alt="头像" class="avatar">
             <div class="user-info">
                 <div class="username" id="currentUsername">加载中...</div>
@@ -310,7 +310,7 @@
                 </button>
                 <div class="chat-info" onclick="chatClient.showProfile(chatClient.currentRoomId)">
                     <div class="chat-avatar">
-                        <img src="/static/images/default-avatar.png?v=20260826-7161b83"
+                        <img src="/static/images/default-avatar.png?v=20260828-1ca2622"
                              alt="聊天对象" id="chatAvatar">
                     </div>
                     <div class="chat-details">
@@ -641,7 +641,7 @@
                 </div>
                 <div class="profile-avatar-section">
                     <div class="avatar-upload-container">
-                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20260826-7161b83"
+                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20260828-1ca2622"
                              alt="头像">
                         <label class="upload-btn" for="avatarUpload">
                             <i class="fas fa-camera"></i>
@@ -890,24 +890,24 @@
 
 
 <!-- 🔧 关键修复：脚本资源直接带版本参数 -->
-<script src="/static/js/dist/spark-md5.min.js?v=20260826-7161b83"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260826-7161b83"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260826-7161b83"></script>
-<script src="/static/js/encrypts.js?v=20260826-7161b83"></script>
-<script src="/static/js/api.js?v=20260826-7161b83"></script>
-<script src="/static/js/utils.js?v=20260826-7161b84"></script>
-<script src="/static/js/chat.js?v=20260826-2c6a8d4"></script>
-<script src="/static/js/tenant.js?v=20260826-7161b83"></script>
-<script src="/static/js/org.js?v=20260826-7161b83"></script>
-<script src="/static/js/notifications.js?v=20260826-5b7f3e9"></script>
-<script src="/static/js/push.js?v=20260826-7161b83"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260828-1ca2622"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260828-1ca2622"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260828-1ca2622"></script>
+<script src="/static/js/encrypts.js?v=20260828-1ca2622"></script>
+<script src="/static/js/api.js?v=20260828-1ca2622"></script>
+<script src="/static/js/utils.js?v=20260828-1ca2622"></script>
+<script src="/static/js/chat.js?v=20260828-1ca2622"></script>
+<script src="/static/js/tenant.js?v=20260828-1ca2622"></script>
+<script src="/static/js/org.js?v=20260828-1ca2622"></script>
+<script src="/static/js/notifications.js?v=20260828-1ca2622"></script>
+<script src="/static/js/push.js?v=20260828-1ca2622"></script>
 
 
 <!-- templates/chat/index.html - 替换原有的版本检测脚本 -->
 
 <script>
     // 🔧 修复1: 从构建时注入的版本号（与后端保持一致）
-    const CURRENT_VERSION = '20260826-7161b83';
+    const CURRENT_VERSION = '20260828-1ca2622';
 
     // 🔧 修复2: 首次访问时保存版本到 localStorage（不是 sessionStorage）
     const LAST_VERSION = localStorage.getItem('static_version');
@@ -991,7 +991,7 @@
 </script>
 
 
-<script src="/static/js/watermark.js?v=20260827-6e4b8c1"></script>
+<script src="/static/js/watermark.js?v=20260828-1ca2622"></script>
 <script>WatermarkManager.init();</script>
 </body>
 </html>
