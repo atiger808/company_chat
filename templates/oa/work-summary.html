@@ -80,6 +80,10 @@
         [data-theme="dark"] .ws-print-area pre { background: #2a2a2a; }
         [data-theme="dark"] .ws-print-area blockquote { background: rgba(155,89,182,.12); }
         .ws-content { font-size: 13px; color: #606266; white-space: pre-wrap; word-break: break-word; }
+        .ws-content-wrap { position: relative; }
+        .ws-content-wrap.ws-collapsed { max-height: 150px; overflow: hidden; }
+        .ws-content-wrap.ws-collapsed::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 36px; background: linear-gradient(180deg, transparent, #fff); pointer-events: none; }
+        [data-theme="dark"] .ws-content-wrap.ws-collapsed::after { background: linear-gradient(180deg, transparent, #1e1e1e); }
         .ws-analysis { margin-top: 10px; background: #f8f9fb; border: 1px solid #ebeef5; border-radius: 8px; padding: 10px 12px; font-size: 13px; color: #303133; white-space: pre-wrap; word-break: break-word; }
         .ws-analysis .ws-analysis-title { color: #9b59b6; font-weight: 600; margin-bottom: 6px; }
         .ws-analysis .cursor-blink::after { content: '▍'; color: #9b59b6; animation: blink 1s infinite; }
@@ -614,7 +618,7 @@
         }).catch(function () {});
     })();
 </script>
-<script src="/static/js/work-summary.js?v=20260828-1ca2622"></script>
+<script src="/static/js/work-summary.js?v=20260828-4f7b9c1"></script>
 <script src="/static/js/watermark.js?v=20260828-1ca2622"></script>
 <script>WatermarkManager.init();</script>
 </body>

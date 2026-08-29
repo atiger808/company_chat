@@ -104,11 +104,14 @@
             box-shadow: 0 0 40px rgba(0,0,0,.4);
         }
         .wc-chart-wrap.wc-fs .wc-chart { height: calc(100vh - 28px) !important; }
+        /* 全屏时全屏/退出全屏与回正按钮并排固定于右上角（回正在右，全屏在左）；仅单个全屏按钮的图表保持在右角 */
         .wc-fs-btn-active { position: fixed !important; top: 12px !important; right: 12px !important; z-index: 100000 !important; }
+        .wc-fs-btn-active.wc-fs-btn-active-pair { right: 70px !important; }
+        .wc-fs-aux-btn-active { position: fixed !important; top: 12px !important; right: 12px !important; z-index: 100000 !important; }
         [data-theme="dark"] .wc-chart-wrap.wc-fs { background: #1e1e1e; }
         /* ===== 关系网络：右侧部门筛选列表 ===== */
         .wc-dept-side {
-            position: absolute; top: 8%; right: 8px; max-width: 206px; max-height: 80%;
+            position: absolute; top: 6%; right: 8px; max-width: 206px; max-height: 80%;
             display: flex; flex-direction: column; z-index: 6;
             background: rgba(255,255,255,.95); border: 1px solid #ebeef5; border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,.08); padding: 6px 8px;
@@ -124,6 +127,13 @@
         .wc-dept-item .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
         .wc-dept-item .nm { overflow: hidden; text-overflow: ellipsis; }
         .wc-dept-item .cnt { margin-left: auto; font-size: 10px; color: #909399; }
+        .wc-dept-item.hidden { opacity: .5; }
+        .wc-dept-item.hidden i { font-size: 9px; color: #c0c4cc; }
+        .wc-dept-side-foot { border-top: 1px dashed #ebeef5; margin-top: 4px; padding-top: 4px; display: flex; align-items: center; gap: 4px; }
+        .wc-dept-invert { display: flex; align-items: center; gap: 4px; font-size: 10px; color: #606266; padding: 1px 4px; cursor: pointer; }
+        .wc-dept-invert input { width: 14px; height: 14px; cursor: pointer; margin: 0; }
+        .wc-dept-side-all { font-size: 10px; color: #409eff; padding: 1px 4px; cursor: pointer; display: flex; align-items: center; gap: 4px; }
+        .wc-dept-side-all:hover { opacity: .8; }
         [data-theme="dark"] .wc-dept-side { background: rgba(30,30,30,.95); border-color: #333; }
         [data-theme="dark"] .wc-dept-side-title { color: #e0e0e0; }
         [data-theme="dark"] .wc-dept-item { color: #e0e0e0; }
@@ -131,6 +141,7 @@
         @media (max-width: 768px) {
             .wc-dept-side { width: 94px; }
             .wc-dept-item { font-size: 10px; }
+            .wc-dept-side-foot { flex-direction: column; align-items: stretch; }
         }
     </style>
 </head>
@@ -282,7 +293,10 @@
         <div class="oa-card" id="wcOrgActivityCard" style="background:#fff;border-radius:10px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.06);margin-top:16px;">
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
                 <div style="font-size:16px;font-weight:700;display:flex;align-items:center;gap:8px;"><i class="fas fa-project-diagram" style="color:#7c4dff;"></i> 成员关系与活跃度 <span style="font-size:12px;color:#909399;font-weight:400;">（组织架构 × 聊天/审批/考勤/总结/任务/网盘/文档 动态行为）</span></div>
-                <span id="wcOrgActivityRange" style="font-size:12px;color:#909399;"></span>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span id="wcOrgActivityScope" style="display:none;align-items:center;gap:4px;font-size:11px;color:#7c4dff;background:rgba(124,77,255,.08);border:1px solid rgba(124,77,255,.25);border-radius:10px;padding:2px 8px;"><i class="fas fa-shield-alt"></i> <span id="wcOrgActivityScopeText"></span></span>
+                    <span id="wcOrgActivityRange" style="font-size:12px;color:#909399;"></span>
+                </div>
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
                 <button class="btn btn-secondary btn-sm wc-viz-tab active" data-tab="network" onclick="wcApp._switchVizTab('network')"><i class="fas fa-project-diagram"></i> 关系网络</button>
@@ -291,15 +305,21 @@
                 <button class="btn btn-secondary btn-sm wc-viz-tab" data-tab="radar" onclick="wcApp._switchVizTab('radar')"><i class="fas fa-spider"></i> 个人雷达</button>
             </div>
             <div class="wc-viz-pane" data-pane="network">
-                <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:6px;">
-                    <button class="btn btn-secondary btn-sm" data-fs-wrap="wcNetworkWrap" onclick="wcApp._toggleChartFullscreen('wcNetworkWrap')"><i class="fas fa-expand"></i> 全屏</button>
-                    <button class="btn btn-secondary btn-sm" onclick="wcApp._resetNetworkView()"><i class="fas fa-undo-alt"></i> 回正</button>
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#606266;cursor:pointer;" title="节点超过100时默认按部门聚合，提升性能"><input type="checkbox" id="wcNetAggregate" onchange="wcApp._toggleAggregate(this.checked)" style="width:14px;height:14px;cursor:pointer;"> 聚合</label>
+                        <button class="btn btn-secondary btn-sm" id="wcNetworkAggBack" style="display:none;" onclick="wcApp._backToAggregate()"><i class="fas fa-arrow-left"></i> 返回聚合</button>
+                    </div>
+                    <div style="display:flex;gap:6px;">
+                        <button class="btn btn-secondary btn-sm" data-fs-wrap="wcNetworkWrap" onclick="wcApp._toggleChartFullscreen('wcNetworkWrap')" title="全屏"><i class="fas fa-expand"></i></button>
+                        <button class="btn btn-secondary btn-sm" data-fs-aux="wcNetworkWrap" onclick="wcApp._resetNetworkView()" title="回正"><i class="fas fa-undo-alt"></i></button>
+                    </div>
                 </div>
                 <div id="wcNetworkWrap" class="wc-chart-wrap" data-chart="networkChart">
                     <div id="wcNetworkChart" class="wc-chart" style="width:100%;height:520px;"></div>
                     <div id="wcNetworkDeptList" class="wc-dept-side">
                         <div class="wc-dept-side-title">
-                            <span>部门筛选</span>
+                            <span id="deptFilterTitle">部门筛选</span>
                             <span class="wc-dept-side-nav">
                                 <i class="fas fa-eye" onclick="wcApp._toggleDeptList(this)"></i>
                                 <i class="fas fa-chevron-up" onclick="wcApp._scrollDeptList(-1)" title="上翻"></i>
@@ -307,13 +327,23 @@
                             </span>
                         </div>
                         <div id="wcNetworkDeptItems" class="wc-dept-side-items"></div>
+                        <div class="wc-dept-side-foot">
+                            <div class="wc-dept-side-all" onclick="wcApp._showAllDepts()"><i class="fas fa-undo-alt"></i> 全部显示</div>
+                            <label class="wc-dept-invert" title="开启：点选部门仅显示该部门（隐藏其他部门）；关闭：点选部门隐藏该部门">
+                                <input type="checkbox" id="wcDeptInvert" onchange="wcApp._toggleInvertDeptFilter(this.checked)"> 反向
+                            </label>
+                        </div>
                     </div>
                 </div>
-                <div id="wcNetworkTip" style="font-size:12px;color:#909399;margin-top:6px;"><i class="fas fa-info-circle"></i> 节点大小=活跃度，颜色=部门；每次互动（私聊/审批/任务/文档/网盘分享）为一条线段，线越多互动越频繁，点击线段查看该次互动、点击节点查看画像</div>
+                <div id="wcNetworkTip" style="font-size:12px;color:#909399;margin-top:6px;"><i class="fas fa-info-circle"></i> 节点大小=活跃度，颜色=部门；每次互动（私聊/审批/任务/文档/网盘分享）为一条线段，线越多互动越频繁；点击右侧部门隐藏/显示该部门成员，点击线段查看该次互动、点击节点查看画像</div>
             </div>
             <div class="wc-viz-pane" data-pane="heatmap" style="display:none;">
-                <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:6px;">
-                    <button class="btn btn-secondary btn-sm" data-fs-wrap="wcHeatmapWrap" onclick="wcApp._toggleChartFullscreen('wcHeatmapWrap')"><i class="fas fa-expand"></i> 全屏</button>
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;">
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <span style="font-size:12px;color:#606266;"><i class="fas fa-filter"></i> 部门：</span>
+                        <select id="wcHeatmapDept" class="form-select" style="width:auto;min-width:110px;" onchange="wcApp._onHeatmapDeptChange(this.value)"></select>
+                    </div>
+                    <button class="btn btn-secondary btn-sm" data-fs-wrap="wcHeatmapWrap" onclick="wcApp._toggleChartFullscreen('wcHeatmapWrap')" title="全屏"><i class="fas fa-expand"></i></button>
                 </div>
                 <div id="wcHeatmapWrap" class="wc-chart-wrap" data-chart="heatmapChart">
                     <div id="wcHeatmapChart" class="wc-chart" style="width:100%;height:520px;"></div>
@@ -322,8 +352,8 @@
             </div>
             <div class="wc-viz-pane" data-pane="tree" style="display:none;">
                 <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:6px;">
-                    <button class="btn btn-secondary btn-sm" data-fs-wrap="wcTreeWrap" onclick="wcApp._toggleChartFullscreen('wcTreeWrap')"><i class="fas fa-expand"></i> 全屏</button>
-                    <button class="btn btn-secondary btn-sm" onclick="wcApp._resetTreeView()"><i class="fas fa-undo-alt"></i> 回正</button>
+                    <button class="btn btn-secondary btn-sm" data-fs-wrap="wcTreeWrap" onclick="wcApp._toggleChartFullscreen('wcTreeWrap')" title="全屏"><i class="fas fa-expand"></i></button>
+                    <button class="btn btn-secondary btn-sm" data-fs-aux="wcTreeWrap" onclick="wcApp._resetTreeView()" title="回正"><i class="fas fa-undo-alt"></i></button>
                 </div>
                 <div id="wcTreeWrap" class="wc-chart-wrap" data-chart="treeChart">
                     <div id="wcTreeChart" class="wc-chart" style="width:100%;height:520px;"></div>
@@ -338,7 +368,7 @@
                     </div>
                     <span id="wcRadarTarget" style="font-size:13px;color:#409eff;"></span>
                     <button class="btn btn-secondary btn-sm" onclick="wcApp._radarSelectSelf()"><i class="fas fa-user-check"></i> 查看自己</button>
-                    <button class="btn btn-secondary btn-sm" data-fs-wrap="wcRadarWrap" onclick="wcApp._toggleChartFullscreen('wcRadarWrap')"><i class="fas fa-expand"></i> 全屏</button>
+                    <button class="btn btn-secondary btn-sm" data-fs-wrap="wcRadarWrap" onclick="wcApp._toggleChartFullscreen('wcRadarWrap')" title="全屏"><i class="fas fa-expand"></i></button>
                 </div>
                 <div id="wcRadarWrap" class="wc-chart-wrap" data-chart="radarChart">
                     <div id="wcRadarChart" class="wc-chart" style="width:100%;height:420px;"></div>
@@ -462,7 +492,7 @@
 <script src="/static/js/api.js?v=20260828-1ca2622"></script>
 <script src="/static/js/tenant.js?v=20260828-1ca2622"></script>
 <script src="/static/js/notifications.js?v=20260828-1ca2622"></script>
-<script src="/static/js/work-calendar.js?v=20260828-1ca2623"></script>
+<script src="/static/js/work-calendar.js?v=20260829-7c9b3e2"></script>
 <script>
     function toggleOaTheme() {
         var cur = document.documentElement.getAttribute('data-theme') || 'light';

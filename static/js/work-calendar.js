@@ -28,8 +28,27 @@ class WorkCalendarApp {
             const mbar = document.getElementById('wcMemberBar');
             if (mbar) { mbar.style.display = 'flex'; }
         }
+        this._renderScopeNotice();
         this.loadMonth(this._year, this._month);
         this._loadAllCharts();
+    }
+
+    // 前端权限提示：按角色展示四个图表可见成员范围（后端 org_activity/member_search 已按角色过滤）
+    _renderScopeNotice() {
+        const chip = document.getElementById('wcOrgActivityScope');
+        const txt = document.getElementById('wcOrgActivityScopeText');
+        if (!chip || !txt) return;
+        const ut = localStorage.getItem('user_type');
+        let text = '';
+        if (ut === 'super_admin') {
+            text = '可见范围：全量成员';
+        } else if (ut === 'admin') {
+            text = '可见范围：本部门及下属部门成员';
+        } else {
+            text = '可见范围：本部门成员及本人';
+        }
+        txt.textContent = text;
+        chip.style.display = 'inline-flex';
     }
 
     _targetParam() {
@@ -551,6 +570,9 @@ class WorkCalendarApp {
             this._orgData = d;
             this._heatSel = null;
             this._treeSel = null;
+            this._hiddenDepts = {};
+            this._invertDeptFilter = false;
+            this._filterDept = null;
             var rangeEl = document.getElementById('wcOrgActivityRange');
             if (rangeEl && d.range) rangeEl.textContent = d.range.start + ' ~ ' + d.range.end;
             var uid = parseInt(localStorage.getItem('user_id'), 10);
@@ -576,17 +598,27 @@ class WorkCalendarApp {
         if (!this._networkChart) this._networkChart = echarts.init(wrap);
         var self = this;
         var isMobile = window.innerWidth < 768;
-        this._activeDeptFilter = null;
+        this._hiddenDepts = {};
+        this._invertDeptFilter = false;
+        this._filterDept = null;
         this._netRawNodes = nodes;
         this._netRawLinks = links;
         var built = this._buildNetworkData(nodes, links);
         this._netCatMap = built.catMap;
         this._netCats = built.cats;
         this._renderDeptList();
+        // 成员>100 默认按部门聚合，提升性能
+        this._netAggregate = nodes.length > 100;
+        var aggEl = document.getElementById('wcNetAggregate');
+        if (aggEl) aggEl.checked = this._netAggregate;
+        var aggBackBtn = document.getElementById('wcNetworkAggBack');
+        if (aggBackBtn) aggBackBtn.style.display = 'none';
         var nodeNameMap = built.nodeNameMap;
         this._networkChart.setOption({
             color: WS_NET_PALETTE,
             tooltip: {
+                confine: true,
+                appendToBody: true,
                 formatter: function (p) {
                     if (p.dataType === 'edge' && p.data) {
                         var lb = WS_NET_TYPE_LABEL[p.data.type] || '互动';
@@ -599,6 +631,11 @@ class WorkCalendarApp {
                         return html;
                     }
                     if (p.dataType === 'node' && p.data) {
+                        if (p.data.isDept) {
+                            return '<b>' + self._escape(p.data.name || '') + '</b>'
+                                + '<br/>成员 ' + (p.data.memberCount || 0) + ' 人 · 活跃度 ' + (p.data.value || 0)
+                                + '<div style="font-size:11px;color:#909399;margin-top:4px;">点击展开该部门成员</div>';
+                        }
                         var a = p.data.activity || {};
                         var name = self._escape(p.data.name || '');
                         var av = self._escape(p.data.avatar || '/static/images/default-avatar.png');
@@ -620,6 +657,13 @@ class WorkCalendarApp {
             series: [{
                 type: 'graph', layout: 'force', roam: true, draggable: true,
                 selectedMode: 'single',
+                animation: true,
+                animationDuration: 800,
+                animationEasing: 'cubicOut',
+                animationEasingUpdate: 'cubicOut',
+                animationDelay: function (idx) { return Math.min(idx * 12, 800); },
+                animationDelayUpdate: function (idx) { return Math.min(idx * 12, 800); },
+                edgeAnimationDelay: function (idx) { return Math.min(idx * 15, 800); },
                 data: built.chartNodes, links: built.chartLinks,
                 categories: built.cats.map(function (c) { return {name: c}; }),
                 force: {repulsion: isMobile ? 120 : 170, edgeLength: isMobile ? 45 : 65, gravity: 0.05},
@@ -632,6 +676,11 @@ class WorkCalendarApp {
         this._networkChart.off('click');
         this._networkChart.on('click', function (p) {
             var tip = document.getElementById('wcNetworkTip');
+            if (self._netAggregate && p.dataType === 'node' && p.data && p.data.isDept) {
+                self._expandDept(p.data.deptName);
+                if (tip) tip.innerHTML = '已展开部门：<b>' + self._escape(p.data.deptName || '') + '</b>，可点「返回聚合」或关闭聚合查看全部成员';
+                return;
+            }
             if (p.dataType === 'edge' && p.data) {
                 var lb = WS_NET_TYPE_LABEL[p.data.type] || '互动';
                 var lc = WS_NET_TYPE_COLOR[p.data.type] || '#909399';
@@ -645,6 +694,8 @@ class WorkCalendarApp {
                 if (tip) tip.innerHTML = '<i class="fas fa-check-circle" style="color:#67c23a;"></i> 已选中：<b>' + self._escape(p.data.name || '') + '</b>（' + self._escape(p.data.dept || '') + '）· 总活跃度 ' + (p.data.value || 0) + '，可切换到「个人雷达」查看画像';
             }
         });
+        // 默认聚合：渲染部门聚合视图
+        if (this._netAggregate) this._renderAggregateView();
         this._networkChart.resize();
     }
 
@@ -688,7 +739,7 @@ class WorkCalendarApp {
         return {chartNodes: chartNodes, chartLinks: chartLinks, nodeNameMap: nodeNameMap, cats: cats, catMap: catMap};
     }
 
-    // 右侧部门筛选列表：悬停筛选该部门成员关系网，移出恢复全图
+    // 右侧部门筛选列表：点击部门切换显隐；「反向」开启时点选部门仅显示该部门，关闭时点选部门隐藏该部门
     _renderDeptList() {
         var side = document.getElementById('wcNetworkDeptList');
         var wrap = document.getElementById('wcNetworkDeptItems');
@@ -698,51 +749,168 @@ class WorkCalendarApp {
         var deptCount = {};
         (this._netRawNodes || []).forEach(function (n) { deptCount[n.category] = (deptCount[n.category] || 0) + 1; });
         if (side) side.style.display = cats.length ? 'flex' : 'none';
+        var invertEl = document.getElementById('wcDeptInvert');
+        if (invertEl) invertEl.checked = !!this._invertDeptFilter;
         wrap.innerHTML = cats.map(function (c, i) {
             var color = WS_NET_PALETTE[i % WS_NET_PALETTE.length];
-            return '<div class="wc-dept-item" data-dept="' + self._escape(c) + '" title="悬停筛选' + self._escape(c) + '成员关系网">'
+            var hidden = !self._invertDeptFilter && self._hiddenDepts && self._hiddenDepts[c];
+            var active = self._invertDeptFilter && self._filterDept === c;
+            var tip = self._invertDeptFilter
+                ? (active ? '点击取消，显示全部' : '点击仅显示' + self._escape(c))
+                : (hidden ? '点击显示' : '点击隐藏') + self._escape(c);
+            return '<div class="wc-dept-item' + (hidden ? ' hidden' : '') + (active ? ' active' : '') + '" data-dept="' + self._escape(c) + '" title="' + tip + '">'
                 + '<span class="dot" style="background:' + color + ';"></span>'
                 + '<span class="nm">' + self._escape(c) + '</span>'
                 + '<span class="cnt">' + (deptCount[c] || 0) + '</span>'
+                + (hidden ? '<i class="fas fa-eye-slash"></i>' : '')
                 + '</div>';
         }).join('');
         if (side && !side._attached) {
             side._attached = true;
-            side.addEventListener('mouseover', function (e) {
+            side.addEventListener('click', function (e) {
                 var item = e.target.closest ? e.target.closest('.wc-dept-item') : null;
-                if (item) self._filterNetworkDept(item.getAttribute('data-dept'));
+                if (item) self._toggleDeptVisibility(item.getAttribute('data-dept'));
             });
-            side.addEventListener('mouseleave', function () { self._clearDeptFilter(); });
         }
     }
-    _filterNetworkDept(deptName) {
-        if (this._activeDeptFilter === deptName) return;
-        this._activeDeptFilter = deptName || null;
-        var ids = {};
-        (this._netRawNodes || []).forEach(function (n) {
-            if (!deptName || n.category === deptName) ids[n.id] = true;
+    // 反向开关：开启=点选部门仅显示该部门；关闭=点选部门隐藏该部门
+    _toggleInvertDeptFilter(checked) {
+        this._exitAggregate();
+        this._invertDeptFilter = !!checked;
+        this._hiddenDepts = {};
+        this._filterDept = null;
+        this._applyNetworkFiltered();
+        this._renderDeptList();
+    }
+    _toggleDeptVisibility(deptName) {
+        this._exitAggregate();
+        if (this._invertDeptFilter) {
+            // 反向：点选该部门 → 仅显示该部门；再次点击取消（显示全部）
+            this._filterDept = (this._filterDept === deptName) ? null : deptName;
+            this._hiddenDepts = {};
+        } else {
+            this._hiddenDepts = this._hiddenDepts || {};
+            if (this._hiddenDepts[deptName]) delete this._hiddenDepts[deptName];
+            else this._hiddenDepts[deptName] = true;
+            this._filterDept = null;
+        }
+        this._applyNetworkFiltered();
+        this._renderDeptList();
+    }
+    _showAllDepts() {
+        this._exitAggregate();
+        this._hiddenDepts = {};
+        this._filterDept = null;
+        this._applyNetworkFiltered();
+        this._renderDeptList();
+    }
+    // 按当前筛选条件重渲染网络图（隐藏/仅显示对应部门成员；数据进出动画渐进显现）
+    _applyNetworkFiltered() {
+        if (!this._networkChart) return;
+        var self = this;
+        var fnodes = (this._netRawNodes || []).filter(function (n) {
+            if (self._invertDeptFilter && self._filterDept) return n.category === self._filterDept;
+            return !(self._hiddenDepts || {})[n.category];
         });
-        var fnodes = (this._netRawNodes || []).filter(function (n) { return ids[n.id]; });
+        var ids = {};
+        fnodes.forEach(function (n) { ids[n.id] = true; });
         var flinks = (this._netRawLinks || []).filter(function (l) { return ids[l.source] && ids[l.target]; });
         var built = this._buildNetworkData(fnodes, flinks, this._netCatMap);
-        if (this._networkChart) this._networkChart.setOption({series: [{data: built.chartNodes, links: built.chartLinks}]});
-        this._highlightDeptItem(deptName);
+        this._networkChart.setOption({series: [{data: built.chartNodes, links: built.chartLinks}]});
     }
-    _clearDeptFilter() {
-        if (!this._activeDeptFilter) return;
-        this._filterNetworkDept(null);
+    _onHeatmapDeptChange(dept) {
+        this._heatmapDept = dept || null;
+        if (this._orgData) this._renderHeatmap(this._orgData);
     }
-    _highlightDeptItem(deptName) {
-        document.querySelectorAll('#wcNetworkDeptItems .wc-dept-item').forEach(function (el) {
-            el.classList.toggle('active', el.getAttribute('data-dept') === deptName);
+
+    // ===== 部门级聚合视图：成员>100默认聚合，点击部门节点展开下属成员，部门间边按互动量加粗 =====
+    _toggleAggregate(checked) {
+        this._netAggregate = !!checked;
+        this._netExpandedDept = null;
+        var backBtn = document.getElementById('wcNetworkAggBack');
+        if (backBtn) backBtn.style.display = 'none';
+        if (this._netAggregate) this._renderAggregateView();
+        else this._applyNetworkFiltered();
+    }
+    _backToAggregate() {
+        this._netExpandedDept = null;
+        var backBtn = document.getElementById('wcNetworkAggBack');
+        if (backBtn) backBtn.style.display = 'none';
+        if (this._netAggregate) this._renderAggregateView();
+        else this._applyNetworkFiltered();
+    }
+    _exitAggregate() {
+        if (!this._netAggregate) return;
+        this._netAggregate = false;
+        var aggEl = document.getElementById('wcNetAggregate');
+        if (aggEl) aggEl.checked = false;
+        var backBtn = document.getElementById('wcNetworkAggBack');
+        if (backBtn) backBtn.style.display = 'none';
+    }
+    _renderAggregateView() {
+        if (!this._networkChart) return;
+        var nodeDept = {}, deptAgg = {};
+        (this._netRawNodes || []).forEach(function (n) {
+            var d = n.category || '未分组';
+            nodeDept[n.id] = d;
+            if (!deptAgg[d]) deptAgg[d] = {total: 0, count: 0};
+            deptAgg[d].total += n.value;
+            deptAgg[d].count += 1;
         });
+        var depts = Object.keys(deptAgg);
+        var catMap = {};
+        depts.forEach(function (d, i) { catMap[d] = i; });
+        var chartNodes = depts.map(function (d) {
+            return {id: 'dept_' + d, name: d, category: catMap[d], value: deptAgg[d].total,
+                    symbolSize: Math.max(20, Math.min(62, 10 + Math.sqrt(deptAgg[d].total) * 1.5)),
+                    memberCount: deptAgg[d].count, deptName: d, isDept: true,
+                    itemStyle: {borderColor: '#fff', borderWidth: 1}};
+        });
+        // 聚合边：跨部门互动计数，互动越多越粗越清晰
+        var edgeAgg = {};
+        (this._netRawLinks || []).forEach(function (l) {
+            var a = nodeDept[l.source], b = nodeDept[l.target];
+            if (!a || !b || a === b) return;
+            var key = a < b ? a + '|' + b : b + '|' + a;
+            edgeAgg[key] = (edgeAgg[key] || 0) + 1;
+        });
+        var chartLinks = Object.keys(edgeAgg).map(function (key) {
+            var parts = key.split('|');
+            var cnt = edgeAgg[key];
+            return {source: 'dept_' + parts[0], target: 'dept_' + parts[1], value: cnt,
+                    lineStyle: {width: Math.min(1.5 + Math.sqrt(cnt) * 0.6, 6), opacity: Math.min(0.35 + cnt * 0.01, 0.9), color: '#909399'}};
+        });
+        this._networkChart.setOption({series: [{data: chartNodes, links: chartLinks,
+            categories: depts.map(function (c) { return {name: c}; })}]});
+    }
+    _expandDept(deptName) {
+        this._netExpandedDept = deptName;
+        this._renderExpandedDept();
+    }
+    _renderExpandedDept() {
+        if (!this._networkChart) return;
+        var deptName = this._netExpandedDept;
+        var fnodes = (this._netRawNodes || []).filter(function (n) { return (n.category || '未分组') === deptName; });
+        var ids = {};
+        fnodes.forEach(function (n) { ids[n.id] = true; });
+        var flinks = (this._netRawLinks || []).filter(function (l) { return ids[l.source] && ids[l.target]; });
+        var built = this._buildNetworkData(fnodes, flinks, this._netCatMap);
+        this._networkChart.setOption({series: [{data: built.chartNodes, links: built.chartLinks}]});
+        var backBtn = document.getElementById('wcNetworkAggBack');
+        if (backBtn) backBtn.style.display = 'inline-flex';
     }
 
     _toggleDeptList(toggleBtn){
         var activityList = document.getElementById('wcNetworkDeptItems');
+        var deptFilterTitle = document.getElementById('deptFilterTitle');
+        var deptSideFoot = document.querySelector('.wc-dept-side-foot')
         if (!activityList) return;
         var isHidden = activityList.style.display === 'none';
         activityList.style.display = isHidden ? 'block' : 'none';
+        deptFilterTitle.style.display = isHidden ? 'block' : 'none';
+        if (deptSideFoot) {
+            deptSideFoot.style.display = isHidden ? 'flex' : 'none';
+        }
         toggleBtn.className = isHidden ? 'fas fa-eye' : 'fas fa-eye-slash';
         toggleBtn.title = isHidden ? '隐藏部门' : '显示部门';
     }
@@ -765,6 +933,21 @@ class WorkCalendarApp {
         var self = this;
         var isMobile = window.innerWidth < 768;
         var types = this._ACT_TYPES();
+        // 部门筛选下拉
+        var deptSel = document.getElementById('wcHeatmapDept');
+        if (deptSel) {
+            var deptSet = [];
+            nodes.forEach(function (n) { if (deptSet.indexOf(n.category) < 0) deptSet.push(n.category); });
+            var cur = deptSel.value || '';
+            deptSel.innerHTML = '<option value="">全部部门</option>' + deptSet.map(function (dd) {
+                return '<option value="' + self._escape(dd) + '"' + (dd === cur ? ' selected' : '') + '>' + self._escape(dd) + '</option>';
+            }).join('');
+        }
+        if (this._heatmapDept) nodes = nodes.filter(function (n) { return (n.category || '未分组') === self._heatmapDept; });
+        if (!nodes.length) {
+            wrap.innerHTML = '<div style="text-align:center;color:#909399;font-size:13px;padding:80px 0;"><i class="fas fa-filter" style="font-size:28px;display:block;margin-bottom:8px;color:#c0c4cc;"></i>该部门暂无成员活跃数据</div>';
+            return;
+        }
         // 移动端减少左侧留白、展示更少成员（行更高更清晰），图表横向撑满
         var top = nodes.slice(0, isMobile ? 20 : 40);
         var data = [], maxV = 1;
@@ -857,7 +1040,7 @@ class WorkCalendarApp {
             (node.children || []).forEach(function (c) { mark(c); });
         })(treeData[0]);
         this._treeChart.setOption({
-            tooltip: {trigger: 'item', triggerOn: 'mousemove', formatter: function (info) {
+            tooltip: {trigger: 'item', triggerOn: 'mousemove', confine: true, appendToBody: true, formatter: function (info) {
                 var t = info.data;
                 var typeLabelMap = {'company': '公司', 'department': '部门', 'group': '小组', 'virtual': '虚拟组织'};
                 if (t.type === 'member') {
@@ -926,7 +1109,7 @@ class WorkCalendarApp {
         });
         this._radarChart.resize();
         var targetEl = document.getElementById('wcRadarTarget');
-        if (targetEl) targetEl.innerHTML = '当前查看：<b>' + this._escape(m.name || '') + '</b>' + (m.department ? '（' + this._escape(m.department) + '）' : '');
+        if (targetEl) targetEl.innerHTML = '<img src="' + this._escape(m.avatar || '/static/images/default-avatar.png') + '" style="width:20px;height:20px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:4px;">当前查看：<b>' + this._escape(m.name || '') + '</b>' + (m.department ? '（' + this._escape(m.department) + '）' : '');
         var sumEl = document.getElementById('wcRadarSummary');
         if (sumEl) {
             var total = values.reduce(function (s, v) { return s + v; }, 0);
@@ -1043,9 +1226,15 @@ class WorkCalendarApp {
             btn.classList.toggle('wc-fs-btn-active', isFs);
             var icon = btn.querySelector('i');
             if (icon) icon.className = isFs ? 'fas fa-compress' : 'fas fa-expand';
-            var span = btn.querySelector('span');
-            if (span) span.textContent = isFs ? '退出全屏' : '全屏';
+            btn.title = isFs ? '退出全屏' : '全屏';
         }
+        // 全屏时保留回正等辅助按钮（fixed 悬浮，与退出全屏按钮并排于右上角）
+        var auxBtns = document.querySelectorAll('[data-fs-aux="' + wrapId + '"]');
+        auxBtns.forEach(function (b) {
+            b.classList.toggle('wc-fs-aux-btn-active', isFs);
+        });
+        // 有回正按钮时退出全屏按钮左移让位，与回正按钮并排
+        if (btn) btn.classList.toggle('wc-fs-btn-active-pair', isFs && auxBtns.length > 0);
         var chart = this['_' + wrap.getAttribute('data-chart')];
         if (chart) setTimeout(function () { chart.resize(); }, 80);
     }
@@ -1053,11 +1242,12 @@ class WorkCalendarApp {
         document.querySelectorAll('.wc-chart-wrap.wc-fs').forEach(function (w) { w.classList.remove('wc-fs'); });
         document.querySelectorAll('.wc-fs-btn-active').forEach(function (b) {
             b.classList.remove('wc-fs-btn-active');
+            b.classList.remove('wc-fs-btn-active-pair');
             var icon = b.querySelector('i');
             if (icon) icon.className = 'fas fa-expand';
-            var span = b.querySelector('span');
-            if (span) span.textContent = '全屏';
+            b.title = '全屏';
         });
+        document.querySelectorAll('.wc-fs-aux-btn-active').forEach(function (b) { b.classList.remove('wc-fs-aux-btn-active'); });
     }
 
     // ===== 超管查看成员 =====

@@ -5673,11 +5673,43 @@ class WorkCalendarViewSet(viewsets.ViewSet):
             'target_user': self._target_info(target),
         })})
 
+    # 活跃度权重：用于成员活跃度总分（审批/总结/任务价值更高，避免闲聊消息刷分导致排名失真）
+    _ACTIVITY_WEIGHTS = {'chat': 1, 'approval': 5, 'attendance': 1, 'summary': 3, 'task': 3, 'cloud': 1, 'doc': 2}
+
+    def _weighted_total(self, a):
+        return sum(self._ACTIVITY_WEIGHTS.get(k, 1) * (a.get(k) or 0) for k in a)
+
+    def _scope_member_ids(self, request):
+        """按角色限定可查看成员：超管=None(全部)；部门管理员=本部门(含子部门)+自己；普通用户=本部门+自己
+        规避普通成员越权查看其他部门管理者的审批/考勤等敏感行为数据"""
+        if getattr(request.user, 'user_type', 'user') == 'super_admin':
+            return None
+        from org.models import UserDepartment
+        from accounts.models import Department
+        my_dept_ids = set(UserDepartment.objects.filter(
+            user=request.user, is_primary=True).values_list('department_id', flat=True))
+        scope = {request.user.id}
+        if not my_dept_ids:
+            return scope
+        dept_set = set(my_dept_ids)
+        if getattr(request.user, 'user_type', 'user') == 'admin':
+            changed = True
+            while changed:
+                changed = False
+                children = set(Department.objects.filter(parent_id__in=dept_set).values_list('id', flat=True))
+                new_ids = children - dept_set
+                if new_ids:
+                    dept_set |= new_ids
+                    changed = True
+        scope |= set(UserDepartment.objects.filter(department_id__in=dept_set).values_list('user_id', flat=True))
+        return scope
+
     @action(detail=False, methods=['get'])
     def org_activity(self, request):
         """成员关系网络 + 活跃度聚合：静态组织架构 × 动态行为数据（聊天/审批/考勤/总结/任务/网盘/文档）
         GET /api/oa/work-calendar/org-activity/?start=YYYY-MM-DD&end=YYYY-MM-DD
-        返回 org_tree（架构树）、network（关系图节点/边）、members（雷达选择）、activity（每人分维度活跃度）"""
+        返回 org_tree（架构树）、network（关系图节点/边）、members（雷达选择）、activity（每人分维度活跃度）
+        按角色限定可见成员（超管全量/管理员本部门+自己/普通本部门+自己）；活跃度总分按权重校准"""
         from datetime import date as dt_date, timedelta
         from accounts.models import CustomUser, Tenant, Department as OrgDept
         from org.models import UserDepartment
@@ -5719,6 +5751,9 @@ class WorkCalendarViewSet(viewsets.ViewSet):
                 tenant_memberships__is_active=True,
             ).distinct()
         members = list(members_qs)
+        scope = self._scope_member_ids(request)
+        if scope is not None:
+            members = [m for m in members if m.id in scope]
         user_ids = [u.id for u in members]
         id_set = set(user_ids)
         empty = {'encrypt': True, 'data': encrypt_data({
@@ -5868,7 +5903,7 @@ class WorkCalendarViewSet(viewsets.ViewSet):
                 if info['dept_id'] == did:
                     a = act[uid]
                     node['children'].append({'name': info['name'], 'id': uid, 'type': 'member',
-                                             'avatar': info['avatar'], 'value': sum(a.values())})
+                                             'avatar': info['avatar'], 'value': self._weighted_total(a)})
             return node
 
         root_children = []
@@ -5879,7 +5914,7 @@ class WorkCalendarViewSet(viewsets.ViewSet):
         if orphans:
             root_children.append({'name': '未分组', 'type': 'virtual', 'children': [
                 {'name': o['name'], 'id': o['id'], 'type': 'member', 'avatar': o['avatar'],
-                 'value': sum(act[o['id']].values())} for o in orphans]})
+                 'value': self._weighted_total(act[o['id']])} for o in orphans]})
         if not root_children:
             root_children.append({'name': '暂无部门', 'type': 'virtual', 'children': []})
         ttype_label = dict(Tenant.TENANT_TYPE_CHOICES).get(tenant.tenant_type, '企业') if tenant else '企业'
@@ -5894,7 +5929,7 @@ class WorkCalendarViewSet(viewsets.ViewSet):
                               'avatar': member_info[uid]['avatar'],
                               'category': member_info[uid]['department'] or '未分组',
                               'position': member_info[uid]['position'],
-                              'value': sum(a.values()), 'activity': a})
+                              'value': self._weighted_total(a), 'activity': a})
         all_nodes.sort(key=lambda n: n['value'], reverse=True)
         top_nodes = all_nodes
         top_ids = {n['id'] for n in top_nodes}
@@ -5928,6 +5963,10 @@ class WorkCalendarViewSet(viewsets.ViewSet):
         if tenant_ids:
             qs = qs.filter(tenant_memberships__tenant_id__in=tenant_ids,
                            tenant_memberships__is_active=True).distinct()
+        # 权限作用域：普通用户/管理员仅能搜索到本部门（含子部门）成员，超管全量
+        scope = self._scope_member_ids(request)
+        if scope is not None:
+            qs = qs.filter(id__in=scope)
         if kw:
             qs = qs.filter(Q(real_name__icontains=kw) | Q(username__icontains=kw))
         qs = qs.order_by('real_name', 'username')[:30]

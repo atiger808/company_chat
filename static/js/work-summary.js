@@ -519,7 +519,11 @@ class WorkSummaryApp {
             } else {
                 html = titleHtml + '<div class="ws-analysis-body">' + body + '</div>';
             }
-            (self._typeEls[key] || []).forEach(x => { if (x) { x.innerHTML = html; x.classList.toggle('ws-typing-active', typing); } });
+            (self._typeEls[key] || []).forEach(x => {
+                if (x) { x.innerHTML = html; x.classList.toggle('ws-typing-active', typing); }
+                // 打字时自动滚动到视野，防止输出的内容不在可视区
+                if (typing && x) self._ensureTypingVisible(x);
+            });
             if (!typing) {
                 clearInterval(self._typeTimers[key]);
                 delete self._typeTimers[key];
@@ -527,6 +531,16 @@ class WorkSummaryApp {
         };
         tick();
         this._typeTimers[key] = setInterval(tick, 16);
+    }
+    _ensureTypingVisible(el) {
+        try {
+            var scroll = el.closest('.ws-modal-body') || el.closest('.modal-body');
+            if (!scroll) return;
+            // 用户若已向上翻阅历史（远离底部）则不强制跟随，避免打扰
+            if ((scroll.scrollTop + scroll.clientHeight) < scroll.scrollHeight - 60) return;
+            // 平滑贴底跟随：始终让内容底部在可视区，避免逐帧累加偏移导致的上下抖动/越滚越快
+            scroll.scrollTop = scroll.scrollHeight;
+        } catch (e) {}
     }
     _stopTyping(key, finalHtml) {
         if (this._typeTimers && this._typeTimers[key]) { clearInterval(this._typeTimers[key]); delete this._typeTimers[key]; }
@@ -573,6 +587,22 @@ class WorkSummaryApp {
         const collapsed = wrap.classList.toggle('ws-collapsed');
         btn.innerHTML = collapsed ? '<i class="fas fa-chevron-down"></i> 展开' : '<i class="fas fa-chevron-up"></i> 收起';
     }
+    // 长内容默认折叠，带「展开/收起」按钮（用于当日工作总结内容等）
+    _collapsibleBlock(html, cls) {
+        const long = String(html || '').length > 220;
+        if (!long) return '<div class="' + cls + '">' + html + '</div>';
+        return '<div class="ws-collapse-block">'
+            + '<div class="' + cls + '-wrap ws-collapsed"><div class="' + cls + '">' + html + '</div></div>'
+            + '<div class="ws-analysis-toggle"><button class="ws-collapse-btn" onclick="workSummaryApp.toggleContentCollapse(this)"><i class="fas fa-chevron-down"></i> 展开</button></div>'
+            + '</div>';
+    }
+    toggleContentCollapse(btn) {
+        const block = btn.closest('.ws-collapse-block');
+        const wrap = block ? block.querySelector('.ws-content-wrap') : null;
+        if (!wrap) return;
+        const collapsed = wrap.classList.toggle('ws-collapsed');
+        btn.innerHTML = collapsed ? '<i class="fas fa-chevron-down"></i> 展开' : '<i class="fas fa-chevron-up"></i> 收起';
+    }
     // AI 分析中：科技感动态提示（扩散光环 + 脑图标 + 渐变流动文字 + 跳动圆点，文案轮播）
     _showThinking(el) {
         if (!el) return;
@@ -614,7 +644,7 @@ class WorkSummaryApp {
     _isAllowedWorkSummaryFile(f) {
         if (!(window.Utils && Utils.isValidFileType)) return true;
         const ext = (f && f.name ? f.name : '').toLowerCase().split('.').pop();
-        if (['md', 'markdown', 'txt', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].indexOf(ext) >= 0) return true;
+        if (['md', 'markdown', 'txt', 'html', 'js', 'py', 'php', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].indexOf(ext) >= 0) return true;
         return Utils.isValidFileType(f);
     }
 
@@ -1111,7 +1141,7 @@ class WorkSummaryApp {
                 + this.statusBadge(d.status)
                 + (d.analyzed_at ? '<span style="font-size:12px;color:#909399;"><i class="fas fa-clock"></i> 分析完成 ' + this._fmtDateTime(d.analyzed_at) + '</span>' : '') + '</div>'
                 + '<div style="font-size:13px;font-weight:600;color:#409eff;margin-bottom:6px;"><i class="fas fa-pen-square"></i> 当日工作总结</div>'
-                + '<div class="ws-content">' + this.escapeHtml(d.content || '（未填写总结文字）') + '</div>'
+                + this._collapsibleBlock(this.escapeHtml(d.content || '（未填写总结文字）'), 'ws-content')
                 + '<div style="font-size:13px;font-weight:600;color:#409eff;margin:12px 0 6px;"><i class="fas fa-folder-open"></i> 工作数据文件</div>'
                 + filesHtml
                 + promptHtml
