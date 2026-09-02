@@ -17,6 +17,7 @@ from .models import (
     DocumentSequence, WatermarkConfig, PrintLog,
     DailyWorkSummary, WorkSummaryRangeAnalysis,
     WorkSummaryConfig,
+    FinanceSpecialist, Announcement, AnnouncementComment, AnnouncementOperation,
 )
 
 
@@ -249,4 +250,36 @@ class WorkSummaryConfigAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'tenant', 'updated_by', 'model_id', 'enabled', 'limit_enabled', 'limit_notified', 'near_limit_notified', 'today_call_count', 'today_cost', 'updated_at']
     search_fields = ['id', 'updated_by__username', 'updated_by__real_name', 'tenant__name']
     list_filter = ['enabled', 'scope_type', 'limit_enabled', 'near_limit_notified', 'limit_notified']
+    list_per_page = 20
+
+
+@admin.register(FinanceSpecialist)
+class FinanceSpecialistAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user', 'tenant', 'is_active', 'updated_at', 'created_at']
+    search_fields = ['user__username', 'user__real_name', 'tenant__name', 'remark']
+    list_filter = ['is_active']
+    list_per_page = 20
+
+
+@admin.register(Announcement)
+class AnnouncementAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'author', 'title', 'scope_type', 'enable_comments', 'comment_mode', 'is_published', 'published_at', 'updated_at', 'created_at']
+    search_fields = ['title', 'author__username', 'author__real_name', 'tenant__name']
+    list_filter = ['scope_type', 'enable_comments', 'comment_mode', 'is_published']
+    list_per_page = 20
+
+
+@admin.register(AnnouncementComment)
+class AnnouncementCommentAdmin(admin.ModelAdmin):
+    list_display = ['id', 'announcement', 'author', 'parent', 'is_anonymous', 'content', 'image', 'created_at']
+    search_fields = ['content', 'author__username', 'author__real_name', 'announcement__title']
+    list_filter = ['is_anonymous']
+    list_per_page = 20
+
+
+@admin.register(AnnouncementOperation)
+class AnnouncementOperationAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'user', 'announcement', 'action', 'title', 'created_at']
+    search_fields = ['title', 'user__username', 'user__real_name']
+    list_filter = ['action']
     list_per_page = 20

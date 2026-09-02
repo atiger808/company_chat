@@ -1629,6 +1629,24 @@ class ApprovalApp {
         return raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
     }
 
+    async apiPut(url, data) {
+        const resp = await fetch(url, {
+            method: 'PUT',
+            headers: TokenManager.getHeaders(),
+            body: JSON.stringify(data || {})
+        });
+        if (!resp.ok) {
+            if (resp.status === 401) {
+                this.handleAuthError();
+                return
+            }
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(this._extractApiError(err));
+        }
+        const raw = await resp.json();
+        return raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+    }
+
     // ==================== 列表相关 ====================
 
     async loadList(page) {
@@ -3732,6 +3750,7 @@ class ApprovalApp {
         this._configCcDepts = [];
         this._configCcUsers = [];
         this._configDeleteId = null;
+        this._loadByType = false;
         document.getElementById('configApprovalType').value = '';
         document.querySelectorAll('.config-type-card').forEach(function (c) {
             c.classList.remove('active');
@@ -3744,6 +3763,11 @@ class ApprovalApp {
         await this._loadSubTenants();
         // Load config list
         await this._renderConfigList();
+        // 默认选中第一个审批类型并自动加载其配置（含适用范围切换）
+        var firstCard = document.querySelector('.config-type-card');
+        if (firstCard && firstCard.getAttribute('data-type')) {
+            await this._selectConfigType(firstCard.getAttribute('data-type'));
+        }
         // Init search fields
         var self = this;
         setTimeout(function () {
@@ -3760,26 +3784,26 @@ class ApprovalApp {
 
     async _loadSubTenants() {
         var group = document.getElementById('configSubTenantGroup');
-        var sel = document.getElementById('configSubTenant');
-        if (!group || !sel) return;
+        var scopeSel = document.getElementById('configScopeSelect');
+        if (!group) return;
         group.style.display = 'block';
-        sel.innerHTML = '<option value="">集团默认配置</option>';
+        if (scopeSel) scopeSel.innerHTML = '<option value="">集团默认</option>';
         try {
             var resp = await fetch(OA_API_URL + '/approval/dept-configs/', {
                 headers: TokenManager.getHeaders()
             });
             if (resp.ok) {
                 var json = await resp.json();
-                var subTenants = json.sub_tenants || [];
-                subTenants.forEach(function (st) {
+                var companyDepts = json.company_departments || [];
+                companyDepts.forEach(function (d) {
                     var opt = document.createElement('option');
-                    opt.value = st.id;
-                    opt.textContent = (st.short_name || st.name) + '（' + (st.tenant_type || '公司') + '）';
-                    sel.appendChild(opt);
+                    opt.value = d.id;
+                    opt.textContent = (d.full_path || d.name) + '（' + (d.department_type === 'company' ? '公司' : '虚拟组织') + '）';
+                    if (scopeSel) scopeSel.appendChild(opt);
                 });
             }
         } catch (e) {
-            console.warn('加载子公司列表失败', e);
+            console.warn('加载公司级部门列表失败', e);
         }
     }
 
@@ -3795,16 +3819,23 @@ class ApprovalApp {
                 container.innerHTML = '<div style="color:#909399;font-size:13px;padding:8px 0;">暂无配置</div>';
                 return;
             }
-            var currentSt = document.getElementById('configSubTenant') ? document.getElementById('configSubTenant').value : '';
+            var scopeVal = document.getElementById('configScopeSelect') ? document.getElementById('configScopeSelect').value : '';
             container.innerHTML = configs.map(function (c) {
-                // Only show configs for the selected sub-tenant (or global when none selected)
-                var cSt = c.sub_tenant ? String(c.sub_tenant) : '';
-                if (currentSt && cSt !== currentSt) return '';
-                if (!currentSt && cSt) return '';
+                if (c.sub_tenant) return ''; // 旧子公司专属配置不再展示（适用范围仅集团默认/公司级部门）
+                // 按配置适用范围过滤：集团默认（空）/ 指定公司级部门
+                var cDept = c.scope_department ? String(c.scope_department) : '';
+                if (scopeVal) {
+                    if (cDept !== scopeVal) return '';
+                } else {
+                    if (cDept) return '';
+                }
                 var sel = self._configEditType === c.approval_type ? ' style="background:#e8f4fd;font-weight:600;display:flex;align-items:center;justify-content:space-between;"' : '';
-                var subTag = c.sub_tenant_name ? ' <span style="font-size:10px;color:#e67e22;">[' + self._escape(c.sub_tenant_name) + ']</span>' : '';
+                // 适用范围标签：公司级部门显示[部门名]，集团默认显示[集团默认]
+                var scopeTag = c.scope_department
+                    ? ' <span style="font-size:10px;color:#16a085;">[' + self._escape(c.scope_department_name || '公司级部门') + ']</span>'
+                    : ' <span style="font-size:10px;color:#909399;">[集团默认]</span>';
                 return '<div class="config-list-item"' + sel + ' data-type="' + c.approval_type + '" onclick="approvalApp._editConfig(\'' + c.approval_type + '\')" style="padding:8px 10px;border-radius:6px;cursor:pointer;margin-bottom:4px;font-size:13px;display:flex;align-items:center;justify-content:space-between;">'
-                    + '<span><i class="fas fa-tag" style="color:var(--primary-color,#409eff);margin-right:4px;font-size:11px;"></i>' + self._escape(self._getTypeName(c.approval_type)) + subTag + '</span>'
+                    + '<span><i class="fas fa-tag" style="color:var(--primary-color,#409eff);margin-right:4px;font-size:11px;"></i>' + self._escape(self._getTypeName(c.approval_type)) + scopeTag + '</span>'
                     + '<span style="font-size:11px;color:#909399;">' + (c.department_name || '未设置') + '</span>'
                     + '</div>';
             }).join('');
@@ -3814,26 +3845,29 @@ class ApprovalApp {
         }
     }
 
-    _selectConfigType(type) {
+    async _selectConfigType(type) {
         this._configEditType = type;
+        this._loadByType = true; // 点选审批类型：允许自动匹配该类型任意配置并切换适用范围
         document.getElementById('configApprovalType').value = type;
+        // 同步右侧顶部类型卡片的选中态（按 data-type 匹配，避免类型码含特殊字符时 CSS 选择器报错、或类型不在网格中抛空异常）
         document.querySelectorAll('.config-type-card').forEach(function (c) {
-            c.classList.remove('active');
+            if (c.getAttribute('data-type') === type) c.classList.add('active');
+            else c.classList.remove('active');
         });
-        document.querySelector('.config-type-card[data-type="' + type + '"]').classList.add('active');
         this._updateThresholdFieldOptions();
-        this._loadConfig();
+        await this._loadConfig();
         this._renderConfigList();
     }
 
     _onConfigSubTenantChange() {
+        this._loadByType = false; // 切换适用范围：仅加载该范围下所选类型的配置，不再自动切回集团默认
         this._renderConfigList();
         this._loadConfig();
     }
 
-    _editConfig(type) {
+    async _editConfig(type) {
         this._configEditType = type;
-        this._selectConfigType(type);
+        await this._selectConfigType(type);
         this._renderConfigList();
     }
 
@@ -3848,21 +3882,52 @@ class ApprovalApp {
         }
         form.style.display = 'block';
         await this._loadConfigDepts();
-        // 获取当前选中的子公司
-        var subTenantId = document.getElementById('configSubTenant') ? document.getElementById('configSubTenant').value : '';
+        // 获取当前选中的适用范围（空=集团默认 / 公司级部门ID）
+        var scopeVal = document.getElementById('configScopeSelect') ? document.getElementById('configScopeSelect').value : '';
         try {
             var data = await this.apiGet(OA_API_URL + '/approval/dept-configs/');
             var configs = data.results || [];
             var cfg = null;
             configs.forEach(function (c) {
-                var cSt = c.sub_tenant ? String(c.sub_tenant) : '';
-                if (c.approval_type === type && cSt === subTenantId) cfg = c;
+                if (c.approval_type !== type) return;
+                if (c.sub_tenant) return; // 跳过旧子公司专属配置，仅按当前企业适用范围匹配
+                var cDept = c.scope_department ? String(c.scope_department) : '';
+                if (scopeVal) { if (cDept === scopeVal) cfg = c; }
+                else { if (!cDept) cfg = c; }
             });
+            // 点选审批类型时：当前适用范围没有该类型配置，则自动匹配该类型已配置的任意配置（公司级部门优先，其次集团默认），并回填适用范围
+            if (!cfg && this._loadByType) {
+                configs.forEach(function (c) {
+                    if (c.approval_type !== type || cfg) return;
+                    if (c.sub_tenant) return;
+                    if (c.scope_department) cfg = c; // 优先公司级部门专属配置
+                });
+                if (!cfg) {
+                    configs.forEach(function (c) {
+                        if (c.approval_type !== type || cfg) return;
+                        if (c.sub_tenant) return;
+                        cfg = c; // 其次集团默认
+                    });
+                }
+            }
             this._configDeleteId = cfg ? cfg.id : null;
+            // 点选审批类型时按配置实际适用范围回填范围下拉（空=集团默认 / 公司级部门ID）；切换适用范围时不覆盖用户选择
+            if (cfg && this._loadByType) {
+                var scopeSel2 = document.getElementById('configScopeSelect');
+                if (scopeSel2) scopeSel2.value = cfg.scope_department ? String(cfg.scope_department) : '';
+            }
             if (delBtn) delBtn.style.display = cfg ? 'inline-flex' : 'none';
             var deptSel = document.getElementById('configFinalDept');
             if (deptSel && cfg && cfg.department) deptSel.value = cfg.department;
             else if (deptSel) deptSel.value = '';
+            // 第一审批人（财务专员）自定义下拉（头像 + 姓名 + 最右侧职位）
+            var firstSel = document.getElementById('configFirstApprover');
+            if (firstSel) {
+                var specs = data.finance_specialists || [];
+                var curFirst = (cfg && cfg.first_approver) ? String(cfg.first_approver) : '';
+                firstSel.value = curFirst;
+                this._buildFirstApproverDropdown(specs, curFirst);
+            }
             this._configApprovers = [];
             if (cfg && cfg.approver_user_details) {
                 this._configApprovers = cfg.approver_user_details.map(function (u) {
@@ -3893,12 +3958,12 @@ class ApprovalApp {
                 });
             }
             this._renderConfigCcUserTags();
-            // Restore sign_type and approval_mode
+            // Restore sign_type and approval_mode（序列化器字段名为 default_sign_type / default_approval_mode）
             var signTypeSel = document.getElementById('configSignType');
-            if (signTypeSel && cfg && cfg.sign_type) signTypeSel.value = cfg.sign_type;
+            if (signTypeSel && cfg && cfg.default_sign_type) signTypeSel.value = cfg.default_sign_type;
             else if (signTypeSel) signTypeSel.value = 'countersign';
             var apprModeSel = document.getElementById('configApprovalMode');
-            if (apprModeSel && cfg && cfg.approval_mode) apprModeSel.value = cfg.approval_mode;
+            if (apprModeSel && cfg && cfg.default_approval_mode) apprModeSel.value = cfg.default_approval_mode;
             else if (apprModeSel) apprModeSel.value = 'sequential';
             // Restore threshold config
             var thEnable = document.getElementById('configThresholdEnable');
@@ -3931,6 +3996,72 @@ class ApprovalApp {
         var erEl = document.getElementById('configEnableReceiptReturn');
         var grp = document.getElementById('configReceiptReturnHoursGroup');
         if (grp) grp.style.display = erEl && erEl.checked ? 'block' : 'none';
+    }
+
+    // 第一审批人（财务专员）自定义下拉：每项姓名前头像 + 最右侧职位（原生 option 不渲染 img/样式，改用 div 下拉）
+    _buildFirstApproverDropdown(specs, curFirst) {
+        var trigger = document.getElementById('configFirstApproverTrigger');
+        var valueEl = document.getElementById('configFirstApproverValue');
+        var drop = document.getElementById('configFirstApproverDrop');
+        var hidden = document.getElementById('configFirstApprover');
+        if (!trigger || !valueEl || !drop || !hidden) return;
+        var self = this;
+        var defAv = '/static/images/default-avatar.png';
+
+        // 渲染下拉项
+        var optHtml = '<div class="fs-select-option" data-val="">'
+            + '<img class="fs-opt-avatar" src="' + defAv + '" onerror="this.style.display=\'none\';"><span class="fs-opt-name">无（不使用财务专员作为第一审批人）</span></div>';
+        (specs || []).forEach(function (s) {
+            var scope = [];
+            (s.sub_tenant_list || []).forEach(function (t) { scope.push(t.name); });
+            (s.department_list || []).forEach(function (d) { scope.push(d.name); });
+            var scopeText = scope.length ? '（' + scope.slice(0, 3).join('、') + (scope.length > 3 ? '…' : '') + '）' : '';
+            var av = s.avatar || defAv;
+            var pos = s.position ? self._escape(s.position) : '';
+            optHtml += '<div class="fs-select-option" data-val="' + s.id + '">'
+                + '<img class="fs-opt-avatar" src="' + self._escape(av) + '" onerror="this.style.display=\'none\';">'
+                + '<span class="fs-opt-name">' + self._escape(s.user_name) + '<span class="fs-opt-scope">' + scopeText + '</span></span>'
+                + (pos ? '<span class="fs-opt-pos">' + pos + '</span>' : '')
+                + '</div>';
+        });
+        drop.innerHTML = optHtml;
+
+        // 同步选中态与触发器显示
+        var sync = function () {
+            var val = hidden.value || '';
+            var selSpec = null;
+            (specs || []).forEach(function (s) { if (String(s.id) === val) selSpec = s; });
+            var av = selSpec ? (selSpec.avatar || defAv) : defAv;
+            var name = selSpec ? selSpec.user_name : '无（不使用财务专员作为第一审批人）';
+            var pos = selSpec && selSpec.position ? ' · ' + selSpec.position : '';
+            valueEl.innerHTML = '<img class="fs-trigger-avatar" src="' + self._escape(av) + '" onerror="this.style.display=\'none\';">'
+                + '<span class="fs-trigger-name">' + self._escape(name) + pos + '</span>';
+            drop.querySelectorAll('.fs-select-option').forEach(function (opt) {
+                opt.classList.toggle('active', opt.getAttribute('data-val') === val);
+            });
+        };
+        drop._fsSync = sync;
+        if (!this._fsSelectDocBound) {
+            this._fsSelectDocBound = true;
+            document.addEventListener('click', function () {
+                document.querySelectorAll('.fs-select-drop').forEach(function (d) { d.style.display = 'none'; });
+            });
+        }
+        trigger.onclick = function (e) {
+            e.stopPropagation();
+            var isOpen = drop.style.display === 'block';
+            document.querySelectorAll('.fs-select-drop').forEach(function (d) { d.style.display = 'none'; });
+            if (!isOpen) { sync(); drop.style.display = 'block'; }
+        };
+        drop.querySelectorAll('.fs-select-option').forEach(function (opt) {
+            opt.onclick = function (e) {
+                e.stopPropagation();
+                hidden.value = opt.getAttribute('data-val');
+                sync();
+                drop.style.display = 'none';
+            };
+        });
+        sync();
     }
 
     _buildDepartmentTreeHtml(depts, selectedId) {
@@ -4303,7 +4434,7 @@ class ApprovalApp {
         var thField = document.getElementById('configThresholdField') ? document.getElementById('configThresholdField').value : '';
         var thValue = document.getElementById('configThresholdValue') ? document.getElementById('configThresholdValue').value : '';
         var thDeptId = document.getElementById('configThresholdDept') ? document.getElementById('configThresholdDept').value : '';
-        var subTenantId = document.getElementById('configSubTenant') ? document.getElementById('configSubTenant').value : '';
+        var deptScopeId = document.getElementById('configScopeSelect') ? document.getElementById('configScopeSelect').value : '';
         var signType = document.getElementById('configSignType') ? document.getElementById('configSignType').value : 'countersign';
         var apprMode = document.getElementById('configApprovalMode') ? document.getElementById('configApprovalMode').value : 'sequential';
         var data = {
@@ -4319,6 +4450,7 @@ class ApprovalApp {
                 return u.id;
             }),
             final_approver: this._configFinalApprover ? this._configFinalApprover.id : null,
+            first_approver: parseInt(document.getElementById('configFirstApprover') ? (document.getElementById('configFirstApprover').value || 0) : 0) || null,
             sign_type: signType,
             approval_mode: apprMode,
             threshold_enabled: thEnabled,
@@ -4329,14 +4461,202 @@ class ApprovalApp {
             receipt_return_hours: parseInt(document.getElementById('configReceiptReturnHours') ? (document.getElementById('configReceiptReturnHours').value || 0) : 24),
             enable_receipt_return: document.getElementById('configEnableReceiptReturn') ? document.getElementById('configEnableReceiptReturn').checked : false,
         };
-        if (subTenantId) data.sub_tenant_id = parseInt(subTenantId);
+        if (deptScopeId) data.scope_department_id = parseInt(deptScopeId);
         try {
             await this.apiPost(OA_API_URL + '/approval/save-dept-config/', data);
             this.showToast('配置保存成功', false);
-            // this.closeModal('approvalConfigModal');
+            // 保存后即时刷新左侧已配置列表与当前配置内容，确保改动立即生效
+            this._loadConfig();
+            this._renderConfigList();
         } catch (e) {
             this.showAlert('保存失败', e.message || '请重试');
         }
+    }
+
+    // ==================== 财务专员管理 ====================
+    async openFinanceSpecialistModal() {
+        var dd = document.getElementById('approvalSvcDropdown');
+        if (dd) dd.classList.remove('show');
+        var modal = document.getElementById('financeSpecialistModal');
+        if (!modal) return;
+        modal.style.display = 'flex';
+        setTimeout(function () { modal.classList.add('show'); }, 10);
+        this._fsList = [];
+        this._fsSubTenants = [];
+        this._fsDepartments = [];
+        await this._loadFinanceSpecialists();
+        this._fsShowList();
+    }
+    closeFinanceSpecialistModal() {
+        var modal = document.getElementById('financeSpecialistModal');
+        if (modal) { modal.classList.remove('show'); setTimeout(function () { modal.style.display = 'none'; }, 150); }
+    }
+    async _loadFinanceSpecialists() {
+        try {
+            var d = await this.apiGet(OA_API_URL + '/approval/finance-specialists/');
+            this._fsList = d.results || [];
+            this._fsSubTenants = d.sub_tenants || [];
+            this._fsDepartments = d.departments || [];
+            this._fsRender();
+        } catch (e) {
+            this.showAlert('加载失败', e.message || '请重试');
+        }
+    }
+    _fsSearch() {
+        var kw = (document.getElementById('fsSearch').value || '').trim().toLowerCase();
+        var list = (this._fsList || []).filter(function (s) {
+            return (s.user_name || '').toLowerCase().indexOf(kw) >= 0
+                || (s.position || '').toLowerCase().indexOf(kw) >= 0;
+        });
+        this._fsRender(list);
+    }
+    _fsRender(list) {
+        var tbody = document.getElementById('fsTbody');
+        if (!tbody) return;
+        var arr = list || this._fsList || [];
+        var self = this;
+        if (!arr.length) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#909399;padding:20px;">暂无财务专员</td></tr>';
+            return;
+        }
+        tbody.innerHTML = arr.map(function (s) {
+            var subs = (s.sub_tenant_list || []).map(function (t) { return self._escape(t.name); }).join('、') || '—';
+            var depts = (s.department_list || []).map(function (d) { return self._escape(d.name); }).join('、') || '—';
+            var status = s.is_active ? '<span style="color:#67c23a;">启用</span>' : '<span style="color:#f56c6c;">停用</span>';
+            var time = s.updated_at ? String(s.updated_at).replace('T', ' ').slice(0, 16) : '';
+            return '<tr>'
+                + '<td><div style="display:flex;align-items:center;gap:6px;"><img src="' + self._escape(s.avatar || '/static/images/default-avatar.png') + '" style="width:26px;height:26px;border-radius:50%;object-fit:cover;"> <div><div style="font-weight:600;">' + self._escape(s.user_name) + '</div><div style="font-size:11px;color:#909399;">' + self._escape(s.position || '') + '</div></div></div></td>'
+                + '<td>' + subs + '</td>'
+                + '<td>' + depts + '</td>'
+                + '<td>' + status + '</td>'
+                + '<td>' + self._escape(time) + '</td>'
+                + '<td><button class="btn btn-sm btn-secondary" onclick="approvalApp._fsEdit(' + s.id + ')"><i class="fas fa-edit"></i></button> <button class="btn btn-sm btn-danger" onclick="approvalApp._fsDel(' + s.id + ')"><i class="fas fa-trash"></i></button></td>'
+                + '</tr>';
+        }).join('');
+    }
+    _fsShowList() {
+        document.getElementById('fsListView').style.display = 'block';
+        document.getElementById('fsFormView').style.display = 'none';
+    }
+    async _fsShowForm() {
+        this._fsEditId = null;
+        document.getElementById('fsFormTitle').textContent = '添加财务专员';
+        document.getElementById('fsUserSearch').value = '';
+        document.getElementById('fsUserTag').innerHTML = '';
+        document.getElementById('fsActive').checked = true;
+        document.getElementById('fsRemark').value = '';
+        this._fsSelectedUser = null;
+        await this._fsRenderScopes();
+        document.getElementById('fsListView').style.display = 'none';
+        document.getElementById('fsFormView').style.display = 'block';
+    }
+    async _fsRenderScopes() {
+        var subWrap = document.getElementById('fsSubTenants');
+        var deptWrap = document.getElementById('fsDepartments');
+        var self = this;
+        if (subWrap) {
+            subWrap.innerHTML = (this._fsSubTenants || []).map(function (t) {
+                return '<label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;border:1px solid #dcdfe6;border-radius:6px;padding:4px 8px;"><input type="checkbox" value="' + t.id + '" class="fs-sub-cb"> ' + self._escape(t.short_name || t.name) + '</label>';
+            }).join('') || '<span style="color:#909399;font-size:12px;">暂无子公司</span>';
+        }
+        if (deptWrap) {
+            deptWrap.innerHTML = (this._fsDepartments || []).map(function (d) {
+                return '<label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;border:1px solid #dcdfe6;border-radius:6px;padding:4px 8px;"><input type="checkbox" value="' + d.id + '" class="fs-dept-cb"> ' + self._escape(d.full_path || d.name) + '</label>';
+            }).join('') || '<span style="color:#909399;font-size:12px;">暂无部门</span>';
+        }
+    }
+    async _fsEdit(id) {
+        var s = null;
+        (this._fsList || []).forEach(function (x) { if (String(x.id) === String(id)) s = x; });
+        if (!s) return;
+        this._fsEditId = id;
+        document.getElementById('fsFormTitle').textContent = '编辑财务专员';
+        document.getElementById('fsUserSearch').value = s.user_name || '';
+        document.getElementById('fsUserTag').innerHTML = '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#ecf5ff;border-radius:12px;font-size:12px;color:#409eff;"><img src="' + this._escape(s.avatar || '/static/images/default-avatar.png') + '" style="width:18px;height:18px;border-radius:50%;"> ' + this._escape(s.user_name) + '</span>';
+        this._fsSelectedUser = { id: s.user, name: s.user_name, avatar: s.avatar };
+        document.getElementById('fsActive').checked = !!s.is_active;
+        document.getElementById('fsRemark').value = s.remark || '';
+        await this._fsRenderScopes();
+        var subIds = (s.sub_tenant_list || []).map(function (t) { return String(t.id); });
+        document.querySelectorAll('#fsSubTenants .fs-sub-cb').forEach(function (cb) { cb.checked = subIds.indexOf(String(cb.value)) >= 0; });
+        var deptIds = (s.department_list || []).map(function (d) { return String(d.id); });
+        document.querySelectorAll('#fsDepartments .fs-dept-cb').forEach(function (cb) { cb.checked = deptIds.indexOf(String(cb.value)) >= 0; });
+        document.getElementById('fsListView').style.display = 'none';
+        document.getElementById('fsFormView').style.display = 'block';
+    }
+    async _fsSave() {
+        if (!this._fsSelectedUser) {
+            this.showAlert('提示', '请选择财务专员用户');
+            return;
+        }
+        var subIds = [];
+        document.querySelectorAll('#fsSubTenants .fs-sub-cb:checked').forEach(function (cb) { subIds.push(parseInt(cb.value)); });
+        var deptIds = [];
+        document.querySelectorAll('#fsDepartments .fs-dept-cb:checked').forEach(function (cb) { deptIds.push(parseInt(cb.value)); });
+        var payload = {
+            user: this._fsSelectedUser.id,
+            sub_tenants: subIds,
+            departments: deptIds,
+            remark: document.getElementById('fsRemark').value,
+            is_active: document.getElementById('fsActive').checked
+        };
+        try {
+            if (this._fsEditId) {
+                await this.apiPut(OA_API_URL + '/approval/finance-specialists/' + this._fsEditId + '/', payload);
+            } else {
+                await this.apiPost(OA_API_URL + '/approval/finance-specialists/', payload);
+            }
+            this.showToast('保存成功', false);
+            this._fsShowList();
+            await this._loadFinanceSpecialists();
+        } catch (e) {
+            this.showAlert('保存失败', e.message || '请重试');
+        }
+    }
+    _fsBack() {
+        this._fsShowList();
+    }
+    async _fsDel(id) {
+        var confirmed = await this.showConfirmDialog('删除财务专员', '确定删除该财务专员吗？删除后其作为第一审批人的配置将失效。', 'danger');
+        if (!confirmed) return;
+        try {
+            var resp = await fetch(OA_API_URL + '/approval/finance-specialists/' + id + '/', {method: 'DELETE', headers: TokenManager.getHeaders()});
+            if (!resp.ok) throw new Error('删除失败');
+            this.showToast('已删除', false);
+            await this._loadFinanceSpecialists();
+        } catch (e) {
+            this.showAlert('删除失败', e.message || '请重试');
+        }
+    }
+    async _fsUserSearch() {
+        var kw = document.getElementById('fsUserSearch').value;
+        var dd = document.getElementById('fsUserDropdown');
+        if (!dd) return;
+        if (!kw.trim()) { dd.style.display = 'none'; return; }
+        try {
+            var resp = await fetch(OA_API_URL + '/approval/finance-specialist-users/?search=' + encodeURIComponent(kw), {headers: TokenManager.getHeaders()});
+            var json = await resp.json();
+            var d = json.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(json) : json;
+            var users = d.results || [];
+            var self = this;
+            dd.innerHTML = users.length ? users.map(function (u) {
+                return '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;border-bottom:1px solid #f0f0f0;" onclick="approvalApp._fsPickUser(' + u.id + ', \'' + self._escape(u.name) + '\', \'' + self._escape(u.avatar || '/static/images/default-avatar.png') + '\')">'
+                    + '<img src="' + self._escape(u.avatar || '/static/images/default-avatar.png') + '" style="width:26px;height:26px;border-radius:50%;object-fit:cover;">'
+                    + '<span style="flex:1;font-size:13px;">' + self._escape(u.name) + '</span>'
+                    + (u.position ? '<span style="font-size:11px;color:#909399;">' + self._escape(u.position) + '</span>' : '')
+                    + '</div>';
+            }).join('') : '<div style="padding:8px 12px;color:#909399;font-size:13px;">未找到成员</div>';
+            dd.style.display = 'block';
+        } catch (e) {
+            dd.style.display = 'none';
+        }
+    }
+    _fsPickUser(id, name, avatar) {
+        document.getElementById('fsUserSearch').value = name;
+        document.getElementById('fsUserTag').innerHTML = '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#ecf5ff;border-radius:12px;font-size:12px;color:#409eff;"><img src="' + this._escape(avatar) + '" style="width:18px;height:18px;border-radius:50%;"> ' + this._escape(name) + '</span>';
+        this._fsSelectedUser = {id: id, name: name, avatar: avatar};
+        var dd = document.getElementById('fsUserDropdown');
+        if (dd) dd.style.display = 'none';
     }
 
     // ==================== 详情 ====================

@@ -413,7 +413,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20260828-1ca2622'
+STATIC_VERSION = '20260901-b9b07be'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -582,6 +582,14 @@ API_MODEL_MAP = {
     "/api/oa/approval/<int:pk>/delete-receipt/": "删除回传票据",
     "/api/oa/approval/custom-payment-methods/": "自定义收款方式库",
     "/api/oa/approval/custom-payment-method/<int:pk>/": "删除自定义收款方式",
+    "/api/oa/approval/finance-specialists/": "财务专员管理",
+    "/api/oa/approval/finance-specialists/<int:pk>/": "财务专员管理详情",
+    "/api/oa/approval/finance-specialist-users/": "财务专员用户搜索",
+    "/api/oa/announcements/": "集团公告",
+    "/api/oa/announcements/<int:pk>/": "集团公告详情",
+    "/api/oa/announcements/<int:pk>/publish/": "集团公告发布",
+    "/api/oa/announcements/<int:pk>/comments/": "集团公告评论列表",
+    "/api/oa/announcements/<int:pk>/add-comment/": "集团公告添加评论",
     "/api/oa/material/items/": "物资物品库",
     "/api/oa/material/item-search/": "物资物品联想",
     "/api/oa/material/items/<int:pk>/": "物资物品编辑/删除",

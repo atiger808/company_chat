@@ -943,6 +943,144 @@ class AdminChatRoomsClient {
                 }
                 break;
 
+            // 🔧 审批卡片：卡片化显示，点击直达审批详情
+            case 'approval_card':
+                try {
+                    let apData = message.approval_data || null;
+                    if (!apData && message.content) {
+                        try { apData = JSON.parse(message.content); } catch (_) {}
+                    }
+                    if (apData && apData.approval_id) {
+                        const statusText = apData.status_display || '待审批';
+                        const statusColors = {'pending': '#E6A23C', 'approved': '#67C23A', 'rejected': '#F56C6C', 'cancelled': '#909399', 'deferred': '#909399', 'processing': '#409EFF'};
+                        const color = statusColors[apData.status] || '#909399';
+                        const title = apData.title || '审批';
+                        const typeName = apData.type_name || '';
+                        const applicant = apData.applicant_name || '';
+                        const amount = apData.amount ? '¥' + apData.amount : '';
+                        contentHtml = `
+                            <div style="max-width: 320px; overflow: hidden; border-radius: 8px; border: 1px solid #e4e7ed; background: #fff; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); cursor: pointer;"
+                                 onclick="window.open('/oa/approval/?approval_id=${apData.approval_id}', '_blank')">
+                                <div style="padding: 10px 14px; background: linear-gradient(135deg, #eef6ff 0%, #dbeafe 100%); border-bottom: 1px solid #e4e7ed; display: flex; justify-content: space-between; align-items: center;">
+                                    <span style="font-weight: 600; color: #303133; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+                                        <i class="fas fa-clipboard-check" style="color: #409EFF;"></i> ${this.escapeHtml(typeName ? typeName + ' ' : '')}审批卡片
+                                    </span>
+                                    <span style="font-size: 11px; padding: 2px 8px; border-radius: 10px; color: #fff; background: ${color};">${this.escapeHtml(statusText)}</span>
+                                </div>
+                                <div style="padding: 10px 14px;">
+                                    <div style="font-size: 14px; color: #303133; margin-bottom: 6px; font-weight: 500;">${this.escapeHtml(title)}</div>
+                                    <div style="font-size: 12px; color: #909399; display: flex; flex-direction: column; gap: 3px;">
+                                        <span><i class="fas fa-user-circle" style="width: 14px;"></i> ${this.escapeHtml(applicant || '未知')}</span>
+                                        ${amount ? `<span><i class="fas fa-yen-sign" style="width: 14px;"></i> ${this.escapeHtml(amount)}</span>` : ''}
+                                    </div>
+                                </div>
+                                <div style="padding: 6px 14px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 11px; color: #909399; text-align: center;">
+                                    点击查看审批 <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
+                                </div>
+                            </div>`;
+                    } else {
+                        contentHtml = '<span style="color:#909399;"><i class="fas fa-clipboard-check"></i> [审批卡片]</span>';
+                    }
+                } catch (e) {
+                    contentHtml = '<span style="color:#909399;"><i class="fas fa-clipboard-check"></i> [审批卡片]</span>';
+                }
+                break;
+
+            // 🔧 每日工作总结卡片：卡片化显示，点击直达总结详情
+            case 'work_summary_card':
+                try {
+                    let wsData = message.work_summary_data || null;
+                    if (!wsData && message.content) {
+                        try { wsData = JSON.parse(message.content); } catch (_) {}
+                    }
+                    if (wsData && wsData.summary_id) {
+                        const statusMap = {done: '已完成', analyzing: '分析中', failed: '分析失败', pending: '待分析', disabled: '已停用'};
+                        const statusColor = {done: '#67C23A', analyzing: '#409EFF', failed: '#F56C6C', pending: '#E6A23C', disabled: '#909399'};
+                        const statusText = statusMap[wsData.status] || '待分析';
+                        const color = statusColor[wsData.status] || '#E6A23C';
+                        const userName = wsData.user_name || '员工';
+                        const date = wsData.summary_date || '';
+                        const position = wsData.position || '';
+                        const rawContent = wsData.content || '（未填写总结文字）';
+                        const rawAnalysis = wsData.analysis || '';
+                        const displayContent = typeof rawContent === 'string' && rawContent.length > 60 ? rawContent.substring(0, 60) + '...' : rawContent;
+                        const displayAnalysis = typeof rawAnalysis === 'string' && rawAnalysis.length > 60 ? rawAnalysis.substring(0, 60) + '...' : rawAnalysis;
+                        contentHtml = `
+                            <div style="max-width: 340px; overflow: hidden; border-radius: 8px; border: 1px solid #e4e7ed; background: #fff; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); cursor: pointer;"
+                                 onclick="window.open('/oa/work-summary/?id=${wsData.summary_id}', '_blank')">
+                                <div style="padding: 10px 14px; background: linear-gradient(135deg, #f3e8ff 0%, #e9d5ff 100%); border-bottom: 1px solid #e4e7ed; display: flex; justify-content: space-between; align-items: center;">
+                                    <span style="font-weight: 600; color: #303133; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+                                        <i class="fas fa-file-signature" style="color: #9b59b6;"></i> 每日工作总结
+                                    </span>
+                                    <span style="font-size: 11px; padding: 2px 8px; border-radius: 10px; color: #fff; background: ${color};">${statusText}</span>
+                                </div>
+                                <div style="padding: 10px 14px;">
+                                    <div style="font-size: 13px; color: #303133; margin-bottom: 6px; font-weight: 500; display: flex; align-items: center; gap: 6px;">
+                                        <i class="fas fa-user-circle" style="color:#9b59b6;"></i> ${this.escapeHtml(userName)}
+                                        <span style="font-size:11px;color:#909399;font-weight:400;">${this.escapeHtml(date)}</span>
+                                    </div>
+                                    ${position ? `<div style="font-size: 11px; color: #a47bd1; margin-bottom: 6px;"><i class="fas fa-user-tie" style="width:14px;"></i> ${this.escapeHtml(position)}</div>` : ''}
+                                    <div style="font-size: 12px; color: #606266; line-height: 1.6; margin-bottom: 6px;">${this.escapeHtml(displayContent)}</div>
+                                    ${displayAnalysis ? `<div style="font-size: 12px; color: #7c4dff; line-height: 1.6; background:#f8f6ff; border-radius:6px; padding:8px 10px;">🤖 ${this.escapeHtml(displayAnalysis)}</div>` : ''}
+                                </div>
+                                <div style="padding: 6px 14px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 11px; color: #909399; text-align: center;">
+                                    点击查看每日总结 <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
+                                </div>
+                            </div>`;
+                    } else {
+                        contentHtml = '<span style="color:#909399;"><i class="fas fa-file-signature"></i> [每日工作总结卡片]</span>';
+                    }
+                } catch (e) {
+                    contentHtml = '<span style="color:#909399;"><i class="fas fa-file-signature"></i> [每日工作总结卡片]</span>';
+                }
+                break;
+
+            // 🔧 协作邀请卡片（云盘文档协作 / 共享文件夹邀请）：卡片化显示，点击直达对应页面
+            case 'collab_card':
+                try {
+                    let collabData = message.collab_data || null;
+                    if (!collabData && message.content) {
+                        try { collabData = JSON.parse(message.content); } catch (_) {}
+                    }
+                    if (collabData && collabData.url) {
+                        const isFolder = collabData.invite_type === 'folder';
+                        const icon = collabData.icon || (isFolder ? 'fa-folder' : 'fa-file-word');
+                        const title = collabData.title || (isFolder ? '共享文件夹邀请' : '协作邀请');
+                        const targetName = collabData.target_name || '';
+                        const inviter = collabData.inviter_name || '';
+                        const perm = collabData.permission_display || '';
+                        const permColors = {'只读': '#909399', '可编辑': '#409EFF', '管理员': '#E6A23C'};
+                        const permColor = permColors[perm] || '#00a1ff';
+                        const openText = isFolder ? '打开共享文件夹' : '打开协作编辑';
+                        contentHtml = `
+                            <div style="max-width: 320px; overflow: hidden; border-radius: 8px; border: 1px solid #e4e7ed; background: #fff; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); cursor: pointer;"
+                                 onclick="window.open('${this.escapeHtml(collabData.url)}', '_blank')">
+                                <div style="padding: 10px 14px; background: linear-gradient(135deg, #e6f7ff 0%, #bae7ff 100%); border-bottom: 1px solid #e4e7ed; display: flex; justify-content: space-between; align-items: center;">
+                                    <span style="font-weight: 600; color: #303133; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+                                        <i class="fas ${isFolder ? 'fa-folder' : 'fa-handshake'}" style="color: #00a1ff;"></i> ${this.escapeHtml(title)}
+                                    </span>
+                                    ${perm ? `<span style="font-size: 11px; padding: 2px 8px; border-radius: 10px; color: #fff; background: ${permColor};">${this.escapeHtml(perm)}</span>` : ''}
+                                </div>
+                                <div style="padding: 10px 14px;">
+                                    <div style="font-size: 14px; color: #303133; margin-bottom: 6px; font-weight: 500; display: flex; align-items: center; gap: 6px;">
+                                        <i class="fas ${icon}" style="color: #00a1ff;"></i> <span style="word-break: break-all;">${this.escapeHtml(targetName || '(未命名)')}</span>
+                                    </div>
+                                    <div style="font-size: 12px; color: #909399; display: flex; align-items: center; gap: 4px;">
+                                        <i class="fas fa-user-circle" style="width: 14px;"></i> ${this.escapeHtml(inviter)} 邀请你参与协作
+                                    </div>
+                                </div>
+                                <div style="padding: 6px 14px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 11px; color: #909399; text-align: center;">
+                                    点击${openText} <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
+                                </div>
+                            </div>`;
+                    } else {
+                        contentHtml = '<span style="color:#909399;"><i class="fas fa-handshake"></i> [协作邀请]</span>';
+                    }
+                } catch (e) {
+                    contentHtml = '<span style="color:#909399;"><i class="fas fa-handshake"></i> [协作邀请]</span>';
+                }
+                break;
+
             default:
                 contentHtml = `<div class="message-text">${this.escapeHtml(message.content || '[未知消息类型]')}</div>`;
         }

@@ -33,6 +33,9 @@ class AdminConsole {
         // 🔧 新增：当前激活的 tab
         this.currentTab = 'users';
 
+        // 🔧 优化：尽早绑定侧边栏开关，避免等异步初始化（网络请求/图表渲染）完成后才可交互
+        this.setupSidebar();
+
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', () => this.init());
         } else {
@@ -84,13 +87,10 @@ class AdminConsole {
             this.initTheme();
 
             // 🔧 关键修复：根据用户类型加载默认标签页
-            if (this.isSuperAdmin) {
-                // 超级管理员默认打开数据统计
-                await this.switchTab('stats');
-            } else {
-                // 普通管理员默认打开用户管理
-                await this.switchTab('users');
-            }
+            // 延迟到下一帧执行，避免初始化时的大量网络请求/图表渲染阻塞首次绘制与侧边栏交互
+            var defaultTab = this.isSuperAdmin ? 'stats' : 'users';
+            var self = this;
+            setTimeout(function () { self.switchTab(defaultTab); }, 0);
 
             // // 🔧 普通管理员默认加载用户管理
             // if (!this.isSuperAdmin) {
@@ -773,6 +773,8 @@ class AdminConsole {
 
     // ==================== 侧边栏管理 ====================
     setupSidebar() {
+        if (this._sidebarBound) return; // 防止重复绑定
+        this._sidebarBound = true;
         const toggleBtn = document.getElementById('sidebarToggleBtn');
         const closeBtn = document.getElementById('sidebarCloseBtn');
         const overlay = document.getElementById('sidebarOverlay');
@@ -2902,7 +2904,7 @@ class AdminConsole {
             ['cloud', '企业网盘'], ['cloud_settings', '网盘系统配置'],
             ['oa_approval', 'OA审批'], ['oa_subsidy', '普惠补贴'],
             ['oa_subsidy_verify', '财务核验'], ['oa_subsidy_pay', '财务支付'],
-            ['oa_attendance', '考勤打卡'], ['work_calendar', '工作日历'],
+            ['oa_attendance', '考勤打卡'], ['oa_announcements', '集团公告'], ['work_calendar', '工作日历'],
             ['work_summary', '每日工作总结'], ['tasks', '任务中心'], ['org', '组织架构'], ['other', '其他页面']
         ];
         var self = this;

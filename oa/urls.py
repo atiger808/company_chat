@@ -1,7 +1,14 @@
 from django.urls import path
-from .views import AttendanceViewSet, ApprovalViewSet, ApprovalTypeViewSet, WorkNotificationViewSet, SubsidyViewSet, WorkCalendarViewSet, MaterialViewSet, DailyWorkSummaryViewSet
+from .views import AttendanceViewSet, ApprovalViewSet, ApprovalTypeViewSet, WorkNotificationViewSet, SubsidyViewSet, WorkCalendarViewSet, MaterialViewSet, DailyWorkSummaryViewSet, AnnouncementViewSet
 
 urlpatterns = [
+    # 集团公告
+    path('announcements/', AnnouncementViewSet.as_view({'get': 'list', 'post': 'create'}), name='announcement-list'),
+    path('announcements/<int:pk>/', AnnouncementViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'}), name='announcement-detail'),
+    path('announcements/<int:pk>/publish/', AnnouncementViewSet.as_view({'post': 'publish'}), name='announcement-publish'),
+    path('announcements/<int:pk>/comments/', AnnouncementViewSet.as_view({'get': 'comments'}), name='announcement-comments'),
+    path('announcements/<int:pk>/add-comment/', AnnouncementViewSet.as_view({'post': 'add_comment'}), name='announcement-add-comment'),
+
     # 考勤打卡
     path('attendance/clock-in/', AttendanceViewSet.as_view({'post': 'clock_in'}), name='attendance-clock-in'),
     path('attendance/clock-out/', AttendanceViewSet.as_view({'post': 'clock_out'}), name='attendance-clock-out'),
@@ -36,6 +43,9 @@ urlpatterns = [
     path('approval/dept-configs/', ApprovalViewSet.as_view({'get': 'dept_configs'}), name='approval-dept-configs'),
     path('approval/save-dept-config/', ApprovalViewSet.as_view({'post': 'save_dept_config'}), name='approval-save-dept-config'),
     path('approval/delete-dept-config/<int:pk>/', ApprovalViewSet.as_view({'delete': 'delete_dept_config'}), name='approval-delete-dept-config'),
+    path('approval/finance-specialists/', ApprovalViewSet.as_view({'get': 'finance_specialists', 'post': 'finance_specialists'}), name='approval-finance-specialists'),
+    path('approval/finance-specialists/<int:pk>/', ApprovalViewSet.as_view({'put': 'finance_specialist_detail', 'delete': 'finance_specialist_detail'}), name='approval-finance-specialist-detail'),
+    path('approval/finance-specialist-users/', ApprovalViewSet.as_view({'get': 'finance_specialist_users'}), name='approval-finance-specialist-users'),
     path('approval/search-cc-users/', ApprovalViewSet.as_view({'get': 'search_cc_users'}), name='approval-search-cc-users'),
     path('approval/search-cc-departments/', ApprovalViewSet.as_view({'get': 'search_cc_departments'}), name='approval-search-cc-departments'),
     path('approval/my-pending/', ApprovalViewSet.as_view({'get': 'my_pending'}), name='approval-my-pending'),

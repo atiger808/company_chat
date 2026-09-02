@@ -7138,20 +7138,24 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                     )
                     chat_room.members.add(inviter, collaborator)
 
-                # 构建邀请消息内容
-                invite_content = (
-                    f'📄 协作邀请\n'
-                    f'<b>{inviter_name}</b> 邀请你协作编辑文件 "<b>{file_obj.name}</b>"\n'
-                    f'权限：{permission_display}\n\n'
-                    f'👉 <a href="{editor_url}" target="_blank" style="color:#3c8dbc;text-decoration:none;">点击此处打开协作编辑  <i class="fa fa-external-link" title="点击打开"></i></a>\n\n'
-                    # f'或复制链接到浏览器打开：\n{editor_url}'
-                )
+                # 构建邀请消息内容（结构化 JSON，前端渲染为协作邀请卡片）
+                collab_card_data = {
+                    'invite_type': 'doc',
+                    'title': '协作邀请',
+                    'inviter_name': inviter_name,
+                    'target_name': file_obj.name,
+                    'permission': permission,
+                    'permission_display': permission_display,
+                    'url': editor_url,
+                    'icon': file_obj.get_icon_class() if hasattr(file_obj, 'get_icon_class') else 'fa-file-word',
+                }
+                invite_content = json.dumps(collab_card_data, ensure_ascii=False)
 
                 invite_message = ChatMessage.objects.create(
                     chat_room=chat_room,
                     sender=inviter,
                     content=invite_content,
-                    message_type='text',
+                    message_type='collab_card',
                 )
                 chat_room.updated_at = timezone.now()
                 chat_room.save(update_fields=['updated_at'])
@@ -7177,7 +7181,7 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                         'sender_id': inviter.id,
                         'sender_name': inviter.username,
                         'content': invite_content,
-                        'message_type': 'text',
+                        'message_type': 'collab_card',
                         'file_info': None,
                         'timestamp': invite_message.timestamp.isoformat(),
                         'mentioned_users': [],
@@ -7204,7 +7208,7 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                         'sender': sender_data,
                         'sender_name': inviter.username,
                         'sender_id': inviter.id,
-                        'message_type': 'text',
+                        'message_type': 'collab_card',
                         'file_info': None,
                         'mentioned_users': [],
                         'mentioned_all': False,
@@ -9349,12 +9353,10 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
     def _send_member_private_notify(self, inviter, target_user, folder, permission):
         """以私聊消息形式通知被加入共享文件夹的成员"""
         from chat.models import ChatRoom, Message as ChatMessage
-        from django.utils.html import escape
 
         inviter_name = getattr(inviter, 'real_name', inviter.username)
         permission_display = {'read': '只读', 'write': '可编辑', 'admin': '管理员'}.get(permission, permission)
         folder_url = f'{settings.BASE_URL.rstrip("/")}/cloud/'
-        safe_folder_name = escape(folder.name)
 
         # 查找或创建两者的私聊聊天室
         existing_room = ChatRoom.objects.filter(
@@ -9376,18 +9378,24 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
             chat_room = ChatRoom.objects.create(room_type='private', creator=inviter)
             chat_room.members.add(inviter, target_user)
 
-        invite_content = (
-            f'📂 共享文件夹邀请\n'
-            f'<b>{escape(inviter_name)}</b> 邀请你加入共享文件夹 "<b>{safe_folder_name}</b>"\n'
-            f'权限：{permission_display}\n\n'
-            f'👉 <a href="{folder_url}" target="_blank" style="color:#3c8dbc;text-decoration:none;">点击此处打开共享文件夹  <i class="fa fa-external-link" title="点击打开"></i></a>'
-        )
+        # 构建邀请消息内容（结构化 JSON，前端渲染为协作邀请卡片）
+        collab_card_data = {
+            'invite_type': 'folder',
+            'title': '共享文件夹邀请',
+            'inviter_name': inviter_name,
+            'target_name': folder.name,
+            'permission': permission,
+            'permission_display': permission_display,
+            'url': folder_url,
+            'icon': 'fa-folder',
+        }
+        invite_content = json.dumps(collab_card_data, ensure_ascii=False)
 
         invite_message = ChatMessage.objects.create(
             chat_room=chat_room,
             sender=inviter,
             content=invite_content,
-            message_type='text',
+            message_type='collab_card',
         )
         chat_room.updated_at = timezone.now()
         chat_room.save(update_fields=['updated_at'])
@@ -9414,7 +9422,7 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
                 'sender_id': inviter.id,
                 'sender_name': inviter.username,
                 'content': invite_content,
-                'message_type': 'text',
+                'message_type': 'collab_card',
                 'file_info': None,
                 'timestamp': invite_message.timestamp.isoformat(),
                 'mentioned_users': [],
@@ -9440,7 +9448,7 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
                 'sender': sender_data,
                 'sender_name': inviter.username,
                 'sender_id': inviter.id,
-                'message_type': 'text',
+                'message_type': 'collab_card',
                 'file_info': None,
                 'mentioned_users': [],
                 'mentioned_all': False,

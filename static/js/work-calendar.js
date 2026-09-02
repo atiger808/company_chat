@@ -184,7 +184,8 @@ class WorkCalendarApp {
                 [info.docs, '文', '#9b59b6'],
                 [info.cloud, '云', '#00a1ff'],
                 [info.org, '组', '#2f9e44'],
-                [info.work_summary, '总', '#7c4dff']
+                [info.work_summary, '总', '#7c4dff'],
+                [info.announcement, '公', '#7c4dff']
             ];
             badgeMap.forEach(function (b) {
                 if (b[0] > 0) badges += '<span class="wc-cal-badge" style="background:' + b[2] + ';">' + b[1] + '</span>';
@@ -251,7 +252,8 @@ class WorkCalendarApp {
                     const iconBg = {
                         approval: ['#ecf5ff', '#409eff'], subsidy: ['#e8f8f0', '#16a085'],
                         task: ['#fdf6ec', '#e6a23c'], doc: ['#f3e8ff', '#9b59b6'], attendance: ['#f0f9eb', '#67c23a'],
-                        cloud: ['#e3f4ff', '#00a1ff'], org: ['#e7f5ea', '#2f9e44'], work_summary: ['#f3e8ff', '#7c4dff']
+                        cloud: ['#e3f4ff', '#00a1ff'], org: ['#e7f5ea', '#2f9e44'], work_summary: ['#f3e8ff', '#7c4dff'],
+                        announcement: ['#f3e8ff', '#7c4dff']
                     }[e.type] || ['#f0f2f5', '#909399'];
                     return '<div class="wc-event" onclick="window.location.href=\'' + this._escape(e.url || '#') + '\'">'
                         + '<div class="wc-event-icon" style="background:' + iconBg[0] + ';color:' + iconBg[1] + ';"><i class="' + this._escape(e.icon || 'fas fa-circle') + '"></i></div>'
@@ -609,10 +611,7 @@ class WorkCalendarApp {
         this._renderDeptList();
         // 成员>100 默认按部门聚合，提升性能
         this._netAggregate = nodes.length > 100;
-        var aggEl = document.getElementById('wcNetAggregate');
-        if (aggEl) aggEl.checked = this._netAggregate;
-        var aggBackBtn = document.getElementById('wcNetworkAggBack');
-        if (aggBackBtn) aggBackBtn.style.display = 'none';
+        this._syncAggregateControls();
         var nodeNameMap = built.nodeNameMap;
         this._networkChart.setOption({
             color: WS_NET_PALETTE,
@@ -824,28 +823,35 @@ class WorkCalendarApp {
     }
 
     // ===== 部门级聚合视图：成员>100默认聚合，点击部门节点展开下属成员，部门间边按互动量加粗 =====
+    // 同步聚合/返回聚合控件（工具栏 + 全屏悬浮栏）
+    _syncAggregateControls() {
+        var aggEl = document.getElementById('wcNetAggregate');
+        if (aggEl) aggEl.checked = !!this._netAggregate;
+        var aggFs = document.getElementById('wcNetAggregateFs');
+        if (aggFs) aggFs.checked = !!this._netAggregate;
+        var showBack = !!this._netExpandedDept;
+        var backMain = document.getElementById('wcNetworkAggBack');
+        if (backMain) backMain.style.display = showBack ? 'inline-flex' : 'none';
+        var backFs = document.getElementById('wcNetworkAggBackFs');
+        if (backFs) backFs.style.display = showBack ? 'inline-flex' : 'none';
+    }
     _toggleAggregate(checked) {
         this._netAggregate = !!checked;
         this._netExpandedDept = null;
-        var backBtn = document.getElementById('wcNetworkAggBack');
-        if (backBtn) backBtn.style.display = 'none';
+        this._syncAggregateControls();
         if (this._netAggregate) this._renderAggregateView();
         else this._applyNetworkFiltered();
     }
     _backToAggregate() {
         this._netExpandedDept = null;
-        var backBtn = document.getElementById('wcNetworkAggBack');
-        if (backBtn) backBtn.style.display = 'none';
+        this._syncAggregateControls();
         if (this._netAggregate) this._renderAggregateView();
         else this._applyNetworkFiltered();
     }
     _exitAggregate() {
         if (!this._netAggregate) return;
         this._netAggregate = false;
-        var aggEl = document.getElementById('wcNetAggregate');
-        if (aggEl) aggEl.checked = false;
-        var backBtn = document.getElementById('wcNetworkAggBack');
-        if (backBtn) backBtn.style.display = 'none';
+        this._syncAggregateControls();
     }
     _renderAggregateView() {
         if (!this._networkChart) return;
@@ -896,8 +902,7 @@ class WorkCalendarApp {
         var flinks = (this._netRawLinks || []).filter(function (l) { return ids[l.source] && ids[l.target]; });
         var built = this._buildNetworkData(fnodes, flinks, this._netCatMap);
         this._networkChart.setOption({series: [{data: built.chartNodes, links: built.chartLinks}]});
-        var backBtn = document.getElementById('wcNetworkAggBack');
-        if (backBtn) backBtn.style.display = 'inline-flex';
+        this._syncAggregateControls();
     }
 
     _toggleDeptList(toggleBtn){

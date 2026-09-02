@@ -407,7 +407,7 @@ class AdminStatisticsClient {
     // 加载部门统计
     async loadDepartmentStats() {
         try {
-            const response = await fetch('/api/chat/admin/statistics/department_stats/', {
+            const response = await fetch(`/api/chat/admin/statistics/department_stats/?days=${this.timeRange}`, {
                 headers: TokenManager.getHeaders()
             });
 
@@ -420,23 +420,46 @@ class AdminStatisticsClient {
                 chartTitle.innerHTML = `<i class="fas fa-building"></i> 部门用户分布（近 ${this.timeRange} 天）`;
             }
 
+            // 过滤无数据部门，移动端展示前 12 个、桌面端前 20 个，避免图表过高
+            const depts = (data.departments || []).filter(d => (d.user_count || 0) > 0 || (d.message_count || 0) > 0);
+            const isMobile = window.innerWidth < 768;
+            const top = depts.slice(0, isMobile ? 12 : 20);
+
+            const canvas = document.getElementById('departmentChart');
+            if (!top.length) {
+                this.renderEmptyChart('departmentChart', '暂无部门数据');
+                return;
+            }
+            // 按部门数量动态调整图表高度（移动端更紧凑、上限更低）
+            const container = canvas?.parentElement;
+            if (container) {
+                const rowH = isMobile ? 30 : 34;
+                const maxH = isMobile ? 440 : 560;
+                const minH = isMobile ? 220 : 260;
+                container.style.height = Math.max(minH, Math.min(maxH, top.length * rowH + 80)) + 'px';
+            }
+
             this.renderHorizontalBarChart(data, 'departmentChart', {
-                labels: data.departments.map(d => d.tenant_name ? `[${d.tenant_name}] ${d.name}` : d.name),
+                labels: top.map(d => d.tenant_name ? `[${d.tenant_name}] ${d.name}` : d.name),
+                tooltipItems: top,
                 datasets: [
                     {
                         label: '总用户数',
-                        data: data.departments.map(d => d.user_count),
-                        backgroundColor: '#409EFF'
+                        data: top.map(d => d.user_count),
+                        backgroundColor: '#409EFF',
+                        yAxisID: 'y'
                     },
                     {
                         label: '活跃用户',
-                        data: data.departments.map(d => d.active_users),
-                        backgroundColor: '#67C23A'
+                        data: top.map(d => d.active_users),
+                        backgroundColor: '#67C23A',
+                        yAxisID: 'y'
                     },
                     {
                         label: '消息数',
-                        data: data.departments.map(d => d.message_count),
-                        backgroundColor: '#E6A23C'
+                        data: top.map(d => d.message_count),
+                        backgroundColor: '#E6A23C',
+                        yAxisID: 'y1'
                     }
                 ]
             });
@@ -444,6 +467,29 @@ class AdminStatisticsClient {
         } catch (error) {
             console.error('加载部门统计失败:', error);
         }
+    }
+
+    // 渲染空数据占位
+    renderEmptyChart(canvasId, msg) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+        if (this.charts[canvasId]) {
+            this.charts[canvasId].destroy();
+            delete this.charts[canvasId];
+        }
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const container = canvas.parentElement;
+        if (container) container.style.height = '200px';
+        const box = canvas.closest('.chart-box');
+        let empty = box ? box.querySelector('.chart-empty') : null;
+        if (!empty) {
+            empty = document.createElement('div');
+            empty.className = 'chart-empty';
+            empty.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#909399;font-size:13px;pointer-events:none;';
+            if (box) { box.appendChild(empty); }
+        }
+        empty.textContent = msg || '暂无数据';
     }
 
 
@@ -677,26 +723,94 @@ class AdminStatisticsClient {
             if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
         }
 
+        const box = canvas.closest('.chart-box');
+        if (box) {
+            const emptyEl = box.querySelector('.chart-empty');
+            if (emptyEl) emptyEl.remove();
+        }
+
+        const items = config.tooltipItems || [];
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        const isMobile = window.innerWidth < 768;
+        const gridColor = isDark ? '#333' : '#f0f0f0';
+        const tickColor = isDark ? '#909399' : '#606266';
+
+        const ds = (config.datasets || []).map(function (d) {
+            return Object.assign({}, d, {
+                borderRadius: 3,
+                barPercentage: 0.75,
+                categoryPercentage: 0.8
+            });
+        });
+
+        // 部门名称过长时按宽度自动换行（返回 \n 多行标签），保证名称显示完整
+        function wrapTickLabel(value) {
+            var label = String(this.getLabelForValue(value) || '');
+            var max = isMobile ? 8 : 14;
+            if (label.length <= max) return label;
+            var lines = [], s = label;
+            while (s.length > max) { lines.push(s.slice(0, max)); s = s.slice(max); }
+            if (s) lines.push(s);
+            return lines.join('\n');
+        }
+
         this.charts[canvasId] = new Chart(canvas, {
             type: 'bar',
             data: {
-                labels: config.labels.length > 8 ? config.labels.slice(-8) : config.labels,
-                datasets: config.datasets
+                labels: config.labels,
+                datasets: ds
             },
             options: {
                 indexAxis: 'y',
                 responsive: true,
                 maintainAspectRatio: false,
                 animation: {duration: 300},
+                interaction: {mode: 'index', intersect: false},
                 plugins: {
                     legend: {
                         position: 'top',
-                        labels: {usePointStyle: true}
+                        labels: {usePointStyle: true, boxWidth: 8, color: tickColor}
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function (ctx) {
+                                return ' ' + ctx.dataset.label + '：' + (ctx.raw == null ? 0 : ctx.raw);
+                            },
+                            afterBody: function (tooltipItems2) {
+                                if (!items.length) return '';
+                                const idx = tooltipItems2[0].dataIndex;
+                                const d = items[idx];
+                                if (!d) return '';
+                                return '\n所属企业：' + (d.tenant_name || '未指定')
+                                    + '\n部门活跃：' + (d.active_users || 0) + ' 人'
+                                    + '\n活跃率：' + (d.activity_rate != null ? d.activity_rate : 0) + '%'
+                                    + '\n消息数：' + (d.message_count || 0);
+                            }
+                        }
                     }
                 },
                 scales: {
-                    x: {beginAtZero: true, grid: {color: '#f0f0f0'}},
-                    y: {grid: {display: false}}
+                    x: {
+                        beginAtZero: true,
+                        grid: {color: gridColor},
+                        ticks: {color: tickColor, precision: 0}
+                    },
+                    y: {
+                        grid: {display: false},
+                        ticks: {
+                            color: tickColor,
+                            autoSkip: false,
+                            font: {size: isMobile ? 10 : 12},
+                            callback: wrapTickLabel
+                        }
+                    },
+                    y1: {
+                        beginAtZero: true,
+                        position: 'right',
+                        grid: {display: false},
+                        ticks: {color: tickColor, precision: 0, autoSkip: false},
+                        title: {display: true, text: '消息数', color: tickColor, font: {size: 11}}
+                    }
                 }
             }
         });
@@ -780,6 +894,7 @@ class AdminStatisticsClient {
             'call_video': '视频通话',
             'task_card': '任务卡片',
             'approval_card': '审批卡片',
+            'collab_card': '协作卡片',
             'work_summary_card': '工作总结'
         };
         return map[type] || type;
@@ -792,16 +907,15 @@ class AdminStatisticsClient {
             'image': '#67C23A',
             'file': '#E6A23C',
             'video': '#F56C6C',
-            'voice': '#909399',
-            'audio': '#909399',
+            'voice': '#426aef',
+            'audio': '#426aef',
             'emoji': '#c82577',
             'location': '#a53ac2',
-            // 'call_audio': '#426aef',
             'call_audio': '#cc1799',
-            // 'call_video': '#ef404f',
             'call_video': '#5b5ef7',
-            'task_card': '#7bb6f3',
-            'approval_card': '#409EFF',
+            'task_card': '#e4e7ed',
+            'approval_card': '#79b1ec',
+            'collab_card': '#bae7ff',
             'work_summary_card': '#9b59b6'
         }
         return map[type] || '#909399';

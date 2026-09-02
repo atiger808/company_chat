@@ -101,8 +101,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     background: var(--primary-color, #409eff);
     color: #fff;
     flex-shrink: 0;
-    position: relative;
-    z-index: 100;
+    /*position: relative;*/
+    /*z-index: 100;*/
+    position: sticky;
+    top: 0;
+    z-index: 200;
 }
 
 .oa-top-bar .top-right .btn-icon {
@@ -1961,6 +1964,129 @@ input[type="time"] {
   font-size: 12px;
   color: #909399;
   margin-left: 4px;
+}
+
+/* ============ 第一审批人（财务专员）自定义下拉：头像 + 姓名 + 最右侧职位 ============ */
+.fs-select-wrap {
+  position: relative;
+  width: 100%;
+}
+.fs-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color, #dcdfe6);
+  border-radius: 6px;
+  font-size: 14px;
+  background: #fff;
+  color: var(--text-primary, #303133);
+  cursor: pointer;
+  min-height: 38px;
+  transition: border-color 0.2s;
+  user-select: none;
+}
+.fs-select:hover {
+  border-color: #c0c4cc;
+}
+.fs-select-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.fs-trigger-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.fs-trigger-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-select-drop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 300;
+  background: #fff;
+  border: 1px solid #dcdfe6;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.fs-select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text-primary, #303133);
+}
+.fs-select-option:hover {
+  background: #f5f7fa;
+}
+.fs-select-option.active {
+  background: #ecf5ff;
+  color: #409eff;
+}
+.fs-opt-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.fs-opt-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-opt-scope {
+  color: #909399;
+  font-size: 12px;
+}
+.fs-opt-pos {
+  flex-shrink: 0;
+  color: #909399;
+  font-size: 12px;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+[data-theme="dark"] .fs-select {
+  background: #2d2d2d;
+  border-color: #444;
+  color: var(--text-primary);
+}
+[data-theme="dark"] .fs-select-drop {
+  background: #1e1e1e;
+  border-color: #444;
+}
+[data-theme="dark"] .fs-select-option:hover {
+  background: #2d2d2d;
+}
+[data-theme="dark"] .fs-select-option.active {
+  background: #1a2740;
+  color: #409eff;
+}
+[data-theme="dark"] .fs-opt-pos,
+[data-theme="dark"] .fs-opt-scope {
+  color: #888;
 }
 
 /* ============ 自定义审批类型：结构化明细 struct_table ============ */

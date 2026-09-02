@@ -11,7 +11,7 @@ class ChatRoomAdmin(admin.ModelAdmin):
 @admin.register(Message)
 class MessageAdmin(admin.ModelAdmin):
     list_display = ('id', 'chat_room', 'sender', 'content', 'message_type', 'is_read', 'is_deleted', 'deleted_at', 'timestamp')
-    list_filter = ('message_type', 'is_read', 'is_deleted', 'mentioned_all', 'call_type', 'call_status')
+    list_filter = ('message_type', 'is_read', 'is_deleted', 'mentioned_all', 'call_type', 'call_status', 'quote_message_type')
     search_fields = ('content', 'id')
     list_per_page = 20
 

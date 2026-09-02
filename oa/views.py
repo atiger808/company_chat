@@ -24,6 +24,7 @@ from .models import (
     MaterialItem, MaterialRequirement, MaterialRequisition,
     MaterialRequirementItem, MaterialRequisitionItem, DocumentSequence,
     WatermarkConfig, DEFAULT_WATERMARK_PAGES, PrintLog, DailyWorkSummary,
+    Announcement, AnnouncementComment, FinanceSpecialist,
 )
 from .type_utils import (
     ensure_builtin_types, resolve_approval_type,
@@ -2270,16 +2271,15 @@ class ApprovalViewSet(viewsets.ViewSet):
         if related_ids:
             approval.related_approvals.set(related_ids)
 
-        # 加载默认配置中的抄送
+        # 加载默认配置中的抄送（按配置优先级：公司级部门/子公司/集团默认）
         if request.tenant and approval.approval_type:
-            try:
-                config = ApprovalDeptConfig.objects.get(tenant=request.tenant, approval_type=approval.approval_type, sub_tenant__isnull=True)
+            config = self._get_config_for_tenant(request.tenant, approval.approval_type,
+                                                 department_id=approval.department_id)
+            if config:
                 if config.cc_users:
                     self._create_cc_records(approval, request, config.cc_users, [])
                 if config.cc_departments:
                     self._create_cc_records(approval, request, [], config.cc_departments)
-            except ApprovalDeptConfig.DoesNotExist:
-                pass
 
         logger.info(f'{request.user} 提交审批 {approval.title}')
         data = ApprovalRequestSerializer(approval, context={'request': request}).data
@@ -2325,22 +2325,14 @@ class ApprovalViewSet(viewsets.ViewSet):
             return None
         return tenant.get_root_tenant()
 
-    def _get_final_approval_dept(self, tenant, approval_type, traverse_parent=True):
-        """获取指定审批类型的最终审批部门（支持向上级集团查找）"""
+    def _get_final_approval_dept(self, tenant, approval_type, department_id=None, traverse_parent=True):
+        """获取指定审批类型的最终审批部门
+        （按配置优先级：公司级部门专属 > 子公司 > 集团默认 > 父级集团回溯）"""
         if not tenant or not approval_type:
             return None
-        # 当前企业配置
-        try:
-            config = ApprovalDeptConfig.objects.get(tenant=tenant, approval_type=approval_type, sub_tenant__isnull=True)
-            return config.department
-        except ApprovalDeptConfig.DoesNotExist:
-            pass
-        # 上级集团配置兜底
-        if traverse_parent:
-            parent = self._get_parent_tenant(tenant)
-            if parent:
-                return self._get_final_approval_dept(parent, approval_type, traverse_parent=True)
-        return None
+        config = self._get_config_for_tenant(tenant, approval_type, department_id=department_id,
+                                             traverse_parent=traverse_parent)
+        return config.department if config else None
 
     def _final_approver_source_label(self, config):
         """最终审批人配置来源展示文案"""
@@ -2374,7 +2366,7 @@ class ApprovalViewSet(viewsets.ViewSet):
             default_config = ApprovalDeptConfig.objects.filter(
                 tenant=config.tenant_id,
                 approval_type=approval_type,
-                sub_tenant__isnull=True
+                sub_tenant__isnull=True, scope_department__isnull=True
             ).order_by('-updated_at').first()
             if default_config and default_config.final_approver_id:
                 return default_config.final_approver, 'default', self._final_approver_source_label(default_config)
@@ -2402,12 +2394,12 @@ class ApprovalViewSet(viewsets.ViewSet):
         except Exception as e:
             logger.warning(f'标记最终审批人节点失败: {e}')
 
-    def _get_config_for_tenant(self, tenant, approval_type, traverse_parent=True):
-        """获取审批配置，支持子企业专属配置和向父级集团回溯
+    def _get_config_for_tenant(self, tenant, approval_type, department_id=None, traverse_parent=True):
+        """获取审批配置，优先级：
 
-        优先级：
+        0. 公司/分公司/虚拟组织级部门专属配置（scope_department=申请人部门或其祖先部门，最近的优先）
         1. 子企业专属配置（集团配置中 sub_tenant=当前企业）
-        2. 当前企业的默认配置（或集团的默认配置）
+        2. 当前企业/集团的默认配置（无 sub_tenant、无 scope_department）
         3. 向父级集团回溯查找
         """
         if not tenant or not approval_type:
@@ -2415,20 +2407,32 @@ class ApprovalViewSet(viewsets.ViewSet):
         # 确定配置所属的 tenant（子企业配置存在集团上，公司配置存在自己上）
         config_tenant = tenant.parent if tenant.parent else tenant
 
-        # 第1优先：子企业专属配置（集团配置中 sub_tenant=当前企业）
-        sub_config = ApprovalDeptConfig.objects.filter(
-            tenant=config_tenant,
-            approval_type=approval_type,
-            sub_tenant=tenant if tenant.parent else None,
-        ).order_by('-updated_at').first()
-        if sub_config:
-            return sub_config
+        # 第0优先：公司/虚拟组织级部门专属配置（从申请人部门向上回溯，最近的优先）
+        if department_id:
+            from accounts.models import Department
+            dept = Department.objects.filter(id=department_id).first()
+            guard = 0
+            while dept and guard < 30:
+                scoped = ApprovalDeptConfig.objects.filter(
+                    tenant=config_tenant, approval_type=approval_type, scope_department=dept,
+                ).order_by('-updated_at').first()
+                if scoped:
+                    return scoped
+                dept = dept.parent
+                guard += 1
 
-        # 第2优先：当前 tenant 的默认配置（无 sub_tenant）
+        # 第1优先：子企业专属配置（集团配置中 sub_tenant=当前企业）
+        if tenant.parent:
+            sub_config = ApprovalDeptConfig.objects.filter(
+                tenant=config_tenant, approval_type=approval_type, sub_tenant=tenant,
+            ).order_by('-updated_at').first()
+            if sub_config:
+                return sub_config
+
+        # 第2优先：当前企业/集团的默认配置（无 sub_tenant、无 scope_department）
         default_config = ApprovalDeptConfig.objects.filter(
-            tenant=config_tenant,
-            approval_type=approval_type,
-            sub_tenant__isnull=True
+            tenant=config_tenant, approval_type=approval_type,
+            sub_tenant__isnull=True, scope_department__isnull=True,
         ).order_by('-updated_at').first()
         if default_config:
             return default_config
@@ -2437,9 +2441,31 @@ class ApprovalViewSet(viewsets.ViewSet):
         if traverse_parent:
             parent = self._get_parent_tenant(tenant)
             if parent:
-                return self._get_config_for_tenant(parent, approval_type, traverse_parent=True)
+                return self._get_config_for_tenant(parent, approval_type, department_id=None, traverse_parent=True)
 
         return None
+
+    def _finance_specialist_in_scope(self, spec, tenant, selected_dept):
+        """判断财务专员的关联范围是否覆盖申请人所属子公司/直属部门"""
+        if not spec or not spec.is_active:
+            return False
+        try:
+            # 关联子公司/分公司/虚拟组织：申请人所属企业命中即生效
+            if tenant and spec.sub_tenants.filter(id=tenant.id).exists():
+                return True
+            # 关联直属部门：从申请人所选部门向上回溯（含其直属部门），命中即生效
+            if selected_dept:
+                from accounts.models import Department
+                dept = selected_dept
+                guard = 0
+                while dept and guard < 30:
+                    if spec.departments.filter(id=dept.id).exists():
+                        return True
+                    dept = dept.parent
+                    guard += 1
+        except Exception:
+            pass
+        return False
 
     def _fallback_approvers(self, user, tenant):
         """兜底：查找企业管理员（支持向父级集团回溯）"""
@@ -2605,8 +2631,8 @@ class ApprovalViewSet(viewsets.ViewSet):
         if not department_id:
             return self._fallback_approvers(user, tenant)
 
-        # Load config for this type (支持向父级集团回溯查找配置)
-        config = self._get_config_for_tenant(tenant, approval_type)
+        # Load config for this type (支持公司/虚拟组织级部门专属配置、子企业配置、向父级集团回溯)
+        config = self._get_config_for_tenant(tenant, approval_type, department_id=department_id)
 
         try:
             selected_dept = Department.objects.get(id=department_id, tenant=tenant)
@@ -2616,6 +2642,20 @@ class ApprovalViewSet(viewsets.ViewSet):
 
         all_approvers = []
         seen_ids = set()
+
+        # 第一审批人（财务专员）：审批类型配置已按申请人所属公司/虚拟组织级部门/子公司/集团默认解析，
+        # 命中该配置即以其财务专员作为审批链第一审批人（优先于部门负责人）
+        first_spec = config.first_approver if config and config.first_approver else None
+        if (first_spec and first_spec.is_active and first_spec.user.is_active
+                and first_spec.user.id != user.id):
+            fu = first_spec.user
+            seen_ids.add(fu.id)
+            all_approvers.append({
+                'type': 'user', 'id': fu.id,
+                'label': f'{fu.real_name or fu.username}',
+                'user_position': fu.position or '',
+                '_first_approver': True,
+            })
 
         # Level 1: Selected department's heads (deputy first, then manager)
         level1 = self._get_level_approvers(selected_dept, user, seen_ids)
@@ -2651,7 +2691,7 @@ class ApprovalViewSet(viewsets.ViewSet):
                         'user_position': u.position or '',
                     })
         else:
-            final_dept = self._get_final_approval_dept(tenant, approval_type)
+            final_dept = self._get_final_approval_dept(tenant, approval_type, department_id=department_id)
             if final_dept:
                 level3 = self._get_level_approvers(final_dept, user, seen_ids)
                 all_approvers.extend(level3)
@@ -2659,7 +2699,7 @@ class ApprovalViewSet(viewsets.ViewSet):
         if not all_approvers:
             # Final attempt: try final approval dept directly
             if not config or not config.approver_users:
-                final_dept = self._get_final_approval_dept(tenant, approval_type)
+                final_dept = self._get_final_approval_dept(tenant, approval_type, department_id=department_id)
                 if final_dept:
                     level3 = self._get_level_approvers(final_dept, user, seen_ids)
                     all_approvers.extend(level3)
@@ -2682,11 +2722,11 @@ class ApprovalViewSet(viewsets.ViewSet):
         # 如果子企业配置没有启用阈值，尝试集团默认配置
         if not threshold_dept and config and config.approver_users is not None:
             try:
-                fallback_config = ApprovalDeptConfig.objects.get(
+                fallback_config = ApprovalDeptConfig.objects.filter(
                     tenant=tenant if not tenant.parent else tenant.parent,
                     approval_type=approval_type,
-                    sub_tenant__isnull=True
-                )
+                    sub_tenant__isnull=True, scope_department__isnull=True
+                ).order_by('-updated_at').first()
                 if fallback_config and fallback_config.threshold_enabled and fallback_config.threshold_value is not None:
                     threshold_val = None
                     if threshold_values:
@@ -3984,7 +4024,7 @@ class ApprovalViewSet(viewsets.ViewSet):
             except Department.DoesNotExist:
                 pass
         tenant = request.tenant or request.user.get_active_tenant()
-        final_dept = self._get_final_approval_dept(tenant, approval_type or None)
+        final_dept = self._get_final_approval_dept(tenant, approval_type or None, department_id=department_id)
         if final_dept:
             dept_map['final'] = final_dept.name
 
@@ -4033,10 +4073,12 @@ class ApprovalViewSet(viewsets.ViewSet):
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
         if not tenant:
             return Response({'results': []})
-        # 集团企业：查看当前企业+子企业配置
-        query = Q(tenant=tenant)
+        # 配置归属企业：与 _get_config_for_tenant / save_dept_config 的 config_tenant 逻辑保持一致
+        config_tenant = tenant.parent if tenant.parent else tenant
+        # 查看配置归属企业 + 其子企业配置
+        query = Q(tenant=config_tenant)
         try:
-            sub_ids = list(tenant.sub_tenants.filter(is_active=True).values_list('id', flat=True))
+            sub_ids = list(config_tenant.sub_tenants.filter(is_active=True).values_list('id', flat=True))
             if sub_ids:
                 query |= Q(tenant_id__in=sub_ids)
         except Exception:
@@ -4046,11 +4088,31 @@ class ApprovalViewSet(viewsets.ViewSet):
         # 附加子企业列表，方便集团配置选择
         extra = {}
         try:
-            sub_tenants = tenant.sub_tenants.filter(is_active=True).values('id', 'name', 'short_name', 'tenant_type')
+            sub_tenants = config_tenant.sub_tenants.filter(is_active=True).values('id', 'name', 'short_name', 'tenant_type')
             extra['sub_tenants'] = list(sub_tenants)
         except Exception:
             extra['sub_tenants'] = []
-        return Response({'results': data, **extra})
+        # 附加财务专员列表，方便「第一审批人」配置选择
+        try:
+            from .models import FinanceSpecialist
+            from .serializers import FinanceSpecialistSerializer
+            specs = FinanceSpecialist.objects.filter(tenant=config_tenant, is_active=True).select_related('user')
+            extra['finance_specialists'] = FinanceSpecialistSerializer(specs, many=True).data
+        except Exception:
+            extra['finance_specialists'] = []
+        # 附加公司/分公司/虚拟组织级部门列表，方便「适用范围」配置选择
+        try:
+            from accounts.models import Department
+            company_depts = Department.objects.filter(
+                tenant=config_tenant, is_active=True, department_type__in=['company', 'virtual'],
+            ).values('id', 'name', 'full_path', 'department_type')
+            extra['company_departments'] = list(company_depts)
+        except Exception:
+            extra['company_departments'] = []
+        resp = Response({'results': data, **extra})
+        # 禁止浏览器缓存配置读取，保证配置修改后立即生效
+        resp['Cache-Control'] = 'no-store'
+        return resp
 
     @action(detail=False, methods=['post'])
     def save_dept_config(self, request):
@@ -4109,6 +4171,17 @@ class ApprovalViewSet(viewsets.ViewSet):
             if not final_approver_obj:
                 return Response({'error': '最终审批人必须是当前企业成员'}, status=400)
 
+        # 第一审批人（财务专员，可选，默认空）
+        first_approver_id = request.data.get('first_approver')
+        first_approver_obj = None
+        if first_approver_id:
+            from .models import FinanceSpecialist
+            first_approver_obj = FinanceSpecialist.objects.filter(
+                id=first_approver_id, tenant=config_tenant, is_active=True
+            ).first()
+            if not first_approver_obj:
+                return Response({'error': '第一审批人（财务专员）不存在'}, status=400)
+
         # Sub-tenant config (集团模式下为子公司配置，存放到集团 config_tenant 下)
         sub_tenant_id = request.data.get('sub_tenant_id')
         sub_tenant_obj = None
@@ -4119,6 +4192,19 @@ class ApprovalViewSet(viewsets.ViewSet):
                     return Response({'error': '指定的子公司不属于当前企业集团'}, status=400)
             except (ValueError, Tenant.DoesNotExist):
                 return Response({'error': '子公司不存在'}, status=400)
+
+        # 适用范围：公司/分公司/虚拟组织级部门（scope_department）
+        scope_department_id = request.data.get('scope_department_id')
+        scope_dept_obj = None
+        if scope_department_id:
+            if sub_tenant_obj:
+                return Response({'error': '适用范围（公司级部门）与子公司不能同时选择'}, status=400)
+            try:
+                scope_dept_obj = Department.objects.get(id=int(scope_department_id), tenant=config_tenant)
+            except (ValueError, Department.DoesNotExist):
+                return Response({'error': '适用范围部门不存在'}, status=400)
+            if scope_dept_obj.department_type not in ('company', 'virtual'):
+                return Response({'error': '适用范围只能选择公司/分公司/虚拟组织类型的部门'}, status=400)
 
         # Threshold fields
         threshold_enabled = request.data.get('threshold_enabled', False)
@@ -4141,6 +4227,8 @@ class ApprovalViewSet(viewsets.ViewSet):
         defaults['cc_users'] = cc_users
         defaults['approver_users'] = approver_users
         defaults['final_approver'] = final_approver_obj
+        defaults['first_approver'] = first_approver_obj
+        defaults['scope_department'] = scope_dept_obj
         sign_type = request.data.get('sign_type', '').strip()
         if sign_type in ('countersign', 'orsign'):
             defaults['default_sign_type'] = sign_type
@@ -4171,20 +4259,41 @@ class ApprovalViewSet(viewsets.ViewSet):
         if 'enable_receipt_return' in request.data:
             defaults['enable_receipt_return'] = bool(request.data.get('enable_receipt_return'))
 
+        # 配置查找键：公司/虚拟组织级部门适用范围 > 子公司 > 集团默认
+        lookup_kwargs = {'tenant': config_tenant, 'approval_type': approval_type}
+        if scope_dept_obj:
+            lookup_kwargs['scope_department'] = scope_dept_obj
+            lookup_kwargs['sub_tenant'] = None
+        elif sub_tenant_obj:
+            lookup_kwargs['sub_tenant'] = sub_tenant_obj
+            lookup_kwargs['scope_department'] = None
+        else:
+            lookup_kwargs['sub_tenant'] = None
+            lookup_kwargs['scope_department'] = None
+        # 查找或创建配置：优先更新该范围最新一条，避免历史重复数据导致 update_or_create 抛 MultipleObjectsReturned；
+        # 同时支持同一审批类型下「集团默认」与「公司级部门专属」配置并存（scope_department 已纳入唯一键）
         try:
-            config, created = ApprovalDeptConfig.objects.update_or_create(
-                tenant=config_tenant,
-                approval_type=approval_type,
-                sub_tenant=sub_tenant_obj,
-                defaults=defaults,
-            )
+            existing = ApprovalDeptConfig.objects.filter(**lookup_kwargs).order_by('-updated_at').first()
+            if existing:
+                for _k, _v in defaults.items():
+                    setattr(existing, _k, _v)
+                existing.save()
+                config = existing
+                created = False
+            else:
+                create_kwargs = dict(lookup_kwargs)
+                create_kwargs.update(defaults)  # defaults 覆盖重叠键（scope_department/sub_tenant 值一致）
+                config = ApprovalDeptConfig.objects.create(**create_kwargs)
+                created = True
         except Exception as e:
             logger.error(f'保存审批配置失败: {e}')
             return Response({'error': f'保存配置失败: {str(e)}'}, status=400)
 
         from .serializers import ApprovalDeptConfigSerializer
         data = ApprovalDeptConfigSerializer(config).data
-        return Response({'encrypt': True, 'data': encrypt_data(data)}, status=201 if created else 200)
+        resp = Response({'encrypt': True, 'data': encrypt_data(data)}, status=201 if created else 200)
+        resp['Cache-Control'] = 'no-store'
+        return resp
 
     @action(detail=True, methods=['delete'])
     def delete_dept_config(self, request, pk=None):
@@ -4197,6 +4306,109 @@ class ApprovalViewSet(viewsets.ViewSet):
             return Response({'message': 'ok'})
         except ApprovalDeptConfig.DoesNotExist:
             return Response({'error': '配置不存在'}, status=404)
+
+    @action(detail=False, methods=['get', 'post'])
+    def finance_specialists(self, request):
+        """财务专员管理：列表（超管/管理员可见）、新增（仅超管）"""
+        from .models import FinanceSpecialist
+        from .serializers import FinanceSpecialistSerializer
+        from accounts.models import Department
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        if not tenant:
+            return Response({'error': '未找到所属企业'}, status=400)
+        if request.method == 'GET':
+            if request.user.user_type not in ('super_admin', 'admin'):
+                return Response({'error': '无权限'}, status=403)
+            qs = FinanceSpecialist.objects.filter(tenant=tenant).select_related('user').order_by('-updated_at')
+            sub_tenants = list(tenant.sub_tenants.filter(is_active=True).values('id', 'name', 'short_name', 'tenant_type'))
+            departments = list(Department.objects.filter(tenant=tenant, is_active=True)
+                               .values('id', 'name', 'parent_id', 'full_path'))
+            return Response({'encrypt': True, 'data': encrypt_data({
+                'results': FinanceSpecialistSerializer(qs, many=True).data,
+                'sub_tenants': sub_tenants,
+                'departments': departments,
+            })})
+        # POST create（仅超管）
+        if request.user.user_type != 'super_admin':
+            return Response({'error': '仅超级管理员可操作'}, status=403)
+        from accounts.models import CustomUser, Tenant as TenantModel
+        user_id = request.data.get('user')
+        sub_tenant_ids = request.data.get('sub_tenants', []) or []
+        dept_ids = request.data.get('departments', []) or []
+        remark = (request.data.get('remark') or '')[:200]
+        is_active = request.data.get('is_active', True)
+        try:
+            spec_user = CustomUser.objects.get(id=int(user_id), is_active=True)
+        except (ValueError, TypeError, CustomUser.DoesNotExist):
+            return Response({'error': '请选择有效的财务专员用户'}, status=400)
+        if not spec_user.tenant_memberships.filter(tenant=tenant, is_active=True).exists():
+            return Response({'error': '财务专员必须是当前企业成员'}, status=400)
+        valid_sub_ids = list(tenant.sub_tenants.filter(id__in=sub_tenant_ids).values_list('id', flat=True))
+        valid_dept_ids = list(Department.objects.filter(id__in=dept_ids, tenant=tenant).values_list('id', flat=True))
+        spec = FinanceSpecialist.objects.create(
+            user=spec_user, tenant=tenant, remark=remark, is_active=is_active)
+        spec.sub_tenants.set(valid_sub_ids)
+        spec.departments.set(valid_dept_ids)
+        return Response({'encrypt': True, 'data': encrypt_data(FinanceSpecialistSerializer(spec).data)}, status=201)
+
+    @action(detail=True, methods=['put', 'delete'])
+    def finance_specialist_detail(self, request, pk=None):
+        """财务专员修改/删除（仅超管）"""
+        if request.user.user_type != 'super_admin':
+            return Response({'error': '仅超级管理员可操作'}, status=403)
+        from .models import FinanceSpecialist
+        from .serializers import FinanceSpecialistSerializer
+        from accounts.models import Department
+        try:
+            spec = FinanceSpecialist.objects.select_related('user').get(id=pk)
+        except FinanceSpecialist.DoesNotExist:
+            return Response({'error': '财务专员不存在'}, status=404)
+        if request.method == 'DELETE':
+            spec.delete()
+            return Response({'message': 'ok'})
+        sub_tenant_ids = request.data.get('sub_tenants')
+        dept_ids = request.data.get('departments')
+        if 'user' in request.data:
+            from accounts.models import CustomUser
+            try:
+                spec_user = CustomUser.objects.get(id=int(request.data.get('user')), is_active=True)
+            except (ValueError, TypeError, CustomUser.DoesNotExist):
+                return Response({'error': '请选择有效的财务专员用户'}, status=400)
+            if not spec_user.tenant_memberships.filter(tenant=spec.tenant, is_active=True).exists():
+                return Response({'error': '财务专员必须是当前企业成员'}, status=400)
+            spec.user = spec_user
+        if 'remark' in request.data:
+            spec.remark = (request.data.get('remark') or '')[:200]
+        if 'is_active' in request.data:
+            spec.is_active = bool(request.data.get('is_active'))
+        if sub_tenant_ids is not None:
+            valid_sub_ids = list(spec.tenant.sub_tenants.filter(id__in=sub_tenant_ids).values_list('id', flat=True))
+            spec.sub_tenants.set(valid_sub_ids)
+        if dept_ids is not None:
+            valid_dept_ids = list(Department.objects.filter(id__in=dept_ids, tenant=spec.tenant).values_list('id', flat=True))
+            spec.departments.set(valid_dept_ids)
+        spec.save()
+        return Response({'encrypt': True, 'data': encrypt_data(FinanceSpecialistSerializer(spec).data)})
+
+    @action(detail=False, methods=['get'])
+    def finance_specialist_users(self, request):
+        """搜索可设为财务专员的用户（当前企业成员）"""
+        from accounts.models import CustomUser
+        from django.db.models import Q
+        keyword = request.query_params.get('search', '').strip()
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        qs = CustomUser.objects.filter(is_active=True)
+        if tenant:
+            qs = qs.filter(tenant_memberships__tenant=tenant, tenant_memberships__is_active=True)
+        if keyword:
+            qs = qs.filter(Q(real_name__icontains=keyword) | Q(username__icontains=keyword))
+        qs = qs.order_by('real_name', 'username')[:30]
+        results = [{
+            'id': u.id, 'name': u.real_name or u.username,
+            'avatar': u.get_avatar_url() if hasattr(u, 'get_avatar_url') else '/static/images/default-avatar.png',
+            'position': u.position or '',
+        } for u in qs]
+        return Response({'encrypt': True, 'data': encrypt_data({'results': results})})
 
     @action(detail=False, methods=['get'])
     def search_cc_users(self, request):
@@ -5495,12 +5707,12 @@ class WorkCalendarViewSet(viewsets.ViewSet):
         from tasks.models import Task
         from cloud.models import CloudFile, FileOperationLog
         from org.models import OrgChangeLog
-        from .models import ApprovalRequest, SubsidyApplication, SubsidyWithdrawal, AttendanceRecord
+        from .models import ApprovalRequest, SubsidyApplication, SubsidyWithdrawal, AttendanceRecord, AnnouncementOperation
         _, last = cal.monthrange(year, month)
         start, end = date(year, month, 1), date(year, month, last)
         days = {}
         for d in range(1, last + 1):
-            days[f'{year:04d}-{month:02d}-{d:02d}'] = {'approvals': 0, 'invoices': 0, 'withdrawals': 0, 'tasks': 0, 'docs': 0, 'cloud': 0, 'org': 0, 'work_summary': 0, 'clock_in': None, 'clock_out': None}
+            days[f'{year:04d}-{month:02d}-{d:02d}'] = {'approvals': 0, 'invoices': 0, 'withdrawals': 0, 'tasks': 0, 'docs': 0, 'cloud': 0, 'org': 0, 'work_summary': 0, 'announcement': 0, 'clock_in': None, 'clock_out': None}
 
         def _bump(qs, key):
             for dt in qs:
@@ -5517,6 +5729,7 @@ class WorkCalendarViewSet(viewsets.ViewSet):
         # 网盘/协作文档操作 + 组织架构操作（按操作者归属）
         _bump(FileOperationLog.objects.filter(user=user, created_at__date__range=[start, end]).values_list('created_at', flat=True), 'cloud')
         _bump(OrgChangeLog.objects.filter(operator=user, created_at__date__range=[start, end]).values_list('created_at', flat=True), 'org')
+        _bump(AnnouncementOperation.objects.filter(user=user, created_at__date__range=[start, end]).values_list('created_at', flat=True), 'announcement')
         for r in AttendanceRecord.objects.filter(user=user, date__range=[start, end]).order_by('date', 'clock_time'):
             ds = r.date.strftime('%Y-%m-%d')
             t = timezone.localtime(r.clock_time).strftime('%H:%M')
@@ -5546,7 +5759,7 @@ class WorkCalendarViewSet(viewsets.ViewSet):
         from tasks.models import Task
         from cloud.models import CloudFile, FileOperationLog
         from org.models import OrgChangeLog
-        from .models import ApprovalRequest, ApprovalLog, SubsidyApplication, SubsidyWithdrawal, AttendanceRecord
+        from .models import ApprovalRequest, ApprovalLog, SubsidyApplication, SubsidyWithdrawal, AttendanceRecord, AnnouncementOperation
         events = []
 
         def fmt(iso):
@@ -5587,6 +5800,12 @@ class WorkCalendarViewSet(viewsets.ViewSet):
             add('attendance', 'fas fa-clock', f'{r.get_clock_type_display()}打卡', fmt(r.clock_time), '/oa/attendance/')
         for ws in DailyWorkSummary.objects.filter(user=user, summary_date=d).order_by('created_at'):
             add('work_summary', 'fas fa-file-signature', f'每日工作总结（{ws.position or "未填职位"}）', fmt(ws.created_at), f'/oa/work-summary/?id={ws.id}')
+        # 集团公告操作：谁操作记谁（发布/存草稿/编辑/删除/评论）；公告已删除时跳公告列表
+        for op in AnnouncementOperation.objects.filter(user=user, created_at__date=d).order_by('created_at'):
+            label = dict(AnnouncementOperation.ACTION_CHOICES).get(op.action, op.action)
+            title = f'公告{label}：{op.title or "未命名公告"}'
+            ann_url = f'/oa/announcements/?id={op.announcement_id}' if op.announcement_id else '/oa/announcements/'
+            add('announcement', 'fas fa-bullhorn', title, fmt(op.created_at), ann_url)
         events.sort(key=lambda e: e['time'], reverse=True)
         return events
 
@@ -6339,6 +6558,262 @@ class WorkCalendarViewSet(viewsets.ViewSet):
             if send_daily_digest_to_user(u, tenant):
                 count += 1
         return Response({'message': f'已发送 {count} 条每日工作汇总'})
+
+
+class AnnouncementViewSet(viewsets.ViewSet):
+    """集团公告：富媒体发布、按范围查看与评论（公开/匿名）"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _tenant(self, request):
+        return getattr(request, 'tenant', None) or request.user.get_active_tenant()
+
+    def _visible_to(self, a, user):
+        """公告对当前用户是否可见"""
+        if a.author_id == user.id or user.user_type == 'super_admin':
+            return True
+        if not a.is_published:
+            return False
+        st = a.scope_type or 'all'
+        try:
+            if st == 'all':
+                return True
+            if st == 'sub_tenants':
+                ids = set(int(x) for x in (a.scope_sub_tenants or []))
+                return user.tenant_memberships.filter(tenant_id__in=ids, is_active=True).exists()
+            if st == 'departments':
+                ids = set(int(x) for x in (a.scope_departments or []))
+                from org.models import UserDepartment
+                from accounts.models import Department
+                my_depts = set(UserDepartment.objects.filter(user=user).values_list('department_id', flat=True))
+                for d in Department.objects.filter(id__in=my_depts):
+                    cur = d
+                    while cur:
+                        if cur.id in ids:
+                            return True
+                        cur = cur.parent
+                return False
+            if st == 'users':
+                return user.id in set(int(x) for x in (a.scope_users or []))
+        except Exception:
+            return False
+        return False
+
+    def _scope_user_ids(self, a, tenant):
+        """计算公告范围覆盖的用户ID（用于通知）"""
+        from accounts.models import CustomUser
+        base = CustomUser.objects.filter(is_active=True)
+        if tenant:
+            base = base.filter(tenant_memberships__tenant=tenant, tenant_memberships__is_active=True).distinct()
+        st = a.scope_type or 'all'
+        if st == 'all':
+            return set(base.values_list('id', flat=True))
+        if st == 'sub_tenants':
+            ids = [int(x) for x in (a.scope_sub_tenants or [])]
+            return set(base.filter(tenant_memberships__tenant_id__in=ids).values_list('id', flat=True))
+        if st == 'departments':
+            from accounts.models import Department
+            from org.models import UserDepartment
+            dept_ids = set(int(x) for x in (a.scope_departments or []))
+            changed = True
+            while changed:
+                changed = False
+                children = set(Department.objects.filter(parent_id__in=dept_ids).values_list('id', flat=True)) - dept_ids
+                if children:
+                    dept_ids |= children
+                    changed = True
+            uids = set(UserDepartment.objects.filter(department_id__in=dept_ids).values_list('user_id', flat=True))
+            return set(base.filter(id__in=uids).values_list('id', flat=True))
+        if st == 'users':
+            ids = set(int(x) for x in (a.scope_users or []))
+            return set(base.filter(id__in=ids).values_list('id', flat=True))
+        return set()
+
+    def list(self, request):
+        from .serializers import AnnouncementSerializer
+        tenant = self._tenant(request)
+        qs = Announcement.objects.filter(tenant=tenant).select_related('author').order_by('-is_published', '-published_at', '-created_at')
+        results = [a for a in qs if self._visible_to(a, request.user)]
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'results': AnnouncementSerializer(results, many=True).data,
+            'can_create': request.user.user_type in ('super_admin', 'admin'),
+        })})
+
+    def _record_operation(self, request, a, action):
+        """记录公告操作（供工作日历汇总）"""
+        try:
+            from .models import AnnouncementOperation
+            AnnouncementOperation.objects.create(
+                tenant=a.tenant_id if a and a.tenant_id else self._tenant(request).id,
+                user=request.user, announcement=a,
+                action=action, title=(a.title if a else (request.data.get('title') or '')[:200]),
+            )
+        except Exception:
+            pass
+
+    def retrieve(self, request, pk=None):
+        from .serializers import AnnouncementSerializer
+        try:
+            a = Announcement.objects.select_related('author').get(id=pk)
+        except Announcement.DoesNotExist:
+            return Response({'error': '公告不存在'}, status=404)
+        if not self._visible_to(a, request.user):
+            return Response({'error': '无权查看该公告'}, status=403)
+        # 记录浏览：总浏览量+1，浏览成员去重记录
+        try:
+            uid = request.user.id
+            viewed = list(a.viewed_by or [])
+            if uid not in viewed:
+                viewed.append(uid)
+            a.viewed_by = viewed
+            a.view_count = (a.view_count or 0) + 1
+            a.save(update_fields=['viewed_by', 'view_count'])
+        except Exception:
+            pass
+        return Response({'encrypt': True, 'data': encrypt_data(AnnouncementSerializer(a).data)})
+
+    def create(self, request):
+        from .serializers import AnnouncementSerializer
+        if request.user.user_type not in ('super_admin', 'admin'):
+            return Response({'error': '仅管理员/超级管理员可发布公告'}, status=403)
+        tenant = self._tenant(request)
+        a = Announcement.objects.create(
+            tenant=tenant,
+            author=request.user,
+            title=(request.data.get('title') or '').strip()[:200],
+            content=request.data.get('content') or '',
+            scope_type=request.data.get('scope_type') or 'all',
+            scope_sub_tenants=request.data.get('scope_sub_tenants') or [],
+            scope_departments=request.data.get('scope_departments') or [],
+            scope_users=request.data.get('scope_users') or [],
+            enable_comments=bool(request.data.get('enable_comments', True)),
+            comment_mode=request.data.get('comment_mode') or 'public',
+        )
+        self._record_operation(request, a, 'draft')
+        return Response({'encrypt': True, 'data': encrypt_data(AnnouncementSerializer(a).data)}, status=201)
+
+    def update(self, request, pk=None):
+        from .serializers import AnnouncementSerializer
+        try:
+            a = Announcement.objects.get(id=pk)
+        except Announcement.DoesNotExist:
+            return Response({'error': '公告不存在'}, status=404)
+        if a.author_id != request.user.id:
+            return Response({'error': '仅发布人可编辑公告'}, status=403)
+        if request.data.get('title') is not None:
+            a.title = (request.data.get('title') or '').strip()[:200]
+        if 'content' in request.data:
+            a.content = request.data.get('content') or ''
+        for f in ('scope_type', 'scope_sub_tenants', 'scope_departments', 'scope_users', 'comment_mode'):
+            if f in request.data:
+                setattr(a, f, request.data.get(f) or [])
+        if 'enable_comments' in request.data:
+            a.enable_comments = bool(request.data.get('enable_comments'))
+        a.save()
+        self._record_operation(request, a, 'edit' if a.is_published else 'draft')
+        return Response({'encrypt': True, 'data': encrypt_data(AnnouncementSerializer(a).data)})
+
+    def destroy(self, request, pk=None):
+        try:
+            a = Announcement.objects.get(id=pk)
+        except Announcement.DoesNotExist:
+            return Response({'error': '公告不存在'}, status=404)
+        if a.author_id != request.user.id:
+            return Response({'error': '仅发布人可删除公告'}, status=403)
+        self._record_operation(request, a, 'delete')
+        a.delete()
+        return Response({'message': 'ok'})
+
+    @action(detail=True, methods=['post'])
+    def publish(self, request, pk=None):
+        """发布公告：设置已发布并发送工作通知给范围内成员"""
+        from .serializers import AnnouncementSerializer
+        try:
+            a = Announcement.objects.select_related('tenant').get(id=pk)
+        except Announcement.DoesNotExist:
+            return Response({'error': '公告不存在'}, status=404)
+        if a.author_id != request.user.id:
+            return Response({'error': '仅发布人可发布公告'}, status=403)
+        if a.is_published and a.published_at:
+            return Response({'message': '公告已发布', 'data': encrypt_data(AnnouncementSerializer(a).data)})
+        a.is_published = True
+        a.published_at = timezone.now()
+        a.save(update_fields=['is_published', 'published_at'])
+        self._record_operation(request, a, 'publish')
+        # 发送工作通知给范围内成员
+        try:
+            from .views import send_work_notification
+        except Exception:
+            send_work_notification = None
+        url = f'/oa/announcements/?id={a.id}'
+        sent = 0
+        for uid in self._scope_user_ids(a, a.tenant):
+            try:
+                if send_work_notification:
+                    send_work_notification(
+                        user_id=uid, title='集团公告',
+                        content=f'{a.author.real_name or a.author.username} 发布了公告："{a.title}"',
+                        notification_type='announcement',
+                        related_url=url,
+                        extra_data={'announcement_id': a.id, 'title': a.title},
+                    )
+                sent += 1
+            except Exception:
+                continue
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'announcement': AnnouncementSerializer(a).data,
+            'notified': sent,
+        })})
+
+    @action(detail=True, methods=['get'])
+    def comments(self, request, pk=None):
+        """公告评论列表（匿名评论仅发布者本人与公告作者可见）"""
+        from .serializers import AnnouncementCommentSerializer
+        try:
+            a = Announcement.objects.get(id=pk)
+        except Announcement.DoesNotExist:
+            return Response({'error': '公告不存在'}, status=404)
+        if not self._visible_to(a, request.user):
+            return Response({'error': '无权查看该公告'}, status=403)
+        qs = a.comments.select_related('author')
+        visible = [c for c in qs if not c.is_anonymous or c.author_id == request.user.id or a.author_id == request.user.id]
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'comments': AnnouncementCommentSerializer(visible, many=True).data,
+            'enable_comments': a.enable_comments,
+            'comment_mode': a.comment_mode,
+        })})
+
+    @action(detail=True, methods=['post'])
+    def add_comment(self, request, pk=None):
+        from .serializers import AnnouncementCommentSerializer
+        try:
+            a = Announcement.objects.select_related('author').get(id=pk)
+        except Announcement.DoesNotExist:
+            return Response({'error': '公告不存在'}, status=404)
+        if not a.is_published:
+            return Response({'error': '公告未发布'}, status=400)
+        if not a.enable_comments:
+            return Response({'error': '该公告未开启评论'}, status=400)
+        content = (request.data.get('content') or '').strip()
+        image = (request.data.get('image') or '').strip()
+        if not content and not image:
+            return Response({'error': '评论内容不能为空'}, status=400)
+        # 二级评论：校验父评论属于该公告
+        parent = None
+        parent_id = request.data.get('parent_id')
+        if parent_id:
+            try:
+                parent = AnnouncementComment.objects.filter(
+                    id=int(parent_id), announcement_id=a.id).first()
+            except (ValueError, TypeError):
+                parent = None
+            if not parent:
+                return Response({'error': '回复的评论不存在'}, status=400)
+        is_anonymous = a.comment_mode == 'anonymous' and bool(request.data.get('is_anonymous', False))
+        c = AnnouncementComment.objects.create(
+            announcement=a, author=request.user, content=content[:500],
+            image=image[:500], parent=parent, is_anonymous=is_anonymous)
+        self._record_operation(request, a, 'comment')
+        return Response({'encrypt': True, 'data': encrypt_data(AnnouncementCommentSerializer(c).data)}, status=201)
 
 
 class WorkNotificationViewSet(viewsets.ViewSet):

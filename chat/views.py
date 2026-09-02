@@ -1827,7 +1827,8 @@ class ChatRoomAdminViewSet(viewsets.ModelViewSet):
             # 消息类型过滤
             message_type = request.query_params.get('message_type')
             if message_type:
-                valid_types = ['text', 'image', 'file', 'video', 'voice', 'audio', 'location', 'emoji']
+                valid_types = ['text', 'image', 'file', 'video', 'voice', 'audio', 'location', 'emoji',
+                               'task_card', 'approval_card', 'work_summary_card', 'collab_card']
                 if message_type not in valid_types:
                     return Response(
                         {'error': f'无效的消息类型，有效类型: {", ".join(valid_types)}'},
@@ -2269,9 +2270,13 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def department_stats(self, request):
-        """🏢 部门统计 - 覆盖集团/企业下的组织架构部门"""
+        """🏢 部门统计 - 覆盖集团/企业下的组织架构部门
+        按 days 统计各部门用户数、活跃用户数（期间发过消息）与消息数"""
         from django.db.models import Count, Q
         from org.models import UserDepartment as OrgUserDepartment
+
+        days = int(request.query_params.get('days', 7) or 7)
+        start = timezone.now() - timedelta(days=days)
 
         # 基于组织架构部门关联（UserDepartment）统计，覆盖企业集团下所有部门
         dept_qs = OrgUserDepartment.objects.values('department').annotate(
@@ -2280,25 +2285,44 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
         dept_map = {d['department']: d['user_count'] for d in dept_qs}
 
         depts = Department.objects.filter(is_active=True).select_related('tenant')
+        dept_ids = list(depts.values_list('id', flat=True))
+
+        # 部门 -> 用户ID集合（同一用户可能归属多个部门，均计入）
+        user_dept = {}
+        for ud in OrgUserDepartment.objects.filter(department_id__in=dept_ids):
+            user_dept.setdefault(ud.department_id, set()).add(ud.user_id)
+
+        # 时间范围内各用户消息数，发过消息的用户计为活跃
+        msg_by_user = {}
+        active_ids = set()
+        for row in Message.objects.filter(timestamp__gte=start, is_deleted=False) \
+                .values('sender_id').annotate(c=Count('id')):
+            if row['sender_id'] is not None:
+                msg_by_user[row['sender_id']] = row['c']
+                active_ids.add(row['sender_id'])
+
         stats = []
         for dept in depts:
-            user_count = dept_map.get(dept.id, 0)
+            uids = user_dept.get(dept.id, set())
+            user_count = len(uids)
             tenant_name = ''
             if dept.tenant:
                 tenant_name = dept.tenant.short_name or dept.tenant.name
+            message_count = sum(msg_by_user.get(u, 0) for u in uids)
+            active_users = sum(1 for u in uids if u in active_ids)
             stats.append({
                 'id': dept.id,
                 'name': dept.name,
                 'tenant_id': dept.tenant_id,
                 'tenant_name': tenant_name,
                 'user_count': user_count,
-                'active_users': 0,
-                'message_count': 0,
-                'activity_rate': 0,
+                'active_users': active_users,
+                'message_count': message_count,
+                'activity_rate': round(active_users / user_count * 100, 1) if user_count else 0,
             })
         # 按用户数降序
         stats.sort(key=lambda x: x['user_count'], reverse=True)
-        cache.set('department_stats', stats, 120)
+        cache.set('department_stats_%s' % days, stats, 120)
         return Response({'departments': stats})
 
 

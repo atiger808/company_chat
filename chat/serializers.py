@@ -77,6 +77,16 @@ class ChatRoomSerializer(serializers.ModelSerializer):
                     last_msg.content = content_text
                 except Exception as e:
                     logger.error(f"Error in get_last_message: {e}")
+            elif last_msg.message_type == 'collab_card':
+                try:
+                    card_data = json.loads(last_msg.content)
+                    if card_data.get('invite_type') == 'folder':
+                        content_text = f"📂 {card_data.get('inviter_name', '')} 邀请你加入共享文件夹：{card_data.get('target_name', '')}"
+                    else:
+                        content_text = f"🤝 {card_data.get('inviter_name', '')} 邀请你协作编辑：{card_data.get('target_name', '')}"
+                    last_msg.content = content_text
+                except Exception as e:
+                    logger.error(f"Error in get_last_message: {e}")
             # logger.info(f"Hit cache for {obj.id} last msg: {last_msg}")
             # # 返回序列化后的数据
             return MessageSerializer(last_msg, context=self.context).data
@@ -121,6 +131,16 @@ class ChatRoomSerializer(serializers.ModelSerializer):
                     try:
                         card_data = json.loads(last_msg.content)
                         content_text = f"📄 {card_data.get('sender_name', '')} 分享了每日工作总结（{card_data.get('summary_date', '')}）"
+                        last_msg.content = content_text
+                    except Exception as e:
+                        logger.error(f"Error in get_last_message: {e}")
+                elif last_msg.message_type == 'collab_card':
+                    try:
+                        card_data = json.loads(last_msg.content)
+                        if card_data.get('invite_type') == 'folder':
+                            content_text = f"📂 {card_data.get('inviter_name', '')} 邀请你加入共享文件夹：{card_data.get('target_name', '')}"
+                        else:
+                            content_text = f"🤝 {card_data.get('inviter_name', '')} 邀请你协作编辑：{card_data.get('target_name', '')}"
                         last_msg.content = content_text
                     except Exception as e:
                         logger.error(f"Error in get_last_message: {e}")
@@ -252,6 +272,8 @@ class MessageSerializer(serializers.ModelSerializer):
 
     task_data = serializers.SerializerMethodField()
     approval_data = serializers.SerializerMethodField()
+    work_summary_data = serializers.SerializerMethodField()
+    collab_data = serializers.SerializerMethodField()
 
     def create(self, validated_data):
         file_id = validated_data.pop('file_id', None)
@@ -279,7 +301,7 @@ class MessageSerializer(serializers.ModelSerializer):
             # 🔧 添加语音时长字段
             'voice_duration', 'mentioned_users', 'mentioned_all',  # 🔧 加入列表
             'call_duration', 'call_type', 'call_status',
-            'cloud_file_id', 'task_data', 'approval_data',  # 🔧 新增字段
+            'cloud_file_id', 'task_data', 'approval_data', 'work_summary_data', 'collab_data',  # 🔧 新增字段
         ]
         read_only_fields = ['id', 'timestamp', 'is_read', 'is_deleted', 'deleted_at', 'sender', 'sender_id', 'sender_name', 'voice_duration', 'mentioned_users', 'mentioned_all']
 
@@ -472,6 +494,26 @@ class MessageSerializer(serializers.ModelSerializer):
                 return json.loads(obj.content)
             except Exception as e:
                 logger.error(f"Error parsing approval card content: {e}")
+                return None
+        return None
+
+    def get_work_summary_data(self, obj):
+        """每日工作总结卡片数据"""
+        if obj.message_type == 'work_summary_card':
+            try:
+                return json.loads(obj.content)
+            except Exception as e:
+                logger.error(f"Error parsing work summary card content: {e}")
+                return None
+        return None
+
+    def get_collab_data(self, obj):
+        """协作邀请卡片数据"""
+        if obj.message_type == 'collab_card':
+            try:
+                return json.loads(obj.content)
+            except Exception as e:
+                logger.error(f"Error parsing collab card content: {e}")
                 return None
         return None
 

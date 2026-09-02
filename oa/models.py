@@ -316,6 +316,7 @@ class WorkNotification(models.Model):
         ('subsidy_withdraw_result', '补贴提现结果'),
         ('daily', '每日通知'),
         ('work_summary', '每日工作总结'),
+        ('announcement', '集团公告'),
         ('hr', '人事通知'),
         ('system', '系统通知'),
     ]
@@ -444,6 +445,23 @@ class ApprovalDeptConfig(models.Model):
         null=True, blank=True,
         verbose_name='最终审批部门'
     )
+    # 第一审批人（财务专员）：作为该审批类型的第一审批人，仅在其关联的子公司/直属部门范围内生效
+    first_approver = models.ForeignKey(
+        'FinanceSpecialist', on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='approval_first_configs',
+        verbose_name='第一审批人（财务专员）',
+        help_text='作为该审批类型的第一审批人，仅在其关联的子公司/直属部门范围内生效；默认空'
+    )
+    # 配置适用范围：指定公司/分公司/虚拟组织级部门（scope_department）；为空=集团默认或子公司配置
+    # 该部门下成员（含子部门所有成员）优先读取此配置，其次读取集团默认配置
+    scope_department = models.ForeignKey(
+        Department, on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='approval_scoped_configs',
+        verbose_name='适用范围（公司/虚拟组织级部门）',
+        help_text='该配置适用于此公司/分公司/虚拟组织级部门及其所有子部门成员；为空表示集团默认或子公司配置'
+    )
     # 默认抄送部门列表
     cc_departments = models.JSONField(default=list, blank=True, verbose_name='默认抄送部门ID列表')
     # 默认抄送人列表
@@ -490,13 +508,45 @@ class ApprovalDeptConfig(models.Model):
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
     class Meta:
-        unique_together = ('tenant', 'approval_type', 'sub_tenant')
+        # scope_department 纳入唯一键：允许同一审批类型同时存在「集团默认」与「公司级部门专属」配置
+        # （PostgreSQL 中 scope_department=NULL 视为相互独立，集团默认唯一性由保存逻辑保证）
+        unique_together = ('tenant', 'approval_type', 'sub_tenant', 'scope_department')
         verbose_name = '审批类型配置'
         verbose_name_plural = '审批类型配置'
         ordering = ['-updated_at']
 
     def __str__(self):
         return f'{self.approval_type} 配置'
+
+
+class FinanceSpecialist(models.Model):
+    """财务专员：可关联集团下多个子公司/直属部门，作为对应子公司/直属部门审批类型的第一审批人"""
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='finance_specialist_profiles', verbose_name='财务专员用户')
+    tenant = models.ForeignKey(
+        'accounts.Tenant', on_delete=models.CASCADE,
+        related_name='finance_specialists', verbose_name='所属集团/企业')
+    # 关联的子公司/分公司/虚拟组织（多选）
+    sub_tenants = models.ManyToManyField(
+        'accounts.Tenant', blank=True,
+        related_name='finance_specialist_sub_scopes', verbose_name='关联子公司')
+    # 关联的直属部门（多选）
+    departments = models.ManyToManyField(
+        Department, blank=True,
+        related_name='finance_specialist_dept_scopes', verbose_name='关联直属部门')
+    remark = models.CharField(max_length=200, blank=True, default='', verbose_name='备注')
+    is_active = models.BooleanField(default=True, verbose_name='是否启用')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        ordering = ['-updated_at']
+        verbose_name = '财务专员'
+        verbose_name_plural = '财务专员'
+
+    def __str__(self):
+        return f'{self.user} 财务专员'
 
 
 class CustomPaymentMethod(models.Model):
@@ -1330,6 +1380,114 @@ class WorkSummaryConfig(models.Model):
         except Exception:
             pass
         return True
+
+
+class Announcement(models.Model):
+    """集团公告：富媒体内容（文字/图片/视频/表格/附件），按范围发布（全员/子公司/部门/成员），
+    范围内成员可查看和评论；评论支持公开/匿名（匿名仅发布者本人与公告作者可见）"""
+    SCOPE_TYPE_CHOICES = [
+        ('all', '集团全员'),
+        ('sub_tenants', '指定子公司'),
+        ('departments', '指定部门'),
+        ('users', '指定成员'),
+    ]
+    COMMENT_MODE_CHOICES = [
+        ('public', '公开'),
+        ('anonymous', '匿名'),
+    ]
+
+    tenant = models.ForeignKey(
+        'accounts.Tenant', on_delete=models.CASCADE,
+        related_name='announcements', verbose_name='所属企业/集团')
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='announcements', verbose_name='发布人')
+    title = models.CharField(max_length=200, verbose_name='公告标题')
+    content = models.TextField(blank=True, default='', verbose_name='公告内容(富媒体HTML)')
+    # 发布范围
+    scope_type = models.CharField(
+        max_length=20, choices=SCOPE_TYPE_CHOICES, default='all', verbose_name='发布范围类型')
+    scope_sub_tenants = models.JSONField(default=list, blank=True, verbose_name='指定子公司ID列表')
+    scope_departments = models.JSONField(default=list, blank=True, verbose_name='指定部门ID列表')
+    scope_users = models.JSONField(default=list, blank=True, verbose_name='指定成员ID列表')
+    # 评论设置
+    enable_comments = models.BooleanField(default=True, verbose_name='开启评论')
+    comment_mode = models.CharField(
+        max_length=20, choices=COMMENT_MODE_CHOICES, default='public', verbose_name='评论方式')
+    # 浏览量统计：view_count 为总浏览量（每次打开详情+1），viewed_by 记录浏览成员ID（去重）
+    view_count = models.IntegerField(default=0, verbose_name='总浏览量')
+    viewed_by = models.JSONField(default=list, blank=True, verbose_name='浏览成员ID列表')
+    # 发布状态
+    is_published = models.BooleanField(default=False, verbose_name='是否已发布')
+    published_at = models.DateTimeField(null=True, blank=True, verbose_name='发布时间')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        ordering = ['-is_published', '-published_at', '-created_at']
+        verbose_name = '集团公告'
+        verbose_name_plural = '集团公告'
+
+    def __str__(self):
+        return self.title
+
+
+class AnnouncementComment(models.Model):
+    """集团公告评论：公开评论范围成员可见；匿名评论仅发布者本人与公告作者可见；支持图片/表情与二级回复"""
+    announcement = models.ForeignKey(
+        Announcement, on_delete=models.CASCADE,
+        related_name='comments', verbose_name='公告')
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='announcement_comments', verbose_name='评论人')
+    content = models.TextField(blank=True, default='', verbose_name='评论内容')
+    # 二级评论：回复某条评论（null=一级评论）
+    parent = models.ForeignKey(
+        'self', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='replies', verbose_name='回复的评论')
+    # 评论图片（可选，单图）
+    image = models.CharField(max_length=500, blank=True, default='', verbose_name='评论图片URL')
+    is_anonymous = models.BooleanField(default=False, verbose_name='是否匿名')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='评论时间')
+
+    class Meta:
+        ordering = ['created_at']
+        verbose_name = '公告评论'
+        verbose_name_plural = '公告评论'
+
+    def __str__(self):
+        return f'{self.author} 评论 {self.announcement}'
+
+
+class AnnouncementOperation(models.Model):
+    """集团公告操作留痕：发布/存草稿/编辑/删除/评论，供工作日历汇总展示"""
+    ACTION_CHOICES = [
+        ('publish', '发布公告'),
+        ('draft', '存草稿'),
+        ('edit', '编辑公告'),
+        ('delete', '删除公告'),
+        ('comment', '评论公告'),
+    ]
+    tenant = models.ForeignKey(
+        'accounts.Tenant', on_delete=models.CASCADE,
+        related_name='announcement_operations', verbose_name='所属企业/集团')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='announcement_operations', verbose_name='操作人')
+    announcement = models.ForeignKey(
+        Announcement, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='operations', verbose_name='公告（删除后为空）')
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES, verbose_name='操作类型')
+    title = models.CharField(max_length=200, blank=True, default='', verbose_name='公告标题快照')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='操作时间')
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = '集团公告操作记录'
+        verbose_name_plural = '集团公告操作记录'
+
+    def __str__(self):
+        return f'{self.get_action_display()}：{self.title or ""}'
 
 
 # 默认所有页面开启水印（首次创建时播种）

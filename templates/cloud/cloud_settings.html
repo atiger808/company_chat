@@ -5,7 +5,7 @@
 
 {% block extra_css %}
 <!--<link rel="stylesheet" href="{% static 'css/cloud_settings.css' %}">-->
-<link rel="stylesheet" href="/static/css/cloud_settings.css?v=20260828-1ca2622">
+<link rel="stylesheet" href="/static/css/cloud_settings.css?v=20260901-b9b07be">
 <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260820-d0a1b2c">
 {% endblock %}
 
@@ -68,7 +68,7 @@
             </a>
             <div class="user-info-dropdown" id="userInfoDropdown" onclick="cloudSettings.toggleUserDropdown(event)">
                     <span id="adminUsername"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260828-1ca2622" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260901-b9b07be" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu show" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/attendance/'">
@@ -98,6 +98,13 @@
                         <div class="dropdown-item" id="workSummaryBtn" onclick="event.stopPropagation();window.location.href='/oa/work-summary/'">
                             <i class="fas fa-file-signature"></i> 每日工作总结
                         </div>
+
+                        <div class="dropdown-item" id="announcementBtn"
+                             onclick="event.stopPropagation();window.location.href='/oa/announcements/'">
+                            <i class="fas fa-bullhorn" style="color:#7c4dff;"></i>
+                            <span>集团公告</span>
+                        </div>
+
 
                         <div class="dropdown-divider"></div>
 
@@ -194,12 +201,12 @@
 {% block extra_js %}
 <!--<script src="{% static 'js/cloud_settings.js' %}"></script>-->
 <!-- 🔧 加密依赖：水印配置响应为加密包，需要 EncryptUtils 解密（缺此则水印静默不显示） -->
-<script src="/static/js/dist/crypto-js.min.js?v=20260828-1ca2622"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260828-1ca2622"></script>
-<script src="/static/js/encrypts.js?v=20260828-1ca2622"></script>
-<script src="/static/js/cloud_settings.js?v=20260828-1ca2622"></script>
-<script src="/static/js/utils.js?v=20260828-1ca2622"></script>
-<script src="/static/js/notifications.js?v=20260828-1ca2622"></script>
-<script src="/static/js/watermark.js?v=20260828-1ca2622"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260901-b9b07be"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260901-b9b07be"></script>
+<script src="/static/js/encrypts.js?v=20260901-b9b07be"></script>
+<script src="/static/js/cloud_settings.js?v=20260901-b9b07be"></script>
+<script src="/static/js/utils.js?v=20260901-b9b07be"></script>
+<script src="/static/js/notifications.js?v=20260901-b9b07be"></script>
+<script src="/static/js/watermark.js?v=20260901-b9b07be"></script>
 <script>WatermarkManager.init();</script>
 {% endblock %}

@@ -243,6 +243,7 @@ class Message(models.Model):
         ('task_card', '任务卡片'),
         ('approval_card', '审批卡片'),
         ('work_summary_card', '工作总结卡片'),
+        ('collab_card', '协作邀请卡片'),
     )
 
     chat_room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='messages', verbose_name='聊天室')

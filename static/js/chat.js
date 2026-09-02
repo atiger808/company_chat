@@ -3282,6 +3282,50 @@ class ChatClient {
         container.innerHTML = cardHtml;
     }
 
+    /**
+     * 🔧 渲染协作邀请卡片（云盘文档协作 / 共享文件夹邀请），点击直达对应页面
+     */
+    renderCollabCardInChat(data, container) {
+        container.className = '';
+        if (!data || !data.url) {
+            container.innerHTML = '<div class="message-text" style="color:#909399;"><i class="fas fa-handshake"></i> [协作邀请]</div>';
+            return;
+        }
+        const isFolder = data.invite_type === 'folder';
+        const icon = data.icon || (isFolder ? 'fa-folder' : 'fa-file-word');
+        const title = this.escapeHtml(data.title || (isFolder ? '共享文件夹邀请' : '协作邀请'));
+        const targetName = this.escapeHtml(data.target_name || '');
+        const inviter = this.escapeHtml(data.inviter_name || '');
+        const perm = data.permission_display || '';
+        const permColors = {'只读': '#909399', '可编辑': '#409EFF', '管理员': '#E6A23C'};
+        const permColor = permColors[perm] || '#00a1ff';
+        const openText = isFolder ? '打开共享文件夹' : '打开协作编辑';
+        const cardHtml = `
+            <div class="message-content message-left approval-card-message" data-collab-url="${this.escapeHtml(data.url)}"
+                 onclick="window.open('${this.escapeHtml(data.url)}', '_blank')"
+                 style="max-width: 320px; padding: 0; overflow: hidden; border-radius: 8px; border: 1px solid #e4e7ed; background: #fff; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); cursor: pointer; transition: all 0.3s;">
+                <div style="padding: 12px 16px; background: linear-gradient(135deg, #e6f7ff 0%, #bae7ff 100%); border-bottom: 1px solid #e4e7ed; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: 600; color: #303133; font-size: 14px; display: flex; align-items: center; gap: 6px;">
+                        <i class="fas ${isFolder ? 'fa-folder' : 'fa-handshake'}" style="color: #00a1ff;"></i> ${title}
+                    </span>
+                    ${perm ? `<span style="font-size: 10px; padding: 4px 8px; border-radius: 10px; color: #fff; background: ${permColor}; white-space: nowrap;">${this.escapeHtml(perm)}</span>` : ''}
+                </div>
+                <div style="padding: 12px 16px;">
+                    <div style="font-size: 14px; color: #303133; margin-bottom: 8px; font-weight: 500; line-height: 1.4; display: flex; align-items: center; gap: 6px;">
+                        <i class="fas ${icon}" style="color: #00a1ff;"></i> <span style="word-break: break-all;">${targetName || '(未命名)'}</span>
+                    </div>
+                    <div style="font-size: 12px; color: #909399; display: flex; align-items: center; gap: 4px;">
+                        <i class="fas fa-user-circle" style="width: 14px;"></i> ${inviter} 邀请你参与协作
+                    </div>
+                </div>
+                <div style="padding: 8px 16px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;">
+                    点击${openText} <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
+                </div>
+            </div>
+        `;
+        container.innerHTML = cardHtml;
+    }
+
     // 更新聊天列表中的用户状态
     updateChatListUserStatus(userId, isOnline) {
         // 私聊：通过 data-user-id 查找
@@ -5374,6 +5418,11 @@ class ChatClient {
                 is_temp: true,
                 is_forwarded: true
             };
+            // 🔧 卡片类消息保留解析后的数据字段，保证本地即时渲染为卡片而非 JSON
+            if (forwardContent.task_data) messageData.task_data = forwardContent.task_data;
+            if (forwardContent.approval_data) messageData.approval_data = forwardContent.approval_data;
+            if (forwardContent.work_summary_data) messageData.work_summary_data = forwardContent.work_summary_data;
+            if (forwardContent.collab_data) messageData.collab_data = forwardContent.collab_data;
 
             // 通过当前 WebSocket 发送
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -5484,6 +5533,54 @@ class ChatClient {
                     message_type: 'task_card',
                     task_data: taskData
                 };
+
+            // 🔧 新增：转发审批卡片（保留 message_type 与卡片数据，避免转发后显示成 JSON 文本）
+            case 'approval_card': {
+                let approvalData = originalMessage.approval_data || null;
+                if (!approvalData && originalMessage.content) {
+                    try {
+                        approvalData = JSON.parse(originalMessage.content);
+                    } catch (_) {
+                    }
+                }
+                return {
+                    content: approvalData ? JSON.stringify(approvalData) : (originalMessage.content || '{}'),
+                    message_type: 'approval_card',
+                    approval_data: approvalData
+                };
+            }
+
+            // 🔧 新增：转发每日工作总结卡片
+            case 'work_summary_card': {
+                let wsData = originalMessage.work_summary_data || null;
+                if (!wsData && originalMessage.content) {
+                    try {
+                        wsData = JSON.parse(originalMessage.content);
+                    } catch (_) {
+                    }
+                }
+                return {
+                    content: wsData ? JSON.stringify(wsData) : (originalMessage.content || '{}'),
+                    message_type: 'work_summary_card',
+                    work_summary_data: wsData
+                };
+            }
+
+            // 🔧 新增：转发协作邀请卡片
+            case 'collab_card': {
+                let collabData = originalMessage.collab_data || null;
+                if (!collabData && originalMessage.content) {
+                    try {
+                        collabData = JSON.parse(originalMessage.content);
+                    } catch (_) {
+                    }
+                }
+                return {
+                    content: collabData ? JSON.stringify(collabData) : (originalMessage.content || '{}'),
+                    message_type: 'collab_card',
+                    collab_data: collabData
+                };
+            }
 
             default:
                 return {
@@ -6085,6 +6182,25 @@ class ChatClient {
                     container.innerHTML = '<div class="message-text" style="color:#909399;"><i class="fas fa-file-signature"></i> [每日工作总结卡片]</div>';
                 }
                 break;
+            case 'collab_card':
+                try {
+                    // 🔧 从 content(JSON) 或 collab_data 获取协作邀请数据
+                    let collabData = message.collab_data || null;
+                    if (!collabData && message.content) {
+                        try {
+                            const parsed = JSON.parse(message.content);
+                            if (parsed && parsed.url !== undefined) {
+                                collabData = parsed;
+                            }
+                        } catch (_) {
+                        }
+                    }
+                    this.renderCollabCardInChat(collabData, container);
+                } catch (e) {
+                    console.error('解析协作邀请卡片数据失败', e);
+                    container.innerHTML = '<div class="message-text" style="color:#909399;"><i class="fas fa-handshake"></i> [协作邀请]</div>';
+                }
+                break;
             default:
                 container.innerHTML += message.content || '[未知消息类型]';
         }
@@ -6464,11 +6580,11 @@ class ChatClient {
             // 与顶部工作通知面板保持一致：优先用 notifications.js 的全局图标/配色，缺失时本地兜底
             var typeIcon2 = function (t) {
                 if (typeof typeIcon === 'function') return typeIcon(t);
-                return 'fas ' + ({'approval': 'fa-check-double', 'attendance': 'fa-clock', 'task': 'fa-tasks', 'collab': 'fa-users', 'subsidy': 'fa-hand-holding-usd', 'subsidy_apply': 'fa-file-invoice', 'subsidy_result': 'fa-clipboard-check', 'subsidy_withdraw': 'fa-money-check-alt', 'subsidy_withdraw_result': 'fa-wallet', 'daily': 'fa-calendar-day', 'work_summary': 'fa-file-signature', 'hr': 'fa-user-tie', 'system': 'fa-bell'}[t] || 'fa-bell');
+                return 'fas ' + ({'approval': 'fa-check-double', 'attendance': 'fa-clock', 'task': 'fa-tasks', 'collab': 'fa-users', 'subsidy': 'fa-hand-holding-usd', 'subsidy_apply': 'fa-file-invoice', 'subsidy_result': 'fa-clipboard-check', 'subsidy_withdraw': 'fa-money-check-alt', 'subsidy_withdraw_result': 'fa-wallet', 'daily': 'fa-calendar-day', 'work_summary': 'fa-file-signature', 'announcement': 'fa-bullhorn', 'hr': 'fa-user-tie', 'system': 'fa-bell'}[t] || 'fa-bell');
             };
             var typeColor2 = function (t) {
                 if (typeof typeColor === 'function') return typeColor(t);
-                return {'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'subsidy': '#16a085', 'subsidy_apply': '#16a085', 'subsidy_result': '#67c23a', 'subsidy_withdraw': '#e6a23c', 'subsidy_withdraw_result': '#16a085', 'daily': '#409eff', 'work_summary': '#9b59b6', 'hr': '#6c5ce7', 'system': '#909399'}[t] || '#909399';
+                return {'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'subsidy': '#16a085', 'subsidy_apply': '#16a085', 'subsidy_result': '#67c23a', 'subsidy_withdraw': '#e6a23c', 'subsidy_withdraw_result': '#16a085', 'daily': '#409eff', 'work_summary': '#9b59b6', 'announcement': '#7c4dff', 'hr': '#6c5ce7', 'system': '#909399'}[t] || '#909399';
             };
             var formatTime2 = function (iso) {
                 if (!iso) return '';

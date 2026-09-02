@@ -5,12 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>企业网盘 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/cloud.css?v=20260828-1ca2622">
+    <link rel="stylesheet" href="/static/css/cloud.css?v=20260901-b9b07be">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260820-d0a1b2c">
     <!-- 🔧 添加二维码库 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>-->
-    <script src="/static/js/dist/qrcode.min.js?v=20260828-1ca2622"></script>
+    <script src="/static/js/dist/qrcode.min.js?v=20260901-b9b07be"></script>
 </head>
 <body>
 <div class="cloud-layout">
@@ -147,16 +147,19 @@
                 </div>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="cloudApp.toggleUserDropdown(event)">
                     <span id="adminUsername"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260828-1ca2622" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260901-b9b07be" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu" id="userDropdownMenu" style="display:none;">
-                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/attendance/'">
+                        <div class="dropdown-item"
+                             onclick="event.stopPropagation();window.location.href='/oa/attendance/'">
                             <i class="fas fa-clock"></i> 考勤打卡
                         </div>
-                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/approval/'">
+                        <div class="dropdown-item"
+                             onclick="event.stopPropagation();window.location.href='/oa/approval/'">
                             <i class="fas fa-check-double"></i> OA审批
                         </div>
-                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/subsidy/'">
+                        <div class="dropdown-item"
+                             onclick="event.stopPropagation();window.location.href='/oa/subsidy/'">
                             <i class="fas fa-hand-holding-usd"></i> 普惠补贴
                         </div>
 
@@ -172,12 +175,20 @@
 
                         <div class="dropdown-divider"></div>
 
-                        <div class="dropdown-item" id="workCalendarBtn" onclick="event.stopPropagation();window.location.href='/oa/work-calendar/'">
+                        <div class="dropdown-item" id="workCalendarBtn"
+                             onclick="event.stopPropagation();window.location.href='/oa/work-calendar/'">
                             <i class="fas fa-calendar-alt"></i> 工作日历
                         </div>
 
-                        <div class="dropdown-item" id="workSummaryBtn" onclick="event.stopPropagation();window.location.href='/oa/work-summary/'">
+                        <div class="dropdown-item" id="workSummaryBtn"
+                             onclick="event.stopPropagation();window.location.href='/oa/work-summary/'">
                             <i class="fas fa-file-signature"></i> 每日工作总结
+                        </div>
+
+                        <div class="dropdown-item" id="announcementBtn"
+                             onclick="event.stopPropagation();window.location.href='/oa/announcements/'">
+                            <i class="fas fa-bullhorn" style="color:#7c4dff;"></i>
+                            <span>集团公告</span>
                         </div>
 
                         <div class="dropdown-divider"></div>
@@ -191,7 +202,8 @@
 
                         <div class="dropdown-divider"></div>
 
-                        <div class="dropdown-item" id="adminConsoleBtn" style="display:none;" onclick="event.stopPropagation();window.location.href='/control/'">
+                        <div class="dropdown-item" id="adminConsoleBtn" style="display:none;"
+                             onclick="event.stopPropagation();window.location.href='/control/'">
                             <i class="fas fa-shield-alt"></i> 管理控制台
                         </div>
 
@@ -448,7 +460,8 @@
                             </button>
                         </div>
 
-                        <button class="btn btn-primary" onclick="cloudApp.openModal('createSharedFolderModal')" title="新建共享文件夹">
+                        <button class="btn btn-primary" onclick="cloudApp.openModal('createSharedFolderModal')"
+                                title="新建共享文件夹">
                             <i class="fas fa-plus"></i> <span class="btn-text">新建共享文件夹</span>
                         </button>
                         <button class="btn btn-secondary"
@@ -564,11 +577,13 @@
                 <div class="view-header">
                     <h3><i class="fas fa-history"></i> 操作日志</h3>
                     <div class="search-box-inline">
-                            <i class="fas fa-search"></i>
-                            <input type="text" id="logSearchInput" placeholder="搜索操作描述、文件名..." oninput="cloudApp.searchLogs(this.value)">
+                        <i class="fas fa-search"></i>
+                        <input type="text" id="logSearchInput" placeholder="搜索操作描述、文件名..."
+                               oninput="cloudApp.searchLogs(this.value)">
                     </div>
                     <div class="admin-header-right">
-                        <select id="logOperationFilter" class="form-select log-filter-select" onchange="cloudApp.filterLogsByOperation(this.value)">
+                        <select id="logOperationFilter" class="form-select log-filter-select"
+                                onchange="cloudApp.filterLogsByOperation(this.value)">
                             <option value="">全部操作</option>
                             <option value="create">创建</option>
                             <option value="upload">上传</option>
@@ -983,7 +998,8 @@
 <div id="manageSharedFolderMembersModal" class="modal">
     <div class="modal-content" style="max-width: 600px;">
         <div class="modal-header">
-            <h3 class="modal-title"><i class="fas fa-users"></i> 管理成员 - <span id="manageSharedFolderName"></span></h3>
+            <h3 class="modal-title"><i class="fas fa-users"></i> 管理成员 - <span id="manageSharedFolderName"></span>
+            </h3>
             <button class="close-btn" onclick="cloudApp.closeModal('manageSharedFolderMembersModal')">&times;</button>
         </div>
         <div class="modal-body">
@@ -998,7 +1014,8 @@
             </div>
             <div class="form-group" style="margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
                 <input type="checkbox" id="sendWorkNotifyCheckbox" checked>
-                <label for="sendWorkNotifyCheckbox" style="cursor: pointer; font-size: 13px; color: var(--text-secondary, #606266); margin: 0;">
+                <label for="sendWorkNotifyCheckbox"
+                       style="cursor: pointer; font-size: 13px; color: var(--text-secondary, #606266); margin: 0;">
                     添加后发送工作通知给该成员
                 </label>
             </div>
@@ -1050,17 +1067,17 @@
 
 <!-- 脚本引入 -->
 <!--<script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>-->
-<script src="/static/js/dist/spark-md5.min.js?v=20260828-1ca2622"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260828-1ca2622"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260828-1ca2622"></script>
-<script src="/static/js/encrypts.js?v=20260828-1ca2622"></script>
-<script src="/static/js/utils.js?v=20260828-1ca2622"></script>
-<script src="/static/js/frontend_cloud_config.js?v=20260828-1ca2622"></script>
-<script src="/static/js/api.js?v=20260828-1ca2622"></script>
-<script src="/static/js/tenant.js?v=20260828-1ca2622"></script>
-<script src="/static/js/org.js?v=20260828-1ca2622"></script>
-<script src="/static/js/cloud.js?v=20260828-1ca2622"></script>
-<script src="/static/js/notifications.js?v=20260828-1ca2622"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260901-b9b07be"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260901-b9b07be"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260901-b9b07be"></script>
+<script src="/static/js/encrypts.js?v=20260901-b9b07be"></script>
+<script src="/static/js/utils.js?v=20260901-b9b07be"></script>
+<script src="/static/js/frontend_cloud_config.js?v=20260901-b9b07be"></script>
+<script src="/static/js/api.js?v=20260901-b9b07be"></script>
+<script src="/static/js/tenant.js?v=20260901-b9b07be"></script>
+<script src="/static/js/org.js?v=20260901-b9b07be"></script>
+<script src="/static/js/cloud.js?v=20260901-b9b07be"></script>
+<script src="/static/js/notifications.js?v=20260901-b9b07be"></script>
 
 <script>
     // 🔧 初始化侧边栏按钮显示状态
@@ -1136,7 +1153,7 @@
         if (!splitter || !sidebar) return;
         var isDragging = false;
 
-        splitter.addEventListener('mousedown', function(e) {
+        splitter.addEventListener('mousedown', function (e) {
             e.preventDefault();
             isDragging = true;
             splitter.classList.add('active');
@@ -1144,7 +1161,7 @@
             document.body.style.userSelect = 'none';
         });
 
-        document.addEventListener('mousemove', function(e) {
+        document.addEventListener('mousemove', function (e) {
             if (!isDragging) return;
             var containerRect = document.querySelector('.cloud-layout').getBoundingClientRect();
             var newWidth = e.clientX - containerRect.left;
@@ -1154,7 +1171,7 @@
             sidebar.classList.toggle('sidebar-narrow', newWidth < 80);
         });
 
-        document.addEventListener('mouseup', function() {
+        document.addEventListener('mouseup', function () {
             if (isDragging) {
                 isDragging = false;
                 splitter.classList.remove('active');
@@ -1165,7 +1182,7 @@
     }
 </script>
 
-<script src="/static/js/watermark.js?v=20260828-1ca2622"></script>
+<script src="/static/js/watermark.js?v=20260901-b9b07be"></script>
 <script>WatermarkManager.init();</script>
 </body>
 </html>

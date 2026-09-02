@@ -166,11 +166,11 @@
     }
 
     function typeIcon(t) {
-        return { 'approval': 'fas fa-check-double', 'attendance': 'fas fa-clock', 'task': 'fas fa-tasks', 'collab': 'fas fa-users', 'subsidy': 'fas fa-hand-holding-usd', 'subsidy_apply': 'fas fa-file-invoice', 'subsidy_result': 'fas fa-clipboard-check', 'subsidy_withdraw': 'fas fa-money-check-alt', 'subsidy_withdraw_result': 'fas fa-wallet', 'daily': 'fas fa-calendar-day', 'work_summary': 'fas fa-file-signature', 'hr': 'fas fa-user-tie', 'system': 'fas fa-bell' }[t] || 'fas fa-bell';
+        return { 'approval': 'fas fa-check-double', 'attendance': 'fas fa-clock', 'task': 'fas fa-tasks', 'collab': 'fas fa-users', 'subsidy': 'fas fa-hand-holding-usd', 'subsidy_apply': 'fas fa-file-invoice', 'subsidy_result': 'fas fa-clipboard-check', 'subsidy_withdraw': 'fas fa-money-check-alt', 'subsidy_withdraw_result': 'fas fa-wallet', 'daily': 'fas fa-calendar-day', 'work_summary': 'fas fa-file-signature', 'announcement': 'fas fa-bullhorn', 'hr': 'fas fa-user-tie', 'system': 'fas fa-bell' }[t] || 'fas fa-bell';
     }
 
     function typeColor(t) {
-        return { 'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'subsidy': '#16a085', 'subsidy_apply': '#16a085', 'subsidy_result': '#67c23a', 'subsidy_withdraw': '#e6a23c', 'subsidy_withdraw_result': '#16a085', 'daily': '#409eff', 'work_summary': '#9b59b6', 'hr': '#6c5ce7', 'system': '#909399' }[t] || '#909399';
+        return { 'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'subsidy': '#16a085', 'subsidy_apply': '#16a085', 'subsidy_result': '#67c23a', 'subsidy_withdraw': '#e6a23c', 'subsidy_withdraw_result': '#16a085', 'daily': '#409eff', 'work_summary': '#9b59b6', 'announcement': '#7c4dff', 'hr': '#6c5ce7', 'system': '#909399' }[t] || '#909399';
     }
 
     function escapeHtml(text) {

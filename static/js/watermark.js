@@ -226,6 +226,7 @@ class WatermarkManager {
         if (path.indexOf('/oa/subsidy-pay') === 0) return 'oa_subsidy_pay';
         if (path.indexOf('/oa/subsidy') === 0) return 'oa_subsidy';
         if (path.indexOf('/oa/attendance') === 0) return 'oa_attendance';
+        if (path.indexOf('/oa/announcements') === 0) return 'oa_announcements';
         if (path.indexOf('/oa/work-calendar') === 0) return 'work_calendar';
         if (path.indexOf('/oa/work-summary') === 0) return 'work_summary';
         if (path.indexOf('/tasks') === 0) return 'tasks';

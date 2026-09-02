@@ -4,6 +4,7 @@ from .models import (
     ApprovalAssignee, ApprovalCarbonCopy, ApprovalDeptConfig,
     AttendanceConfig, SubsidyApplication, SubsidyPayment, SubsidyConfig,
     SubsidyWallet, SubsidyWithdrawal, UserAttendanceConfig,
+    FinanceSpecialist, Announcement, AnnouncementComment,
 )
 from .type_utils import resolve_approval_type
 
@@ -576,17 +577,21 @@ class ApprovalDeptConfigSerializer(serializers.ModelSerializer):
     cc_user_details = serializers.SerializerMethodField()
     approver_user_details = serializers.SerializerMethodField()
     final_approver_details = serializers.SerializerMethodField()
+    first_approver_details = serializers.SerializerMethodField()
     threshold_department_name = serializers.SerializerMethodField()
     threshold_field_display = serializers.SerializerMethodField()
     sub_tenant_name = serializers.SerializerMethodField()
+    scope_department_name = serializers.SerializerMethodField()
 
     class Meta:
         model = ApprovalDeptConfig
         fields = [
             'id', 'tenant', 'sub_tenant', 'sub_tenant_name',
+            'scope_department', 'scope_department_name',
             'approval_type', 'approval_type_display',
             'default_sign_type', 'default_approval_mode',
             'department', 'department_name',
+            'first_approver', 'first_approver_details',
             'cc_departments', 'cc_department_details',
             'cc_users', 'cc_user_details',
             'approver_users', 'approver_user_details',
@@ -646,6 +651,22 @@ class ApprovalDeptConfigSerializer(serializers.ModelSerializer):
             'position': u.position or '',
         }
 
+    def get_first_approver_details(self, obj):
+        """第一审批人（财务专员）详情"""
+        if not obj.first_approver:
+            return None
+        s = obj.first_approver
+        defAv = '/static/images/default-avatar.png'
+        return {
+            'id': s.id,
+            'user_id': s.user_id,
+            'name': s.user.real_name or s.user.username,
+            'avatar': s.user.get_avatar_url() if hasattr(s.user, 'get_avatar_url') else defAv,
+            'position': s.user.position or '',
+            'sub_tenant_names': list(s.sub_tenants.values_list('name', flat=True)),
+            'department_names': list(s.departments.values_list('name', flat=True)),
+        }
+
     def get_threshold_department_name(self, obj):
         return obj.threshold_department.name if obj.threshold_department else ''
 
@@ -653,6 +674,9 @@ class ApprovalDeptConfigSerializer(serializers.ModelSerializer):
         if obj.sub_tenant:
             return obj.sub_tenant.short_name or obj.sub_tenant.name
         return ''
+
+    def get_scope_department_name(self, obj):
+        return obj.scope_department.name if obj.scope_department else ''
 
     def get_threshold_field_display(self, obj):
         if not obj.threshold_field:
@@ -667,6 +691,40 @@ class ApprovalDeptConfigSerializer(serializers.ModelSerializer):
                 if f.get('key') == obj.threshold_field:
                     return f.get('label') or obj.threshold_field
         return obj.threshold_field
+
+
+class FinanceSpecialistSerializer(serializers.ModelSerializer):
+    """财务专员序列化器（含关联子公司/直属部门与用户详情）"""
+    user_name = serializers.SerializerMethodField()
+    avatar = serializers.SerializerMethodField()
+    position = serializers.SerializerMethodField()
+    sub_tenant_list = serializers.SerializerMethodField()
+    department_list = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FinanceSpecialist
+        fields = [
+            'id', 'user', 'user_name', 'avatar', 'position',
+            'tenant', 'sub_tenants', 'sub_tenant_list',
+            'departments', 'department_list',
+            'remark', 'is_active', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['tenant', 'created_at', 'updated_at']
+
+    def get_user_name(self, obj):
+        return obj.user.real_name or obj.user.username
+
+    def get_avatar(self, obj):
+        return obj.user.get_avatar_url() if hasattr(obj.user, 'get_avatar_url') else '/static/images/default-avatar.png'
+
+    def get_position(self, obj):
+        return obj.user.position or ''
+
+    def get_sub_tenant_list(self, obj):
+        return [{'id': t.id, 'name': t.short_name or t.name} for t in obj.sub_tenants.all()]
+
+    def get_department_list(self, obj):
+        return [{'id': d.id, 'name': d.name} for d in obj.departments.all()]
 
 
 class AttendanceConfigSerializer(serializers.ModelSerializer):
@@ -1011,3 +1069,59 @@ class SubsidyWithdrawalSerializer(serializers.ModelSerializer):
             'alipay_qr': u.alipay_qr or '',
             'wechat_qr': u.wechat_qr or '',
         }
+
+
+class AnnouncementCommentSerializer(serializers.ModelSerializer):
+    """集团公告评论序列化器（含图片/表情与二级回复）"""
+    author_name = serializers.SerializerMethodField()
+    avatar = serializers.SerializerMethodField()
+    parent_author_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AnnouncementComment
+        fields = ['id', 'author', 'author_name', 'avatar', 'content', 'image', 'parent', 'parent_author_name', 'is_anonymous', 'created_at']
+
+    def get_author_name(self, obj):
+        return obj.author.real_name or obj.author.username
+
+    def get_avatar(self, obj):
+        return obj.author.get_avatar_url() if hasattr(obj.author, 'get_avatar_url') else '/static/images/default-avatar.png'
+
+    def get_parent_author_name(self, obj):
+        if obj.parent_id:
+            try:
+                if obj.parent.is_anonymous:
+                    return '匿名用户'
+                return obj.parent.author.real_name or obj.parent.author.username
+            except Exception:
+                return ''
+        return ''
+
+
+class AnnouncementSerializer(serializers.ModelSerializer):
+    """集团公告序列化器"""
+    author_name = serializers.SerializerMethodField()
+    author_avatar = serializers.SerializerMethodField()
+    comment_count = serializers.SerializerMethodField()
+    scope_label = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Announcement
+        fields = [
+            'id', 'title', 'content', 'author', 'author_name', 'author_avatar',
+            'scope_type', 'scope_label', 'scope_sub_tenants', 'scope_departments', 'scope_users',
+            'enable_comments', 'comment_mode', 'is_published', 'published_at',
+            'comment_count', 'view_count', 'created_at', 'updated_at',
+        ]
+
+    def get_author_name(self, obj):
+        return obj.author.real_name or obj.author.username
+
+    def get_author_avatar(self, obj):
+        return obj.author.get_avatar_url() if hasattr(obj.author, 'get_avatar_url') else '/static/images/default-avatar.png'
+
+    def get_comment_count(self, obj):
+        return obj.comments.count()
+
+    def get_scope_label(self, obj):
+        return dict(Announcement.SCOPE_TYPE_CHOICES).get(obj.scope_type or 'all', '集团全员')

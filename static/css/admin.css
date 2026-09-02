@@ -1081,6 +1081,8 @@
     min-height: 320px;
     display: flex;
     flex-direction: column;
+    position: relative;
+    margin-bottom: 20px;
 }
 
 .chart-box h4 {
@@ -1099,6 +1101,23 @@
     height: 250px !important;
     max-height: 250px;
     width: 100%;
+}
+
+/* 部门用户分布：整行铺满网格，按部门数量动态调整高度，不受固定 250px 限制 */
+.chart-row-full {
+    grid-column: 1 / -1;
+    min-width: 0;
+}
+.chart-row-full .chart-box.chart-full {
+    width: 100%;
+    min-width: 0;
+}
+#departmentChart {
+    height: auto !important;
+    max-height: none !important;
+}
+@media (max-width: 768px) {
+    .chart-row-full { grid-column: 1 / -1; }
 }
 
 /* 排行榜容器 */

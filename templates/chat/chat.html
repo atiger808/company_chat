@@ -23,9 +23,9 @@
     <meta name="msapplication-TileColor" content="#409EFF">
     <meta name="msapplication-TileImage" content="/static/icons/icon-144x144.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20260828-1ca2622">-->
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260828-1ca2622">
-    <link rel="stylesheet" href="/static/css/org.css?v=20260828-1ca2622">
+    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20260901-b9b07be">-->
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260901-b9b07be">
+    <link rel="stylesheet" href="/static/css/org.css?v=20260901-b9b07be">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
 
     <!-- 🔧 iOS 专用样式修复 -->
@@ -175,12 +175,19 @@
                         <i class="fas fa-file-signature"></i>
                         <span>每日工作总结</span>
                     </div>
+
+                    <div class="dropdown-divider"></div>
+
+                    <div class="dropdown-item" id="announcementBtn" onclick="event.stopPropagation();window.location.href='/oa/announcements/'">
+                        <i class="fas fa-bullhorn" style="color:#7c4dff;"></i>
+                        <span>集团公告</span>
+                    </div>
                     <div class="dropdown-item" id="versionLogBtn">
                         <i class="fas fa-history"></i>
                         <span>版本更新日志</span>
                     </div>
 
-                     <div class="dropdown-divider"></div>
+                    <div class="dropdown-divider"></div>
 
                     <div class="dropdown-item" id="tasksBtn" style="display: none;">
                         <i class="fas fa-tasks"></i>
@@ -215,7 +222,7 @@
         </div>
 
         <div class="user-profile">
-            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260828-1ca2622"
+            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20260901-b9b07be"
                  alt="头像" class="avatar">
             <div class="user-info">
                 <div class="username" id="currentUsername">加载中...</div>
@@ -266,7 +273,7 @@
 
         <!-- 侧边栏底部功能区 -->
         <div class="sidebar-bottom-bar">
-            <div class="sidebar-bottom-item" id="notifSidebarItem" onclick="chatClient.openNotifications()" style="display:none;">
+            <div title="工作通知" class="sidebar-bottom-item" id="notifSidebarItem" onclick="chatClient.openNotifications()" style="display:none;">
                 <div class="sb-icon" style="background:var(--primary-color,#409eff);">
                     <i class="fas fa-bell"></i>
                 </div>
@@ -278,13 +285,22 @@
                     <span class="badge-num">0</span>
                 </div>
             </div>
-            <div class="sidebar-bottom-item" id="orgSidebarBtn" onclick="chatClient.openOrgView()">
+            <div title="组织架构" class="sidebar-bottom-item" id="orgSidebarBtn" onclick="chatClient.openOrgView()">
                 <div class="sb-icon" style="background:linear-gradient(135deg,#e6a23c,#f0c78a);">
                     <i class="fas fa-sitemap"></i>
                 </div>
                 <div class="sb-text">
                     <div class="sb-title">组织架构</div>
                     <div class="sb-sub">查看企业组织</div>
+                </div>
+            </div>
+            <div title="集团公告" class="sidebar-bottom-item" id="announcementSidebarItem" onclick="event.stopPropagation();window.location.href='/oa/announcements/'">
+                <div class="sb-icon" style="background:linear-gradient(135deg,#7c4dff,#a06bff);">
+                    <i class="fas fa-bullhorn"></i>
+                </div>
+                <div class="sb-text">
+                    <div class="sb-title">集团公告</div>
+                    <div class="sb-sub">查看公告</div>
                 </div>
             </div>
         </div>
@@ -310,7 +326,7 @@
                 </button>
                 <div class="chat-info" onclick="chatClient.showProfile(chatClient.currentRoomId)">
                     <div class="chat-avatar">
-                        <img src="/static/images/default-avatar.png?v=20260828-1ca2622"
+                        <img src="/static/images/default-avatar.png?v=20260901-b9b07be"
                              alt="聊天对象" id="chatAvatar">
                     </div>
                     <div class="chat-details">
@@ -641,7 +657,7 @@
                 </div>
                 <div class="profile-avatar-section">
                     <div class="avatar-upload-container">
-                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20260828-1ca2622"
+                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20260901-b9b07be"
                              alt="头像">
                         <label class="upload-btn" for="avatarUpload">
                             <i class="fas fa-camera"></i>
@@ -890,24 +906,24 @@
 
 
 <!-- 🔧 关键修复：脚本资源直接带版本参数 -->
-<script src="/static/js/dist/spark-md5.min.js?v=20260828-1ca2622"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260828-1ca2622"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260828-1ca2622"></script>
-<script src="/static/js/encrypts.js?v=20260828-1ca2622"></script>
-<script src="/static/js/api.js?v=20260828-1ca2622"></script>
-<script src="/static/js/utils.js?v=20260828-1ca2622"></script>
-<script src="/static/js/chat.js?v=20260828-1ca2622"></script>
-<script src="/static/js/tenant.js?v=20260828-1ca2622"></script>
-<script src="/static/js/org.js?v=20260828-1ca2622"></script>
-<script src="/static/js/notifications.js?v=20260828-1ca2622"></script>
-<script src="/static/js/push.js?v=20260828-1ca2622"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260901-b9b07be"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260901-b9b07be"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260901-b9b07be"></script>
+<script src="/static/js/encrypts.js?v=20260901-b9b07be"></script>
+<script src="/static/js/api.js?v=20260901-b9b07be"></script>
+<script src="/static/js/utils.js?v=20260901-b9b07be"></script>
+<script src="/static/js/chat.js?v=20260901-b9b07be"></script>
+<script src="/static/js/tenant.js?v=20260901-b9b07be"></script>
+<script src="/static/js/org.js?v=20260901-b9b07be"></script>
+<script src="/static/js/notifications.js?v=20260901-b9b07be"></script>
+<script src="/static/js/push.js?v=20260901-b9b07be"></script>
 
 
 <!-- templates/chat/index.html - 替换原有的版本检测脚本 -->
 
 <script>
     // 🔧 修复1: 从构建时注入的版本号（与后端保持一致）
-    const CURRENT_VERSION = '20260828-1ca2622';
+    const CURRENT_VERSION = '20260901-b9b07be';
 
     // 🔧 修复2: 首次访问时保存版本到 localStorage（不是 sessionStorage）
     const LAST_VERSION = localStorage.getItem('static_version');
@@ -991,7 +1007,7 @@
 </script>
 
 
-<script src="/static/js/watermark.js?v=20260828-1ca2622"></script>
+<script src="/static/js/watermark.js?v=20260901-b9b07be"></script>
 <script>WatermarkManager.init();</script>
 </body>
 </html>
