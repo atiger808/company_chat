@@ -25,6 +25,15 @@ import asyncio
 from loguru import logger
 
 
+@database_sync_to_async
+def _check_user_active(user_id):
+    """实时校验用户是否仍处于启用状态（禁用/离职后立即阻止其通过已建立连接收发）"""
+    try:
+        return CustomUser.objects.filter(id=user_id, is_active=True).exists()
+    except Exception:
+        return False
+
+
 class ChatConsumer(AsyncWebsocketConsumer):
     """聊天WebSocket消费者"""
 
@@ -201,6 +210,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """接收消息"""
         if self.user.is_anonymous:
             await self.close()
+            return
+
+        # 禁用/离职用户：即使连接建立后也被禁用，立即断开并阻止其继续使用实时服务
+        if not await _check_user_active(self.user.id):
+            await self.close(code=4403)
             return
 
         try:
@@ -855,6 +869,9 @@ class NotificationConsumer(AsyncWebsocketConsumer):
     async def receive(self, text_data):
         """接收消息（通知消费者通常只接收不发送）"""
         try:
+            if not await _check_user_active(self.user.id):
+                await self.close(code=4403)
+                return
             data = json.loads(text_data)
             # 🔧 前端打开/回到前台时主动查询待接听来电
             if data.get('type') == 'check_pending_call':
@@ -1105,6 +1122,9 @@ class CallConsumer(AsyncWebsocketConsumer):
     async def receive(self, text_data):
         """接收信令消息"""
         try:
+            if not await _check_user_active(self.user.id):
+                await self.close(code=4403)
+                return
             data = json.loads(text_data)
             message_type = data.get('type')
 

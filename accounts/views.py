@@ -502,15 +502,108 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
 
+        # 防止禁用自己
+        if target_user.id == user.id and target_user.is_active:
+            return Response({'error': '不能禁用当前登录的管理员账号'}, status=status.HTTP_403_FORBIDDEN)
+
         target_user.is_active = not target_user.is_active
         target_user.save()
 
-        logger.info(f'{user} {"启用" if target_user.is_active else "禁用"}了用户 {target_user.username}')
+        # 禁用（一般代表离职）：立即清除在线状态 + 使其已签发 refresh token 全部失效，
+        # 配合认证层按 is_active 逐请求拒绝，确保该用户无法再使用任何服务
+        if not target_user.is_active:
+            try:
+                from chat.models import UserOnlineStatus
+                from django.utils import timezone as dj_tz
+                UserOnlineStatus.objects.filter(user=target_user).update(
+                    is_online=False, last_seen=dj_tz.now())
+            except Exception:
+                pass
+            try:
+                from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+                for ot in OutstandingToken.objects.filter(user=target_user):
+                    BlacklistedToken.objects.get_or_create(token=ot)
+            except Exception:
+                pass
+            logger.warning(f'{user} 禁用了用户 {target_user.username}（已下线并吊销其令牌）')
+        else:
+            logger.info(f'{user} 启用了用户 {target_user.username}')
 
         return Response({
             'message': f'用户已{"启用" if target_user.is_active else "禁用"}',
             'is_active': target_user.is_active
         })
+
+    def transfer_data(self, request, pk=None):
+        """离职一键交接：将离职员工名下网盘文件/文件夹等数据平滑转移给接替者
+        POST /api/auth/admin/users/<pk>/transfer-data/  body: {to_user_id, scope:'cloud'}
+        """
+        from_user = self.get_object()
+        actor = request.user
+
+        # 权限：普通管理员只能为普通用户交接
+        if not actor.is_superuser and from_user.user_type != 'normal':
+            return Response({'error': '普通管理员只能为普通用户办理离职交接'},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            to_user_id = int(request.data.get('to_user_id') or 0)
+        except (ValueError, TypeError):
+            to_user_id = 0
+        if not to_user_id or to_user_id == from_user.id:
+            return Response({'error': '请选择有效的接替者（不能与原用户相同）'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            to_user = CustomUser.objects.get(id=to_user_id, is_active=True)
+        except CustomUser.DoesNotExist:
+            return Response({'error': '接替者不存在或已禁用'}, status=status.HTTP_400_BAD_REQUEST)
+        # 非超管管理员仅能在同一企业内交接
+        if not actor.is_superuser:
+            from_tenant = from_user.get_active_tenant()
+            to_tenant = to_user.get_active_tenant()
+            if not from_tenant or from_tenant.id != (to_tenant.id if to_tenant else None):
+                return Response({'error': '仅可在同一企业内办理交接'}, status=status.HTTP_403_FORBIDDEN)
+
+        scope = (request.data.get('scope') or 'cloud').strip() or 'cloud'
+        summary = {'files': 0, 'folders': 0, 'shares': 0, 'doc_locks_released': 0}
+
+        # 网盘/协作文档数据交接（核心）
+        if scope in ('cloud', 'all'):
+            from cloud.models import Folder, CloudFile, FileShare
+            # 交接个人文件夹（共享文件夹保留原结构不转移；跳过回收站与永久删除项）
+            folders = list(Folder.objects.filter(
+                owner=from_user, is_shared_folder=False,
+                deleted_at__isnull=True, permanently_deleted=False))
+            folder_ids = [f.id for f in folders]
+            for f in folders:
+                # unique_together=(parent,name,owner)：若接替者同名文件夹冲突则重命名
+                for attempt in range(20):
+                    try:
+                        f.owner = to_user
+                        f.save(update_fields=['owner'])
+                        summary['folders'] += 1
+                        break
+                    except Exception:
+                        suffix = f'（离职交接{attempt + 1}）'
+                        f.name = (f.name or '')[:240] + suffix
+            # 交接文件（含协作文档文件）；释放离职者遗留的编辑锁
+            qs = CloudFile.objects.filter(
+                owner=from_user, deleted_at__isnull=True, permanently_deleted=False)
+            file_ids = list(qs.values_list('id', flat=True))
+            locked = qs.filter(editing_user=from_user).update(editing_user=None)
+            summary['doc_locks_released'] = locked or 0
+            updated = qs.update(owner=to_user)
+            summary['files'] = updated or len(file_ids)
+            # 交接离职者创建的、指向已交接文件/文件夹的分享
+            share_qs = FileShare.objects.filter(owner=from_user, is_active=True)
+            if folder_ids:
+                share_qs = share_qs.filter(Q(folder_id__in=folder_ids) | Q(file_id__in=file_ids))
+            else:
+                share_qs = share_qs.filter(file_id__in=file_ids)
+            summary['shares'] = share_qs.update(owner=to_user) or 0
+
+        logger.info(f'{actor} 为离职用户 {from_user.username} 办理数据交接 → {to_user.username}：{summary}')
+        return Response({'message': '数据交接完成', 'summary': summary})
 
     @action(detail=False, methods=['post'])
     def batch_delete(self, request):
@@ -1578,6 +1671,25 @@ class TokenRefreshView(APIView):
 
             # 获取用户信息（用于日志）
             user_id = refresh.get('user_id')
+            # 🔧 禁用/离职用户禁止刷新 Token，使已签发的 access/refresh 全部失效（服务端按 is_active 逐请求拒绝）
+            if user_id:
+                try:
+                    from django.contrib.auth import get_user_model
+                    u = get_user_model().objects.get(id=user_id)
+                    if not u.is_active:
+                        try:
+                            from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+                            for ot in OutstandingToken.objects.filter(user=u):
+                                BlacklistedToken.objects.get_or_create(token=ot)
+                        except Exception:
+                            pass
+                        logger.warning(f'禁用用户尝试刷新 Token: user_id={user_id}')
+                        return Response({
+                            'error': '账户已被禁用，无法使用系统服务',
+                            'code': 'account_disabled'
+                        }, status=status.HTTP_401_UNAUTHORIZED)
+                except Exception:
+                    pass
             logger.info(f"用户 {user_id} 刷新了 Token")
 
             # 检查是否即将过期（7天内过期则延长）

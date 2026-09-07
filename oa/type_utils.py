@@ -45,6 +45,23 @@ BUILTIN_TYPES = [
           ]},
          {'key': 'purpose', 'label': '用途', 'type': 'textarea', 'required': True},
      ]},
+    # 物资入库单：关联需求单自动带出待收明细（可编辑本次实收数量，可分批），审批通过后自动累计已入库并写库存流水
+    {'code': 'material_stock_in', 'name': '物资入库单', 'icon': 'fa-warehouse', 'color': '#16a085',
+     'desc': '关联需求单分批入库，实收数量默认待收数可改小，通过后自动入库',
+     'form_schema': [
+         {'key': 'link_req', 'label': '关联需求单', 'type': 'link_requisition', 'required': True,
+          'target': 'items', 'mode': 'stock_in'},
+         {'key': 'warehouse', 'label': '仓库/库位', 'type': 'text'},
+         {'key': 'stock_date', 'label': '入库日期', 'type': 'date', 'required': True, 'default': 'today'},
+         {'key': 'items', 'label': '入库明细', 'type': 'struct_table', 'required': True,
+          'columns': [
+              {'key': 'item_name', 'label': '物品名称', 'type': 'item'},
+              {'key': 'spec', 'label': '规格型号', 'type': 'text'},
+              {'key': 'unit', 'label': '单位', 'type': 'text'},
+              {'key': 'quantity', 'label': '本次入库数量', 'type': 'number'},
+          ]},
+         {'key': 'remark', 'label': '备注', 'type': 'textarea'},
+     ]},
 ]
 
 

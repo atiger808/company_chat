@@ -7,6 +7,7 @@
 日志 django中间件 + 多租户中间件
 """
 import json
+import re
 import time
 import threading
 from django.db import close_old_connections
@@ -31,6 +32,44 @@ def get_current_tenant():
 def set_current_tenant(tenant):
     """设置当前线程的 tenant"""
     _thread_locals.tenant = tenant
+
+
+# 操作日志「接口模型映射」：把 API_MODEL_MAP 的 Django 风格路由占位符编译为正则，
+# 按「最长的命中规则」匹配真实请求路径，避免带 int/uuid 参数的具体接口被通用前缀接口误匹配
+_API_MODEL_REGEX_CACHE = {'built': False, 'patterns': []}
+
+
+def _param_placeholder_to_regex(m):
+    typ = m.group(1)
+    return {
+        'int': r'\d+',
+        'uuid': r'[0-9a-fA-F\-]{36}',
+        'slug': r'[A-Za-z0-9\-_]+',
+        'path': r'.+',
+    }.get(typ, r'[^/]+')
+
+
+def _build_api_model_regex():
+    patterns = []
+    for key, label in settings.API_MODEL_MAP.items():
+        # 先把字面部分转义，再仅替换 <type:name> 占位符为正则
+        escaped = re.escape(key)
+        regex_src = re.sub(r'<(\w+):[^>]+>', _param_placeholder_to_regex, escaped)
+        patterns.append((re.compile('^' + regex_src), len(key), label))
+    # 命中越长的规则越具体（如离职一键交接优于用户管理通用前缀），先按长度降序便于直接取第一个
+    patterns.sort(key=lambda p: p[1], reverse=True)
+    _API_MODEL_REGEX_CACHE['patterns'] = patterns
+    _API_MODEL_REGEX_CACHE['built'] = True
+
+
+def resolve_api_model(request_path):
+    """根据真实请求路径解析 API_MODEL_MAP 中最具体的接口模块名；无命中返回空字符串"""
+    if not _API_MODEL_REGEX_CACHE['built']:
+        _build_api_model_regex()
+    for compiled, _key_len, label in _API_MODEL_REGEX_CACHE['patterns']:
+        if compiled.match(request_path):
+            return label
+    return ''
 
 
 class TenantMiddleware(MiddlewareMixin):
@@ -167,15 +206,11 @@ class ApiLoggingMiddleware(MiddlewareMixin):
         logger.info(f'operation_log: {operation_log} creat: {creat}')
         if not operation_log.request_modular:
             logger.info(f'operation_log.request_modular: {operation_log.request_modular} request_path: {request.request_path}')
-            if settings.API_MODEL_MAP.get(request.request_path, None):
-                operation_log.request_modular = settings.API_MODEL_MAP[request.request_path]
+            # 按最具体的匹配规则解析接口模块（支持带 int/uuid 参数的具体接口）
+            mapped = resolve_api_model(request.request_path)
+            if mapped:
+                operation_log.request_modular = mapped
                 operation_log.save()
-            else:
-                for key, value in settings.API_MODEL_MAP.items():
-                    if request.request_path.startswith(key):
-                        operation_log.request_modular = value
-                        operation_log.save()
-                        break
 
     def process_view(self, request, view_func, view_args, view_kwargs):
         request.start_time = time.time()
@@ -185,14 +220,8 @@ class ApiLoggingMiddleware(MiddlewareMixin):
                     if '/query' not in request.request_path:
                         if request.request_path in settings.EXLUDE_API_LOG:
                             return
-                        request_modular = ''
-                        if settings.API_MODEL_MAP.get(request.request_path, None):
-                            request_modular = settings.API_MODEL_MAP[request.request_path]
-                        else:
-                            for key, value in settings.API_MODEL_MAP.items():
-                                if request.request_path.startswith(key):
-                                    request_modular = value
-                                    break
+                        # 按最具体的匹配规则解析接口模块（支持带 int/uuid 参数的具体接口）
+                        request_modular = resolve_api_model(request.request_path)
                         if not request_modular and hasattr(view_func.cls, 'queryset'):
                             request_modular = get_verbose_name(view_func.cls.queryset)
 

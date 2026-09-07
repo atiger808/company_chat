@@ -128,6 +128,8 @@ class DocumentEditorApp {
         this.selectedCollaborators = new Map(); // key: userId, value: {id, name, real_name, permission, avatar}
         this.editingCollabId = null;
         this.hasError = false;
+        // 原始/兼容切换：URL ?use=original|compat（缺省时后端对已转换表格默认提供兼容副本）
+        this._use = (new URLSearchParams(window.location.search).get('use') || '').toLowerCase();
 
         // 协同编辑 WebSocket 相关
         this.collabSocket = null;
@@ -172,6 +174,7 @@ class DocumentEditorApp {
 
             // 4. 更新页面信息
             this.updatePageInfo();
+            this.refreshVersionToggle();
 
             // 5. 初始化 OnlyOffice 编辑器
             this.initEditor();
@@ -277,7 +280,9 @@ class DocumentEditorApp {
     // 获取编辑配置
     async fetchEditConfig() {
         try {
-            const response = await fetch(`/api/cloud/documents/${this.fileId}/edit/`, {
+            let editUrl = `/api/cloud/documents/${this.fileId}/edit/`;
+            if (this._use) editUrl += '?use=' + encodeURIComponent(this._use);
+            const response = await fetch(editUrl, {
                 headers: TokenManagerCustom.getHeaders()
             });
 
@@ -323,6 +328,29 @@ class DocumentEditorApp {
         };
         const icon = iconMap[this.config.documentType] || 'fa-file';
         document.getElementById('docTypeIcon').className = `fas ${icon}`;
+    }
+
+    // 原始/兼容副本切换控件
+    refreshVersionToggle() {
+        const btn = document.getElementById('docVersionToggle');
+        const label = document.getElementById('docVersionToggleLabel');
+        if (!btn || !label) return;
+        const hasCompat = this.config && !!this.config.has_compat;
+        btn.style.display = hasCompat ? 'inline-flex' : 'none';
+        if (hasCompat) {
+            const compatNow = !!this.config.use_compat;
+            label.textContent = compatNow ? '切换到原始文件' : '切换到兼容副本';
+            btn.title = compatNow ? '打开未转换的原始文件' : '打开兼容格式副本（图片/预览更友好）';
+        }
+    }
+    switchDocumentVersion() {
+        if (!this.config) return;
+        const compatNow = !!this.config.use_compat;
+        const next = compatNow ? 'original' : 'compat';
+        const params = new URLSearchParams(window.location.search);
+        params.set('id', this.fileId);
+        params.set('use', next);
+        window.location.href = window.location.pathname + '?' + params.toString();
     }
 
     // ==================== OnlyOffice 编辑器初始化 ====================

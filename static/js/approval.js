@@ -426,9 +426,15 @@ class ApprovalApp {
                     });
                     break;
                 }
-                case 'date':
-                    html += '<input type="date" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(val) + '">';
+                case 'date': {
+                    let dv = val;
+                    if (!dv && f.default === 'today') {
+                        const _t = new Date();
+                        dv = _t.getFullYear() + '-' + String(_t.getMonth() + 1).padStart(2, '0') + '-' + String(_t.getDate()).padStart(2, '0');
+                    }
+                    html += '<input type="date" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(dv) + '">';
                     break;
+                }
                 case 'datetime':
                     html += '<input type="datetime-local" class="form-input" data-k="' + self._escape(key) + '" value="' + self._escape(val) + '">';
                     break;
@@ -730,28 +736,44 @@ class ApprovalApp {
         this._onDynStructChange();
     }
 
-    // ===== 关联需求单（物资领用单） =====
+    // ===== 关联需求单（物资领用单 / 物资入库单） =====
+    _reqLinkStockMode() {
+        const f = (this._currentSchema || []).find(function (s) { return s.type === 'link_requisition'; });
+        return !!(f && f.mode === 'stock_in');
+    }
     async _onDynReqLinkSearch(e, key) {
         const kw = (e.target.value || '').trim();
         const res = document.getElementById('dynReqLinkRes_' + key);
         if (!res) return;
         if (!kw) { res.style.display = 'none'; return; }
+        const stockMode = this._reqLinkStockMode();
         try {
-            const r = await fetch(OA_API_URL + '/material/requirement-search/?search=' + encodeURIComponent(kw), {headers: TokenManager.getHeaders()});
+            let url = OA_API_URL + '/material/requirement-search/?search=' + encodeURIComponent(kw);
+            if (stockMode) url += '&mode=stock_in';
+            const r = await fetch(url, {headers: TokenManager.getHeaders()});
             if (!r.ok) return;
             const d = await r.json();
             const list = d.results || [];
             const self = this;
             res.innerHTML = list.length ? list.map(function (it) {
+                const sub = stockMode
+                    ? ('待收 ' + (it.to_receive != null ? it.to_receive : 0))
+                    : ('剩余可领 ' + (it.remaining != null ? it.remaining : 0));
                 if (it.linkable) {
+                    const badge = stockMode ? ['待收 ' + (it.to_receive != null ? it.to_receive : 0), '#e6a23c', '#fdf6ec'] : ['可领用', '#16a085', '#e8f8f0'];
                     return '<div style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;" onclick="approvalApp._selectDynReqLink(' + it.id + ', \'' + self._escape(key) + '\')">'
-                        + '<div style="font-size:13px;font-weight:600;color:#16a085;">' + self._escape(it.doc_no) + ' <span style="font-size:10px;color:#16a085;background:#e8f8f0;border-radius:4px;padding:0 4px;">可领用</span></div>'
-                        + '<div style="font-size:11px;color:#909399;">' + self._escape([it.branch_dept, '物品 ' + it.item_count + ' 项', '剩余可领 ' + it.remaining].filter(Boolean).join(' · ')) + '</div>'
+                        + '<div style="font-size:13px;font-weight:600;color:#16a085;">' + self._escape(it.doc_no)
+                        + ' <span style="font-size:10px;color:' + badge[1] + ';background:' + badge[2] + ';border-radius:4px;padding:0 4px;">' + self._escape(badge[0]) + '</span></div>'
+                        + '<div style="font-size:11px;color:#909399;">' + self._escape([it.branch_dept, '物品 ' + it.item_count + ' 项', sub].filter(Boolean).join(' · ')) + '</div>'
                         + '</div>';
                 }
-                return '<div style="padding:8px 12px;opacity:0.55;border-bottom:1px solid #f0f0f0;cursor:not-allowed;" title="需求单' + self._escape(it.status_label) + '，入库后方可领用">'
-                    + '<div style="font-size:13px;font-weight:600;color:#606266;">' + self._escape(it.doc_no) + ' <span style="font-size:10px;color:#e6a23c;background:#fdf6ec;border-radius:4px;padding:0 4px;">' + self._escape(it.status_label) + '</span></div>'
-                    + '<div style="font-size:11px;color:#909399;">' + self._escape([it.branch_dept, '物品 ' + it.item_count + ' 项'].filter(Boolean).join(' · ')) + '（未入库，暂不可领用）</div>'
+                const reason = stockMode
+                    ? ((it.to_receive != null && it.to_receive <= 0) ? '该需求单已全部入库' : (it.status_label + '，需先审批通过'))
+                    : (it.status_label + '，入库后方可领用');
+                return '<div style="padding:8px 12px;opacity:0.55;border-bottom:1px solid #f0f0f0;cursor:not-allowed;" title="' + self._escape(reason) + '">'
+                    + '<div style="font-size:13px;font-weight:600;color:#606266;">' + self._escape(it.doc_no)
+                    + ' <span style="font-size:10px;color:#e6a23c;background:#fdf6ec;border-radius:4px;padding:0 4px;">' + self._escape(it.status_label) + '</span></div>'
+                    + '<div style="font-size:11px;color:#909399;">' + self._escape([it.branch_dept, '物品 ' + it.item_count + ' 项'].filter(Boolean).join(' · ')) + '（' + self._escape(reason) + '）</div>'
                     + '</div>';
             }).join('') : '<div style="padding:8px 12px;color:#909399;font-size:13px;">未找到需求单，请先发起物资需求单</div>';
             res.style.display = 'block';
@@ -800,7 +822,11 @@ class ApprovalApp {
         const tag = document.getElementById('dynReqLinkTag_' + key);
         if (!tag) return;
         const v = this._dynReqLinkValues && this._dynReqLinkValues[key];
-        if (!v) { tag.innerHTML = '<span style="font-size:12px;color:#c0c4cc;">未选择需求单（选择后将自动带出领用明细）</span>'; return; }
+        if (!v) {
+            const hint = this._reqLinkStockMode() ? '未选择需求单（选择后自动带出待收明细，可改本次实收数量）' : '未选择需求单（选择后将自动带出领用明细）';
+            tag.innerHTML = '<span style="font-size:12px;color:#c0c4cc;">' + hint + '</span>';
+            return;
+        }
         tag.innerHTML = '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#e8f8f0;border-radius:14px;font-size:12px;color:#16a085;margin-top:6px;">'
             + '<i class="fas fa-box-open" style="font-size:11px;"></i>'
             + '<span style="font-weight:600;">' + this._escape(v.doc_no || '') + '</span>'
@@ -827,7 +853,8 @@ class ApprovalApp {
         }
     }
 
-    // 从需求单自动带出明细到目标 struct_table（回填数量为剩余可领量；只读字段按只读渲染）
+    // 从需求单自动带出明细到目标 struct_table：
+    // 领用单回填「剩余可领量」（行只读锁定）；入库单回填「待收量」可编辑（用户可改本次实收）
     _fillDynStructFromRequirement(target, items) {
         const tbl = document.querySelector('.dyn-struct-table[data-struct-key="' + target + '"]');
         if (!tbl) return;
@@ -835,12 +862,19 @@ class ApprovalApp {
         if (!rowsEl) return;
         const cols = this._dynStructCols[target] || [];
         const readonly = this._dynStructReadonly && this._dynStructReadonly[target];
+        const stockMode = this._reqLinkStockMode();
         rowsEl.innerHTML = '';
         (items || []).forEach(function (it) {
+            let qty;
+            if (stockMode) {
+                qty = (it.to_receive != null) ? it.to_receive : ((it.quantity != null ? it.quantity : 0) - (it.received || 0));
+            } else {
+                qty = it.remaining != null ? it.remaining : it.quantity;
+            }
             approvalApp._appendDynStructRow(tbl, {
                 item_name: it.item_name, spec: it.spec, unit: it.unit,
                 price: it.price,
-                quantity: it.remaining != null ? it.remaining : it.quantity,
+                quantity: qty,
                 remark: it.remark || ''
             }, cols, readonly);
         });
@@ -4930,17 +4964,23 @@ class ApprovalApp {
             }
 
             // 物资单据：显眼展示单据号 + 复制按钮（方便申请人凭单号发起领用/领料）
-            if ((d.approval_type === 'material_requirement' || d.approval_type === 'material_requisition')
+            if ((d.approval_type === 'material_requirement' || d.approval_type === 'material_requisition' || d.approval_type === 'material_stock_in')
                 && d.form_data && d.form_data.doc_no) {
                 var _docNo = String(d.form_data.doc_no);
-                var _docLabel = d.approval_type === 'material_requirement' ? '物资需求单号' : '物资领用单号';
+                var _docLabel = d.approval_type === 'material_requirement' ? '物资需求单号'
+                    : (d.approval_type === 'material_requisition' ? '物资领用单号' : '物资入库单号');
+                var _isStockIn = d.approval_type === 'material_stock_in';
+                var _isRequisition = d.approval_type === 'material_requisition';
+                var _reqId = (d.form_data.link_req && (d.form_data.link_req.requirement_id || d.form_data.link_req.id));
                 html += '<div class="detail-item" style="grid-column:1/-1;background:#f0f9eb;border:1px solid #cdeeda;border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
                     + '<label style="margin:0;"><i class="fas fa-hashtag" style="color:#16a085;"></i> ' + _docLabel + '</label>'
                     + '<span style="font-size:18px;font-weight:700;color:#16a085;letter-spacing:1px;cursor:pointer;" title="点击复制" onclick="approvalApp._copyText(\'' + this._escape(_docNo) + '\')">' + this._escape(_docNo) + '</span>'
                     + '<button class="btn btn-secondary" onclick="approvalApp._copyText(\'' + this._escape(_docNo) + '\')" title="复制单据号" style="font-size:12px;padding:3px 10px;border:1px solid #16a085;border-radius:4px;color:#16a085;background:#fff;cursor:pointer;"><i class="fas fa-copy"></i> 复制</button>'
-                    + (d.approval_type === 'material_requisition' && d.form_data.requirement_doc_no ? '<span style="font-size:12px;color:#909399;">关联需求单：' + this._escape(d.form_data.requirement_doc_no) + '</span>' : '')
-                    + (d.approval_type === 'material_requisition' && d.form_data.link_req
-                        ? '<button class="btn btn-secondary" onclick="approvalApp._openRequirementDetail(\'' + this._escape(d.form_data.link_req.requirement_id || d.form_data.link_req.id) + '\')" title="查看需求单详情" style="font-size:12px;padding:3px 10px;border:1px solid #16a085;border-radius:4px;color:#16a085;background:#fff;cursor:pointer;"><i class="fas fa-box-open"></i> 查看需求单</button>'
+                    + ((_isRequisition || _isStockIn) && d.form_data.requirement_doc_no ? '<span style="font-size:12px;color:#909399;">关联需求单：' + this._escape(d.form_data.requirement_doc_no) + '</span>' : '')
+                    + (_isStockIn && d.form_data.warehouse ? '<span style="font-size:12px;color:#909399;">仓库/库位：' + this._escape(d.form_data.warehouse) + '</span>' : '')
+                    + (_isStockIn && d.form_data.stock_date ? '<span style="font-size:12px;color:#909399;">入库日期：' + this._escape(d.form_data.stock_date) + '</span>' : '')
+                    + ((_isRequisition || _isStockIn) && _reqId
+                        ? '<button class="btn btn-secondary" onclick="approvalApp._openRequirementDetail(\'' + this._escape(_reqId) + '\')" title="查看需求单详情" style="font-size:12px;padding:3px 10px;border:1px solid #16a085;border-radius:4px;color:#16a085;background:#fff;cursor:pointer;"><i class="fas fa-box-open"></i> 查看需求单</button>'
                         : '')
                     + '</div>';
             }
@@ -5455,7 +5495,7 @@ class ApprovalApp {
             tbody.innerHTML = items.map(function (it) {
                 var stock = (it.stock != null) ? Number(it.stock) : null;
                 var stockHtml = stock === null ? '-'
-                    : '<span style="color:' + (stock > 0 ? '#67c23a' : (stock === 0 ? '#909399' : '#f56c6c')) + ';font-weight:600;">' + stock + ' ' + approvalApp._escape(it.unit || '') + '</span>';
+                    : '<span style="color:' + (stock > 0 ? '#67c23a' : (stock === 0 ? '#909399' : '#f56c6c')) + ';font-weight:600;">' + (Math.round(stock * 100) / 100) + ' ' + approvalApp._escape(it.unit || '') + '</span>';
                 return '<tr>'
                     + '<td>' + approvalApp._escape(it.name) + '</td>'
                     + '<td>' + approvalApp._escape(it.spec || '-') + '</td>'
@@ -5463,7 +5503,9 @@ class ApprovalApp {
                     + '<td>' + approvalApp._escape(it.category || '-') + '</td>'
                     + '<td>' + approvalApp._escape(it.price || '-') + '</td>'
                     + '<td>' + stockHtml + '</td>'
-                    + '<td><button class="action-btn" onclick="approvalApp._editMaterialItem(' + it.id + ')" title="编辑"><i class="fas fa-edit"></i></button>'
+                    + '<td style="display:flex;gap:4px;"><button class="action-btn" title="出入库流水" onclick="approvalApp._openItemLedger(' + it.id + ')"><i class="fas fa-history" style="color:#16a085;"></i></button>'
+                    + '<button class="action-btn" title="库存调整" onclick="approvalApp._openItemAdjust(' + it.id + ')"><i class="fas fa-balance-scale" style="color:#e6a23c;"></i></button>'
+                    + '<button class="action-btn" onclick="approvalApp._editMaterialItem(' + it.id + ')" title="编辑"><i class="fas fa-edit"></i></button>'
                     + '<button class="action-btn" style="color:#f56c6c;" onclick="approvalApp._deleteMaterialItem(' + it.id + ')" title="删除"><i class="fas fa-trash"></i></button></td>'
                     + '</tr>';
             }).join('');
@@ -5537,6 +5579,92 @@ class ApprovalApp {
         } catch (e) { this.showToast(e.message || '删除失败', true); }
     }
 
+    // ===== 物品出入库流水 / 库存调整 / 重建流水 =====
+    async _openItemLedger(id) {
+        try {
+            var d = await this.apiGet(OA_API_URL + '/material/ledger/?item_id=' + id);
+            if (!d) return;
+            var it = d.item || {};
+            document.getElementById('matLedgerHeader').innerHTML =
+                '<img src="/static/images/default-avatar.png" style="display:none;">'
+                + '<span style="font-weight:600;color:#303133;">' + this._escape(it.name || ('#' + id)) + '</span>'
+                + (it.spec ? '<span style="color:#909399;">' + this._escape(it.spec) + '</span>' : '')
+                + '<span>现有库存：<b style="color:' + (d.balance > 0 ? '#67c23a' : (d.balance === 0 ? '#909399' : '#f56c6c')) + ';">' + d.balance + ' ' + this._escape(it.unit || '') + '</b></span>';
+            var tbody = document.getElementById('matLedgerTbody');
+            var rows = d.rows || [];
+            if (!rows.length) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:26px;color:#909399;">暂无流水（可通过库存调整/入库/领用产生）</td></tr>'; }
+            else {
+                tbody.innerHTML = rows.map(function (lg) {
+                    var color = lg.delta > 0 ? '#67c23a' : (lg.delta < 0 ? '#f56c6c' : '#909399');
+                    var sign = lg.delta > 0 ? '+' : '';
+                    return '<tr>'
+                        + '<td>' + approvalApp._escape(lg.created_at || '') + '</td>'
+                        + '<td>' + approvalApp._escape(lg.ref_label || lg.ref_type || '') + '</td>'
+                        + '<td style="color:' + color + ';font-weight:600;">' + sign + lg.delta + '</td>'
+                        + '<td>' + approvalApp._escape(lg.doc_no || '-') + '</td>'
+                        + '<td>' + approvalApp._escape(lg.operator || '-') + '</td>'
+                        + '<td>' + approvalApp._escape(lg.note || '') + '</td></tr>';
+                }).join('');
+            }
+            document.getElementById('materialLedgerModal').style.display = 'flex';
+            setTimeout(function () { document.getElementById('materialLedgerModal').classList.add('show'); }, 10);
+        } catch (e) { this.showToast('加载流水失败', true); }
+    }
+    _closeMaterialLedgerModal() {
+        var m = document.getElementById('materialLedgerModal');
+        if (m) { m.classList.remove('show'); setTimeout(function () { m.style.display = 'none'; }, 150); }
+    }
+    async _openItemAdjust(id) {
+        this._matAdjustItemId = id;
+        document.getElementById('matAdjustIo').value = 'in';
+        document.getElementById('matAdjustQty').value = '';
+        document.getElementById('matAdjustNote').value = '';
+        try {
+            var r = await fetch(OA_API_URL + '/material/items/' + id + '/', {headers: TokenManager.getHeaders()});
+            if (r.ok) {
+                var it = await r.json();
+                document.getElementById('matAdjustItemInfo').innerHTML = '物品：<b>' + this._escape(it.name || '') + '</b>'
+                    + (it.spec ? ' <span style="color:#909399;">' + this._escape(it.spec) + '</span>' : '')
+                    + '（单位 ' + this._escape(it.unit || '-') + '）';
+            }
+        } catch (err) { /* ignore */ }
+        document.getElementById('materialItemAdjustModal').style.display = 'flex';
+        setTimeout(function () { document.getElementById('materialItemAdjustModal').classList.add('show'); }, 10);
+    }
+    _closeMaterialItemAdjustModal() {
+        var m = document.getElementById('materialItemAdjustModal');
+        if (m) { m.classList.remove('show'); setTimeout(function () { m.style.display = 'none'; }, 150); }
+    }
+    async _saveMaterialItemAdjust() {
+        var qty = parseFloat(document.getElementById('matAdjustQty').value);
+        if (!(qty > 0)) { this.showToast('请输入大于 0 的调整数量', true); return; }
+        var payload = {
+            item_id: this._matAdjustItemId,
+            io: document.getElementById('matAdjustIo').value,
+            quantity: qty,
+            note: (document.getElementById('matAdjustNote').value || '').trim()
+        };
+        try {
+            var r = await fetch(OA_API_URL + '/material/item-adjust/', {method: 'POST', headers: TokenManager.getHeaders(), body: JSON.stringify(payload)});
+            if (!r.ok) { var e2 = await r.json().catch(function () { return {}; }); throw new Error(this._extractApiError(e2)); }
+            this._closeMaterialItemAdjustModal();
+            this.showToast('库存已调整', false);
+            this._loadMaterialItems();
+        } catch (e) { this.showToast(e.message || '调整失败', true); }
+    }
+    async _rebuildLedger() {
+        var ok = await this.showConfirmDialog('重建库存流水', '将清空本企业库存流水，并用历史「已入库需求单(+)」与「已通过领用单(−)」重建。确认执行？', 'danger');
+        if (!ok) return;
+        try {
+            var r = await fetch(OA_API_URL + '/material/ledger-rebuild/', {method: 'POST', headers: TokenManager.getHeaders(), body: JSON.stringify({})});
+            if (!r.ok) { var e2 = await r.json().catch(function () { return {}; }); throw new Error(this._extractApiError(e2)); }
+            var raw = await r.json();
+            var dd = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+            this.showToast((dd && dd.message) || '已重建', false);
+            this._loadMaterialItems();
+        } catch (e) { this.showToast(e.message || '重建失败', true); }
+    }
+
     // ==================== 物资管理（需求单/领用单） ====================
     openMaterialMgmtModal() {
         document.getElementById('materialMgmtModal').style.display = 'flex';
@@ -5562,32 +5690,34 @@ class ApprovalApp {
             if (btn) btn.className = 'fas fa-compress';
         }
     }
+    _loadCurrentMatTab(page) {
+        page = page || 1;
+        if (this._matTab === 'req') return this._loadMaterialRequirements(page);
+        if (this._matTab === 'reqsn') return this._loadMaterialRequisitions(page);
+        return this._loadMaterialStockIns(page);
+    }
     _switchMaterialTab(tab) {
         this._matTab = tab;
         this._matPage = 1;
         document.querySelectorAll('.mat-tab-btn').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-tab') === tab); });
         document.getElementById('matReqPanel').style.display = tab === 'req' ? 'block' : 'none';
         document.getElementById('matReqsnPanel').style.display = tab === 'reqsn' ? 'block' : 'none';
-        if (tab === 'req') this._loadMaterialRequirements(1);
-        else this._loadMaterialRequisitions(1);
+        document.getElementById('matStockInPanel').style.display = tab === 'stockin' ? 'block' : 'none';
+        this._loadCurrentMatTab(1);
     }
     _onMaterialSearch() {
         var self = this;
         clearTimeout(this._matSearchTimer);
         this._matSearchTimer = setTimeout(function () {
             self._matPage = 1;
-            if (self._matTab === 'req') self._loadMaterialRequirements(1);
-            else self._loadMaterialRequisitions(1);
+            self._loadCurrentMatTab(1);
         }, 300);
     }
     _reloadMaterialTab() {
-        var page = this._matPage || 1;
-        if (this._matTab === 'req') this._loadMaterialRequirements(page);
-        else this._loadMaterialRequisitions(page);
+        this._loadCurrentMatTab(this._matPage || 1);
     }
     _matPageGo(page) {
-        if (this._matTab === 'req') this._loadMaterialRequirements(page);
-        else this._loadMaterialRequisitions(page);
+        this._loadCurrentMatTab(page);
     }
     _renderMaterialPagination(data) {
         var el = document.getElementById('matPagination');
@@ -5612,7 +5742,12 @@ class ApprovalApp {
             approved: ['#67c23a', '已通过(可领用)'],
             rejected: ['#f56c6c', '已驳回']
         };
-        var map = kind === 'reqsn' ? reqsnMap : reqMap;
+        var stockinMap = {
+            pending: ['#909399', '待审批'],
+            approved: ['#67c23a', '已入库'],
+            rejected: ['#f56c6c', '已驳回']
+        };
+        var map = kind === 'reqsn' ? reqsnMap : (kind === 'stockin' ? stockinMap : reqMap);
         var c = map[status] || ['#909399', status];
         return '<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;color:#fff;background:' + c[0] + ';">' + this._escape(c[1]) + '</span>';
     }
@@ -5632,14 +5767,21 @@ class ApprovalApp {
             if (!list.length) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:#909399;">' + (search ? '未找到匹配的需求单' : '暂无物资需求单') + '</td></tr>'; this._renderMaterialPagination(d); return; }
             var self = this;
             tbody.innerHTML = list.map(function (it) {
+                var received = (it.received_total != null) ? it.received_total : 0;
+                var totalQ = (it.total_quantity != null) ? it.total_quantity : 0;
+                var remain = (it.remaining != null) ? it.remaining : 0;
+                var toRec = (it.to_receive != null) ? it.to_receive : (totalQ - received);
+                var canStock = it.status !== 'stocked' && it.request_status === 'approved' && toRec > 0;
                 var actions = '';
+                actions += '<button class="action-btn" title="需求单详情" onclick="approvalApp._openRequirementDetail(' + it.id + ')"><i class="fas fa-list-ul" style="color:#909399;"></i></button>';
                 if (it.status === 'approved') {
-                    actions += '<button class="action-btn" title="确认采购" onclick="approvalApp._changeRequirementStatus(' + it.id + ',\'purchasing\')"><i class="fas fa-cart-arrow-down" style="color:#409eff;"></i></button>';
-                    actions += '<button class="action-btn" title="确认入库" onclick="approvalApp._changeRequirementStatus(' + it.id + ',\'stocked\')"><i class="fas fa-warehouse" style="color:#67c23a;"></i></button>';
-                } else if (it.status === 'purchasing') {
-                    actions += '<button class="action-btn" title="确认入库" onclick="approvalApp._changeRequirementStatus(' + it.id + ',\'stocked\')"><i class="fas fa-warehouse" style="color:#67c23a;"></i></button>';
-                } else if (it.status === 'stocked') {
-                    actions += '<span style="font-size:11px;color:#67c23a;"><i class="fas fa-check-circle"></i> 可领用</span>';
+                    actions += '<button class="action-btn" title="确认采购(采购中)" onclick="approvalApp._changeRequirementStatus(' + it.id + ',\'purchasing\')"><i class="fas fa-cart-arrow-down" style="color:#409eff;"></i></button>';
+                }
+                if (canStock) {
+                    actions += '<button class="action-btn" title="去入库：新建物资入库单关联本需求单" onclick="approvalApp._startStockInForRequirement(' + it.id + ')"><i class="fas fa-warehouse" style="color:#16a085;"></i></button>';
+                }
+                if (it.status === 'stocked') {
+                    actions += '<span style="font-size:11px;color:#67c23a; padding:6px;"><i class="fas fa-check-circle"></i> 可领用</span>';
                 }
                 if (it.request_id) {
                     actions += '<button class="action-btn" title="查看审批" onclick="approvalApp.showDetail(' + it.request_id + ')"><i class="fas fa-eye"></i></button>';
@@ -5647,12 +5789,13 @@ class ApprovalApp {
                 return '<tr>'
                     + '<td style="font-weight:600;color:#16a085;">' + self._escape(it.doc_no) + '</td>'
                     + '<td>' + self._escape(it.branch_dept || '-') + '</td>'
-                    + '<td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + self._escape(it.purpose) + '">' + self._escape(it.purpose || '-') + '</td>'
                     + '<td>' + self._renderMatStatus(it.status, 'req') + '</td>'
-                    + '<td>' + it.item_count + ' 项 / 剩余 ' + it.remaining + '</td>'
+                    + '<td><div>' + received + ' / ' + totalQ + '</div>'
+                    + (toRec > 0 ? '<div style="font-size:11px;color:#e6a23c;">待收 ' + toRec + '</div>' : '<div style="font-size:11px;color:#67c23a;">已收齐</div>') + '</td>'
+                    + '<td style="color:' + (remain > 0 ? '#409eff' : '#909399') + ';">' + remain + '</td>'
                     + '<td>' + self._escape(it.applicant || '-') + '</td>'
                     + '<td>' + self._escape(it.created_at || '-') + '</td>'
-                    + '<td>' + (actions || '-') + '</td>'
+                    + '<td style="display:flex;gap:4px;">' + (actions || '-') + '</td>'
                     + '</tr>';
             }).join('');
             this._renderMaterialPagination(d);
@@ -5689,6 +5832,58 @@ class ApprovalApp {
             this._renderMaterialPagination(d);
         } catch (e) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:#909399;">加载失败</td></tr>'; }
     }
+    async _loadMaterialStockIns(page) {
+        var tbody = document.getElementById('matStockInTbody');
+        if (!tbody) return;
+        page = page || 1;
+        this._matPage = page;
+        var search = document.getElementById('matSearch') ? document.getElementById('matSearch').value.trim() : '';
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:#909399;"><i class="fas fa-spinner fa-spin"></i> 加载中...</td></tr>';
+        try {
+            var url = OA_API_URL + '/material/stock-ins/?page=' + page + '&page_size=10';
+            if (search) url += '&search=' + encodeURIComponent(search);
+            var d = await this.apiGet(url);
+            if (!d) return;
+            var list = d.results || [];
+            if (!list.length) { tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:#909399;">' + (search ? '未找到匹配的入库单' : '暂无物资入库单（请通过「物资入库单」审批发起入库）') + '</td></tr>'; this._renderMaterialPagination(d); return; }
+            var self = this;
+            tbody.innerHTML = list.map(function (it) {
+                var actions = '';
+                if (it.request_id) actions += '<button class="action-btn" title="查看审批" onclick="approvalApp.showDetail(' + it.request_id + ')"><i class="fas fa-eye"></i></button>';
+                return '<tr>'
+                    + '<td style="font-weight:600;color:#16a085;">' + self._escape(it.doc_no) + '</td>'
+                    + '<td style="font-weight:600;color:#e6a23c;">' + self._escape(it.requirement_doc_no || '-') + '</td>'
+                    + '<td>' + self._escape(it.warehouse || '-') + '</td>'
+                    + '<td>' + self._escape(it.stock_date || '-') + '</td>'
+                    + '<td>' + self._renderMatStatus(it.status, 'stockin') + '</td>'
+                    + '<td>' + it.item_count + ' 项 / 合计 ' + it.received_total + '</td>'
+                    + '<td>' + self._escape(it.applicant || '-') + '</td>'
+                    + '<td>' + self._escape(it.created_at || '-') + '</td>'
+                    + '<td>' + (actions || '-') + '</td>'
+                    + '</tr>';
+            }).join('');
+            this._renderMaterialPagination(d);
+        } catch (e) { tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:30px;color:#909399;">加载失败</td></tr>'; }
+    }
+    // 物资需求单操作「去入库」：打开新建审批并预选物资入库单类型 + 预关联该需求单
+    async _startStockInForRequirement(rid) {
+        var hasType = (this._approvalTypes || []).some(function (t) { return t.code === 'material_stock_in'; });
+        if (!hasType) { this.showToast('物资入库单类型暂不可用，请先停用旧自定义「物资入库」类型', true); return; }
+        try {
+            await this.openCreateModal();
+        } catch (e) { this.showToast('打开新建审批失败', true); return; }
+        this.selectType('material_stock_in');
+        var self = this;
+        setTimeout(function () {
+            self._dynReqLinkValues = self._dynReqLinkValues || {};
+            self._dynReqLinkValues['link_req'] = {requirement_id: rid, doc_no: '', branch_dept: '', purpose: '', amount: null};
+            self._renderDynReqLinkTag('link_req');
+            self._autoFillRequisitionDetail('link_req', 'items', rid);
+            // 使文档滚动到新建审批模态框可见
+            var modal = document.getElementById('createApprovalModal');
+            if (modal) modal.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+        }, 150);
+    }
     async _changeRequirementStatus(id, status) {
         var label = status === 'stocked' ? '确认该需求单已采购入库，之后可被领用' : '将该需求单标记为采购中';
         var ok = await this.showConfirmDialog('需求单状态流转', label + '？', 'confirm');
@@ -5713,14 +5908,30 @@ class ApprovalApp {
             var itemsHtml = (d.items || []).map(function (i) {
                 var price = (i.price != null && i.price !== '') ? Number(i.price) : null;
                 var totalAmt = (price != null) ? (price * (Number(i.quantity) || 0)).toFixed(2) : '-';
+                var received = (i.received != null) ? i.received : 0;
+                var toRec = (i.to_receive != null) ? i.to_receive : (Number(i.quantity) - received);
                 return '<tr><td>' + approvalApp._escape(i.item_name) + '</td>'
                     + '<td>' + approvalApp._escape(i.spec || '-') + '</td>'
                     + '<td>' + approvalApp._escape(i.unit || '-') + '</td>'
                     + '<td style="text-align:right;">' + (price != null ? price.toFixed(2) : '-') + '</td>'
                     + '<td style="text-align:right;">' + i.quantity + '</td>'
                     + '<td style="text-align:right;color:#e6a23c;font-weight:600;">' + totalAmt + '</td>'
+                    + '<td style="text-align:right;color:#16a085;font-weight:600;">' + received + '</td>'
+                    + '<td style="text-align:right;color:#e6a23c;">' + toRec + '</td>'
                     + '<td style="color:#67c23a;font-weight:600;">' + i.remaining + '</td></tr>';
-            }).join('') || '<tr><td colspan="7" style="text-align:center;color:#909399;">无明细</td></tr>';
+            }).join('') || '<tr><td colspan="9" style="text-align:center;color:#909399;">无明细</td></tr>';
+            var stockInsHtml = (d.stock_ins || []).length
+                ? '<div style="font-size:13px;font-weight:600;color:#16a085;margin:14px 0 6px;"><i class="fas fa-warehouse"></i> 入库记录</div>'
+                    + '<table class="oa-table"><thead><tr><th>入库单号</th><th>入库日期</th><th>仓库/库位</th><th>实收合计</th><th>状态</th><th>经手人</th></tr></thead><tbody>'
+                    + (d.stock_ins || []).map(function (si) {
+                        return '<tr><td style="font-weight:600;color:#16a085;">' + approvalApp._escape(si.doc_no) + '</td>'
+                            + '<td>' + approvalApp._escape(si.stock_date || '-') + '</td>'
+                            + '<td>' + approvalApp._escape(si.warehouse || '-') + '</td>'
+                            + '<td>' + si.received_total + '</td>'
+                            + '<td>' + approvalApp._renderMatStatus(si.status, 'stockin') + '</td>'
+                            + '<td>' + approvalApp._escape(si.operator || '-') + '</td></tr>';
+                    }).join('') + '</tbody></table>'
+                : '';
             body.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;margin-bottom:12px;">'
                 + '<div><strong>需求单号：</strong><span style="color:#16a085;font-weight:700;">' + approvalApp._escape(d.doc_no) + '</span></div>'
                 + '<div><strong>状态：</strong>' + approvalApp._renderMatStatus(d.status, 'req') + '</div>'
@@ -5729,7 +5940,8 @@ class ApprovalApp {
                 + '<div><strong>预估金额：</strong><span style="color:#e6a23c;font-weight:700;">¥' + (d.amount != null && d.amount !== '' ? (Number(d.amount)).toFixed(2) : '-') + '</span></div>'
                 + '<div><strong>用途：</strong>' + approvalApp._escape(d.purpose || '-') + '</div>'
                 + '</div>'
-                + '<table class="oa-table"><thead><tr><th>物品名称</th><th>规格</th><th>单位</th><th>单价</th><th>数量</th><th>金额</th><th>剩余可领</th></tr></thead><tbody>' + itemsHtml + '</tbody></table>';
+                + '<table class="oa-table"><thead><tr><th>物品名称</th><th>规格</th><th>单位</th><th>单价</th><th>需求数量</th><th>金额</th><th>已入库</th><th>待收</th><th>剩余可领</th></tr></thead><tbody>' + itemsHtml + '</tbody></table>'
+                + stockInsHtml;
             // 提升层级：在审批详情（z-index 3000）之上打开
             document.getElementById('materialReqDetailModal').style.zIndex = '3500';
             document.getElementById('materialReqDetailModal').style.display = 'flex';

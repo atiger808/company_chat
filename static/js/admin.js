@@ -1041,6 +1041,9 @@ class AdminConsole {
                                 <button class="action-btn" onclick="adminConsole.openEditUserModal(${user.id})" title="编辑">
                                     <i class="fas fa-edit"></i>
                                 </button>
+                                ${user.is_active
+                                    ? '<button class="action-btn" disabled style="opacity:.45;cursor:not-allowed;" title="离职交接（需先禁用该用户后方可交接）"><i class="fas fa-exchange-alt"></i></button>'
+                                    : '<button class="action-btn transfer-ready" onclick="adminConsole.openTransferModal(' + user.id + ', \'' + user.username + '\', \'' + user.real_name + '\')" title="离职交接（将名下网盘文件等交接给接替者）"><i class="fas fa-exchange-alt"></i></button>'}
                                 <button class="action-btn" onclick="adminConsole.resetPassword(${user.id}, '${user.username}')" title="重置密码">
                                     <i class="fas fa-key"></i>
                                 </button>
@@ -1113,9 +1116,12 @@ class AdminConsole {
         event.stopPropagation();
 
         const action = newStatus ? '启用' : '禁用';
+        const note = newStatus
+            ? ''
+            : '<br><small style="color: var(--text-light);">禁用后（一般指员工离职）该用户将无法登录及使用任何系统服务，名下数据可在用户管理中操作交接。</small>';
         const confirmed = await this.showConfirmDialog(
             `${action}用户`,
-            `确定要${action}用户 "<span class="highlight">${username}</span>" 吗？`,
+            `确定要${action}用户 "<span class="highlight">${username}</span>" 吗？${note}`,
             action === '禁用' ? 'danger' : 'confirm'
         );
 
@@ -1911,6 +1917,163 @@ class AdminConsole {
         } catch (error) {
             console.error('重置密码失败:', error);
             this.showError('重置失败', error.message);
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+    // ==================== 离职一键交接 ====================
+    async openTransferModal(userId, username, real_name) {
+        this._transferFromId = userId;
+        this._transferFromName = real_name ? `${real_name}@${username}` : `@${username || '未知用户'}`;
+        this._transferToId = null;
+        document.getElementById('transferFromName').textContent = this._transferFromName || '';
+        document.getElementById('transferToSearch').value = '';
+        document.getElementById('transferToUserId').value = '';
+        const tag = document.getElementById('transferToTag');
+        if (tag) { tag.style.display = 'none'; tag.innerHTML = ''; }
+        const dd = document.getElementById('transferToDropdown');
+        if (dd) {
+            dd.innerHTML = '<div style="padding:12px;color:#909399;font-size:13px;text-align:center;">正在加载接替者...</div>';
+            dd.style.display = 'block';
+        }
+        this._transferCandidates = [];
+        this.openModal('transferModal');
+        // 接替者候选：打开时从服务端拉取当前管理员可见用户（排除离职者与当前操作人），保证列表与搜索可用
+        const selfId = this.currentUser ? this.currentUser.id : null;
+        try {
+            const resp = await fetch(API_ADMIN_URL + '/admin/users/?page=1&page_size=200', {
+                headers: TokenManager.getHeaders()
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                const rows = data.results || [];
+                this._transferCandidates = rows.filter(function (u) {
+                    return String(u.id) !== String(userId) && String(u.id) !== String(selfId);
+                });
+            }
+        } catch (e) {
+            console.warn('加载接替者列表失败', e);
+        }
+        this._transferSearch('');
+    }
+
+    _transferSearch(kw) {
+        const dd = document.getElementById('transferToDropdown');
+        if (!dd) return;
+        kw = (kw || '').trim().toLowerCase();
+        const list = (this._transferCandidates || []).filter(function (u) {
+            if (!kw) return true;
+            return ((u.real_name || '') + ' ' + (u.username || '') + ' ' + (u.position || '')
+                + ' ' + ((u.department_info && u.department_info.name) || u.department || '')).toLowerCase().indexOf(kw) >= 0;
+        });
+        const defAv = '/static/images/default-avatar.png';
+        if (!list.length) {
+            dd.innerHTML = '<div style="padding:12px;color:#909399;font-size:13px;text-align:center;">未找到匹配的接替者</div>';
+        } else {
+            const self = this;
+            dd.innerHTML = list.map(function (u) {
+                const dept = (u.department_info && u.department_info.name) || u.department || '未分组';
+                const dis = u.is_active === false ? '（已禁用）' : '';
+                return '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;cursor:pointer;border-bottom:1px solid #f0f0f0;" '
+                    + 'onclick="adminConsole._pickTransferTo(' + u.id + ')">'
+                    + '<img src="' + (u.avatar_url || defAv) + '" style="width:34px;height:34px;border-radius:50%;object-fit:cover;flex-shrink:0;">'
+                    + '<div style="flex:1;min-width:0;">'
+                    + '<div style="font-size:14px;color:#303133;font-weight:600;">' + self._escAttr(u.real_name || u.username) + '<span style="color:#909399;font-weight:400;">（' + self._escAttr(u.username) + '）</span></div>'
+                    + '<div style="font-size:12px;color:#909399;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escAttr(u.position || '未填职位') + ' · ' + self._escAttr(dept) + '</div>'
+                    + '</div>'
+                    + (dis ? '<span style="font-size:11px;color:#f56c6c;flex-shrink:0;">已禁用</span>' : '')
+                    + '</div>';
+            }).join('');
+        }
+        dd.style.display = 'block';
+    }
+
+    _pickTransferTo(id) {
+        let u = null;
+        (this._transferCandidates || []).forEach(function (x) { if (String(x.id) === String(id)) u = x; });
+        if (!u) return;
+        this._transferToId = id;
+        document.getElementById('transferToUserId').value = id;
+        document.getElementById('transferToSearch').value = u.real_name || u.username || '';
+        const dd = document.getElementById('transferToDropdown');
+        if (dd) dd.style.display = 'none';
+        const tag = document.getElementById('transferToTag');
+        if (tag) {
+            const defAv = '/static/images/default-avatar.png';
+            const dept = (u.department_info && u.department_info.name) || u.department || '未分组';
+            tag.innerHTML = '<img src="' + (u.avatar_url || defAv) + '" style="width:24px;height:24px;border-radius:50%;object-fit:cover;flex-shrink:0;">'
+                + '<div style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><b>' + this._escAttr(u.real_name || u.username) + '</b>'
+                + '<span style="color:#909399;font-weight:400;margin-left:6px;">' + this._escAttr(u.position || '未填职位') + ' · ' + this._escAttr(dept) + '</span></div>'
+                + '<i class="fas fa-times" style="cursor:pointer;flex-shrink:0;" onclick="adminConsole._clearTransferTo(event)" title="重新选择"></i>';
+            tag.style.display = 'flex';
+        }
+    }
+
+    _clearTransferTo(e) {
+        if (e) e.stopPropagation();
+        this._transferToId = null;
+        document.getElementById('transferToUserId').value = '';
+        document.getElementById('transferToSearch').value = '';
+        const tag = document.getElementById('transferToTag');
+        if (tag) { tag.style.display = 'none'; tag.innerHTML = ''; }
+        const dd = document.getElementById('transferToDropdown');
+        if (dd) dd.style.display = 'none';
+        this._transferSearch('');
+    }
+
+    _escAttr(s) {
+        if (s === undefined || s === null) return '';
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    toggleTransferMaximize() {
+        const modal = document.getElementById('transferModal');
+        const content = modal ? modal.querySelector('.modal-content') : null;
+        const btn = document.getElementById('transferMaxBtn');
+        if (!content) return;
+        const isMax = content.classList.toggle('maximized');
+        if (btn) {
+            const icon = btn.querySelector('i');
+            if (icon) icon.className = isMax ? 'fas fa-compress' : 'fas fa-expand';
+            btn.title = isMax ? '退出全屏' : '最大化';
+        }
+        const body = content.querySelector('.modal-body');
+        if (body) body.style.maxHeight = isMax ? 'calc(100vh - 140px)' : '';
+    }
+
+    async confirmTransfer() {
+        const toUserId = document.getElementById('transferToUserId').value || this._transferToId;
+        if (!toUserId) {
+            this.showError('操作失败', '请选择接替者');
+            return;
+        }
+        const fromId = this._transferFromId;
+        const confirmed = await this.showConfirmDialog(
+            '确认交接',
+            `确定将用户 "<span class="highlight">${this._transferFromName || ''}</span>" 名下的网盘文件/文件夹等数据交接给所选接替者吗？<br><small style="color: var(--text-light);">交接后原文件归属改为接替者，操作不可撤销。</small>`,
+            'danger'
+        );
+        if (!confirmed) return;
+        try {
+            this.showLoading();
+            const resp = await fetch(`${API_ADMIN_URL}/admin/users/${fromId}/transfer-data/`, {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify({to_user_id: parseInt(toUserId, 10), scope: 'cloud'})
+            });
+            const data = await resp.json();
+            if (!resp.ok) {
+                throw new Error(data.error || data.message || '交接失败');
+            }
+            const s = data.summary || {};
+            this.closeModal('transferModal');
+            this.showSuccess('交接完成',
+                `文件 ${s.files || 0} 个 · 文件夹 ${s.folders || 0} 个 · 分享 ${s.shares || 0} 个已交接给接替者`);
+            this.refreshUsers();
+        } catch (e) {
+            console.error('交接失败:', e);
+            this.showError('交接失败', e.message);
         } finally {
             this.hideLoading();
         }

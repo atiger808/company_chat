@@ -22,7 +22,8 @@ from .models import (
     SubsidyApplication, SubsidyPayment, SubsidyConfig, SubsidyWallet,
     SubsidyWithdrawal, SubsidyInvoiceVerifyRecord,
     MaterialItem, MaterialRequirement, MaterialRequisition,
-    MaterialRequirementItem, MaterialRequisitionItem, DocumentSequence,
+    MaterialRequirementItem, MaterialRequisitionItem, MaterialStockIn,
+    MaterialStockInItem, MaterialStockLog, DocumentSequence,
     WatermarkConfig, DEFAULT_WATERMARK_PAGES, PrintLog, DailyWorkSummary,
     Announcement, AnnouncementComment, FinanceSpecialist,
 )
@@ -2172,7 +2173,7 @@ class ApprovalViewSet(viewsets.ViewSet):
                 payment_method=payment_method,
             )
             # 物资单据：创建业务记录 + 自动生成单据号（失败则回滚整单）；金额镜像到审批金额字段以支持阈值审批
-            if approval_type in ('material_requirement', 'material_requisition'):
+            if approval_type in ('material_requirement', 'material_requisition', 'material_stock_in'):
                 from decimal import Decimal as _D, InvalidOperation as _IO
                 from .material_utils import ensure_material_record
                 _mrec, merr = ensure_material_record(approval, form_data)
@@ -2941,6 +2942,37 @@ class ApprovalViewSet(viewsets.ViewSet):
             if rec and rec.status == 'pending':
                 rec.status = 'approved'
                 rec.save(update_fields=['status'])
+        elif approval.approval_type == 'material_stock_in':
+            from .material_utils import apply_stock_in
+            rec = MaterialStockIn.objects.select_related('requirement', 'created_by').filter(request=approval).first()
+            if rec and rec.status != 'approved':
+                rec.status = 'approved'
+                rec.save(update_fields=['status'])
+                apply_stock_in(rec)
+                # 通知入库申请人
+                if rec.created_by_id:
+                    send_work_notification(
+                        user_id=rec.created_by_id,
+                        title='物资已入库',
+                        content=f'入库单 {rec.doc_no}（关联需求单 {rec.requirement_doc_no or ""}）已入库',
+                        notification_type='approval',
+                        related_url=f'/oa/approval/?approval_id={approval.id}',
+                        extra_data={'approval_id': approval.id},
+                    )
+                # 需求单申请人获知入库进度
+                req_applicant_id = rec.requirement.created_by_id if rec.requirement else None
+                if req_applicant_id and req_applicant_id != rec.created_by_id:
+                    try:
+                        send_work_notification(
+                            user_id=req_applicant_id,
+                            title='物资入库进度',
+                            content=f'需求单 {rec.requirement_doc_no or ""} 有新入库（入库单 {rec.doc_no}）',
+                            notification_type='approval',
+                            related_url=f'/oa/approval/?approval_id={rec.requirement.request_id}' if rec.requirement and rec.requirement.request_id else '',
+                            extra_data={'approval_id': rec.requirement.request_id if rec.requirement else None},
+                        )
+                    except Exception:
+                        pass
 
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
@@ -3471,7 +3503,7 @@ class ApprovalViewSet(viewsets.ViewSet):
                                       approval.approval_type)
         approval.form_data = form_data
         # 物资单据：重新提交时同步业务记录（保留原单据号），校验失败则拒绝重新提交
-        if approval.approval_type in ('material_requirement', 'material_requisition'):
+        if approval.approval_type in ('material_requirement', 'material_requisition', 'material_stock_in'):
             from decimal import Decimal as _D, InvalidOperation as _IO
             from .material_utils import ensure_material_record
             _mrec, merr = ensure_material_record(approval, form_data)
@@ -4491,16 +4523,17 @@ class MaterialViewSet(viewsets.ViewSet):
         total_pages = max(1, (total + page_size - 1) // page_size)
         items_page = list(qs[(page - 1) * page_size: page * page_size])
         from django.db.models import Sum
-        stock_in = dict(MaterialRequirementItem.objects.filter(
-            requirement__tenant=tenant, requirement__status='stocked'
-        ).values('item_name').annotate(t=Sum('quantity')).values_list('item_name', 't'))
-        stock_out = dict(MaterialRequisitionItem.objects.filter(
-            requisition__tenant=tenant, requisition__status='approved'
-        ).values('item_name').annotate(t=Sum('quantity')).values_list('item_name', 't'))
+        # 现有库存 = 库存流水余额（入库 + / 出库 − / 手工调整 ±）
+        fk_tot = dict(MaterialStockLog.objects.filter(tenant=tenant, item_id__in=[i.id for i in items_page])
+                      .values('item_id').annotate(t=Sum('delta')).values_list('item_id', 't'))
+        name_tot = {}
+        for r in MaterialStockLog.objects.filter(tenant=tenant, item__isnull=True) \
+                .values('item_name', 'spec').annotate(t=Sum('delta')):
+            name_tot[(r['item_name'], r['spec'] or '')] = r['t']
         data = [{
             'id': i.id, 'name': i.name, 'spec': i.spec, 'unit': i.unit,
             'category': i.category, 'price': str(i.price or ''),
-            'stock': float((stock_in.get(i.name, 0) or 0) - (stock_out.get(i.name, 0) or 0)),
+            'stock': float(fk_tot.get(i.id) if i.id in fk_tot else (name_tot.get((i.name, i.spec or ''), 0) or 0)),
         } for i in items_page]
         return Response({'results': data, 'count': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages})
 
@@ -4576,11 +4609,13 @@ class MaterialViewSet(viewsets.ViewSet):
 
     # ===== 需求单联动 =====
     def requirement_search(self, request):
-        """需求单搜索：返回本企业需求单并标注是否可领用（已入库且剩余>0 才能关联），
-        未入库的需求单仅展示（灰色、不可选），让申请人清楚需求单已生成及当前状态"""
+        """需求单搜索：mode=''（领用单）→ 可领用=已入库且剩余>0；
+        mode=stock_in（入库单）→ 可关联=需求单已审批通过且有待收数量"""
         tenant = self._tenant(request)
+        mode = (request.query_params.get('mode', '') or '').strip()
         keyword = request.query_params.get('search', '').strip()
-        qs = MaterialRequirement.objects.filter(tenant=tenant).prefetch_related('items')
+        qs = MaterialRequirement.objects.filter(tenant=tenant) \
+            .select_related('request', 'branch_dept').prefetch_related('items')
         if keyword:
             from django.db.models import Q
             qs = qs.filter(Q(doc_no__icontains=keyword) | Q(purpose__icontains=keyword)
@@ -4589,33 +4624,51 @@ class MaterialViewSet(viewsets.ViewSet):
         status_labels = dict(MaterialRequirement.STATUS_CHOICES)
         data = []
         for r in qs:
-            total_remain = float(sum((i.quantity - i.requisitioned_quantity) for i in r.items.all()))
+            req_approved = bool(r.request_id and r.request.status == 'approved')
+            total_remain = 0.0
+            total_receive = 0.0
+            total_quantity = 0.0
+            for i in r.items.all():
+                q = float(i.quantity)
+                total_quantity += q
+                total_remain += q - float(i.requisitioned_quantity)
+                total_receive += q - float(i.received_quantity)
+            if mode == 'stock_in':
+                linkable = bool(req_approved and r.status in ('approved', 'purchasing') and total_receive > 0)
+            else:
+                linkable = bool(r.status == 'stocked' and total_remain > 0)
             data.append({
                 'id': r.id, 'doc_no': r.doc_no,
                 'branch_dept': r.branch_dept.name if r.branch_dept else '',
                 'purpose': r.purpose,
                 'item_count': r.items.count(),
-                'remaining': total_remain,
+                'remaining': round(total_remain, 2),
+                'to_receive': round(total_receive, 2),
+                'total_quantity': round(total_quantity, 2),
                 'status': r.status,
                 'status_label': status_labels.get(r.status, r.status),
-                'linkable': r.status == 'stocked' and total_remain > 0,
+                'linkable': linkable,
+                'mode': mode,
                 'created_at': r.created_at.strftime('%Y-%m-%d'),
             })
         return Response({'results': data})
 
     def requirement_detail(self, request):
-        """需求单详情 + 明细（含剩余可领），供领用单自动带出"""
+        """需求单详情 + 明细（含已领/待领/已收/待收）+ 相关入库单，供领用/入库自动带出"""
+        from django.db.models import Sum
         rid = request.query_params.get('id', '').strip()
         if not rid:
             return Response({'error': '缺少需求单ID'}, status=400)
         try:
-            r = MaterialRequirement.objects.get(id=int(rid))
+            r = MaterialRequirement.objects.select_related('created_by', 'request').get(id=int(rid))
         except (ValueError, TypeError, MaterialRequirement.DoesNotExist):
             return Response({'error': '需求单不存在'}, status=404)
         items = [{
             'item_name': i.item_name, 'spec': i.spec, 'unit': i.unit,
             'price': float(i.price) if i.price is not None else None,
             'quantity': float(i.quantity),
+            'received': float(i.received_quantity),
+            'to_receive': float(i.quantity - i.received_quantity),
             'remaining': float(i.quantity - i.requisitioned_quantity),
             'remark': i.remark,
         } for i in r.items.all()]
@@ -4623,7 +4676,7 @@ class MaterialViewSet(viewsets.ViewSet):
         # 预估金额：优先取审批金额字段，兜底取审批 form_data
         amount = None
         if r.request_id:
-            _req = ApprovalRequest.objects.filter(id=r.request_id).first()
+            _req = r.request if r.request_id else None
             if _req:
                 if _req.amount:
                     amount = float(_req.amount)
@@ -4632,6 +4685,22 @@ class MaterialViewSet(viewsets.ViewSet):
                         amount = float(_req.form_data['amount'])
                     except (ValueError, TypeError):
                         amount = None
+        # 相关入库单（最近 10 张，含实收合计）
+        si_sum = dict(MaterialStockInItem.objects.filter(stock_in__requirement=r)
+                      .values('stock_in_id').annotate(t=Sum('quantity')).values_list('stock_in_id', 't'))
+        si_labels = dict(MaterialStockIn.STATUS_CHOICES)
+        stock_ins = []
+        for si in r.stock_ins.select_related('created_by').order_by('-created_at')[:10]:
+            stock_ins.append({
+                'id': si.id, 'doc_no': si.doc_no,
+                'status': si.status,
+                'status_label': si_labels.get(si.status, si.status),
+                'warehouse': si.warehouse,
+                'stock_date': str(si.stock_date) if si.stock_date else '',
+                'received_total': float(si_sum.get(si.id, 0) or 0),
+                'operator': (si.created_by.real_name or si.created_by.username) if si.created_by else '',
+                'request_id': si.request_id,
+            })
         return Response({'encrypt': True, 'data': encrypt_data({
             'id': r.id, 'doc_no': r.doc_no,
             'branch_dept': r.branch_dept.name if r.branch_dept else '',
@@ -4642,10 +4711,12 @@ class MaterialViewSet(viewsets.ViewSet):
             'request_id': r.request_id,
             'amount': amount,
             'items': items,
+            'stock_ins': stock_ins,
         })})
 
     def stock_in(self, request):
-        """入库确认：需求单已采购入库，之后才可被领用（仅企业管理员/超管）"""
+        """需求单一键整单入库（仅企业管理员/超管）：把剩余待收全部收掉并写库存流水，
+        用于无需「物资入库单」审批的快捷收尾，逻辑与入库单审批通过后一致。"""
         if not self._admin(request):
             return Response({'error': '仅企业管理员可操作'}, status=403)
         rid = request.data.get('id') or request.data.get('requirement_id')
@@ -4655,10 +4726,23 @@ class MaterialViewSet(viewsets.ViewSet):
             r = MaterialRequirement.objects.get(id=int(rid))
         except (ValueError, TypeError, MaterialRequirement.DoesNotExist):
             return Response({'error': '需求单不存在'}, status=404)
-        if r.request.status != 'approved':
+        if not r.request or r.request.status != 'approved':
             return Response({'error': '需求单审批通过后才能确认入库'}, status=400)
-        r.status = 'stocked'
-        r.save(update_fields=['status'])
+        from .material_utils import write_stock_log
+        from django.db import transaction
+        with transaction.atomic():
+            changed = False
+            for ri in r.items.select_for_update().all():
+                remaining = ri.quantity - ri.received_quantity
+                if remaining > 0:
+                    ri.received_quantity = ri.received_quantity + remaining
+                    ri.save(update_fields=['received_quantity'])
+                    write_stock_log(r.tenant, item_name=ri.item_name, spec=ri.spec, delta=remaining,
+                                    ref_type='requirement', ref_id=r.id, doc_no=r.doc_no,
+                                    operator=request.user, note=f'整单入库 {r.doc_no}')
+                    changed = True
+            r.status = 'stocked'
+            r.save(update_fields=['status', 'updated_at'])
         try:
             if r.created_by_id:
                 send_work_notification(
@@ -4693,6 +4777,8 @@ class MaterialViewSet(viewsets.ViewSet):
         for r in list(qs[(page - 1) * page_size: page * page_size]):
             items = list(r.items.all())
             total_remain = float(sum((i.quantity - i.requisitioned_quantity) for i in items))
+            total_quantity = float(sum(i.quantity for i in items))
+            total_received = float(sum(i.received_quantity for i in items))
             data.append({
                 'id': r.id, 'doc_no': r.doc_no,
                 'branch_dept': r.branch_dept.name if r.branch_dept else '',
@@ -4701,6 +4787,9 @@ class MaterialViewSet(viewsets.ViewSet):
                 'status_label': status_labels.get(r.status, r.status),
                 'item_count': len(items),
                 'remaining': round(total_remain, 2),
+                'total_quantity': round(total_quantity, 2),
+                'received_total': round(total_received, 2),
+                'to_receive': round(total_quantity - total_received, 2),
                 'applicant': (r.created_by.real_name or r.created_by.username) if r.created_by else '',
                 'request_status': r.request.status if r.request_id else '',
                 'request_id': r.request_id,
@@ -4762,6 +4851,20 @@ class MaterialViewSet(viewsets.ViewSet):
         allowed = {'purchasing': {'approved'}, 'stocked': {'approved', 'purchasing'}}
         if r.status not in allowed.get(status, set()):
             return Response({'error': f'当前状态({r.status})不能流转到({status})'}, status=400)
+        # 置为「已入库」时把剩余待收整单收掉并写库存流水，保证与入库单口径一致
+        if status == 'stocked':
+            from .material_utils import write_stock_log
+            from django.db import transaction
+            with transaction.atomic():
+                for ri in r.items.select_for_update().all():
+                    remaining = ri.quantity - ri.received_quantity
+                    if remaining > 0:
+                        ri.received_quantity = ri.received_quantity + remaining
+                        ri.save(update_fields=['received_quantity'])
+                        write_stock_log(r.tenant, item_name=ri.item_name, spec=ri.spec,
+                                        delta=remaining, ref_type='requirement', ref_id=r.id,
+                                        doc_no=r.doc_no, operator=request.user,
+                                        note=f'整单入库 {r.doc_no}')
         r.status = status
         r.save(update_fields=['status'])
         try:
@@ -4778,6 +4881,131 @@ class MaterialViewSet(viewsets.ViewSet):
         except Exception:
             pass
         return Response({'message': '已更新'})
+
+    def stock_ins(self, request):
+        """物资入库单列表（物资管理界面「入库单」Tab，可搜索/状态 + 分页）"""
+        from django.db.models import Q
+        tenant = self._tenant(request)
+        qs = MaterialStockIn.objects.filter(tenant=tenant) \
+            .select_related('created_by', 'requirement__request')
+        search = (request.query_params.get('search', '') or '').strip()
+        status = (request.query_params.get('status', '') or '').strip()
+        if search:
+            qs = qs.filter(Q(doc_no__icontains=search) | Q(requirement_doc_no__icontains=search)
+                          | Q(warehouse__icontains=search) | Q(created_by__username__icontains=search)
+                          | Q(created_by__real_name__icontains=search))
+        if status in ('pending', 'approved', 'rejected'):
+            qs = qs.filter(status=status)
+        qs = qs.order_by('-updated_at')
+        page = max(1, int(request.query_params.get('page', 1) or 1))
+        page_size = max(1, int(request.query_params.get('page_size', 20) or 20))
+        total = qs.count()
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        si_labels = dict(MaterialStockIn.STATUS_CHOICES)
+        data = []
+        for si in list(qs[(page - 1) * page_size: page * page_size]):
+            items = list(si.items.all())
+            data.append({
+                'id': si.id, 'doc_no': si.doc_no,
+                'requirement_doc_no': si.requirement_doc_no or (si.requirement.doc_no if si.requirement else ''),
+                'warehouse': si.warehouse,
+                'stock_date': str(si.stock_date) if si.stock_date else '',
+                'status': si.status,
+                'status_label': si_labels.get(si.status, si.status),
+                'item_count': len(items),
+                'received_total': round(float(sum(i.quantity for i in items)), 2),
+                'applicant': (si.created_by.real_name or si.created_by.username) if si.created_by else '',
+                'request_id': si.request_id,
+                'created_at': si.created_at.strftime('%Y-%m-%d %H:%M') if si.created_at else '',
+            })
+        return Response({'encrypt': True, 'data': encrypt_data(
+            {'results': data, 'count': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages})})
+
+    def _item_stock(self, tenant, item):
+        """计算单个物品库物品当前库存（=该物品库存流水余额；无 FK 流水时按名称/规格兜底）"""
+        from django.db.models import Sum
+        fk = MaterialStockLog.objects.filter(tenant=tenant, item_id=item.id) \
+            .aggregate(t=Sum('delta'))['t']
+        if fk is not None:
+            return float(fk)
+        nm = MaterialStockLog.objects.filter(tenant=tenant, item__isnull=True,
+                                             item_name=item.name, spec=item.spec or '') \
+            .aggregate(t=Sum('delta'))['t']
+        return float(nm or 0)
+
+    def ledger(self, request):
+        """物品出入库流水（?item_id= 或 ?item=）"""
+        tenant = self._tenant(request)
+        item_id = (request.query_params.get('item_id') or request.query_params.get('item') or '').strip()
+        if not item_id:
+            return Response({'error': '缺少物品ID'}, status=400)
+        try:
+            item = MaterialItem.objects.filter(tenant=tenant, id=int(item_id)).first()
+        except (ValueError, TypeError):
+            item = None
+        if not item:
+            return Response({'error': '物品不存在'}, status=404)
+        ref_labels = dict(MaterialStockLog.REF_TYPES)
+        rows = []
+        for lg in MaterialStockLog.objects.filter(tenant=tenant, item=item).order_by('-created_at')[:200]:
+            rows.append({
+                'delta': float(lg.delta),
+                'ref_type': lg.ref_type,
+                'ref_label': ref_labels.get(lg.ref_type, lg.ref_type),
+                'doc_no': lg.doc_no,
+                'note': lg.note,
+                'operator': (lg.operator.real_name or lg.operator.username) if lg.operator else '',
+                'created_at': lg.created_at.strftime('%Y-%m-%d %H:%M') if lg.created_at else '',
+            })
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'item': {'id': item.id, 'name': item.name, 'spec': item.spec, 'unit': item.unit},
+            'balance': self._item_stock(tenant, item),
+            'rows': rows,
+        })})
+
+    def item_adjust(self, request):
+        """库存手工调整/盘点（仅管理员）：io=in|out，quantity>0，记录原因并写 adjust 流水"""
+        if not self._admin(request):
+            return Response({'error': '仅企业管理员可操作'}, status=403)
+        tenant = self._tenant(request)
+        item_id = request.data.get('item_id') or request.data.get('id')
+        io = (request.data.get('io') or '').strip().lower()
+        note = (request.data.get('note') or '').strip()
+        if not item_id:
+            return Response({'error': '缺少物品ID'}, status=400)
+        try:
+            item = MaterialItem.objects.filter(tenant=tenant, id=int(item_id)).first()
+        except (ValueError, TypeError):
+            item = None
+        if not item:
+            return Response({'error': '物品不存在'}, status=404)
+        if io not in ('in', 'out'):
+            return Response({'error': '请选择入库/出库方向'}, status=400)
+        try:
+            qty = float(request.data.get('quantity'))
+        except (TypeError, ValueError):
+            return Response({'error': '数量格式错误'}, status=400)
+        if qty <= 0:
+            return Response({'error': '调整数量必须大于0'}, status=400)
+        balance = self._item_stock(tenant, item)
+        if io == 'out' and balance + 1e-9 < qty:
+            return Response({'error': f'库存不足：当前库存 {balance} {item.unit or ""}'}, status=400)
+        delta = qty if io == 'in' else -qty
+        from decimal import Decimal
+        MaterialStockLog.objects.create(
+            tenant=tenant, item=item, item_name=item.name, spec=item.spec,
+            delta=Decimal(str(delta)), ref_type='adjust', operator=request.user,
+            note=note or ('手工入库' if io == 'in' else '手工出库'))
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'message': '已调整', 'balance': balance + (qty if io == 'in' else -qty)})})
+
+    def ledger_rebuild(self, request):
+        """重建库存流水：用历史 已入库需求单(+) + 已通过领用单(−) 重建（仅管理员，一次性迁移）"""
+        if not self._admin(request):
+            return Response({'error': '仅企业管理员可操作'}, status=403)
+        from .material_utils import rebuild_ledger
+        n = rebuild_ledger(self._tenant(request))
+        return Response({'encrypt': True, 'data': encrypt_data({'message': f'已重建 {n} 条库存流水'})})
 
 
 class WatermarkViewSet(viewsets.ViewSet):
@@ -5063,10 +5291,196 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
             'analyzed_at': s.analyzed_at.isoformat() if s.analyzed_at else None,
             'error_message': s.error_message,
         }
+        try:
+            d['like_count'] = s.likes.count()
+            d['comment_count'] = s.comments.count()
+        except Exception:
+            d['like_count'] = 0
+            d['comment_count'] = 0
+        d['liked_by_me'] = False
+        req = getattr(self, 'request', None)
+        if req and getattr(req.user, 'is_authenticated', False):
+            try:
+                d['liked_by_me'] = s.likes.filter(user_id=req.user.id).exists()
+            except Exception:
+                d['liked_by_me'] = False
         if with_result:
             d['analysis_result'] = s.analysis_result
             d['prompt_text'] = s.prompt_text
         return d
+
+    def _comment_data(self, c):
+        """评论结构化数据（支持二级回复字段）"""
+        pname = ''
+        if c.parent_id:
+            try:
+                pname = c.parent.author.real_name or c.parent.author.username
+            except Exception:
+                pname = ''
+        return {
+            'id': c.id, 'author': c.author_id,
+            'author_name': c.author.real_name or c.author.username,
+            'avatar': c.author.get_avatar_url() if hasattr(c.author, 'get_avatar_url') else '',
+            'content': c.content, 'image': c.image or '',
+            'parent': c.parent_id, 'parent_author_name': pname,
+            'created_at': c.created_at.isoformat() if c.created_at else None,
+        }
+
+    def _can_interact_summary(self, s, user):
+        """能否对某篇总结点赞/评论：本人、超管，或同企业内部门负责人(其部门可见范围)"""
+        if not user or not user.is_authenticated:
+            return False
+        if s.user_id == user.id or user.user_type == 'super_admin':
+            return True
+        if user.user_type == 'admin':
+            tenant = self._tenant(self.request) if hasattr(self, 'request') else None
+            if tenant and s.tenant_id in (tenant.id, (tenant.parent_id if tenant.parent_id else tenant.id)):
+                scoped = self._scoped_user_ids(user)
+                return scoped is None or s.user_id in scoped
+        return False
+
+    def _notify_summary_managers(self, s):
+        """总结提交后，通知提交人所在部门（含向上最近一级）的主负责人与副负责人"""
+        try:
+            from org.models import UserDepartment
+            from accounts.models import Department, CustomUser
+        except Exception:
+            return
+        try:
+            user = s.user
+            dept_ids = list(UserDepartment.objects.filter(user=user).values_list('department_id', flat=True))
+            if not dept_ids and user.department_id:
+                dept_ids = [user.department_id]
+            if not dept_ids:
+                return
+            leader_ids = set()
+            dept_map = {d.id: d for d in Department.objects.filter(id__in=dept_ids)}
+            for did in dept_ids:
+                cur = dept_map.get(did)
+                seen_cycle = set()
+                while cur and cur.id not in seen_cycle:
+                    seen_cycle.add(cur.id)
+                    if cur.manager_id or cur.deputy_managers.exists():
+                        if cur.manager_id:
+                            leader_ids.add(cur.manager_id)
+                        leader_ids.update(cur.deputy_managers.all().values_list('id', flat=True))
+                        break
+                    cur = cur.parent
+            leader_ids.discard(user.id)
+        except Exception:
+            return
+        if not leader_ids:
+            return
+        recipients = list(CustomUser.objects.filter(id__in=leader_ids, is_active=True).values_list('id', flat=True))
+        if not recipients:
+            return
+        name = user.real_name or user.username
+        url = f'/oa/work-summary/?id={s.id}'
+        for mid in recipients:
+            try:
+                send_work_notification(
+                    user_id=mid, title='每日工作总结',
+                    content=f'{name} 提交了 {s.summary_date} 的每日工作总结',
+                    notification_type='work_summary', related_url=url,
+                    extra_data={'summary_id': s.id, 'summary_date': str(s.summary_date),
+                                'submitter': user.id, 'kind': 'submit'})
+            except Exception:
+                continue
+
+    @action(detail=True, methods=['post', 'delete'])
+    def like(self, request, pk=None):
+        """点赞/取消点赞每日工作总结
+        POST/DELETE /api/oa/work-summary/{pk}/like/
+        """
+        from .models import DailyWorkSummary, DailyWorkSummaryLike
+        try:
+            s = DailyWorkSummary.objects.select_related('user').get(id=pk)
+        except DailyWorkSummary.DoesNotExist:
+            return Response({'error': '总结不存在'}, status=404)
+        if not self._can_interact_summary(s, request.user):
+            return Response({'error': '无权对该总结点赞'}, status=403)
+        newly = False
+        existed = DailyWorkSummaryLike.objects.filter(summary=s, user=request.user).exists()
+        if request.method == 'POST':
+            if not existed:
+                DailyWorkSummaryLike.objects.create(summary=s, user=request.user)
+                newly = True
+            liked = True
+        else:
+            if existed:
+                DailyWorkSummaryLike.objects.filter(summary=s, user=request.user).delete()
+            liked = False
+        # 点赞实时通知总结提交人
+        if newly and s.user_id and s.user_id != request.user.id and getattr(s.user, 'is_active', True):
+            try:
+                send_work_notification(
+                    user_id=s.user_id, title='每日工作总结',
+                    content=f'{request.user.real_name or request.user.username} 点赞了您 {s.summary_date} 的每日工作总结',
+                    notification_type='work_summary',
+                    related_url=f'/oa/work-summary/?id={s.id}',
+                    extra_data={'summary_id': s.id, 'summary_date': str(s.summary_date),
+                                'actor': request.user.id, 'kind': 'like'})
+            except Exception as e:
+                logger.warning(f'总结点赞通知失败: {e}')
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'liked': liked, 'like_count': s.likes.count(),
+        })})
+
+    @action(detail=True, methods=['get'])
+    def comments(self, request, pk=None):
+        """总结评论列表 GET /api/oa/work-summary/{pk}/comments/"""
+        from .models import DailyWorkSummary, DailyWorkSummaryComment
+        try:
+            s = DailyWorkSummary.objects.get(id=pk)
+        except DailyWorkSummary.DoesNotExist:
+            return Response({'error': '总结不存在'}, status=404)
+        if not self._can_view_summary(request.user, s):
+            return Response({'error': '无权查看该总结评论'}, status=403)
+        qs = DailyWorkSummaryComment.objects.filter(summary=s).select_related('author', 'parent__author')
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'comments': [self._comment_data(c) for c in qs],
+        })})
+
+    @action(detail=True, methods=['post'])
+    def add_comment(self, request, pk=None):
+        """发表/回复评论（支持图片） POST /api/oa/work-summary/{pk}/add-comment/"""
+        from .models import DailyWorkSummary, DailyWorkSummaryComment
+        try:
+            s = DailyWorkSummary.objects.select_related('user').get(id=pk)
+        except DailyWorkSummary.DoesNotExist:
+            return Response({'error': '总结不存在'}, status=404)
+        if not self._can_interact_summary(s, request.user):
+            return Response({'error': '无权评论该总结'}, status=403)
+        content = (request.data.get('content') or '').strip()
+        image = (request.data.get('image') or '').strip()
+        if not content and not image:
+            return Response({'error': '评论内容不能为空'}, status=400)
+        parent = None
+        parent_id = request.data.get('parent_id')
+        if parent_id:
+            try:
+                parent = DailyWorkSummaryComment.objects.filter(
+                    id=int(parent_id), summary_id=s.id).first()
+            except (ValueError, TypeError):
+                parent = None
+            if not parent:
+                return Response({'error': '回复的评论不存在'}, status=400)
+        c = DailyWorkSummaryComment.objects.create(
+            summary=s, author=request.user, content=content[:500],
+            image=image[:500], parent=parent)
+        # 评论实时通知总结提交人
+        if s.user_id and s.user_id != request.user.id and getattr(s.user, 'is_active', True):
+            try:
+                send_work_notification(
+                    user_id=s.user_id, title='每日工作总结',
+                    content=f'{request.user.real_name or request.user.username} 评论了您 {s.summary_date} 的每日工作总结',
+                    notification_type='work_summary',
+                    related_url=f'/oa/work-summary/?id={s.id}',
+                    extra_data={'summary_id': s.id, 'summary_date': str(s.summary_date),
+                                'comment_id': c.id, 'actor': request.user.id, 'kind': 'comment'})
+            except Exception as e:
+                logger.warning(f'总结评论通知失败: {e}')
+        return Response({'encrypt': True, 'data': encrypt_data(self._comment_data(c))}, status=201)
 
     def _file_type(self, name):
         ext = os.path.splitext(name or '')[1].lower()
@@ -5140,6 +5554,8 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
                 analyze_work_summary_task.delay(s.id)
             except Exception as e:
                 logger.warning(f'触发每日总结分析失败: {e}')
+        # 通知提交人所在部门负责人/副负责人（实时）
+        self._notify_summary_managers(s)
         return Response({'encrypt': True, 'data': encrypt_data(self._summary_data(s))}, status=201)
 
     def list(self, request):
@@ -5800,6 +6216,16 @@ class WorkCalendarViewSet(viewsets.ViewSet):
             add('attendance', 'fas fa-clock', f'{r.get_clock_type_display()}打卡', fmt(r.clock_time), '/oa/attendance/')
         for ws in DailyWorkSummary.objects.filter(user=user, summary_date=d).order_by('created_at'):
             add('work_summary', 'fas fa-file-signature', f'每日工作总结（{ws.position or "未填职位"}）', fmt(ws.created_at), f'/oa/work-summary/?id={ws.id}')
+        # 每日总结互动（谁操作记谁）：点赞/评论的总结详情直达
+        from .models import DailyWorkSummaryLike as _DWSLike, DailyWorkSummaryComment as _DWSComment
+        for lk in _DWSLike.objects.filter(user=user, created_at__date=d).select_related('summary__user').order_by('created_at'):
+            add('work_summary', 'fas fa-thumbs-up',
+                f'点赞每日总结：{lk.summary.user.real_name or lk.summary.user.username} · {lk.summary.summary_date}',
+                fmt(lk.created_at), f'/oa/work-summary/?id={lk.summary_id}')
+        for cm in _DWSComment.objects.filter(author=user, created_at__date=d).select_related('summary__user').order_by('created_at'):
+            add('work_summary', 'fas fa-comment-dots',
+                f'评论每日总结：{cm.summary.user.real_name or cm.summary.user.username} · {cm.summary.summary_date}',
+                fmt(cm.created_at), f'/oa/work-summary/?id={cm.summary_id}')
         # 集团公告操作：谁操作记谁（发布/存草稿/编辑/删除/评论）；公告已删除时跳公告列表
         for op in AnnouncementOperation.objects.filter(user=user, created_at__date=d).order_by('created_at'):
             label = dict(AnnouncementOperation.ACTION_CHOICES).get(op.action, op.action)
@@ -5892,11 +6318,42 @@ class WorkCalendarViewSet(viewsets.ViewSet):
             'target_user': self._target_info(target),
         })})
 
-    # 活跃度权重：用于成员活跃度总分（审批/总结/任务价值更高，避免闲聊消息刷分导致排名失真）
-    _ACTIVITY_WEIGHTS = {'chat': 1, 'approval': 5, 'attendance': 1, 'summary': 3, 'task': 3, 'cloud': 1, 'doc': 2}
+    # 活跃度权重：不再硬编码，默认值见 oa.models.DEFAULT_ACTIVITY_WEIGHTS，
+    # 每企业可由超管在工作日历页「活跃度权重」可视化覆盖（ActivityWeightConfig）。
 
-    def _weighted_total(self, a):
-        return sum(self._ACTIVITY_WEIGHTS.get(k, 1) * (a.get(k) or 0) for k in a)
+    def _activity_weights(self, tenant):
+        """返回该企业生效的权重字典（默认值 + 企业配置覆盖，均限 0~20 整数）"""
+        try:
+            from .models import ActivityWeightConfig, DEFAULT_ACTIVITY_WEIGHTS
+        except Exception:
+            return {}
+        weights = dict(DEFAULT_ACTIVITY_WEIGHTS)
+        if tenant:
+            try:
+                cfg = ActivityWeightConfig.objects.filter(tenant=tenant).first()
+                if cfg and isinstance(cfg.weights, dict):
+                    for k, v in cfg.weights.items():
+                        if v is None:
+                            continue
+                        try:
+                            weights[k] = max(0, min(20, int(float(v))))
+                        except (ValueError, TypeError):
+                            continue
+            except Exception:
+                pass
+        return weights
+
+    def _weighted_total(self, a, weights=None):
+        if weights is None:
+            weights = self._activity_weights(getattr(self, '_last_tenant', None)) or {}
+        total = 0
+        for k in a:
+            try:
+                w = int(weights.get(k, 1))
+            except (ValueError, TypeError):
+                w = 1
+            total += w * (a.get(k) or 0)
+        return total
 
     def _scope_member_ids(self, request):
         """按角色限定可查看成员：超管=None(全部)；部门管理员=本部门(含子部门)+自己；普通用户=本部门+自己
@@ -5935,7 +6392,7 @@ class WorkCalendarViewSet(viewsets.ViewSet):
         from chat.models import Message, ChatRoom
         from tasks.models import Task
         from cloud.models import FileOperationLog
-        from .models import ApprovalRequest, ApprovalAssignee, AttendanceRecord, DailyWorkSummary
+        from .models import ApprovalRequest, ApprovalAssignee, AttendanceRecord, DailyWorkSummary, AnnouncementOperation
 
         now_date = timezone.localdate()
         start = end = None
@@ -5962,6 +6419,7 @@ class WorkCalendarViewSet(viewsets.ViewSet):
                 tenant_ids += [t.id for t in tenant.sub_tenants.filter(is_active=True)]
             except Exception:
                 pass
+        weights = self._activity_weights(tenant)
 
         members_qs = CustomUser.objects.filter(is_active=True)
         if tenant_ids:
@@ -5998,7 +6456,9 @@ class WorkCalendarViewSet(viewsets.ViewSet):
             }
 
         act = {uid: {'chat': 0, 'approval': 0, 'attendance': 0, 'summary': 0,
-                     'task': 0, 'cloud': 0, 'doc': 0} for uid in user_ids}
+                     'task': 0, 'cloud': 0, 'doc': 0, 'announcement': 0,
+                     'summary_pub': 0, 'summary_like': 0, 'summary_cmt': 0,
+                     'announce_pub': 0, 'announce_cmt': 0} for uid in user_ids}
 
         def _add(qs, key):
             for uid in qs:
@@ -6014,8 +6474,6 @@ class WorkCalendarViewSet(viewsets.ViewSet):
              .values_list('user_id', flat=True), 'approval')
         _add(AttendanceRecord.objects.filter(user_id__in=user_ids, date__range=[start, end])
              .values_list('user_id', flat=True), 'attendance')
-        _add(DailyWorkSummary.objects.filter(user_id__in=user_ids, summary_date__range=[start, end])
-             .values_list('user_id', flat=True), 'summary')
         _add(Task.objects.filter(creator_id__in=user_ids, created_at__date__range=[start, end])
              .values_list('creator_id', flat=True), 'task')
         _add(Task.objects.filter(assignee_id__in=user_ids, status='done', updated_at__date__range=[start, end])
@@ -6025,6 +6483,21 @@ class WorkCalendarViewSet(viewsets.ViewSet):
         _add(FileOperationLog.objects.filter(user_id__in=user_ids, operation='edit_save',
                                              created_at__date__range=[start, end])
              .values_list('user_id', flat=True), 'doc')
+        # —— 每日总结行为（发布/点赞/评论）：发布按总结日期归属，点赞/评论按发生时间归属 ——
+        _add(DailyWorkSummary.objects.filter(user_id__in=user_ids, summary_date__range=[start, end])
+             .values_list('user_id', flat=True), 'summary_pub')
+        from .models import DailyWorkSummaryLike as _DWSLike, DailyWorkSummaryComment as _DWSComment
+        _add(_DWSLike.objects.filter(user_id__in=user_ids, created_at__date__range=[start, end])
+             .values_list('user_id', flat=True), 'summary_like')
+        _add(_DWSComment.objects.filter(author_id__in=user_ids, created_at__date__range=[start, end])
+             .values_list('author_id', flat=True), 'summary_cmt')
+        # —— 集团公告行为（发布/评论） ——
+        _add(AnnouncementOperation.objects.filter(user_id__in=user_ids, action='publish',
+                                                  created_at__date__range=[start, end])
+             .values_list('user_id', flat=True), 'announce_pub')
+        _add(AnnouncementOperation.objects.filter(user_id__in=user_ids, action='comment',
+                                                  created_at__date__range=[start, end])
+             .values_list('user_id', flat=True), 'announce_cmt')
 
         # —— 两两互动边：每次互动生成一条线段（含类型/时间/标题），逐条显示、点击可看该次互动 ——
         from django.db.models import Max as MaxAgg
@@ -6105,6 +6578,32 @@ class WorkCalendarViewSet(viewsets.ViewSet):
                 if au.id in id_set and au.id != share.owner_id:
                     _push_edge(share.owner_id, au.id, 'share',
                                timezone.localtime(share.created_at).isoformat(), '网盘分享')
+        # 公告评论：评论人 → 公告发布人（每次评论一条线段，形成跨成员关系）
+        for op in AnnouncementOperation.objects.filter(
+                action='comment', user_id__in=user_ids,
+                created_at__date__range=[start, end]).select_related('announcement__author'):
+            ann = op.announcement
+            if ann and ann.author_id and ann.author_id in id_set:
+                _push_edge(op.user_id, ann.author_id, 'announcement',
+                           timezone.localtime(op.created_at).isoformat(),
+                           f'评论公告：{op.title or ann.title}')
+        # 总结评论/点赞：互动人 → 总结作者（每次一条线段，形成跨成员关系）
+        for cm in _DWSComment.objects.filter(
+                author_id__in=user_ids, created_at__date__range=[start, end],
+        ).select_related('summary__user').only('author_id', 'created_at', 'summary__summary_date', 'summary__user_id'):
+            au = cm.summary.user_id
+            if au in id_set and cm.author_id != au:
+                _push_edge(cm.author_id, au, 'summary_comment',
+                           timezone.localtime(cm.created_at).isoformat(),
+                           f'评论总结：{cm.summary.summary_date}')
+        for lk in _DWSLike.objects.filter(
+                user_id__in=user_ids, created_at__date__range=[start, end],
+        ).select_related('summary__user').only('user_id', 'created_at', 'summary__summary_date', 'summary__user_id'):
+            au = lk.summary.user_id
+            if au in id_set and lk.user_id != au:
+                _push_edge(lk.user_id, au, 'summary_like',
+                           timezone.localtime(lk.created_at).isoformat(),
+                           f'点赞总结：{lk.summary.summary_date}')
 
         # —— 组织架构树：根=当前企业/集团名，部门按类型着色（公司/子公司类型区别于普通部门，不单独列出） ——
         depts = list(OrgDept.objects.filter(tenant_id__in=tenant_ids))
@@ -6122,7 +6621,7 @@ class WorkCalendarViewSet(viewsets.ViewSet):
                 if info['dept_id'] == did:
                     a = act[uid]
                     node['children'].append({'name': info['name'], 'id': uid, 'type': 'member',
-                                             'avatar': info['avatar'], 'value': self._weighted_total(a)})
+                                             'avatar': info['avatar'], 'value': self._weighted_total(a, weights)})
             return node
 
         root_children = []
@@ -6133,7 +6632,7 @@ class WorkCalendarViewSet(viewsets.ViewSet):
         if orphans:
             root_children.append({'name': '未分组', 'type': 'virtual', 'children': [
                 {'name': o['name'], 'id': o['id'], 'type': 'member', 'avatar': o['avatar'],
-                 'value': self._weighted_total(act[o['id']])} for o in orphans]})
+                 'value': self._weighted_total(act[o['id']], weights)} for o in orphans]})
         if not root_children:
             root_children.append({'name': '暂无部门', 'type': 'virtual', 'children': []})
         ttype_label = dict(Tenant.TENANT_TYPE_CHOICES).get(tenant.tenant_type, '企业') if tenant else '企业'
@@ -6148,7 +6647,7 @@ class WorkCalendarViewSet(viewsets.ViewSet):
                               'avatar': member_info[uid]['avatar'],
                               'category': member_info[uid]['department'] or '未分组',
                               'position': member_info[uid]['position'],
-                              'value': self._weighted_total(a), 'activity': a})
+                              'value': self._weighted_total(a, weights), 'activity': a})
         all_nodes.sort(key=lambda n: n['value'], reverse=True)
         top_nodes = all_nodes
         top_ids = {n['id'] for n in top_nodes}
@@ -6521,6 +7020,37 @@ class WorkCalendarViewSet(viewsets.ViewSet):
             'auto_send': bool(cfg and cfg.auto_send),
         }
 
+    def _activity_weight_payload(self, tenant):
+        from .models import DEFAULT_ACTIVITY_WEIGHTS, ACTIVITY_WEIGHT_LABELS
+        weights = self._activity_weights(tenant)
+        return {
+            'weights': weights,
+            'types': [{'key': k, 'label': ACTIVITY_WEIGHT_LABELS.get(k, k),
+                       'weight': weights.get(k, 1)} for k in DEFAULT_ACTIVITY_WEIGHTS],
+        }
+
+    @action(detail=False, methods=['get', 'post'])
+    def activity_weight_config(self, request):
+        """成员关系与活跃度·行为权重配置：GET 读取 / POST 保存（仅超级管理员，按企业持久化生效）"""
+        tenant = self._tenant(request)
+        if request.method == 'POST':
+            if request.user.user_type != 'super_admin':
+                return Response({'error': '仅超级管理员可配置'}, status=403)
+            from .models import ActivityWeightConfig, DEFAULT_ACTIVITY_WEIGHTS
+            merged = dict(DEFAULT_ACTIVITY_WEIGHTS)
+            raw = request.data.get('weights')
+            if isinstance(raw, dict):
+                for k, v in raw.items():
+                    if v is None or v == '':
+                        continue
+                    try:
+                        merged[k] = max(0, min(20, int(float(v))))
+                    except (ValueError, TypeError):
+                        continue
+            ActivityWeightConfig.objects.update_or_create(tenant=tenant, defaults={'weights': merged})
+            return Response({'encrypt': True, 'data': encrypt_data(self._activity_weight_payload(tenant))})
+        return Response({'encrypt': True, 'data': encrypt_data(self._activity_weight_payload(tenant))})
+
     def _ensure_digest_periodic_task(self):
         """确保 celery beat 有一个每5分钟轮询每日通知的定时任务（幂等）"""
         try:
@@ -6813,6 +7343,19 @@ class AnnouncementViewSet(viewsets.ViewSet):
             announcement=a, author=request.user, content=content[:500],
             image=image[:500], parent=parent, is_anonymous=is_anonymous)
         self._record_operation(request, a, 'comment')
+        # 评论实时通知公告发布人
+        if a.author_id and a.author_id != request.user.id and getattr(a.author, 'is_active', True):
+            try:
+                who = '某位成员' if is_anonymous else (request.user.real_name or request.user.username)
+                send_work_notification(
+                    user_id=a.author_id, title='集团公告',
+                    content=f'{who} 评论了您的公告：“{a.title}”',
+                    notification_type='announcement',
+                    related_url=f'/oa/announcements/?id={a.id}',
+                    extra_data={'announcement_id': a.id, 'title': a.title,
+                                'comment_id': c.id, 'actor': request.user.id, 'kind': 'comment'})
+            except Exception as e:
+                logger.warning(f'公告评论通知失败: {e}')
         return Response({'encrypt': True, 'data': encrypt_data(AnnouncementCommentSerializer(c).data)}, status=201)
 
 

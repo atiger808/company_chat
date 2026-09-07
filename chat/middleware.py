@@ -19,7 +19,11 @@ from django.core.cache import cache
 def get_user(user_id):
     User = get_user_model()
     try:
-        return User.objects.get(id=user_id)
+        user = User.objects.get(id=user_id)
+        # 禁用用户不允许建立 WebSocket 连接（离职/被禁用后无法接入实时服务）
+        if user and not user.is_active:
+            return None
+        return user
     except User.DoesNotExist:
         return None
 

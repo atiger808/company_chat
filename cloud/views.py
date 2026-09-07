@@ -1,5 +1,7 @@
 # cloud/views.py - 添加网盘视图集
 
+import os
+
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -2068,7 +2070,30 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-            # 检查是否所有分片都已上传
+            temp_dir = session.temp_path
+
+            # 🔧 自愈：以磁盘实际分片为准，把“文件已写但 DB 记录未落库/被回滚”的分片补回 uploaded_chunks，
+            # 修复偶发的 “还有 1 个分片未上传，missing_chunks=[0]” 400 错误
+            try:
+                if temp_dir and os.path.isdir(temp_dir):
+                    present = set()
+                    for fname in os.listdir(temp_dir):
+                        mch = re.match(r'^chunk_(\d+)$', fname)
+                        if mch:
+                            idx = int(mch.group(1))
+                            if 0 <= idx < session.total_chunks:
+                                present.add(idx)
+                    db_set = set(session.uploaded_chunks)
+                    if present and len(present) > len(db_set):
+                        session.uploaded_chunks = sorted(db_set | present)
+                        session.save(update_fields=['uploaded_chunks', 'updated_at'])
+                        logger.info(
+                            f'合并自愈分片记录：session={session.id}, '
+                            f'DB {len(db_set)} → 磁盘补齐 {len(session.uploaded_chunks)}/{session.total_chunks}')
+            except Exception as heal_err:
+                logger.warning(f'合并自愈分片列表失败: {heal_err}')
+
+            # 检查是否所有分片都已上传（自愈后仍有缺失才报错）
             if len(session.uploaded_chunks) != session.total_chunks:
                 missing = session.get_missing_chunks()
                 return Response(
@@ -2191,6 +2216,53 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                 {'error': f'合并失败: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    @action(detail=True, methods=['get', 'post'])
+    def convert_compatible(self, request, pk=None):
+        """Excel 兼容格式转换：LibreOffice 后台清洗 WPS/新版 Excel「单元格内图片」私有公式
+        GET /api/cloud/files/{id}/convert_compatible/  → 查询转换状态
+        POST /api/cloud/files/{id}/convert_compatible/ → 立即投递后台转换（force）
+        """
+        from utils.office_clean import get_state, is_spreadsheet, schedule_clean
+        try:
+            file_obj = CloudFile.objects.get(id=pk, owner=request.user, deleted_at__isnull=True)
+        except CloudFile.DoesNotExist:
+            return Response({'error': '文件不存在'}, status=404)
+        if not is_spreadsheet(file_obj.name or file_obj.original_name or ''):
+            return Response({'error': '仅支持表格(xlsx/xlsm/xls)转换为兼容格式'}, status=400)
+
+        if request.method == 'GET':
+            # 实时诊断：LibreOffice 是否可用、当前存储文件是否仍含 DISPIMG 私有公式
+            from utils.office_clean import (
+                has_private_picture_formula, libreoffice_available,
+            )
+            lo_available = libreoffice_available()
+            has_dispimg_now = None
+            fname = (file_obj.name or file_obj.original_name or '').lower()
+            try:
+                if file_obj.file and file_obj.file.name:
+                    fp = file_obj.file.path
+                    if fp and os.path.exists(fp):
+                        has_dispimg_now = has_private_picture_formula(fp) \
+                            if fname.endswith(('.xlsx', '.xlsm')) else True
+            except Exception as _e:
+                has_dispimg_now = None
+            st = get_state(str(file_obj.id))
+            return Response({
+                'file_id': str(file_obj.id), 'file_name': file_obj.name,
+                'size': file_obj.size, 'state': st.get('state'),
+                'lo_available': lo_available,
+                'has_dispimg_now': has_dispimg_now,
+                'compat_ready': bool(getattr(file_obj, 'compat_ready', False)),
+                'has_compat_file': bool(file_obj.compat_file and file_obj.compat_file.name),
+                'detail': {k: v for k, v in st.items() if k != 'state'},
+            })
+
+        # 🔧 功能已停用：转换会破坏原始单元格图片结构，无法被 OnlyOffice/WPS 恢复，不再提供转换
+        return Response({
+            'error': '“转换为兼容格式”功能已停用：为避免破坏原始文件中的单元格图片，请在本地 WPS/Excel 将“单元格图片”转为“浮动图片”后重新上传，原始文件将原样保存。',
+            'message': '该功能已停用',
+        }, status=400)
 
     @action(detail=False, methods=['get'])
     def check_session(self, request):
@@ -5039,7 +5111,10 @@ class CloudFileDownloadView(APIView):
             file_obj.download_count = models.F('download_count') + 1
             file_obj.save(update_fields=['download_count'])
 
-            # 6. 构建文件响应
+            # 6. 构建文件响应（?use=compat → 返回兼容副本，无则回退原始；默认始终返回原始）
+            if request.query_params.get('use') == 'compat':
+                if file_obj.compat_file and file_obj.compat_file.name and getattr(file_obj, 'compat_ready', False):
+                    return self._build_compat_response(file_obj)
             return self._build_file_response(file_obj, request)
 
         except Exception as e:
@@ -5220,6 +5295,23 @@ class CloudFileDownloadView(APIView):
             filename = 'unnamed_file'
 
         return filename
+
+    def _build_compat_response(self, file_obj):
+        """构建 OnlyOffice 兼容副本(xlsx) 的文件响应（用于 ?use=compat）"""
+        if not file_obj.compat_file or not file_obj.compat_file.name:
+            return Response({'error': '暂无兼容副本'}, status=404)
+        path = file_obj.compat_file.path
+        if not os.path.exists(path):
+            return Response({'error': '兼容副本物理路径不存在'}, status=404)
+        safe = self._sanitize_filename(file_obj.name or file_obj.original_name or '文件')
+        safe = os.path.splitext(safe)[0] + '.xlsx'
+        resp = FileResponse(open(path, 'rb'), as_attachment=True, filename=safe)
+        resp['Content-Disposition'] = self._build_content_disposition(safe)
+        resp['Content-Length'] = file_obj.compat_file.size
+        resp['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        resp['X-Content-Type-Options'] = 'nosniff'
+        logger.info(f"✅ 兼容副本响应构建：{safe} ({file_obj.compat_file.size} bytes)")
+        return resp
 
     def _log_download(self, file_obj, request, auth_method):
         """
@@ -5442,11 +5534,13 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
         ).hexdigest()
         return f"{timestamp}:{token}"
 
-    def _get_file_url(self, file_obj):
-        """构建带 token 的文件访问 URL"""
+    def _get_file_url(self, file_obj, use=''):
+        """构建带 token 的文件访问 URL；use='compat' 时 OnlyOffice 拉取兼容副本"""
         token = self._generate_download_token(file_obj)
-        # return f"{self.server_url}/api/cloud/files/{file_obj.id}/download/?token={token}"
-        return f"{self.server_url}/api/cloud/cloudfiles/{file_obj.id}/download_file/?token={token}"
+        base = f"{self.server_url}/api/cloud/cloudfiles/{file_obj.id}/download_file/?token={token}"
+        if use == 'compat':
+            base += '&use=compat'
+        return base
 
     def _get_callback_url(self, file_id):
         """构建回调 URL"""
@@ -5616,8 +5710,21 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # 3.2 URL 构建
-            file_url = self._get_file_url(file_obj)
+            # 3.1.5 兼容副本判定：转换过(xlsx 兼容就绪)才允许切换原始/兼容
+            compat_exists = bool(
+                getattr(file_obj, 'compat_file', None) and file_obj.compat_file.name
+                and getattr(file_obj, 'compat_ready', False)
+            )
+            requested_use = (request.query_params.get('use') or '').lower()
+            use_compat = compat_exists
+            if requested_use in ('compat', 'original'):
+                use_compat = (requested_use == 'compat') and compat_exists
+            if file_ext not in ('xlsx', 'xlsm'):
+                use_compat = False
+            served_ext = 'xlsx' if use_compat else file_ext
+
+            # 3.2 URL 构建（use=compat 时 OnlyOffice 拉取兼容副本；默认打开：有兼容副本则用兼容）
+            file_url = self._get_file_url(file_obj, use='compat' if use_compat else '')
             callback_url = self._get_callback_url(pk)
 
             # ==================== 4. 权限配置（动态加载系统配置 + 用户自定义权限）====================
@@ -5667,7 +5774,7 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
             config = {
                 # ── 文档核心配置 ──
                 'document': {
-                    'fileType': file_ext,
+                    'fileType': served_ext,
                     'key': document_key,  # ✅ 稳定的 key 支持协同编辑
                     'title': file_obj.name or file_obj.original_name or '未命名文档',
                     'version_number': file_obj.current_version.version_number if file_obj.current_version else '' ,
@@ -5770,6 +5877,10 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                 'width': '100%',
                 'type': 'desktop',  # desktop/mobile/embedded
             }
+
+            # 编辑器侧用于“原始/兼容”切换的标记
+            config['has_compat'] = compat_exists
+            config['use_compat'] = use_compat
 
             # ==================== 8. JWT Token 集成 ====================
             if self.jwt_enabled and self.jwt_secret:

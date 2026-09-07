@@ -156,6 +156,13 @@ class CloudFile(models.Model):
     size = models.BigIntegerField(default=0, verbose_name='文件大小（字节）')
     mime_type = models.CharField(max_length=100, blank=True, verbose_name='MIME 类型')
     md5 = models.CharField(max_length=32, db_index=True, verbose_name='MD5 哈希')
+    # OnlyOffice 兼容副本：由原始表格经 LibreOffice 清洗另存的标准 xlsx，
+    # 原始文件始终保持不变（仅用户手动点击“转换为兼容格式”时生成/刷新）
+    compat_file = models.FileField(
+        upload_to='cloud_files/compat/%Y/%m/%d/', null=True, blank=True,
+        verbose_name='兼容格式副本(xlsx)',
+        help_text='由含 WPS/新版 Excel「单元格内图片」私有公式的原始表格清洗另存的标准副本，用于 OnlyOffice 在线打开；原始文件保持不变')
+    compat_ready = models.BooleanField(default=False, verbose_name='兼容副本已就绪')
 
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,

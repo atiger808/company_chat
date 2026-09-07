@@ -11,9 +11,11 @@ from .models import (
     SubsidyWithdrawal, SubsidyWallet,
     SubsidyInvoiceVerifyRecord,
     DailyDigestConfig,
+    ActivityWeightConfig,
     MaterialItem,
     MaterialRequirement, MaterialRequirementItem,
     MaterialRequisition, MaterialRequisitionItem,
+    MaterialStockIn, MaterialStockInItem, MaterialStockLog,
     DocumentSequence, WatermarkConfig, PrintLog,
     DailyWorkSummary, WorkSummaryRangeAnalysis,
     WorkSummaryConfig,
@@ -165,6 +167,13 @@ class DailyDigestConfigAdmin(admin.ModelAdmin):
     list_per_page = 20
 
 
+@admin.register(ActivityWeightConfig)
+class ActivityWeightConfigAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'weights', 'updated_at']
+    search_fields = ['tenant__name']
+    list_per_page = 20
+
+
 @admin.register(MaterialItem)
 class MaterialItemAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'name', 'spec', 'unit', 'category', 'price', 'is_active', 'created_by', 'updated_at']
@@ -183,7 +192,7 @@ class MaterialRequirementAdmin(admin.ModelAdmin):
 
 @admin.register(MaterialRequirementItem)
 class MaterialRequirementItemAdmin(admin.ModelAdmin):
-    list_display = ['id', 'requirement', 'item_name', 'spec', 'unit', 'quantity', 'requisitioned_quantity', 'remark']
+    list_display = ['id', 'requirement', 'item_name', 'spec', 'unit', 'quantity', 'received_quantity', 'requisitioned_quantity', 'remark']
     search_fields = ['item_name', 'spec', 'requirement__doc_no']
     list_per_page = 20
 
@@ -200,6 +209,37 @@ class MaterialRequisitionAdmin(admin.ModelAdmin):
 class MaterialRequisitionItemAdmin(admin.ModelAdmin):
     list_display = ['id', 'requisition', 'item_name', 'spec', 'unit', 'quantity', 'remark']
     search_fields = ['item_name', 'spec', 'requisition__doc_no']
+    list_per_page = 20
+
+
+class MaterialStockInItemInline(admin.TabularInline):
+    model = MaterialStockInItem
+    extra = 0
+
+
+@admin.register(MaterialStockIn)
+class MaterialStockInAdmin(admin.ModelAdmin):
+    list_display = ['id', 'doc_no', 'tenant', 'requirement_doc_no', 'warehouse', 'stock_date', 'status', 'created_by', 'created_at', 'updated_at']
+    list_filter = ['status']
+    search_fields = ['doc_no', 'requirement_doc_no', 'warehouse', 'tenant__name', 'created_by__username', 'created_by__real_name']
+    inlines = [MaterialStockInItemInline]
+    list_per_page = 20
+
+
+@admin.register(MaterialStockInItem)
+class MaterialStockInItemAdmin(admin.ModelAdmin):
+    list_display = ['id', 'stock_in', 'item_name', 'spec', 'unit', 'quantity']
+    search_fields = ['item_name', 'spec', 'stock_in__doc_no']
+    list_per_page = 20
+
+
+@admin.register(MaterialStockLog)
+class MaterialStockLogAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'item', 'item_name', 'spec', 'delta', 'ref_type', 'doc_no', 'operator', 'created_at']
+    list_filter = ['ref_type']
+    search_fields = ['item_name', 'spec', 'doc_no', 'tenant__name', 'operator__username', 'operator__real_name']
+    readonly_fields = ['tenant', 'item', 'item_name', 'spec', 'delta', 'ref_type', 'ref_id', 'doc_no', 'operator', 'note', 'created_at']
+    date_hierarchy = 'created_at'
     list_per_page = 20
 
 

@@ -993,6 +993,36 @@ class DailyDigestConfig(models.Model):
         return f'{self.tenant} 每日通知配置'
 
 
+# 成员关系与活跃度：行为维度中文名（固定，不入库）
+ACTIVITY_WEIGHT_LABELS = {
+    'chat': '聊天', 'approval': '审批', 'attendance': '考勤', 'task': '任务',
+    'cloud': '网盘', 'doc': '文档', 'summary_pub': '发布总结', 'summary_cmt': '评论总结',
+    'summary_like': '点赞总结', 'announce_pub': '发布公告', 'announce_cmt': '评论公告',
+}
+# 活跃度权重默认值（可被 ActivityWeightConfig 覆盖，工作日历页超管可视化配置）
+DEFAULT_ACTIVITY_WEIGHTS = {
+    'chat': 1, 'approval': 5, 'attendance': 1, 'task': 3,
+    'cloud': 1, 'doc': 2, 'summary_pub': 3, 'summary_cmt': 2,
+    'summary_like': 1, 'announce_pub': 4, 'announce_cmt': 2,
+}
+
+
+class ActivityWeightConfig(models.Model):
+    """成员关系与活跃度·行为权重（每企业一条；工作日历页由超管可视化配置，替代代码硬编码）"""
+    tenant = models.OneToOneField(
+        'accounts.Tenant', on_delete=models.CASCADE,
+        related_name='activity_weight_config', verbose_name='所属企业')
+    weights = models.JSONField(default=dict, verbose_name='行为权重字典')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '活跃度权重配置'
+        verbose_name_plural = '活跃度权重配置'
+
+    def __str__(self):
+        return f'{self.tenant} 活跃度权重'
+
+
 class MaterialItem(models.Model):
     """物资物品库：统一物品主数据（名称/规格/单位/分类/参考价）"""
     tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
@@ -1063,6 +1093,9 @@ class MaterialRequirementItem(models.Model):
     remark = models.CharField(max_length=200, blank=True, default='', verbose_name='备注')
     requisitioned_quantity = models.DecimalField(max_digits=12, decimal_places=2, default=0,
                                                  verbose_name='已领用数量')
+    # 通过「物资入库单」审批分批发货累计的已入库数量（全收完需求单才置为已入库可领用）
+    received_quantity = models.DecimalField(max_digits=12, decimal_places=2, default=0,
+                                            verbose_name='已入库数量')
 
     class Meta:
         verbose_name = '物资需求单明细'
@@ -1119,6 +1152,93 @@ class MaterialRequisitionItem(models.Model):
     class Meta:
         verbose_name = '物资领用单明细'
         verbose_name_plural = '物资领用单明细'
+
+
+class MaterialStockIn(models.Model):
+    """物资入库单：关联物资需求单，支持分批实收；审批通过后自动累计需求单已入库并写库存流水"""
+    STATUS_CHOICES = [
+        ('pending', '待审批'),
+        ('approved', '已入库'),
+        ('rejected', '已驳回'),
+    ]
+    request = models.OneToOneField(ApprovalRequest, on_delete=models.CASCADE,
+                                   related_name='material_stock_in', verbose_name='关联审批单')
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                               null=True, blank=True, related_name='material_stock_ins',
+                               verbose_name='所属企业')
+    doc_no = models.CharField(max_length=40, unique=True, verbose_name='入库单号')
+    requirement = models.ForeignKey(MaterialRequirement, on_delete=models.SET_NULL,
+                                    null=True, blank=True, related_name='stock_ins',
+                                    verbose_name='关联需求单')
+    requirement_doc_no = models.CharField(max_length=40, blank=True, default='', verbose_name='关联需求单号(快照)')
+    warehouse = models.CharField(max_length=100, blank=True, default='', verbose_name='仓库/库位')
+    stock_date = models.DateField(null=True, blank=True, verbose_name='入库日期')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name='状态')
+    remark = models.TextField(blank=True, default='', verbose_name='备注')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                                   null=True, blank=True, related_name='material_stock_ins_created',
+                                   verbose_name='申请人')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        ordering = ['-updated_at']
+        verbose_name = '物资入库单'
+        verbose_name_plural = '物资入库单'
+
+    def __str__(self):
+        return self.doc_no
+
+
+class MaterialStockInItem(models.Model):
+    """物资入库单明细（本次实收快照）"""
+    stock_in = models.ForeignKey(MaterialStockIn, on_delete=models.CASCADE,
+                                 related_name='items', verbose_name='入库单')
+    item_name = models.CharField(max_length=100, verbose_name='物品名称')
+    spec = models.CharField(max_length=100, blank=True, default='', verbose_name='规格型号')
+    unit = models.CharField(max_length=20, blank=True, default='', verbose_name='单位')
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='实收数量')
+
+    class Meta:
+        verbose_name = '物资入库单明细'
+        verbose_name_plural = '物资入库单明细'
+
+
+class MaterialStockLog(models.Model):
+    """物资库存流水：每次入库(+)/出库(−)/手工调整(±)各记一条，物品库现有库存=流水余额"""
+    REF_TYPES = [
+        ('requirement', '需求整单入库'),
+        ('stock_in', '入库单'),
+        ('requisition', '领用出库'),
+        ('adjust', '库存调整'),
+    ]
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                               null=True, blank=True, related_name='material_stock_logs',
+                               verbose_name='所属企业')
+    item = models.ForeignKey(MaterialItem, on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name='stock_logs', verbose_name='物品库物品')
+    item_name = models.CharField(max_length=100, verbose_name='物品名称')
+    spec = models.CharField(max_length=100, blank=True, default='', verbose_name='规格型号')
+    delta = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='库存变动(入+/出-)')
+    ref_type = models.CharField(max_length=20, choices=REF_TYPES, verbose_name='来源类型')
+    ref_id = models.BigIntegerField(null=True, blank=True, verbose_name='来源ID')
+    doc_no = models.CharField(max_length=40, blank=True, default='', verbose_name='关联单号')
+    operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                                 null=True, blank=True, related_name='material_stock_logs',
+                                 verbose_name='经手人')
+    note = models.CharField(max_length=300, blank=True, default='', verbose_name='备注')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='发生时间')
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = '物资库存流水'
+        verbose_name_plural = '物资库存流水'
+        indexes = [
+            models.Index(fields=['tenant', 'item', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.item_name} {self.delta} {self.get_ref_type_display()}'
 
 
 class DocumentSequence(models.Model):
@@ -1236,6 +1356,47 @@ class DailyWorkSummary(models.Model):
 
     def __str__(self):
         return f'{self.user} {self.summary_date} 每日总结'
+
+
+class DailyWorkSummaryLike(models.Model):
+    """每日工作总结点赞（每人每篇仅一次）"""
+    summary = models.ForeignKey(
+        DailyWorkSummary, on_delete=models.CASCADE,
+        related_name='likes', verbose_name='总结')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='work_summary_likes', verbose_name='点赞人')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='点赞时间')
+
+    class Meta:
+        unique_together = ('summary', 'user')
+        ordering = ['created_at']
+        verbose_name = '每日总结点赞'
+        verbose_name_plural = '每日总结点赞'
+
+
+class DailyWorkSummaryComment(models.Model):
+    """每日工作总结评论：支持图片/表情与二级回复"""
+    summary = models.ForeignKey(
+        DailyWorkSummary, on_delete=models.CASCADE,
+        related_name='comments', verbose_name='总结')
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='work_summary_comments', verbose_name='评论人')
+    content = models.TextField(blank=True, default='', verbose_name='评论内容')
+    parent = models.ForeignKey(
+        'self', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='replies', verbose_name='回复的评论')
+    image = models.CharField(max_length=500, blank=True, default='', verbose_name='评论图片URL')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='评论时间')
+
+    class Meta:
+        ordering = ['created_at']
+        verbose_name = '每日总结评论'
+        verbose_name_plural = '每日总结评论'
+
+    def __str__(self):
+        return f'{self.author} 评论 {self.summary_id}'
 
 
 class WorkSummaryRangeAnalysis(models.Model):

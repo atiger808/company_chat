@@ -413,7 +413,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20260901-b9b07be'
+STATIC_VERSION = '20260905-cc1724f'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -452,6 +452,7 @@ API_MODEL_MAP = {
 
     # ====== 管理控制台 ======
     "/api/auth/admin/users/": "用户管理",
+    "/api/auth/admin/users/<int:pk>/transfer-data/": "离职一键交接",
     "/api/auth/admin/dashboard/": "数据统计",
     "/api/auth/admin/login-logs/": "登录日志",
     "/api/auth/admin/operation-logs/": "操作日志",
@@ -490,6 +491,7 @@ API_MODEL_MAP = {
     "/api/cloud/files/save_from_url/": "从URL保存文件到网盘",
     "/api/cloud/files/save_from_chat/": "从聊天保存文件到网盘",
     "/api/cloud/files/": "文件管理",
+    "/api/cloud/files/<uuid:pk>/convert_compatible/": "表格兼容格式转换",
     "/api/cloud/cloudfiles/": "文件下载",
     "/api/cloud/folders/": "文件夹管理",
     "/api/cloud/search-users/": "搜索用户",
@@ -599,6 +601,10 @@ API_MODEL_MAP = {
     "/api/oa/material/requirements/": "物资需求单列表",
     "/api/oa/material/requisitions/": "物资领用单列表",
     "/api/oa/material/requirement-status/": "物资需求单状态流转",
+    "/api/oa/material/stock-ins/": "物资入库单列表",
+    "/api/oa/material/ledger/": "物资库存流水",
+    "/api/oa/material/item-adjust/": "物资库存调整",
+    "/api/oa/material/ledger-rebuild/": "物资库存流水重建",
     "/api/oa/subsidy/upload-invoice/": "补贴发票上传",
     "/api/oa/subsidy/ocr-invoice/": "补贴票据OCR识别",
     "/api/oa/subsidy/qr-scan/": "补贴票据二维码扫描",
@@ -637,6 +643,7 @@ API_MODEL_MAP = {
     "/api/oa/work-calendar/digest-config/": "每日通知配置",
     "/api/oa/work-calendar/digest-send/": "每日通知手动发送",
     "/api/oa/work-calendar/work-summary-stats/": "每日总结完成情况统计",
+    "/api/oa/work-calendar/activity-weight/": "行为活跃度权重配置",
     "/api/oa/work-calendar/org-activity/": "成员关系与活跃度可视化",
     "/api/oa/work-calendar/member-search/": "成员关系-成员搜索",
     "/api/oa/work-summary/": "每日工作总结",
@@ -650,6 +657,9 @@ API_MODEL_MAP = {
     "/api/oa/work-summary/<int:pk>/analyze/": "每日总结重新分析",
     "/api/oa/work-summary/<int:pk>/share/": "每日总结分享私聊",
     "/api/oa/work-summary/<int:pk>/export-pdf/": "每日总结导出PDF",
+    "/api/oa/work-summary/<int:pk>/like/": "每日总结点赞",
+    "/api/oa/work-summary/<int:pk>/comments/": "每日总结评论列表",
+    "/api/oa/work-summary/<int:pk>/add-comment/": "每日总结添加评论",
     "/api/system/watermark-config/": "企业水印配置",
     "/api/system/print-log/": "打印记录",
     "/api/oa/notifications/": "工作通知",
@@ -1179,3 +1189,9 @@ PUSH_RELAY_SECRET = config('PUSH_RELAY_SECRET', default='')
 ARK_API_KEY = config('ARK_API_KEY', default='')
 # 火山方舟模型名（或推理接入点 ID ep-xxx），如豆包模型 doubao-seed-1-6-250615 / doubao-pro-32k
 ARK_MODEL = config('ARK_MODEL', default='doubao-seed-2-0-lite-260428')
+
+# ===== Excel(WPS/新版Excel「单元格内图片」) OnlyOffice 兼容清洗 =====
+# LibreOffice 可执行文件路径（留空自动探测 libreoffice / soffice），服务器需安装 LibreOffice
+LIBREOFFICE_BIN = config('LIBREOFFICE_BIN', default='')
+# 单次 LibreOffice 转换超时秒数（含上万图片的大表格给足时间）
+OFFICE_CONVERT_TIMEOUT = config('OFFICE_CONVERT_TIMEOUT', default=1800, cast=int)

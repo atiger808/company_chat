@@ -116,6 +116,7 @@ urlpatterns = [
     path('work-calendar/member-search/', WorkCalendarViewSet.as_view({'get': 'member_search'}), name='work-calendar-member-search'),
     path('work-calendar/digest-config/', WorkCalendarViewSet.as_view({'get': 'digest_config', 'post': 'digest_config'}), name='work-calendar-digest-config'),
     path('work-calendar/digest-send/', WorkCalendarViewSet.as_view({'post': 'digest_send'}), name='work-calendar-digest-send'),
+    path('work-calendar/activity-weight/', WorkCalendarViewSet.as_view({'get': 'activity_weight_config', 'post': 'activity_weight_config'}), name='work-calendar-activity-weight'),
 
     # 物资管理（物品库 + 需求/领用联动 + 入库确认）
     path('material/items/', MaterialViewSet.as_view({'get': 'items', 'post': 'create_item'}), name='material-items'),
@@ -127,6 +128,10 @@ urlpatterns = [
     path('material/requirements/', MaterialViewSet.as_view({'get': 'requirements'}), name='material-requirements'),
     path('material/requisitions/', MaterialViewSet.as_view({'get': 'requisitions'}), name='material-requisitions'),
     path('material/requirement-status/', MaterialViewSet.as_view({'post': 'requirement_status'}), name='material-requirement-status'),
+    path('material/stock-ins/', MaterialViewSet.as_view({'get': 'stock_ins'}), name='material-stock-ins'),
+    path('material/ledger/', MaterialViewSet.as_view({'get': 'ledger'}), name='material-ledger'),
+    path('material/item-adjust/', MaterialViewSet.as_view({'post': 'item_adjust'}), name='material-item-adjust'),
+    path('material/ledger-rebuild/', MaterialViewSet.as_view({'post': 'ledger_rebuild'}), name='material-ledger-rebuild'),
 
     # 每日工作总结（上传/提交/我的/团队/详情/删除/重跑分析/范围分析/成员）
     path('work-summary/upload/', DailyWorkSummaryViewSet.as_view({'post': 'upload'}), name='work-summary-upload'),
@@ -139,6 +144,9 @@ urlpatterns = [
     path('work-summary/<int:pk>/analyze/', DailyWorkSummaryViewSet.as_view({'post': 'analyze'}), name='work-summary-analyze'),
     path('work-summary/<int:pk>/share/', DailyWorkSummaryViewSet.as_view({'post': 'share'}), name='work-summary-share'),
     path('work-summary/<int:pk>/export-pdf/', DailyWorkSummaryViewSet.as_view({'get': 'export_pdf'}), name='work-summary-export-pdf'),
+    path('work-summary/<int:pk>/like/', DailyWorkSummaryViewSet.as_view({'post': 'like', 'delete': 'like'}), name='work-summary-like'),
+    path('work-summary/<int:pk>/comments/', DailyWorkSummaryViewSet.as_view({'get': 'comments'}), name='work-summary-comments'),
+    path('work-summary/<int:pk>/add-comment/', DailyWorkSummaryViewSet.as_view({'post': 'add_comment'}), name='work-summary-add-comment'),
     path('work-summary/', DailyWorkSummaryViewSet.as_view({'get': 'list', 'post': 'create'}), name='work-summary-list'),
 
     # 工作通知

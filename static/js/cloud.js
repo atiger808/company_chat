@@ -3906,14 +3906,14 @@ class CloudApp {
             // 🔧 2. 初始化上传追踪器（用于计算上传速度）
             this.initUploadTracker(file.name, file.size);
 
-            // 🔧 3. 创建分片上传器
+            // 🔧 3. 创建分片上传器（单分片顺序上传：concurrent=1，避免并发分片导致 merge_chunks 偶发 400）
             const uploader = new ChunkedUploader({
                 file: file,
                 fileName: file.name,
                 fileSize: file.size,
                 fileMd5: fileMd5,
                 chunkSize: this.uploadConfig.chunkSize,
-                concurrent: this.uploadConfig.concurrent,
+                concurrent: 1,
                 retryCount: this.uploadConfig.retryCount,
 
                 // 🔧 进度回调 - 关键：在此处更新速度显示
@@ -7061,6 +7061,7 @@ class CloudApp {
                 e.preventDefault();
                 uploadArea.classList.remove('dragover');
                 const files = e.dataTransfer.files;
+                this._warnBigExcel(files);
 
                 // 🔧 支持批量上传
                 if (files.length > 1) {
@@ -7085,6 +7086,7 @@ class CloudApp {
         if (fileInput) {
             fileInput.addEventListener('change', (e) => {
                 const files = e.target.files;
+                this._warnBigExcel(files);
 
                 // 🔧 支持批量上传
                 if (files.length > 1) {
@@ -7600,6 +7602,67 @@ class CloudApp {
         });
     }
 
+
+    // ==================== Excel 兼容格式转换（WPS/新版 Excel 单元格内图片） ====================
+    _isSpreadsheetName(name) {
+        return /\.(xlsx|xlsm|xls)$/i.test(String(name || ''));
+    }
+    // 上传 Excel 前提示（产品层：大型 Excel 多为单元格内图片，提示先本地转浮动图片）
+    _warnBigExcel(files) {
+        if (!files || !files.length) return;
+        const BIG = 15 * 1024 * 1024; // 15MB 以上视为“异常大”
+        for (let i = 0; i < files.length; i++) {
+            const f = files[i];
+            if (!f || !f.name) continue;
+            if (/\.(xlsx|xlsm|xls)$/i.test(f.name) && f.size >= BIG) {
+                this.showWarning('上传提示', '检测到大型 Excel（可能包含大量“单元格内图片”）。若在线预览图片不显示，请在本地 WPS/Excel 把“单元格图片”批量转为“浮动图片”后重新上传；原始文件将原样保存，不会做任何转换。');
+                return;
+            }
+        }
+    }
+    // 手动触发「转换为兼容格式」：后台 LibreOffice 清洗为 OnlyOffice 可识别标准格式
+    async convertCompatibleFile(id, name) {
+        this.showInfo('格式转换', `已开始为「${name || ''}」生成兼容副本（原始文件会保留）；大表格可能需要几分钟，转换期间请勿在线编辑。`);
+        try {
+            const resp = await fetch(`/api/cloud/files/${id}/convert_compatible/`, {
+                method: 'POST',
+                headers: TokenManager.getHeaders()
+            });
+            const data = await resp.json();
+            if (!resp.ok) {
+                this.showError('格式转换', (data && (data.error || data.message)) || '请求失败，请重试');
+                return;
+            }
+            this._pollConvertStatus(id);
+        } catch (e) {
+            console.error('convertCompatibleFile error', e);
+            this.showError('格式转换', '请求失败：' + (e.message || e));
+        }
+    }
+    _pollConvertStatus(id) {
+        let tries = 0;
+        const timer = setInterval(async () => {
+            tries++;
+            try {
+                const r = await fetch(`/api/cloud/files/${id}/convert_compatible/`, {headers: TokenManager.getHeaders()});
+                const d = await r.json();
+                const st = d && d.state;
+                if (st === 'done') {
+                    clearInterval(timer);
+                    this.showSuccess('格式转换', '转换完成：已生成兼容副本（原始文件已保留）。重新打开时会默认使用兼容副本，并可在编辑页一键切回原始文件。');
+                    this.loadFiles(this.currentFolderId);
+                } else if (st === 'error' || st === 'error_nofile' || st === 'error_unavailable') {
+                    clearInterval(timer);
+                    this.showError('格式转换', '转换失败，请检查服务器是否已安装 LibreOffice(soffice) 后重试。');
+                } else if (tries >= 40) {
+                    clearInterval(timer);
+                    this.showInfo('格式转换', '仍在后台转换中，请稍后刷新查看结果。');
+                }
+            } catch (e) {
+                console.warn('poll convert status error', e);
+            }
+        }, 8000);
+    }
 
     showError(title, message) {
         this.showToast(`${title}: ${message}`, 'error');

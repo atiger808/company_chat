@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理控制台 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260901-b9b07be">
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260901-b9b07be">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260905-cc1724f">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260905-cc1724f">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260820-d0b2c3e">
     <!-- 🔧 新增：Chart.js 用于图表展示 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>-->
-    <script src="/static/js/dist/chart.min.js?v=20260901-b9b07be"></script>
+    <script src="/static/js/dist/chart.min.js?v=20260905-cc1724f"></script>
     <!-- 🔧 关键修复2: 添加 Chart.js 加载失败的回退方案 -->
     <script>
         // 检查 Chart.js 是否加载成功
@@ -24,6 +24,36 @@
             document.head.appendChild(fallbackScript);
         }
     </script>
+    <style>
+        /* 管理控制台模态框最大化按钮 + 离职交接全屏样式 */
+        .maximize-btn {
+            width: 32px; height: 32px; border: none; background: transparent;
+            color: var(--text-light, #909399); cursor: pointer;
+            display: inline-flex; align-items: center; justify-content: center;
+            border-radius: 6px; font-size: 14px; transition: all .2s; margin-right: 4px;
+        }
+        .maximize-btn:hover { background: var(--bg-secondary, #f0f2f5); color: var(--text-primary, #303133); }
+        .modal-content.maximized {
+            position: fixed !important; top: 20px !important; left: 20px !important;
+            right: 20px !important; bottom: 20px !important;
+            max-width: none !important; width: auto !important;
+            max-height: none !important; height: auto !important;
+            margin: 0 !important; transform: none !important;
+            border-radius: 12px !important; z-index: 2100;
+        }
+        .modal-content.maximized .modal-body { max-height: calc(100vh - 140px) !important; overflow-y: auto !important; }
+        /* 已禁用用户的「离职交接」按钮：高亮橙色，提示可交接 */
+        .action-btn.transfer-ready {
+            color: #e67e22 !important;
+            border-color: #e6a23c !important;
+            background: #fff7e6 !important;
+        }
+        .action-btn.transfer-ready:hover {
+            background: #ffe9c9 !important;
+            border-color: #e67e22 !important;
+        }
+        .action-btn[disabled] { opacity: .45; cursor: not-allowed; }
+    </style>
 
 </head>
 <body>
@@ -144,7 +174,7 @@
                 </div>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="adminConsole.toggleUserDropdown(event)">
                     <span id="adminUsername" class="btn-text"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260901-b9b07be" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260905-cc1724f" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu show" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item"
@@ -1023,24 +1053,62 @@
     </div>
 </div>
 
+<!-- 离职一键交接模态框 -->
+<div id="transferModal" class="modal">
+    <div class="modal-content modal-sm" style="max-width:560px;">
+        <div class="modal-header">
+            <h3><i class="fas fa-exchange-alt"></i> 离职数据交接</h3>
+            <div style="display:flex;align-items:center;gap:4px;">
+                <button type="button" class="maximize-btn" id="transferMaxBtn" title="最大化"
+                        onclick="adminConsole.toggleTransferMaximize()">
+                    <i class="fas fa-expand"></i>
+                </button>
+                <button class="close-btn" onclick="adminConsole.closeModal('transferModal')">&times;</button>
+            </div>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:13px;color:var(--text-secondary);">
+                将 <strong id="transferFromName" class="highlight"></strong> 名下的
+                <strong>网盘文件 / 文件夹 / 相关分享</strong> 平滑交接给接替者（原文件归属改为接替者）。</p>
+            <div class="form-group">
+                <label>接替者</label>
+                <input type="text" id="transferToSearch" class="form-input" autocomplete="off"
+                       placeholder="输入姓名 / 账号 / 职位 / 部门搜索..." style="width:100%;"
+                       oninput="adminConsole._transferSearch(this.value)">
+                <input type="hidden" id="transferToUserId" value="">
+                <!-- 候选列表在表单流内展示，避免被模态框 overflow 裁剪，超出自带滚动 -->
+                <div id="transferToDropdown"
+                     style="display:none;margin-top:6px;background:#fff;border:1px solid #dcdfe6;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.08);max-height:220px;overflow-y:auto;"></div>
+                <div id="transferToTag"
+                     style="display:none;align-items:center;gap:8px;margin-top:8px;padding:6px 10px;background:#ecf5ff;border-radius:8px;font-size:13px;color:#409eff;"></div>
+                <small class="form-hint">交接完成后，建议在用户管理中禁用离职用户。</small>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="adminConsole.closeModal('transferModal')">取消</button>
+            <button class="btn btn-primary" onclick="adminConsole.confirmTransfer()">确认交接</button>
+        </div>
+    </div>
+</div>
+
 <!-- 加载指示器 -->
 <div class="loading-overlay" id="loadingOverlay" style="display: none;">
     <div class="loading-spinner">
         <div class="spinner"></div>
     </div>
 </div>
-<script src="/static/js/dist/spark-md5.min.js?v=20260901-b9b07be"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260901-b9b07be"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260901-b9b07be"></script>
-<script src="/static/js/encrypts.js?v=20260901-b9b07be"></script>
-<script src="/static/js/utils.js?v=20260901-b9b07be"></script>
-<script src="/static/js/api.js?v=20260901-b9b07be"></script>
-<script src="/static/js/admin.js?v=20260901-b9b07be"></script>
-<script src="/static/js/admin_chat_rooms.js?v=20260901-b9b07be"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260905-cc1724f"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260905-cc1724f"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260905-cc1724f"></script>
+<script src="/static/js/encrypts.js?v=20260905-cc1724f"></script>
+<script src="/static/js/utils.js?v=20260905-cc1724f"></script>
+<script src="/static/js/api.js?v=20260905-cc1724f"></script>
+<script src="/static/js/admin.js?v=20260905-cc1724f"></script>
+<script src="/static/js/admin_chat_rooms.js?v=20260905-cc1724f"></script>
 <!-- 🔧 新增：数据统计和系统设置 JS -->
-<script src="/static/js/admin_statistics.js?v=20260901-b9b07be"></script>
-<script src="/static/js/admin_settings.js?v=20260901-b9b07be"></script>
-<script src="/static/js/notifications.js?v=20260901-b9b07be"></script>
+<script src="/static/js/admin_statistics.js?v=20260905-cc1724f"></script>
+<script src="/static/js/admin_settings.js?v=20260905-cc1724f"></script>
+<script src="/static/js/notifications.js?v=20260905-cc1724f"></script>
 
 
 <script>
@@ -1213,7 +1281,7 @@
     </div>
 </div>
 
-<script src="/static/js/watermark.js?v=20260901-b9b07be"></script>
+<script src="/static/js/watermark.js?v=20260905-cc1724f"></script>
 <script>WatermarkManager.init();</script>
 </body>
 </html>

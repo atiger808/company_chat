@@ -20,6 +20,9 @@ def get_user_from_token(token):
     try:
         access_token = AccessToken(token)
         user = User.objects.get(id=access_token['user_id'])
+        # 禁用用户不允许接入协同编辑/实时服务
+        if not user.is_active:
+            return AnonymousUser()
         return user
     except Exception as e:
         logger.warning(f"Token解析失败: {e}")

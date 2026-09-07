@@ -948,6 +948,7 @@ class WorkSummaryApp {
             + filesHtml
             + analysisHtml
             + '<div class="ws-actions">'
+            + this._socialBar(s)
             + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openDetail(' + s.id + ')"><i class="fas fa-eye"></i> 详情</button>'
             + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openPrintModal(' + s.id + ')"><i class="fas fa-print"></i> 打印</button>'
             + (s.status === 'failed' || s.status === 'done' ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.rerunAnalysis(' + s.id + ')"><i class="fas fa-sync"></i> 重新分析</button>' : '')
@@ -956,6 +957,25 @@ class WorkSummaryApp {
             + (s.user === this._myId ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.editSummary(' + s.id + ')"><i class="fas fa-edit"></i> 编辑</button>' : '')
             + (this._isSuperAdmin ? '<button class="btn btn-sm btn-danger" onclick="workSummaryApp.deleteSummary(' + s.id + ')"><i class="fas fa-trash"></i> 删除</button>' : '')
             + '</div></div>';
+    }
+    _socialBar(s) {
+        const liked = !!s.liked_by_me;
+        const self = this;
+        return '<button type="button" class="btn btn-sm ' + (liked ? 'btn-primary' : 'btn-secondary') + '" data-liked="' + (liked ? '1' : '0') + '" title="点赞" onclick="workSummaryApp.toggleWsListLike(' + s.id + ', this)"><i class="fas fa-thumbs-up"></i> <b>' + (s.like_count || 0) + '</b></button>'
+            + '<button type="button" class="btn btn-sm btn-secondary" title="评论" onclick="workSummaryApp.openDetailAndComment(' + s.id + ')"><i class="fas fa-comment-dots"></i> <b>' + (s.comment_count || 0) + '</b></button>';
+    }
+    async toggleWsListLike(id, btn) {
+        if (!btn) return;
+        try {
+            const likedNow = btn.getAttribute('data-liked') === '1';
+            const url = WS_API + '/' + id + '/like/';
+            const d = likedNow ? await this.apiRaw(url, 'DELETE') : await this.apiRaw(url, 'POST');
+            const liked = !likedNow;
+            btn.setAttribute('data-liked', liked ? '1' : '0');
+            btn.className = 'btn btn-sm ' + (liked ? 'btn-primary' : 'btn-secondary');
+            const b = btn.querySelector('b');
+            if (b) b.textContent = d && d.like_count != null ? d.like_count : (liked ? 1 : 0);
+        } catch (e) { this.toast('点赞失败', true); }
     }
 
     // ===== 团队总结 =====
@@ -1034,7 +1054,8 @@ class WorkSummaryApp {
                 + (s.content ? '<div class="ws-content">' + self.escapeHtml(s.content) + '</div>' : '<div class="ws-content" style="color:#c0c4cc;">（未填写总结文字）</div>')
                 + filesHtml
                 + analysisHtml
-                + '<div class="ws-actions"><button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openDetail(' + s.id + ')"><i class="fas fa-eye"></i> 详情</button>'
+                + '<div class="ws-actions">' + this._socialBar(s)
+                + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openDetail(' + s.id + ')"><i class="fas fa-eye"></i> 详情</button>'
             + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openPrintModal(' + s.id + ')"><i class="fas fa-print"></i> 打印</button>'
                 + (s.status === 'failed' || s.status === 'done' ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.rerunAnalysis(' + s.id + ')"><i class="fas fa-sync"></i> 重新分析</button>' : '')
                 + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openExportModal(' + s.id + ')"><i class="fas fa-download"></i> 导出</button>'
@@ -1175,6 +1196,8 @@ class WorkSummaryApp {
             } else if (d.status === 'disabled') {
                 if (detailEl) detailEl.innerHTML = titleHtml + '<div class="ws-analysis-body" style="color:#909399;">模型分析功能已停用</div>';
             }
+            // 点赞/评论 社交区
+            this._renderWsSocial(d);
         } catch (e) {
             this.toast((e && e.message) || '加载失败', true);
         }
@@ -1185,6 +1208,173 @@ class WorkSummaryApp {
         const el = document.getElementById('wsDetailAnalysis');
         if (el && el._thinkTimer) { clearInterval(el._thinkTimer); el._thinkTimer = null; }
     }
+    // 打开总结详情并自动展开评论输入区（卡片评论按钮/工作汇总跳转共用）
+    async openDetailAndComment(id) {
+        await this.openDetail(id);
+        const box = document.getElementById('wsCommentBox');
+        if (box) { box.style.display = 'block'; }
+        if (this._socialSummary) this._loadWsComments(this._socialSummary.id);
+        const wrap = document.getElementById('wsSocialBox');
+        if (wrap) wrap.scrollIntoView({behavior: 'smooth', block: 'center'});
+    }
+    // ===== #1 每日总结 点赞/评论 =====
+    _wsEmojiList() {
+        return ['😀','😄','😂','😊','😍','😅','🥰','😘','😎','🤔','👍','👏','🙌','💪','🙏','❤️','💖','🔥','🎉','✨','🙂','😉'];
+    }
+    async _renderWsSocial(d) {
+        const wrap = document.getElementById('wsDetailBody');
+        if (!wrap) return;
+        this._socialSummary = d;
+        const liked = !!d.liked_by_me;
+        const box = document.createElement('div');
+        box.id = 'wsSocialBox';
+        box.innerHTML =
+            '<div style="display:flex;align-items:center;gap:10px;margin:14px 0 4px;border-top:1px solid #ebeef5;padding-top:12px;flex-wrap:wrap;">'
+            + '<button type="button" class="btn btn-sm ' + (liked ? 'btn-primary' : 'btn-secondary') + '" data-liked="' + (liked ? '1' : '0') + '" onclick="workSummaryApp.toggleWsLike(' + d.id + ', this)"><i class="fas fa-thumbs-up"></i> <span>点赞</span> <b>' + (d.like_count || 0) + '</b></button>'
+            + '<button type="button" class="btn btn-sm btn-secondary" onclick="workSummaryApp.toggleWsCommentBox()"><i class="fas fa-comment-dots"></i> 评论 <b>' + (d.comment_count || 0) + '</b></button>'
+            + '</div>'
+            + '<div id="wsCommentBox" style="display:none;border-top:1px solid #ebeef5;margin-top:6px;padding-top:10px;"></div>';
+        wrap.appendChild(box);
+        this._wsReplyTo = null;
+        this._wsImage = null;
+    }
+    async toggleWsLike(id, btn) {
+        try {
+            const likedNow = btn && btn.getAttribute('data-liked') === '1';
+            const url = WS_API + '/' + id + '/like/';
+            const d = likedNow
+                ? await this.apiRaw(url, 'DELETE')
+                : await this.apiRaw(url, 'POST');
+            const liked = !likedNow;
+            if (btn) {
+                btn.setAttribute('data-liked', liked ? '1' : '0');
+                btn.className = 'btn btn-sm ' + (liked ? 'btn-primary' : 'btn-secondary');
+                const b = btn.querySelector('b');
+                if (b) b.textContent = (d && d.like_count != null ? d.like_count : (liked ? 1 : 0));
+            }
+        } catch (e) { this.toast('点赞失败', true); }
+    }
+    toggleWsCommentBox() {
+        const box = document.getElementById('wsCommentBox');
+        if (!box) return;
+        const show = box.style.display !== 'block';
+        box.style.display = show ? 'block' : 'none';
+        if (show && this._socialSummary) this._loadWsComments(this._socialSummary.id);
+    }
+    async _loadWsComments(id) {
+        const box = document.getElementById('wsCommentBox');
+        if (!box) return;
+        this._comments = [];
+        try {
+            const d = await this.apiGet(WS_API + '/' + id + '/comments/');
+            this._comments = (d && d.comments) || [];
+        } catch (e) { this._comments = []; }
+        box.innerHTML = this._wsCommentsHtml(id);
+    }
+    _wsCommentsHtml(id) {
+        const comments = this._comments || [];
+        const top = [], children = {};
+        comments.forEach(c => { if (c.parent) { (children[c.parent] = children[c.parent] || []).push(c); } else top.push(c); });
+        const one = (c, isReply) => {
+            const av = c.avatar || '/static/images/default-avatar.png';
+            const rep = (isReply && c.parent_author_name) ? '<span style="color:#7c4dff;">回复 @' + this.escapeHtml(c.parent_author_name) + '：</span>' : '';
+            const img = c.image ? '<div style="margin-top:4px;"><img src="' + this.escapeHtml(c.image) + '" style="max-width:140px;max-height:140px;border-radius:6px;object-fit:cover;cursor:pointer;" onclick="window.open(\'' + this.escapeHtml(c.image) + '\',\'_blank\')"></div>' : '';
+            return '<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px dashed #f0f0f0;' + (isReply ? 'margin-left:36px;' : '') + '">'
+                + '<img src="' + this.escapeHtml(av) + '" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0;">'
+                + '<div style="flex:1;min-width:0;">'
+                + '<div><span style="font-size:12px;font-weight:600;color:#303133;">' + this.escapeHtml(c.author_name) + '</span><span style="font-size:11px;color:#909399;margin-left:8px;">' + this._fmtDateTime(c.created_at) + '</span></div>'
+                + '<div style="font-size:13px;color:#606266;white-space:pre-wrap;word-break:break-word;">' + rep + this.escapeHtml(c.content) + '</div>'
+                + img
+                + '<div style="margin-top:2px;"><span style="font-size:11px;color:#909399;cursor:pointer;" onclick="workSummaryApp._setWsReply(' + c.id + ', \'' + this.escapeHtml(c.author_name) + '\')"><i class="fas fa-reply"></i> 回复</span></div>'
+                + '</div></div>';
+        };
+        let h = '<div id="wsReplyBanner" style="display:none;align-items:center;gap:6px;background:#f3e8ff;border-radius:6px;padding:5px 8px;font-size:12px;color:#7c4dff;margin-bottom:6px;">回复 <b id="wsReplyTarget"></b><i class="fas fa-times" style="margin-left:auto;cursor:pointer;" onclick="workSummaryApp._clearWsReply()"></i></div>';
+        if (!comments.length) {
+            h += '<div style="color:#909399;font-size:12px;padding:6px 0;">暂无评论，快来抢沙发～</div>';
+        } else {
+            top.forEach(c => { h += one(c, false); (children[c.id] || []).forEach(r => { h += one(r, true); }); });
+        }
+        h += '<div style="display:flex;gap:6px;margin-top:8px;align-items:flex-end;">'
+            + '<textarea id="wsCmtInput" class="form-textarea" style="flex:1;min-height:48px;font-size:13px;padding:6px 8px;" placeholder="写下你的评论..."></textarea>'
+            + '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">'
+            + '<button type="button" class="btn btn-sm btn-secondary" title="图片" onclick="document.getElementById(\'wsCmtImg\').click()"><i class="fas fa-image"></i></button>'
+            + '<button type="button" class="btn btn-sm btn-secondary" title="表情" onclick="workSummaryApp._toggleWsEmoji()"><i class="far fa-smile"></i></button>'
+            + '<button type="button" class="btn btn-sm btn-primary" onclick="workSummaryApp.submitWsComment(' + id + ')"><i class="fas fa-paper-plane"></i></button></div>'
+            + '<input type="file" id="wsCmtImg" accept="image/*" style="display:none;" onchange="workSummaryApp._wsPickImg(event)"></div>'
+            + '<div id="wsCmtImgWrap" style="display:none;margin-top:6px;"><img id="wsCmtImgView" src="" style="max-width:90px;max-height:90px;border-radius:6px;object-fit:cover;"></div>'
+            + '<div id="wsCmtEmoji" style="display:none;margin-top:6px;border:1px solid #dcdfe6;border-radius:8px;padding:6px;background:#fff;">'
+            + this._wsEmojiList().map(e => '<span style="font-size:20px;cursor:pointer;line-height:1;" onclick="workSummaryApp._insertWsEmoji(\'' + e + '\')">' + e + '</span>').join('') + '</div>';
+        return h;
+    }
+    _setWsReply(id, name) {
+        this._wsReplyTo = {id: id, name: name};
+        const banner = document.getElementById('wsReplyBanner');
+        const target = document.getElementById('wsReplyTarget');
+        if (banner) banner.style.display = 'flex';
+        if (target) target.textContent = '@' + name;
+        const inp = document.getElementById('wsCmtInput');
+        if (inp) inp.focus();
+    }
+    _clearWsReply() {
+        this._wsReplyTo = null;
+        const banner = document.getElementById('wsReplyBanner');
+        if (banner) banner.style.display = 'none';
+    }
+    _toggleWsEmoji() {
+        const p = document.getElementById('wsCmtEmoji');
+        if (p) p.style.display = p.style.display === 'block' ? 'none' : 'block';
+    }
+    _insertWsEmoji(emoji) {
+        const inp = document.getElementById('wsCmtInput');
+        if (inp) { inp.value = (inp.value || '') + emoji; inp.focus(); }
+    }
+    _wsPickImg(e) {
+        const f = e.target.files && e.target.files[0];
+        e.target.value = '';
+        if (!f) return;
+        const fd = new FormData();
+        fd.append('file', f);
+        const hd = TokenManager.getHeaders();
+        delete hd['Content-Type'];
+        const self = this;
+        fetch('/api/chat/upload/', {method: 'POST', headers: hd, body: fd}).then(r => r.json()).then(json => {
+            const url = json.file_url || json.url || json.file || (json.data && (json.data.file_url || json.data.url)) || '';
+            if (!url) { this.toast('图片上传失败', true); return; }
+            self._wsImage = url;
+            const wrap = document.getElementById('wsCmtImgWrap');
+            const img = document.getElementById('wsCmtImgView');
+            if (img) img.src = url;
+            if (wrap) wrap.style.display = 'block';
+        }).catch(() => this.toast('图片上传失败', true));
+    }
+    async submitWsComment(id) {
+        const inp = document.getElementById('wsCmtInput');
+        const content = (inp && inp.value || '').trim();
+        if (!content && !this._wsImage) { this.toast('请输入评论内容', true); return; }
+        const payload = {content: content};
+        if (this._wsImage) payload.image = this._wsImage;
+        if (this._wsReplyTo) payload.parent_id = this._wsReplyTo.id;
+        try {
+            await this.apiRaw(WS_API + '/' + id + '/add-comment/', 'POST', payload);
+            if (inp) inp.value = '';
+            this._wsImage = null;
+            this._clearWsReply();
+            const wrap = document.getElementById('wsCmtImgWrap');
+            if (wrap) { wrap.style.display = 'none'; }
+            await this._loadWsComments(id);
+            if (this._socialSummary) this._socialSummary.comment_count = (this._comments || []).length;
+        } catch (e) { this.toast('评论失败', true); }
+    }
+    async apiRaw(url, method, body) {
+        const resp = await fetch(url, {method: method, headers: TokenManager.getHeaders(), body: body ? JSON.stringify(body) : undefined});
+        if (!resp.ok) {
+            const b = await resp.json().catch(() => ({}));
+            throw new Error(b.error || b.detail || '请求失败');
+        }
+        const raw = await resp.json();
+        return raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+    }
+
     toggleDetailPrompt() {
         const el = document.getElementById('wsDetailPrompt');
         if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';

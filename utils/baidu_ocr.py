@@ -238,6 +238,7 @@ def verify_vat_invoice(api_key=None, secret_key=None,
 
 
 _TAX_NO_RE = re.compile(r'纳税人识别号\s*[:：]?\s*([0-9A-Za-z]{14,22})')
+_TAX_NO_RE_TRAIN = re.compile(r'统一社会信用代码\s*[:：]?\s*([0-9A-Za-z]{14,22})')
 _DRAWER_RE = re.compile(r'开票人\s*[:：]?\s*([^\s,，;；]{1,20})')
 _TAX_RATE_RE = re.compile(r'-?\d+(?:\.\d+)?%')
 
@@ -351,9 +352,10 @@ def _parse_invoice(words):
     if m:
         result['invoice_date'] = '%s-%s-%s' % (m.group(1), m.group(2).zfill(2), m.group(3).zfill(2))
 
+
     # 开票金额：优先取「价税合计/小写」后的金额，其次全文第一个两位小数金额
     amount = ''
-    for kw in ('价税合计', '价税合计(大写)', '小写'):
+    for kw in ('价税合计', '价税合计(大写)', '小写', '票价'):
         idx = compact.find(kw)
         if idx >= 0:
             seg = compact[idx + len(kw):idx + len(kw) + 30]
@@ -361,10 +363,12 @@ def _parse_invoice(words):
             if m:
                 amount = m.group(1).replace(',', '')
                 break
+
     if not amount:
         m = _AMOUNT_RE.search(full_text)
         if m and m.group(1).replace(',', ''):
             amount = m.group(1).replace(',', '')
+
     result['invoice_amount'] = amount
 
     # 购买方 / 销售方信息
@@ -378,22 +382,37 @@ def _parse_invoice(words):
         buyer_seg = compact.split('购买方', 1)[1]
     elif '销售方' in compact:
         seller_seg = compact.split('销售方', 1)[1]
+
     if buyer_seg:
         buyer_name, result['buyer_tax_no'] = _extract_party(buyer_seg)
         if '名称：' in buyer_name:
             buyer_name = buyer_name.split('名称：')[0].strip(' :：\n\r\t')
         buyer_name = buyer_name.replace('统一社会信用代码', '').strip('/')
         result['buyer_name'] = buyer_name
+
     if seller_seg:
         seller_name, result['seller_tax_no'] = _extract_party(seller_seg)
         if '名称：' in seller_name:
             seller_name = seller_name.split('名称：')[1].strip(' :：\n\r\t')
         seller_name = seller_name.replace('统一社会信用代码', '').strip('/')
         result['seller_name'] = seller_name
+
     m = _extract_tax_no(compact)
     if m:
         result['buyer_tax_no'] = m[0]
         result['seller_tax_no'] = m[-1]
+    else:
+        m = _TAX_NO_RE_TRAIN.findall(compact)
+        if len(m) == 2:
+            result['buyer_tax_no'] = m[0]
+            result['seller_tax_no'] = m[-1]
+        elif len(m) == 1:
+            result['buyer_tax_no'] = m[0]
+
+    invoice_code = result.get('invoice_code')
+    if invoice_code:
+        if invoice_code == result.get('buyer_tax_no') or invoice_code == result.get('seller_tax_no'):
+            result['invoice_code'] = ''
 
     # 开票主体（销售方名称）
     result['invoice_issuer'] = result['seller_name'] or ''
@@ -521,87 +540,30 @@ if __name__ == '__main__':
              '计', '¥157.26', '¥1.57', '价税合计（大写）', '壹佰伍拾捌圆捌角叁分', '(小写) ¥158.83', '备注',
              '开票人：傅晓飞']
 
-    words = ['电子发票（晋通发票）', '发票号码：26117000001140279758', '开票日期：2026年08月11日', '北京市税务局',
-             '购买方信息', '名称：义乌市声澜科技有限责任公司', '销售方信息', '名称：北京我遥我控科技有限公司',
-             '统一社会信用代码/纳税人识别号：91330782MAEKK29W4R', '统一社会信用代码/纳税人识别号：91110116055565228Q',
-             '项目名称', '规格型号', '单位', '数量', '单价', '金额', '税率/征收率', '税额', '*生产生活服务*代订机票',
-             '/', '/', '1', '4113.21', '4113.21', '6%', '246.79', '款', '合', '计', '¥4113.21', '¥246.79',
-             '价税合计（大写）', '肆仟叁佰陆拾圆整', '（小写）¥4360.00', '备注', '开票人：孟浩伟']
+    # words = ['电子发票（晋通发票）', '发票号码：26117000001140279758', '开票日期：2026年08月11日', '北京市税务局',
+    #          '购买方信息', '名称：义乌市声澜科技有限责任公司', '销售方信息', '名称：北京我遥我控科技有限公司',
+    #          '统一社会信用代码/纳税人识别号：91330782MAEKK29W4R', '统一社会信用代码/纳税人识别号：91110116055565228Q',
+    #          '项目名称', '规格型号', '单位', '数量', '单价', '金额', '税率/征收率', '税额', '*生产生活服务*代订机票',
+    #          '/', '/', '1', '4113.21', '4113.21', '6%', '246.79', '款', '合', '计', '¥4113.21', '¥246.79',
+    #          '价税合计（大写）', '肆仟叁佰陆拾圆整', '（小写）¥4360.00', '备注', '开票人：孟浩伟']
 
     # words = ['16:03', '5G', '高德地图', '电子发票（普通发票）', '1/1', '发票号码：', '26347000000197747618', '旅客运输服务', '开票日期', '2026年08月11日', '安徽省税务局', '购买方信息', '销售方信息', '岳众同臻信息服务（义乌市）有限公司', '名称：', '统一社会信用代码/纳税人识别号：', '91330782MA8GUGDY4Q', '统一社会信用代码/纳税人识别号：', '91340207MAD5LN9F2T', '项目名称', '规格型号', '单位', '数量', '单价', '金额', '税率/征收率', '税额', '*交通运输服务*客运服务费', '无', '次', '6.85', '6.85', '0.21', '¥6.85', '计', '¥0.21', '出行人', '有效身份证件号', '出行日期', '出发地', '到达地', '等级', '交通工具类型', '价税合计（大写）', '柒元陆分', '(小写) ￥ 7.06', '备注', '开票人：朱浪博', '<', '-cn-beijing.aliyuncs.com']
 
-    words = ['电子发票（普通发票）', '发票号码：25322000000517532898', 'W', '8', '开票日期：2025年11月04日', '江苏省税务局',
-             '下载次数：1', '购买方信息', '名称：义乌市声澜科技有限责任公司', '销售方信息', '名称：无锡双吉锅业有限公司',
-             '统一社会信用代码/纳税人识别号：', '统一社会信用代码/纳税人识别号：913202065580753519', '项目名称',
-             '规格型号', '单位', '数量', '单价', '金额', '税率/征收率', '税额', '*金属制品*铁锅', '个',
-             '1 295.530973451327', '295.53', '13%', '38.42', '合', '计', '¥295.53', '¥38.42', '价税合计（大写）',
-             '叁佰叁拾叁圆玖角伍分', '(小写) ¥333.95', '备注', '开票人：胡玉婷']
-
-    # r = _parse_invoice(words_1)
-    # print(r)
-    # print('*'*30)
+    # words = ['电子发票（普通发票）', '发票号码：25322000000517532898', 'W', '8', '开票日期：2025年11月04日', '江苏省税务局',
+    #          '下载次数：1', '购买方信息', '名称：义乌市声澜科技有限责任公司', '销售方信息', '名称：无锡双吉锅业有限公司',
+    #          '统一社会信用代码/纳税人识别号：', '统一社会信用代码/纳税人识别号：913202065580753519', '项目名称',
+    #          '规格型号', '单位', '数量', '单价', '金额', '税率/征收率', '税额', '*金属制品*铁锅', '个',
+    #          '1 295.530973451327', '295.53', '13%', '38.42', '合', '计', '¥295.53', '¥38.42', '价税合计（大写）',
+    #          '叁佰叁拾叁圆玖角伍分', '(小写) ¥333.95', '备注', '开票人：胡玉婷']
 
     r = _parse_invoice(words)
     print(r)
 
-    data = {'words_result': {'PurchaserAddress': '', 'PurchaserBank': '', 'Password': '', 'CommodityVehicleType': [],
-                             'SellerRegisterNum': '91330901MA28KDTFX3', 'SellerBank': '',
-                             'CommodityNum': [{'row': '1', 'word': '1'}],
-                             'CommodityAmount': [{'row': '1', 'word': '596.23'}], 'InvoiceType': '电子发票(普通发票)',
-                             'AmountInWords': '陆佰叁拾贰圆整', 'TotalTax': '35.77', 'MachineCode': '', 'City': '',
-                             'InvoiceNumDigit': '', 'Checker': '', 'InvoiceCode': '', 'SellerAddress': '',
-                             'CommodityPrice': [{'row': '1', 'word': '596.23'}], 'NoteDrawer': '魏薇', 'Province': '',
-                             'InvoiceNum': '26332000007038384901', 'CommodityTaxRate': [{'row': '1', 'word': '6%'}],
-                             'ServiceType': '餐饮', 'InvoiceDate': '2026年08月16日', 'CommodityEndDate': [],
-                             'PurchaserRegisterNum': '91330782MAEKK29W4R', 'CommodityStartDate': [],
-                             'TotalAmount': '596.23', 'SheetNum': '', 'CommodityPlateNum': [],
-                             'PurchaserName': '义乌市声澜科技有限责任公司',
-                             'SellerName': '舟山市高佳庄餐饮管理有限公司长峙岛香樟店',
-                             'InvoiceNumConfirm': '26332000007038384901', 'Agent': '否', 'InvoiceTag': '其他',
-                             'CommodityUnit': [], 'CheckCode': '', 'InvoiceTypeOrg': '电子发票(普通发票)',
-                             'Remarks': '', 'Payee': '', 'CommodityTax': [{'row': '1', 'word': '35.77'}],
-                             'AmountInFiguers': '632.00',
-                             'CommodityName': [{'row': '1', 'word': '*生产生活服务*餐饮服务'}], 'CommodityType': [],
-                             'OnlinePay': '', 'PassengerName': [], 'PassengerIdNum': [], 'PassengerDate': [],
-                             'PassengerDeparture': [], 'PassengerArrival': [], 'PassengerClass': [],
-                             'PassengerVehicleType': [], 'TransportType': [], 'TransportPlateNum': [],
-                             'TransportDeparture': [], 'TransportArrival': [], 'TransportCargoInfo': []},
-            'words_result_num': 61, 'log_id': 2089249828719692928}
+    print('*'*30)
 
-    result = {'invoice_type': 'ordinary', 'invoice_number': '26332000007038384901', 'invoice_code': '',
-              'invoice_amount': '632.00', 'invoice_date': '2026-08-16',
-              'invoice_issuer': '舟山市高佳庄餐饮管理有限公司长峙岛香樟店', 'buyer_name': '义乌市声澜科技有限责任公司',
-              'buyer_tax_no': '91330782MAEKK29W4R', 'seller_name': '舟山市高佳庄餐饮管理有限公司长峙岛香樟店',
-              'seller_tax_no': '91330901MA28KDTFX3', 'tax_rate': '', 'drawer': ''}
+    words = ['电子发票铁路电子客票）', '国家税务总局', '发票号码: 26339132537000733886', '浙江省税务局', '开票日期:2026年09月05日', '义乌站', 'D57', '重庆北站', 'Yi wu', 'Chongqi ngbei', '2026年08月31日 22:23开', '04车013号中铺', '二等卧', '票价: ￥445.00', '5110111980****2959', '古红彬', '电子客票号: 3253766086083196652042026', '购买方名称: 义乌市声澜科技有限责任公司', '统一社会信用代码: 91330782MAEKK29W4R', '买票请到12306 发货请到95306', '中国铁路祝您旅途愉快']
 
-    data = {'words_result': {'PurchaserAddress': '', 'PurchaserBank': '', 'Password': '', 'CommodityVehicleType': [],
-                             'SellerRegisterNum': '91330100396319295P', 'SellerBank': '',
-                             'CommodityNum': [{'row': '1', 'word': '1.0000000000000'}],
-                             'CommodityAmount': [{'row': '1', 'word': '2653.10'}], 'InvoiceType': '电子发票(专用发票)',
-                             'AmountInWords': '贰仟玖佰玖拾捌圆整', 'TotalTax': '344.90', 'MachineCode': '', 'City': '',
-                             'InvoiceNumDigit': '', 'Checker': '', 'InvoiceCode': '', 'SellerAddress': '',
-                             'CommodityPrice': [{'row': '1', 'word': '2653.1000000000000'}], 'NoteDrawer': '陈叶芳',
-                             'Province': '', 'InvoiceNum': '26337000000695148096',
-                             'CommodityTaxRate': [{'row': '1', 'word': '13%'}], 'ServiceType': '电器设备',
-                             'InvoiceDate': '2026年08月15日', 'CommodityEndDate': [],
-                             'PurchaserRegisterNum': '91330782MAEKK29W4R', 'CommodityStartDate': [],
-                             'TotalAmount': '2653.10', 'SheetNum': '', 'CommodityPlateNum': [],
-                             'PurchaserName': '义乌市声澜科技有限责任公司',
-                             'SellerName': '特斯拉汽车销售服务（杭州）有限公司',
-                             'InvoiceNumConfirm': '26337000000695148096', 'Agent': '否', 'InvoiceTag': '其他',
-                             'CommodityUnit': [{'row': '1', 'word': '个'}], 'CheckCode': '',
-                             'InvoiceTypeOrg': '电子发票(增值税专用发票)', 'Remarks': 'SV18EE209E', 'Payee': '',
-                             'CommodityTax': [{'row': '1', 'word': '344.90'}], 'AmountInFiguers': '2998.00',
-                             'CommodityName': [{'row': '1', 'word': '*交通运输设备*精品销售-3M膜'}],
-                             'CommodityType': [{'row': '1', 'word': '2122248-00-A'}], 'OnlinePay': '',
-                             'PassengerName': [], 'PassengerIdNum': [], 'PassengerDate': [], 'PassengerDeparture': [],
-                             'PassengerArrival': [], 'PassengerClass': [], 'PassengerVehicleType': [],
-                             'TransportType': [], 'TransportPlateNum': [], 'TransportDeparture': [],
-                             'TransportArrival': [], 'TransportCargoInfo': []}, 'words_result_num': 61,
-            'log_id': 2089253337708488078}
 
-    result = {'invoice_type': 'special', 'invoice_number': '26337000000695148096', 'invoice_code': '',
-              'invoice_amount': '2998.00', 'invoice_date': '2026-08-15',
-              'invoice_issuer': '特斯拉汽车销售服务（杭州）有限公司', 'buyer_name': '义乌市声澜科技有限责任公司',
-              'buyer_tax_no': '91330782MAEKK29W4R', 'seller_name': '特斯拉汽车销售服务（杭州）有限公司',
-              'seller_tax_no': '91330100396319295P', 'tax_rate': '', 'drawer': ''}
+    r = _parse_invoice(words)
+    print(r)
+

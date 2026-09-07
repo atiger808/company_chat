@@ -56,6 +56,8 @@ urlpatterns = [
          name='admin-toggle-status'),
     path('admin/users/batch-delete/', UserAdminViewSet.as_view({'post': 'batch_delete'}), name='admin-batch-delete'),
     path('admin/users/export/', UserAdminViewSet.as_view({'get': 'export'}), name='admin-export'),
+    # 离职一键交接
+    path('admin/users/<int:pk>/transfer-data/', UserAdminViewSet.as_view({'post': 'transfer_data'}), name='admin-transfer-data'),
     # 为用户分配好友
     path('admin/users/<int:pk>/assign-friends/', UserAdminViewSet.as_view({'post': 'assign_friends'}), name='admin-assign-friends'),
     # 获取用户的好友列表

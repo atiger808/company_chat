@@ -1,8 +1,8 @@
 // static/js/work-calendar.js - 工作日历
 const WC_API = '/api/oa/work-calendar';
 const WS_NET_PALETTE = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#9b59b6', '#00a1ff', '#16a085', '#e74c3c', '#8e44ad', '#d35400', '#2f9e44', '#5c6bc0', '#ec407a', '#795548'];
-const WS_NET_TYPE_COLOR = {'chat': '#409eff', 'approval': '#e6a23c', 'task': '#f56c6c', 'doc': '#9b59b6', 'share': '#00a1ff'};
-const WS_NET_TYPE_LABEL = {'chat': '私聊消息', 'approval': 'OA审批', 'task': '任务指派', 'doc': '协作文档', 'share': '网盘分享'};
+const WS_NET_TYPE_COLOR = {'chat': '#409eff', 'approval': '#e6a23c', 'task': '#f56c6c', 'doc': '#9b59b6', 'share': '#00a1ff', 'announcement': '#16a085', 'summary_comment': '#7c4dff', 'summary_like': '#c0a3ff'};
+const WS_NET_TYPE_LABEL = {'chat': '私聊消息', 'approval': 'OA审批', 'task': '任务指派', 'doc': '协作文档', 'share': '网盘分享', 'announcement': '公告评论', 'summary_comment': '总结评论', 'summary_like': '总结点赞'};
 
 class WorkCalendarApp {
     constructor() {
@@ -363,7 +363,7 @@ class WorkCalendarApp {
             var list = items.slice(-20);
             var avg = d.avg_minutes || 0;
             this._effChart.setOption({
-                tooltip: {trigger: 'axis', formatter: function (ps) {
+                tooltip: {trigger: 'axis', confine: true, appendToBody: true, formatter: function (ps) {
                     var i = ps[0].dataIndex;
                     var it = list[i];
                     var ap = it.applicant || {};
@@ -372,7 +372,7 @@ class WorkCalendarApp {
                         + '<div><div style="font-weight:600;">' + this._escape(ap.name || '') + '</div>'
                         + '<div style="font-size:11px;color:#909399;">' + this._escape([ap.department, ap.position].filter(Boolean).join(' · ')) + '</div></div></div>'
                         + '<div style="font-weight:600;max-width:220px;word-break:break-all;">' + this._escape(it.title) + '</div>'
-                        + '<div>到达 ' + this._escape(Utils.formatDateTime(it.arrival)) + ' → 通过 ' + this._escape(Utils.formatDateTime(it.approved_at)) + '</div>'
+                        + '<div>到达  ' + this._escape(Utils.formatDateTime(it.arrival)) + ' → 通过 ' + this._escape(Utils.formatDateTime(it.approved_at)) + '</div>'
                         + '<div>用时：' + this._fmtDur(it.minutes) + '</div>';
                 }.bind(this)},
                 grid: {left: 44, right: 16, top: 24, bottom: 90},
@@ -409,7 +409,7 @@ class WorkCalendarApp {
             var avgs = results.map(function (r) { return r.avg_minutes; });
             var self = this;
             this._leaderboardChart.setOption({
-                tooltip: {trigger: 'axis', axisPointer: {type: 'shadow'}, formatter: function (ps) {
+                tooltip: {trigger: 'axis', confine: true, appendToBody: true, axisPointer: {type: 'shadow'}, formatter: function (ps) {
                     var i = ps[0].dataIndex;
                     var r = results[i];
                     return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">'
@@ -557,10 +557,14 @@ class WorkCalendarApp {
             ['chat', '聊天', '#409eff'],
             ['approval', '审批', '#e6a23c'],
             ['attendance', '考勤', '#67c23a'],
-            ['summary', '总结', '#7c4dff'],
             ['task', '任务', '#f56c6c'],
             ['cloud', '网盘', '#00a1ff'],
-            ['doc', '文档', '#9b59b6']
+            ['doc', '文档', '#9b59b6'],
+            ['summary_pub', '发总结', '#7c4dff'],
+            ['summary_cmt', '评总结', '#a86df5'],
+            ['summary_like', '赞总结', '#c0a3ff'],
+            ['announce_pub', '发公告', '#16a085'],
+            ['announce_cmt', '评公告', '#48c9b0']
         ];
     }
     async _loadOrgActivity(params) {
@@ -1093,7 +1097,8 @@ class WorkCalendarApp {
         (d.members || []).forEach(function (x) { if (String(x.id) === String(memberId)) m = x; });
         if (!m) { m = (d.members || [])[0] || null; }
         if (!m) { wrap.innerHTML = '<div style="text-align:center;color:#909399;font-size:13px;padding:80px 0;">暂无成员数据</div>'; return; }
-        var a = act[String(m.id)] || {chat: 0, approval: 0, attendance: 0, summary: 0, task: 0, cloud: 0, doc: 0};
+        var a = act[String(m.id)] || {chat: 0, approval: 0, attendance: 0, task: 0, cloud: 0, doc: 0,
+                                      summary_pub: 0, summary_cmt: 0, summary_like: 0, announce_pub: 0, announce_cmt: 0};
         var types = this._ACT_TYPES();
         var values = types.map(function (t) { return a[t[0]] || 0; });
         var maxV = Math.max.apply(null, values.concat([1]));
@@ -1343,6 +1348,55 @@ class WorkCalendarApp {
             if (!d) return;
             this._closeConfigModal();
             this.showToast('配置已保存', false);
+        } catch (e) {
+            this.showToast((e && e.message) || '保存失败', true);
+        }
+    }
+
+    // ===== 行为活跃度权重配置（仅超管，按企业持久化） =====
+    async openWeightConfigModal() {
+        try {
+            const d = await this.apiGet(WC_API + '/activity-weight/');
+            if (!d) return;
+            const rows = document.getElementById('wcWeightRows');
+            if (!rows) return;
+            const colors = ['#409eff', '#e6a23c', '#67c23a', '#f56c6c', '#00a1ff', '#9b59b6', '#7c4dff', '#a86df5', '#c0a3ff', '#16a085', '#48c9b0'];
+            const self = this;
+            rows.innerHTML = (d.types || []).map(function (t, i) {
+                const c = colors[i % colors.length];
+                const w = (t.weight != null) ? t.weight : 1;
+                return '<div style="border:1px solid #ebeef5;border-radius:8px;padding:6px 10px;display:flex;align-items:center;gap:8px;background:#fff;">'
+                    + '<span style="width:8px;height:8px;border-radius:50%;background:' + c + ';flex-shrink:0;"></span>'
+                    + '<span style="flex:1;min-width:0;font-size:13px;color:#303133;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape(t.label || t.key) + '</span>'
+                    + '<input type="number" min="0" max="20" class="form-input wc-weight-input" data-key="' + self._escape(t.key) + '" value="' + w + '" style="width:64px;text-align:center;padding:3px 6px;">'
+                    + '</div>';
+            }).join('');
+            const modal = document.getElementById('wcWeightModal');
+            modal.style.display = 'flex';
+            setTimeout(function () { modal.classList.add('show'); }, 10);
+        } catch (e) {
+            this.showToast((e && e.message) || '加载权重失败', true);
+        }
+    }
+    _closeWeightConfigModal() {
+        const modal = document.getElementById('wcWeightModal');
+        if (modal) { modal.classList.remove('show'); setTimeout(function () { modal.style.display = 'none'; }, 150); }
+    }
+    async saveWeightConfig() {
+        const weights = {};
+        document.querySelectorAll('#wcWeightRows .wc-weight-input').forEach(function (inp) {
+            const key = inp.getAttribute('data-key');
+            if (!key) return;
+            let v = parseFloat(inp.value);
+            if (isNaN(v)) v = 0;
+            weights[key] = Math.max(0, Math.min(20, Math.round(v)));
+        });
+        try {
+            const d = await this.apiPost(WC_API + '/activity-weight/', {weights: weights});
+            if (!d) return;
+            this._closeWeightConfigModal();
+            this.showToast('权重已保存并即时生效', false);
+            this._loadAllCharts();
         } catch (e) {
             this.showToast((e && e.message) || '保存失败', true);
         }
