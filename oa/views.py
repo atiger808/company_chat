@@ -117,6 +117,43 @@ def send_work_notification(user_id, title, content, notification_type='system', 
         return None
 
 
+def _store_cloud_file_copy(request, cloud_id, dest_prefix, month=False):
+    """把当前用户「我的网盘」中的文件流式复制到模块存储（OA/每日总结共用）。
+    返回 (info|None, error)。"""
+    from cloud.models import CloudFile
+    from django.core.files.storage import default_storage
+    try:
+        cf = CloudFile.objects.filter(id=cloud_id, owner=request.user, deleted_at__isnull=True).first()
+    except Exception:
+        cf = None
+    if not cf:
+        return None, '未找到该网盘文件或无权访问'
+    if not cf.file or not cf.file.name:
+        return None, '该网盘文件无存储数据'
+    name = cf.original_name or cf.name or 'file'
+    ext = os.path.splitext(name)[1].lower()
+    sub = f'{dest_prefix}/{timezone.now().strftime("%Y%m")}' if month else dest_prefix
+    path = f'{sub}/{uuid.uuid4().hex}{ext}'
+    try:
+        src = cf.file.open('rb')
+        try:
+            with default_storage.open(path, 'wb') as dst:
+                while True:
+                    chunk = src.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    dst.write(chunk)
+        finally:
+            try:
+                src.close()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f'网盘文件复制到模块存储失败: {e}')
+        return None, '复制网盘文件失败'
+    return {'name': name, 'url': default_storage.url(path), 'size': int(cf.size or 0)}, None
+
+
 class AttendanceViewSet(viewsets.ViewSet):
     """考勤打卡视图集"""
     permission_classes = [permissions.IsAuthenticated]
@@ -4000,6 +4037,52 @@ class ApprovalViewSet(viewsets.ViewSet):
         logger.info(f'{request.user} 上传审批附件 {file.name}')
         return Response({'url': file_url, 'name': file.name})
 
+    @action(detail=False, methods=['post'])
+    def attach_cloud(self, request):
+        """把当前用户「我的网盘」中的文件复制为审批附件（自包含，审批人/负责人无需网盘权限即可预览）"""
+        cloud_id = request.data.get('cloud_id')
+        if not cloud_id:
+            return Response({'error': '缺少网盘文件ID'}, status=400)
+        info, err = _store_cloud_file_copy(request, str(cloud_id), 'approval_attachments', month=False)
+        if err or not info:
+            return Response({'error': err or '复制失败'}, status=400)
+        return Response({'url': info['url'], 'name': info['name'], 'size': info.get('size', 0)})
+
+    @action(detail=False, methods=['get'])
+    def cloud_picker(self, request):
+        """「从我的网盘选择」数据源（OA 模块内转发，认证与本模块一致）。
+        无搜索词：列出当前 folder 同层文件夹+文件（钻取）；
+        有搜索词：忽略 folder，跨当前用户全部网盘文件按名称搜索。"""
+        from cloud.models import CloudFile, Folder
+        from cloud.serializers import CloudFileSerializer
+        from django.db.models import Q
+        owner = request.user
+        folder_id = (request.query_params.get('folder', '') or '').strip()
+        if folder_id.lower() == 'null':
+            folder_id = ''
+        kw = (request.query_params.get('search', '') or '').strip()
+        cf_qs = CloudFile.objects.filter(owner=owner, deleted_at__isnull=True)
+        results = []
+        if kw:
+            # 全部文件范围内搜索（忽略当前目录），此时只返回文件不返回目录
+            cf_qs = cf_qs.filter(Q(name__icontains=kw) | Q(original_name__icontains=kw))
+        else:
+            fd_qs = Folder.objects.filter(owner=owner, deleted_at__isnull=True)
+            if folder_id:
+                cf_qs = cf_qs.filter(folder_id=folder_id)
+                fd_qs = fd_qs.filter(parent_id=folder_id)
+            else:
+                cf_qs = cf_qs.filter(folder__isnull=True)
+                fd_qs = fd_qs.filter(parent__isnull=True)
+            for fd in fd_qs.order_by('-created_at')[:200]:
+                results.append({'id': str(fd.id), 'name': fd.name, 'is_folder': True})
+        file_data = CloudFileSerializer(cf_qs.order_by('-updated_at')[:300], many=True,
+                                        context={'request': request}).data
+        for it in file_data:
+            it['is_folder'] = False
+            results.append(it)
+        return Response({'results': results})
+
     @action(detail=False, methods=['get'])
     def approval_chain(self, request):
         """获取当前用户的审批链预览（根据所选部门和审批类型动态生成）"""
@@ -5511,6 +5594,18 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
             logger.warning(f'每日总结文件上传失败: {e}')
             return Response({'error': f'上传失败：{e}'}, status=500)
         return Response({'encrypt': True, 'data': encrypt_data({'files': out})})
+
+    @action(detail=False, methods=['post'])
+    def cloud_file(self, request):
+        """把当前用户「我的网盘」中的文件复制为每日总结工作数据文件（自包含，预览/保存网盘同本地）"""
+        cloud_id = request.data.get('cloud_id')
+        if not cloud_id:
+            return Response({'error': '缺少网盘文件ID'}, status=400)
+        info, err = _store_cloud_file_copy(request, str(cloud_id), 'work_summary', month=True)
+        if err or not info:
+            return Response({'error': err or '复制失败'}, status=400)
+        info['type'] = self._file_type(info['name'])
+        return Response({'encrypt': True, 'data': encrypt_data({'file': info})})
 
     def create(self, request):
         from datetime import date as dt_date

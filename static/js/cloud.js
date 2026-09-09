@@ -1266,6 +1266,45 @@ class CloudApp {
     }
 
     /**
+     * 🔧 按文件类型生成图标/缩略图（图片可用缩略图，其余按类型着色），与网盘选择器一致
+     */
+    _typedIconHtml(item, size) {
+        size = size || 18;
+        const name = String((item && (item.original_name || item.name)) || '');
+        const mime = String((item && item.mime_type) || '').toLowerCase();
+        const ext = name.lastIndexOf('.') > -1 ? name.substring(name.lastIndexOf('.') + 1).toLowerCase() : '';
+        const isImg = !!(item && (item.is_image || (mime && mime.indexOf('image/') === 0)
+            || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico'].indexOf(ext) > -1));
+        const isVid = !!(item && (item.is_video || (mime && mime.indexOf('video/') === 0)
+            || ['mp4', 'avi', 'mov', 'mkv', 'wmv', 'webm', 'flv', 'm4v'].indexOf(ext) > -1));
+        const isPdf = ext === 'pdf' || (item && item.document_type === 'pdf') || mime === 'application/pdf';
+        const isWord = ['doc', 'docx', 'rtf'].indexOf(ext) > -1 || (mime && mime.indexOf('word') > -1);
+        const isExcel = ['xls', 'xlsx', 'csv', 'et'].indexOf(ext) > -1 || (mime && (mime.indexOf('excel') > -1 || mime.indexOf('spreadsheet') > -1));
+        const isPpt = ['ppt', 'pptx'].indexOf(ext) > -1 || (mime && mime.indexOf('presentation') > -1);
+        const isAudio = !!(item && (item.is_audio || (mime && mime.indexOf('audio/') === 0)
+            || ['mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'amr'].indexOf(ext) > -1));
+        const isZip = ['zip', 'rar', '7z', 'tar', 'gz', 'bz2'].indexOf(ext) > -1
+            || (mime && (mime.indexOf('zip') > -1 || mime.indexOf('compressed') > -1));
+        const isText = ['txt', 'md', 'log', 'json', 'xml', 'yml', 'yaml'].indexOf(ext) > -1
+            || (mime && mime.indexOf('text/') === 0);
+        let cls = 'fa-file', color = '#909399';
+        if (isImg) { cls = 'fa-image'; color = '#67c23a'; }
+        else if (isPdf) { cls = 'fa-file-pdf'; color = '#f56c6c'; }
+        else if (isWord) { cls = 'fa-file-word'; color = '#409eff'; }
+        else if (isExcel) { cls = 'fa-file-excel'; color = '#16a085'; }
+        else if (isPpt) { cls = 'fa-file-powerpoint'; color = '#e6a23c'; }
+        else if (isVid) { cls = 'fa-video'; color = '#9b59b6'; }
+        else if (isAudio) { cls = 'fa-music'; color = '#00a1ff'; }
+        else if (isZip) { cls = 'fa-file-archive'; color = '#b7791f'; }
+        else if (isText) { cls = 'fa-file-alt'; color = '#909399'; }
+        if (isImg && item && item.file_url && size > 24) {
+            return '<img src="' + this.escapeHtml(item.file_url) + '" style="width:' + size + 'px;height:' + size + 'px;border-radius:4px;object-fit:cover;vertical-align:middle;" alt="' + this.escapeHtml(item.name || '') + '">';
+        }
+        const w = Math.max(size, 22);
+        return '<i class="fas ' + cls + '" style="color:' + color + ';font-size:' + size + 'px;width:' + w + 'px;text-align:center;vertical-align:middle;"></i>';
+    }
+
+    /**
      * 渲染文件列表（支持列表/网格视图）（增强版 - 标识共享文件夹）
      */
     renderFiles(data) {
@@ -1338,7 +1377,9 @@ class CloudApp {
                                    data-file-id="${file.id}"
                                    ${isSelected ? 'checked' : ''}
                                    onchange="cloudApp.toggleFileSelection('${file.id}', this.checked)">
-                            <i class="fas ${isFolder ? 'fa-folder' : file.icon_class || 'fa-file'}" style="color: ${folderColor}"></i>
+                            ${isFolder
+                                ? `<i class="fas fa-folder" style="color: ${folderColor}"></i>`
+                                : this._typedIconHtml(file, 18)}
                             <span class="file-name">${this.escapeHtml(file.name)}</span>
         
                             ${isSharedFolder ? `<div class="badge" title="共享文件夹 - ${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"></div>` : ''}
@@ -1438,8 +1479,10 @@ class CloudApp {
                     </div>
                 ` : `
                     <div class="file-icon">
-                        <i class="fas ${isFolder ? 'fa-folder folder' : file.icon_class || 'fa-file'}" style="color: ${folderColor}"></i>
-                        
+                        ${isFolder
+                            ? `<i class="fas fa-folder folder" style="color: ${folderColor}"></i>`
+                            : this._typedIconHtml(file, 48)}
+
                         ${isSharedFolder ? `<div class="badge badge-corner" title="共享文件夹 - ${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"></div>` : ''}
                     </div>
                 `;
@@ -2512,6 +2555,7 @@ class CloudApp {
             docs.forEach(doc => {
                 const docType = doc.document_type || 'word';
                 const iconClass = doc.doc_icon || this.getDocIconClass(docType);
+                const docColor = ({word: '#409eff', excel: '#16a085', ppt: '#e6a23c', pdf: '#f56c6c', video: '#9b59b6', audio: '#00a1ff', text: '#909399', image: '#67c23a'})[docType] || '#409eff';
                 const collaboratorCount = doc.collaborator_count || 0;
                 const isOwner = doc.owner?.id === this.currentUser?.id;
 
@@ -2523,7 +2567,7 @@ class CloudApp {
                      ondblclick="cloudApp.openCollabDoc('${doc.id}')">
                      
                     <div class="file-col name">
-                        <i class="fas ${iconClass} collab-icon"></i>
+                        <i class="fas ${iconClass} collab-icon" style="color:${docColor};"></i>
                         <span class="file-name">${this.escapeHtml(doc.name)}</span>
                         ${!isOwner ? '<span class="badge badge-info">协作</span>' : ''}
                     </div>
@@ -2564,6 +2608,7 @@ class CloudApp {
             docs.forEach(doc => {
                 const docType = doc.document_type || 'word';
                 const iconClass = doc.doc_icon || this.getDocIconClass(docType);
+                const docColor = ({word: '#409eff', excel: '#16a085', ppt: '#e6a23c', pdf: '#f56c6c', video: '#9b59b6', audio: '#00a1ff', text: '#909399', image: '#67c23a'})[docType] || '#409eff';
                 const collaboratorCount = doc.collaborator_count || 0;
                 const isOwner = doc.owner?.id === this.currentUser?.id;
 
@@ -2575,7 +2620,7 @@ class CloudApp {
                      title="${this.escapeHtml(doc.name)}">
                      
                     <div class="file-icon collab-icon-large">
-                        <i class="fas ${iconClass}"></i>
+                        <i class="fas ${iconClass}" style="color:${docColor};"></i>
                     </div>
                     
                     <div class="file-name" onclick="cloudApp.openCollabDoc('${doc.id}')">
@@ -4444,7 +4489,9 @@ class CloudApp {
             html += `
                 <div class="share-item">
                     <div class="share-icon">
-                        <i class="fas ${share.is_folder ? 'fa-folder' : share.file_info?.icon_class || 'fa-file'}"></i>
+                        ${share.is_folder
+                            ? '<i class="fas fa-folder"></i>'
+                            : this._typedIconHtml(share.file_info || {name: share.file_info?.name}, 24)}
                     </div>
                     <div class="share-info">
                         <div class="share-name">
@@ -4621,7 +4668,7 @@ class CloudApp {
                          data-is-folder="${isFolder}" title="${item.name}">
                         <div class="file-col name">
                             <input type="checkbox" class="file-checkbox" data-file-id="${item.id}">
-                            <i class="fas ${iconClass}"></i>
+                            ${isFolder ? '<i class="fas fa-folder" style="color:#e6a23c"></i>' : this._typedIconHtml(item, 18)}
                             <span class="file-name">${this.escapeHtml(item.name)}</span>
                         </div>
                         <div class="file-col size">${isFolder ? '-' : (item.size_formatted || '-')}</div>
@@ -4655,7 +4702,7 @@ class CloudApp {
                          data-file-id="${item.id}" 
                          data-is-folder="${isFolder}" title="${item.name}">
                         <div class="file-icon">
-                            <i class="fas ${iconClass}"></i>
+                            ${isFolder ? '<i class="fas fa-folder" style="color:#e6a23c"></i>' : this._typedIconHtml(item, 48)}
                         </div>
                         <div class="file-name">${this.escapeHtml(item.name)}</div>
                         <div class="file-size">${isFolder ? '' : (item.size_formatted || '')}</div>
@@ -6094,6 +6141,17 @@ class CloudApp {
 
 
     /**
+     * 🔧 共享文件夹搜索输入（防抖触发全局搜索）
+     */
+    onSharedFolderSearchInput(value) {
+        clearTimeout(this._sharedFolderSearchTimer);
+        const self = this;
+        this._sharedFolderSearchTimer = setTimeout(function () {
+            self.searchSharedFolders((value || '').trim());
+        }, 400);
+    }
+
+    /**
      * 🔧 搜索共享文件夹中的文件和文件夹
      */
     async searchSharedFolders(keyword) {
@@ -6108,12 +6166,9 @@ class CloudApp {
             // 显示搜索状态
             this.updateSharedFolderSearchUI(true, keyword);
 
+            // 搜索不传 folder：在整个可访问的共享文件夹内跨目录搜索文件
             let url = '/api/cloud/shared-folders/';
             const params = new URLSearchParams();
-
-            if (this.currentFolderId) {
-                params.append('folder', this.currentFolderId);
-            }
             params.append('search', keyword.trim());
             params.append('page', 1);
             params.append('page_size', 20);
@@ -6131,12 +6186,8 @@ class CloudApp {
             const data = await res.json();
             const results = Array.isArray(data.results) ? data.results : data;
 
-            // 渲染搜索结果
-            if (this.currentFolderId) {
-                this.renderSharedFolderContents(results, this.currentFolderId);
-            } else {
-                this.renderSharedFolders(results);
-            }
+            // 搜索结果统一以“文件列表”形式渲染（含跨目录命中的文件）
+            this.renderSharedFolderContents(results, '');
 
             // 更新分页
             if (!this.pagination.sharedFolders) {
@@ -6435,7 +6486,7 @@ class CloudApp {
                     listHtml += `
                         <div class="file-item" data-file-id="${item.id}" data-is-folder="false">
                             <div class="file-col name">
-                                <i class="fas ${item.icon_class || 'fa-file'}"></i>
+                                ${this._typedIconHtml(item, 18)}
                                 <span class="file-name">${this.escapeHtml(item.name)}</span>
                             </div>
                             <div class="file-col size">${item.size_formatted || '0 B'}</div>
@@ -6544,7 +6595,7 @@ class CloudApp {
                         <div class="badge badge-corner" title="创建者 - ${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"></div>
                     ` : `
                         <div class="file-icon">
-                            <i class="fas ${item.icon_class || 'fa-file'}" style="font-size: 48px;"></i>
+                            ${this._typedIconHtml(item, 48)}
                             <div class="badge badge-corner" title="创建者 - ${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"></div>
                         </div>
                     `;

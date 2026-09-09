@@ -236,6 +236,18 @@ class OrgApp {
         } else {
             this._showNoTenant();
         }
+
+        var isAdmin = this._isAdmin();
+        var createDeptBtn = document.getElementById('createDeptBtn');
+        var createSubTenantBtn = document.getElementById('createSubTenantBtn');
+        if (createDeptBtn) {
+            createDeptBtn.style.display = isAdmin ? 'flex' : 'none';
+        }
+        if (createSubTenantBtn) {
+            createSubTenantBtn.style.display = isAdmin ? 'flex' : 'none';
+        }
+
+
         this.bindEvents();
     }
 

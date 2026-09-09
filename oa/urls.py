@@ -40,6 +40,8 @@ urlpatterns = [
     path('approval/all-departments/', ApprovalViewSet.as_view({'get': 'all_departments'}), name='approval-all-departments'),
     path('approval/org_departments/', ApprovalViewSet.as_view({'get': 'org_departments'}), name='approval-org-departments'),
     path('approval/upload-attachment/', ApprovalViewSet.as_view({'post': 'upload_attachment'}), name='approval-upload'),
+    path('approval/attach-cloud/', ApprovalViewSet.as_view({'post': 'attach_cloud'}), name='approval-attach-cloud'),
+    path('approval/cloud-picker/', ApprovalViewSet.as_view({'get': 'cloud_picker'}), name='approval-cloud-picker'),
     path('approval/dept-configs/', ApprovalViewSet.as_view({'get': 'dept_configs'}), name='approval-dept-configs'),
     path('approval/save-dept-config/', ApprovalViewSet.as_view({'post': 'save_dept_config'}), name='approval-save-dept-config'),
     path('approval/delete-dept-config/<int:pk>/', ApprovalViewSet.as_view({'delete': 'delete_dept_config'}), name='approval-delete-dept-config'),
@@ -135,6 +137,7 @@ urlpatterns = [
 
     # 每日工作总结（上传/提交/我的/团队/详情/删除/重跑分析/范围分析/成员）
     path('work-summary/upload/', DailyWorkSummaryViewSet.as_view({'post': 'upload'}), name='work-summary-upload'),
+    path('work-summary/cloud-file/', DailyWorkSummaryViewSet.as_view({'post': 'cloud_file'}), name='work-summary-cloud-file'),
     path('work-summary/all/', DailyWorkSummaryViewSet.as_view({'get': 'all'}), name='work-summary-all'),
     path('work-summary/config/', DailyWorkSummaryViewSet.as_view({'get': 'config', 'post': 'config'}), name='work-summary-config'),
     path('work-summary/members/', DailyWorkSummaryViewSet.as_view({'get': 'members'}), name='work-summary-members'),

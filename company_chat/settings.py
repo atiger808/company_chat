@@ -413,7 +413,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20260905-cc1724f'
+STATIC_VERSION = '20260908-7d959d0'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -648,6 +648,9 @@ API_MODEL_MAP = {
     "/api/oa/work-calendar/member-search/": "成员关系-成员搜索",
     "/api/oa/work-summary/": "每日工作总结",
     "/api/oa/work-summary/upload/": "每日总结文件上传",
+    "/api/oa/work-summary/cloud-file/": "每日总结从网盘添加文件",
+    "/api/oa/approval/attach-cloud/": "审批从网盘添加附件",
+    "/api/oa/approval/cloud-picker/": "从我的网盘选择-文件浏览",
     "/api/oa/work-summary/all/": "每日总结团队列表",
     "/api/oa/work-summary/config/": "每日总结模型配置",
     "/api/oa/work-summary/members/": "每日总结成员列表",

@@ -876,6 +876,28 @@ class WorkSummaryApp {
     }
     removeMyFile(i) { this.myFiles.splice(i, 1); this.renderMyFiles(); }
 
+    // ===== 从我的网盘选择工作数据文件（复制到工作总结存储，预览/保存网盘与本地一致） =====
+    pickCloudFiles() {
+        if (!window.CloudFilePicker) { this.toast('网盘选择组件未加载，请刷新', true); return; }
+        const self = this;
+        CloudFilePicker.open({title: '从我的网盘选择工作数据文件', onPick: function (list) { self._addCloudWorkFiles(list); }});
+    }
+    async _addCloudWorkFiles(list) {
+        if (!(list && list.length)) return;
+        let added = 0;
+        for (const it of list) {
+            try {
+                const res = await this.apiRaw(WS_API + '/cloud-file/', 'POST', {cloud_id: it.cloud_id});
+                const f = (res && res.file) || null;
+                if (!f || !f.url) continue;
+                this.myFiles = this.myFiles || [];
+                this.myFiles.push(f);
+                added++;
+            } catch (e) { this.toast((e && e.message) || '添加失败', true); break; }
+        }
+        if (added) { this.renderMyFiles(); this.toast('已添加 ' + added + ' 个文件', false); }
+    }
+
     // ===== 提交 =====
     async submit() {
         const dateEl = document.getElementById('wsDate');

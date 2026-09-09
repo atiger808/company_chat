@@ -1405,9 +1405,12 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
         # 如果是回收站视图，通过 CloudFileFilter 处理 trash 参数
         # 这里只做基础过滤，不处理 trash/starred 等特殊逻辑
 
-        # 🔧 文件夹钻取过滤 (folder 参数)
+        # 🔧 文件夹钻取过滤 (folder 参数)；有 search 关键字时忽略目录，跨全部文件搜索
         folder_id = self.request.query_params.get('folder', '')
-        if folder_id and folder_id.lower() != 'null' and folder_id != '':
+        has_search = bool((self.request.query_params.get('search', '') or '').strip())
+        if has_search:
+            queryset = queryset  # 全盘搜索（不限定目录）
+        elif folder_id and folder_id.lower() != 'null' and folder_id != '':
             queryset = queryset.filter(folder_id=folder_id)
         else:
             queryset = queryset.filter(folder__isnull=True)
@@ -1481,8 +1484,13 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
             if folder_id and folder_id.lower() == 'null':
                 folder_id = ''
 
-            # 5. 获取当前层级的子文件夹（不受分页影响）
-            if folder_id and folder_id != '':
+            # 搜索关键字存在时：跨全部文件搜索，不再拼入当前目录文件夹（避免无关目录干扰结果）
+            has_search = bool((request.query_params.get('search', '') or '').strip())
+
+            # 5. 获取当前层级的子文件夹（不受分页影响）；搜索时不返回目录
+            if has_search:
+                subfolders = Folder.objects.none()
+            elif folder_id and folder_id != '':
                 subfolders = Folder.objects.filter(
                     parent_id=folder_id,
                     owner=request.user,
@@ -2700,7 +2708,12 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
         logger.info(f'{request.user} Rename pk: {pk}')
         try:
             file_obj = CloudFile.objects.get(id=pk)
-            if not self._can_write_with_ancestors(file_obj.folder, request.user):
+            # 文件所有者 / 超管可直接重命名（含根目录文件 folder=None）；
+            # 其余协作者/共享文件夹成员按文件夹写权限判断
+            can_rename = (file_obj.owner == request.user) or request.user.is_superuser
+            if not can_rename:
+                can_rename = self._can_write_with_ancestors(file_obj.folder, request.user)
+            if not can_rename:
                 return Response({'error': '无操作权限'}, status=403)
         except CloudFile.DoesNotExist:
             return Response({'error': '文件不存在'}, status=404)
@@ -5687,18 +5700,23 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
             base_permissions = self._get_user_onlyoffice_permissions(request.user)
 
             # 2.2 编辑权限验证（决定编辑器模式）
-            can_edit = base_permissions.get('edit')
+            # 文件级协作者权限优先：该文件存在 FileCollaboration 时以其权限为准——
+            # 「只读」协作者即使所在共享文件夹对其可写也不能编辑，避免绕过只读权限
+            explicit_collab = FileCollaboration.objects.filter(
+                file=file_obj, user=request.user, is_active=True).first()
+            if explicit_collab is not None:
+                can_edit = explicit_collab.permission in ('write', 'admin')
+            elif file_obj.owner == request.user or request.user.is_superuser:
+                can_edit = True
+            elif is_shared_folder_access:
+                can_edit = self._can_write_with_ancestors(file_obj.folder, request.user)
+            else:
+                can_edit = False
+            # 系统级「允许编辑」用户权限若被关闭，则强制只读（即使文档级可编辑）
+            if can_edit and not base_permissions.get('edit', True):
+                can_edit = False
             if not can_edit:
                 logger.info(f'👁️ 只读模式：user={request.user.username} , file={pk}')
-
-            can_edit = self._can_edit_document(file_obj, request.user)
-            if not can_edit:
-                logger.warning(f'⚠️ 无权限编辑：user={request.user.username}, file={pk}')
-
-            # 如果是共享文件夹访问，检查是否有写入权限
-            if is_shared_folder_access:
-                can_edit = self._can_write_with_ancestors(file_obj.folder, request.user)
-                logger.info(f'👁️ 共享文件夹编辑：user={request.user.username}, file={pk} can_edit: {can_edit}')
 
             # ==================== 3. 基础信息准备 ====================
             # 3.1 文件扩展名和文档类型
@@ -7407,6 +7425,22 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
 
             # 4. 处理不同状态码
             if status_code in [2, 4]:  # 文档已保存/强制保存
+                # 🔧 安全：回调无认证（JWT 可选），必须按回调中的编辑者重新校验写权限——
+                # 只读协作者即使会话能发起保存也不得写盘/生成新版本
+                callback_editor = None
+                if users:
+                    try:
+                        from accounts.models import CustomUser as _CU4
+                        callback_editor = _CU4.objects.get(id=users[0])
+                    except Exception:
+                        callback_editor = None
+                    if callback_editor is not None and not self._can_edit_document(file_obj, callback_editor):
+                        logger.warning(
+                            f'Callback 保存被拒绝（无编辑权限）：file={pk} user={callback_editor} users={users}')
+                        return Response({'error': 0})  # 返回成功码避免 OnlyOffice 报错/重试
+                    if callback_editor is None:
+                        logger.warning(f'Callback 无法识别编辑者，忽略保存：file={pk} users={users}')
+                        return Response({'error': 0})
                 if url:
                     logger.info(f'💾 Saving document from: {url}')
                     try:
@@ -9356,6 +9390,51 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
                     {'error': f'加载失败: {str(e)}'},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
+
+        # 🔧 全局搜索（未指定 folder 但有 search）：在整个可访问的共享文件夹内跨目录搜文件
+        if search_keyword and not folder_id:
+            try:
+                root_ids = list(Folder.objects.filter(
+                    _tenant_q(request),
+                    is_shared_folder=True,
+                    deleted_at__isnull=True
+                ).filter(
+                    Q(owner=request.user) | Q(folder_collaborations__user=request.user,
+                                              folder_collaborations__is_active=True)
+                ).distinct().values_list('id', flat=True))
+                allowed_ids = set(root_ids)
+                frontier = list(root_ids)
+                while frontier:
+                    children = list(Folder.objects.filter(
+                        parent_id__in=frontier,
+                        deleted_at__isnull=True
+                    ).values_list('id', flat=True))
+                    new_ids = [cid for cid in children if cid not in allowed_ids]
+                    if not new_ids:
+                        break
+                    allowed_ids.update(new_ids)
+                    frontier = new_ids
+                files = CloudFile.objects.filter(
+                    folder_id__in=allowed_ids,
+                    deleted_at__isnull=True
+                ).filter(
+                    Q(name__icontains=search_keyword) |
+                    Q(original_name__icontains=search_keyword) |
+                    Q(description__icontains=search_keyword)
+                ).select_related('owner').order_by('-updated_at')
+
+                page = self.paginate_queryset(files)
+                file_data = CloudFileSerializer(page if page is not None else files,
+                                               many=True, context={'request': request}).data
+                for item in file_data:
+                    item['is_folder'] = False
+                if page is not None:
+                    return self.get_paginated_response(file_data)
+                return Response({'results': file_data, 'count': len(file_data)})
+            except Exception as e:
+                logger.error(f'共享文件夹全局搜索失败: {e}', exc_info=True)
+                return Response({'error': f'搜索失败: {str(e)}'},
+                                status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
             # 默认行为：返回共享文件夹列表
         return super().list(request, *args, **kwargs)

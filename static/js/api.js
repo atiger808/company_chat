@@ -33,6 +33,8 @@ class TokenManager {
 
 }
 
+window.TokenManager = TokenManager;
+
 // API 调用封装
 class API {
     constructor() {

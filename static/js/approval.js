@@ -449,9 +449,11 @@ class ApprovalApp {
                         + (f.unit ? '<span style="font-size:12px;color:#909399;white-space:nowrap;flex-shrink:0;">' + self._escape(self._unitLabel(f.unit)) + '</span>' : '') + '</div>';
                     break;
                 case 'attachment':
-                    html += '<div class="dyn-attachment"><input type="file" multiple style="display:none;" onchange="approvalApp._onDynAttachmentChange(event, \'' + self._escape(key) + '\')">'
+                    html += '<div class="dyn-attachment" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+                        + '<input type="file" multiple style="display:none;" onchange="approvalApp._onDynAttachmentChange(event, \'' + self._escape(key) + '\')">'
                         + '<button type="button" class="btn btn-secondary btn-sm" onclick="this.previousElementSibling.click()"><i class="fas fa-paperclip"></i> 选择附件</button>'
-                        + '<div class="dyn-attach-list" id="dynAttach_' + self._escape(key) + '"></div></div>';
+                        + '<button type="button" class="btn btn-secondary btn-sm" onclick="approvalApp._pickDynCloudAttachments(\'' + self._escape(key) + '\')"><i class="fas fa-cloud"></i> 从网盘选择</button>'
+                        + '<div class="dyn-attach-list" id="dynAttach_' + self._escape(key) + '" style="width:100%;"></div></div>';
                     break;
                 case 'department':
                     html += '<select class="form-select" data-k="' + self._escape(key) + '" id="dynDept_' + self._escape(key) + '"><option value="">请选择部门</option></select>';
@@ -999,6 +1001,53 @@ class ApprovalApp {
         if (!this._dynAttachmentValues[key]) return;
         this._dynAttachmentValues[key].splice(idx, 1);
         this._renderDynAttachList(key);
+    }
+
+    // ===== 从我的网盘选择附件（复制到审批附件存储） =====
+    async _copyOneCloudToAttachment(cloudId) {
+        const r = await fetch(OA_API_URL + '/approval/attach-cloud/', {
+            method: 'POST', headers: TokenManager.getHeaders(),
+            body: JSON.stringify({cloud_id: cloudId})
+        });
+        if (!r.ok) { const e2 = await r.json().catch(function () { return {}; }); throw new Error(e2.error || '添加失败'); }
+        return r.json();
+    }
+    pickCloudAttachments() {
+        if (!window.CloudFilePicker) { this.showToast('网盘选择组件未加载，请刷新', true); return; }
+        const self = this;
+        CloudFilePicker.open({title: '从我的网盘选择附件', onPick: function (list) { self._addCloudAttachments(list); }});
+    }
+    async _addCloudAttachments(list) {
+        if (!(list && list.length)) return;
+        this._attachmentFiles = this._attachmentFiles || [];
+        let added = 0;
+        for (const it of list) {
+            try {
+                const item = await this._copyOneCloudToAttachment(it.cloud_id);
+                this._attachmentFiles.push({url: item.url, name: item.name});
+                added++;
+            } catch (e) { this.showToast(e.message || '添加失败', true); break; }
+        }
+        if (added) { this._renderAttachments(); this.showToast('已添加 ' + added + ' 个文件', false); }
+    }
+    _pickDynCloudAttachments(key) {
+        if (!window.CloudFilePicker) { this.showToast('网盘选择组件未加载，请刷新', true); return; }
+        const self = this;
+        CloudFilePicker.open({title: '从我的网盘选择附件', onPick: function (list) { self._addDynCloudAttachments(key, list); }});
+    }
+    async _addDynCloudAttachments(key, list) {
+        if (!(list && list.length)) return;
+        this._dynAttachmentValues = this._dynAttachmentValues || {};
+        this._dynAttachmentValues[key] = this._dynAttachmentValues[key] || [];
+        let added = 0;
+        for (const it of list) {
+            try {
+                const item = await this._copyOneCloudToAttachment(it.cloud_id);
+                this._dynAttachmentValues[key].push({url: item.url, name: item.name});
+                added++;
+            } catch (e) { this.showToast(e.message || '添加失败', true); break; }
+        }
+        if (added) { this._renderDynAttachList(key); this.showToast('已添加 ' + added + ' 个文件', false); }
     }
 
     _loadDynDeptOptions(key, selectedId, scope) {
@@ -6095,6 +6144,7 @@ class ApprovalApp {
                 + '<div style="margin-top:12px;"><label style="font-size:13px;font-weight:500;display:block;margin-bottom:6px;"><i class="fas fa-paperclip"></i> 附件</label>'
                 + '<div style="display:flex;gap:8px;align-items:center;">'
                 + '<button type="button" class="btn btn-secondary" onclick="approvalApp._triggerActionUpload()" style="font-size:12px;padding:6px 12px;"><i class="fas fa-paperclip"></i> 选择文件</button>'
+                + '<button type="button" class="btn btn-secondary" onclick="approvalApp.pickActionCloudAttachments()" style="font-size:12px;padding:6px 12px;"><i class="fas fa-cloud"></i> 从网盘选择</button>'
                 + '<input type="file" id="actionFileInput" style="display:none;" accept=".jpg,.jpeg,.png,.gif,.pdf,.doc,.docx,.xls,.xlsx,.zip,.mp4,.avi,.mov,.mp3,.wav" onchange="approvalApp._handleActionFileSelect(event)">'
                 + '<span style="font-size:11px;color:#909399;">支持 jpg/png/pdf/doc/zip/mp4等，不超过10MB</span></div>'
                 + '<div id="actionAttachmentPreview" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;"></div></div>'
@@ -6219,6 +6269,30 @@ class ApprovalApp {
         } catch (e) {
             this.showAlert('错误', '附件上传失败');
         }
+    }
+
+    pickActionCloudAttachments() {
+        if (!window.CloudFilePicker) { this.showAlert('提示', '网盘选择组件未加载，请刷新'); return; }
+        var self = this;
+        CloudFilePicker.open({title: '从我的网盘选择附件', onPick: function (list) { self._addActionCloudAttachments(list); }});
+    }
+    async _addActionCloudAttachments(list) {
+        if (!(list && list.length)) return;
+        if (!this._actionAttachments) this._actionAttachments = [];
+        var added = 0;
+        for (var i = 0; i < list.length; i++) {
+            try {
+                var resp = await fetch(OA_API_URL + '/approval/attach-cloud/', {
+                    method: 'POST', headers: TokenManager.getHeaders(),
+                    body: JSON.stringify({cloud_id: list[i].cloud_id})
+                });
+                if (!resp.ok) { var er2 = await resp.json().catch(function () { return {}; }); throw new Error(er2.error || '添加失败'); }
+                var res = await resp.json();
+                this._actionAttachments.push({url: res.url, name: res.name || list[i].name});
+                added++;
+            } catch (e) { this.showAlert('提示', (e && e.message) || '添加失败'); break; }
+        }
+        if (added) { this._renderActionAttachments(); this.showToast('已添加 ' + added + ' 个文件', false); }
     }
 
     _renderActionAttachments() {
@@ -6774,6 +6848,7 @@ class ApprovalApp {
         if (canUpload) {
             html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
                 + '<button type="button" class="btn btn-sm btn-primary" onclick="approvalApp._triggerReceiptUpload(' + d.id + ')"><i class="fas fa-upload"></i> 回传付款凭证/票据</button>'
+                + '<button type="button" class="btn btn-sm btn-secondary" onclick="approvalApp._pickReceiptCloudFiles(' + d.id + ')"><i class="fas fa-cloud"></i> 从网盘选择</button>'
                 + '<input type="file" id="receiptFileInput' + d.id + '" style="display:none;" multiple onchange="approvalApp._handleReceiptFileSelect(' + d.id + ', this)">'
                 + (isLastApprover && !isApplicant
                     ? '<button type="button" class="btn btn-sm btn-secondary" onclick="approvalApp._submitReceiptComment(' + d.id + ')"><i class="fas fa-comment-dots"></i> 单独提交审批意见</button>'
@@ -6848,19 +6923,44 @@ class ApprovalApp {
             }
         }
         if (input) input.value = '';
-        if (uploaded.length) {
-            // 随票据一起提交的审批意见（最后审批人可填）
-            const commentEl = document.getElementById('receiptComment' + id);
-            const comment = commentEl ? commentEl.value.trim() : '';
-            try {
-                const res = await this.apiPost(OA_API_URL + '/approval/' + id + '/upload-receipt/', {files: uploaded, comment: comment});
-                this.showToast((res && res.message) || '票据回传成功', false);
-                if (commentEl) commentEl.value = '';
-                this.showDetail(id);
-            } catch (e) {
-                this.showAlert('回传失败', e.message || '请重试');
-            }
+        if (uploaded.length) await this._submitReceiptFiles(id, uploaded);
+    }
+
+    async _submitReceiptFiles(id, uploaded) {
+        if (!(uploaded && uploaded.length)) return;
+        // 随票据一起提交的审批意见（最后审批人可填）
+        const commentEl = document.getElementById('receiptComment' + id);
+        const comment = commentEl ? commentEl.value.trim() : '';
+        try {
+            const res = await this.apiPost(OA_API_URL + '/approval/' + id + '/upload-receipt/', {files: uploaded, comment: comment});
+            this.showToast((res && res.message) || '票据回传成功', false);
+            if (commentEl) commentEl.value = '';
+            this.showDetail(id);
+        } catch (e) {
+            this.showAlert('回传失败', e.message || '请重试');
         }
+    }
+
+    _pickReceiptCloudFiles(id) {
+        if (!window.CloudFilePicker) { this.showAlert('提示', '网盘选择组件未加载，请刷新'); return; }
+        const self = this;
+        CloudFilePicker.open({title: '从我的网盘选择回传票据', onPick: function (list) { self._addReceiptCloudFiles(id, list); }});
+    }
+    async _addReceiptCloudFiles(id, list) {
+        if (!(list && list.length)) return;
+        const uploaded = [];
+        for (let i = 0; i < list.length; i++) {
+            try {
+                const resp = await fetch(OA_API_URL + '/approval/attach-cloud/', {
+                    method: 'POST', headers: TokenManager.getHeaders(),
+                    body: JSON.stringify({cloud_id: list[i].cloud_id})
+                });
+                if (!resp.ok) { const e2 = await resp.json().catch(function () { return {}; }); throw new Error(e2.error || '添加失败'); }
+                const res = await resp.json();
+                uploaded.push({url: res.url, name: res.name || list[i].name});
+            } catch (e) { this.showAlert('提示', (e && e.message) || '添加失败'); break; }
+        }
+        if (uploaded.length) await this._submitReceiptFiles(id, uploaded);
     }
 
 
