@@ -214,6 +214,13 @@ def ensure_material_stock_in(approval, form_data):
     warehouse = str(form_data.get('warehouse') or '').strip()
     stock_date = (form_data.get('stock_date') or '').strip()
     remark = str(form_data.get('remark') or '').strip()
+    actual_amount = None
+    raw_amount = form_data.get('actual_amount')
+    if raw_amount not in (None, ''):
+        try:
+            actual_amount = Decimal(str(raw_amount))
+        except (InvalidOperation, ValueError, TypeError):
+            actual_amount = None
     items = _parse_items(form_data.get('items'))
     if not req_id:
         return None, '请选择关联需求单'
@@ -225,6 +232,15 @@ def ensure_material_stock_in(approval, form_data):
         return None, '需求单尚未审批通过，暂不可入库'
     if not items:
         return None, '请至少填写一行实收明细'
+    # 🔧 防重复：同一需求单若已有「进行中」的物资入库单审批（待审批/暂缓/办理中），不允许再发起新入库单，
+    # 避免同一需求单重复走入库审批；分批入库需等前一张入库单审批结束（通过/驳回）后再发起
+    dup = MaterialStockIn.objects.filter(requirement=requirement) \
+        .exclude(request=approval) \
+        .filter(status='pending',
+                request__status__in=['pending', 'deferred', 'processing']) \
+        .order_by('-created_at').first()
+    if dup:
+        return None, f'需求单 {requirement.doc_no} 已有进行中的物资入库单（{dup.doc_no}），请等待其审批结束后再发起分批入库'
     req_items = {i.item_name: i for i in requirement.items.all()}
     for it in items:
         ri = req_items.get(it['item_name'])
@@ -250,14 +266,17 @@ def ensure_material_stock_in(approval, form_data):
         rec.requirement_doc_no = requirement.doc_no
         rec.warehouse = warehouse
         rec.stock_date = date_val
+        rec.actual_amount = actual_amount
         rec.remark = remark
-        rec.save(update_fields=['requirement', 'requirement_doc_no', 'warehouse', 'stock_date', 'remark', 'updated_at'])
+        rec.save(update_fields=['requirement', 'requirement_doc_no', 'warehouse', 'stock_date',
+                                'actual_amount', 'remark', 'updated_at'])
     else:
         doc_no = generate_document_no(approval.tenant, 'material_stock_in') or f'RU{approval.id}'
         rec = MaterialStockIn.objects.create(
             request=approval, tenant=approval.tenant, doc_no=doc_no,
             requirement=requirement, requirement_doc_no=requirement.doc_no,
-            warehouse=warehouse, stock_date=date_val, remark=remark, status='pending',
+            warehouse=warehouse, stock_date=date_val, actual_amount=actual_amount,
+            remark=remark, status='pending',
             created_by=approval.applicant,
         )
     rec.items.all().delete()

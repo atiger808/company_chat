@@ -1053,10 +1053,12 @@ class ApprovalApp {
     _loadDynDeptOptions(key, selectedId, scope) {
         const sel = document.getElementById('dynDept_' + key);
         if (!sel) return;
-        // scope=all：自定义类型「部门」字段，展示当前用户所属所有企业下的所有部门
-        this.apiGet(OA_API_URL + '/approval/org_departments/?scope=all').then(data => {
+        // 分公司字段 → scope=company（后端返回当前企业全部公司型部门，普通用户可见）；
+        // 其余部门字段 → scope=all（自定义类型「部门」，展示所属企业部门并按角色限定）
+        const scopeParam = scope === 'company' ? 'company' : 'all';
+        this.apiGet(OA_API_URL + '/approval/org_departments/?scope=' + scopeParam).then(data => {
             let depts = data.results || [];
-            // scope=company（分公司）：仅展示公司型部门
+            // scope=company：后端已限定公司型部门，此处再过滤保证一致
             if (scope === 'company') {
                 depts = depts.filter(function (d) { return d.department_type === 'company'; });
             }
@@ -1687,7 +1689,7 @@ class ApprovalApp {
 
     _extractApiError(err) {
         if (!err || typeof err !== 'object') return '请求失败';
-        var msg = err.error || err.message || err.detail;
+        var msg = err.error || err.message || err.detail || err;
         if (Array.isArray(msg)) msg = msg.join('；');
         else if (msg && typeof msg === 'object') msg = Object.values(msg)[0];
         if (Array.isArray(msg)) msg = msg.join('；');
@@ -5922,16 +5924,26 @@ class ApprovalApp {
             await this.openCreateModal();
         } catch (e) { this.showToast('打开新建审批失败', true); return; }
         this.selectType('material_stock_in');
-        var self = this;
-        setTimeout(function () {
-            self._dynReqLinkValues = self._dynReqLinkValues || {};
-            self._dynReqLinkValues['link_req'] = {requirement_id: rid, doc_no: '', branch_dept: '', purpose: '', amount: null};
-            self._renderDynReqLinkTag('link_req');
-            self._autoFillRequisitionDetail('link_req', 'items', rid);
-            // 使文档滚动到新建审批模态框可见
-            var modal = document.getElementById('createApprovalModal');
-            if (modal) modal.scrollIntoView({behavior: 'smooth', block: 'nearest'});
-        }, 150);
+        // 预填当前需求单（回填单号/分公司并以 图标+单号+分公司 形式展示在关联框下方，同时带出待收明细）
+        await this._preselectDynRequirement('link_req', 'items', rid);
+        var modal = document.getElementById('createApprovalModal');
+        if (modal) modal.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+    }
+    // 预选某需求单并回填关联标签（含需求单号/分公司）与明细
+    async _preselectDynRequirement(key, target, rid) {
+        try {
+            const detail = await this.apiGet(OA_API_URL + '/material/requirement-detail/?id=' + rid);
+            if (!detail) { this.showToast('加载需求单失败', true); return; }
+            this._dynReqLinkValues = this._dynReqLinkValues || {};
+            this._dynReqLinkValues[key] = {
+                requirement_id: detail.id, doc_no: detail.doc_no,
+                branch_dept: detail.branch_dept, purpose: detail.purpose, amount: detail.amount
+            };
+            this._renderDynReqLinkTag(key);
+            if (target) this._fillDynStructFromRequirement(target, detail.items || []);
+        } catch (e) {
+            this.showToast((e && e.message) || '加载需求单失败', true);
+        }
     }
     async _changeRequirementStatus(id, status) {
         var label = status === 'stocked' ? '确认该需求单已采购入库，之后可被领用' : '将该需求单标记为采购中';
@@ -5971,12 +5983,14 @@ class ApprovalApp {
             }).join('') || '<tr><td colspan="9" style="text-align:center;color:#909399;">无明细</td></tr>';
             var stockInsHtml = (d.stock_ins || []).length
                 ? '<div style="font-size:13px;font-weight:600;color:#16a085;margin:14px 0 6px;"><i class="fas fa-warehouse"></i> 入库记录</div>'
-                    + '<table class="oa-table"><thead><tr><th>入库单号</th><th>入库日期</th><th>仓库/库位</th><th>实收合计</th><th>状态</th><th>经手人</th></tr></thead><tbody>'
+                    + '<table class="oa-table"><thead><tr><th>入库单号</th><th>入库日期</th><th>仓库/库位</th><th>实收合计</th><th>实际金额</th><th>状态</th><th>经手人</th></tr></thead><tbody>'
                     + (d.stock_ins || []).map(function (si) {
+                        var amt = (si.actual_amount != null && si.actual_amount !== '') ? ('¥' + Number(si.actual_amount).toFixed(2)) : '-';
                         return '<tr><td style="font-weight:600;color:#16a085;">' + approvalApp._escape(si.doc_no) + '</td>'
                             + '<td>' + approvalApp._escape(si.stock_date || '-') + '</td>'
                             + '<td>' + approvalApp._escape(si.warehouse || '-') + '</td>'
                             + '<td>' + si.received_total + '</td>'
+                            + '<td style="text-align:right;color:#e6a23c;">' + amt + '</td>'
                             + '<td>' + approvalApp._renderMatStatus(si.status, 'stockin') + '</td>'
                             + '<td>' + approvalApp._escape(si.operator || '-') + '</td></tr>';
                     }).join('') + '</tbody></table>'

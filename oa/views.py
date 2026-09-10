@@ -2985,7 +2985,9 @@ class ApprovalViewSet(viewsets.ViewSet):
             if rec and rec.status != 'approved':
                 rec.status = 'approved'
                 rec.save(update_fields=['status'])
+                was_stocked = bool(rec.requirement and rec.requirement.status == 'stocked')
                 apply_stock_in(rec)
+                now_stocked = bool(rec.requirement and rec.requirement.status == 'stocked')
                 # 通知入库申请人
                 if rec.created_by_id:
                     send_work_notification(
@@ -2996,18 +2998,29 @@ class ApprovalViewSet(viewsets.ViewSet):
                         related_url=f'/oa/approval/?approval_id={approval.id}',
                         extra_data={'approval_id': approval.id},
                     )
-                # 需求单申请人获知入库进度
+                # 需求单申请人：收满（本次入库后变为可领用）→ 通知其可发起物资领用
                 req_applicant_id = rec.requirement.created_by_id if rec.requirement else None
-                if req_applicant_id and req_applicant_id != rec.created_by_id:
+                if req_applicant_id:
                     try:
-                        send_work_notification(
-                            user_id=req_applicant_id,
-                            title='物资入库进度',
-                            content=f'需求单 {rec.requirement_doc_no or ""} 有新入库（入库单 {rec.doc_no}）',
-                            notification_type='approval',
-                            related_url=f'/oa/approval/?approval_id={rec.requirement.request_id}' if rec.requirement and rec.requirement.request_id else '',
-                            extra_data={'approval_id': rec.requirement.request_id if rec.requirement else None},
-                        )
+                        if now_stocked and not was_stocked:
+                            send_work_notification(
+                                user_id=req_applicant_id,
+                                title='物资已入库，可发起领用',
+                                content=f'需求单 {rec.requirement_doc_no or ""} 已全部入库，可在 OA 审批-新建审批选择「物资领用单」关联该需求单发起领用',
+                                notification_type='approval',
+                                related_url='/oa/approval/',
+                                extra_data={'approval_id': rec.requirement.request_id if rec.requirement else None},
+                            )
+                        elif req_applicant_id != rec.created_by_id:
+                            # 分批入库进度（未收满）
+                            send_work_notification(
+                                user_id=req_applicant_id,
+                                title='物资入库进度',
+                                content=f'需求单 {rec.requirement_doc_no or ""} 有新入库（入库单 {rec.doc_no}），尚未全部收齐',
+                                notification_type='approval',
+                                related_url=f'/oa/approval/?approval_id={rec.requirement.request_id}' if rec.requirement and rec.requirement.request_id else '',
+                                extra_data={'approval_id': rec.requirement.request_id if rec.requirement else None},
+                            )
                     except Exception:
                         pass
 
@@ -3903,6 +3916,28 @@ class ApprovalViewSet(viewsets.ViewSet):
             tenant = request.user.get_active_tenant()
         user = request.user
         scope = request.query_params.get('scope', '')
+        # scope=company（分公司下拉）：返回当前企业（含子企业，管理员视角）全部公司型部门，
+        # 不按用户所属部门过滤——普通用户也能看到并选择分公司，发起物资需求/领用等
+        if scope == 'company':
+            tids = [tenant.id] if tenant else []
+            if user.user_type in ('super_admin', 'admin') and tenant:
+                try:
+                    tids += [t.id for t in tenant.sub_tenants.filter(is_active=True)]
+                except Exception:
+                    pass
+            if not tids:
+                return Response({'results': [], 'default_id': None})
+            depts = list(Department.objects.filter(
+                tenant_id__in=tids, is_active=True, department_type='company'
+            ).values('id', 'name', 'parent_id', 'full_path', 'tenant_id', 'level', 'department_type'))
+            if len(tids) > 1 and depts:
+                tenant_names = {t.id: (t.short_name or t.name) for t in Tenant.objects.filter(id__in=tids)}
+                for d in depts:
+                    tn = tenant_names.get(d['tenant_id'], '')
+                    if tn:
+                        d['name'] = f'[{tn}] {d["name"]}'
+                        d['_tenant_name'] = tn
+            return Response({'results': depts, 'default_id': None})
         if scope == 'all':
             # 当前用户所属的所有企业（多企业隔离原则：只取用户所属企业的部门）
             tenant_ids = list(Tenant.objects.filter(
@@ -4781,6 +4816,7 @@ class MaterialViewSet(viewsets.ViewSet):
                 'warehouse': si.warehouse,
                 'stock_date': str(si.stock_date) if si.stock_date else '',
                 'received_total': float(si_sum.get(si.id, 0) or 0),
+                'actual_amount': float(si.actual_amount) if si.actual_amount is not None else None,
                 'operator': (si.created_by.real_name or si.created_by.username) if si.created_by else '',
                 'request_id': si.request_id,
             })

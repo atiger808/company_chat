@@ -1173,6 +1173,9 @@ class MaterialStockIn(models.Model):
     requirement_doc_no = models.CharField(max_length=40, blank=True, default='', verbose_name='关联需求单号(快照)')
     warehouse = models.CharField(max_length=100, blank=True, default='', verbose_name='仓库/库位')
     stock_date = models.DateField(null=True, blank=True, verbose_name='入库日期')
+    # 实际入库金额：可能与需求单预估金额存在出入，入库时按实际填写
+    actual_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True,
+                                        verbose_name='实际金额')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name='状态')
     remark = models.TextField(blank=True, default='', verbose_name='备注')
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,

@@ -51,6 +51,8 @@ BUILTIN_TYPES = [
      'form_schema': [
          {'key': 'link_req', 'label': '关联需求单', 'type': 'link_requisition', 'required': True,
           'target': 'items', 'mode': 'stock_in'},
+         {'key': 'actual_amount', 'label': '实际金额', 'type': 'amount', 'required': True,
+          'placeholder': '与需求单预估金额可能存在出入，按实际入库金额填写'},
          {'key': 'warehouse', 'label': '仓库/库位', 'type': 'text'},
          {'key': 'stock_date', 'label': '入库日期', 'type': 'date', 'required': True, 'default': 'today'},
          {'key': 'items', 'label': '入库明细', 'type': 'struct_table', 'required': True,

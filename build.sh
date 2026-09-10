@@ -5,6 +5,7 @@ set -e
 echo "build: update static versions"
 git add ./
 git commit -m "build: update static versions"
+git push origin main
 
 # 🔧 修复1: 正确生成 VERSION（处理非 Git 环境）
 if git rev-parse --git-dir > /dev/null 2>&1; then
