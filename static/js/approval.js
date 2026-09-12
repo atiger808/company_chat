@@ -455,6 +455,9 @@ class ApprovalApp {
                         + '<button type="button" class="btn btn-secondary btn-sm" onclick="approvalApp._pickDynCloudAttachments(\'' + self._escape(key) + '\')"><i class="fas fa-cloud"></i> 从网盘选择</button>'
                         + '<div class="dyn-attach-list" id="dynAttach_' + self._escape(key) + '" style="width:100%;"></div></div>';
                     break;
+                case 'invoice':
+                    html += self._invoiceBlockHtml(key, { canOperate: self._isInvoiceOperator(null) });
+                    break;
                 case 'department':
                     html += '<select class="form-select" data-k="' + self._escape(key) + '" id="dynDept_' + self._escape(key) + '"><option value="">请选择部门</option></select>';
                     break;
@@ -496,6 +499,10 @@ class ApprovalApp {
             if (f.type === 'attachment') {
                 this._dynAttachmentValues[f.key] = Array.isArray(values[f.key]) ? values[f.key] : [];
                 this._renderDynAttachList(f.key);
+            }
+            if (f.type === 'invoice') {
+                this._setInvoiceList(f.key, Array.isArray(values[f.key]) ? values[f.key] : []);
+                this._renderInvoices(f.key, { canOperate: this._isInvoiceOperator(null) });
             }
             if (f.type === 'user') {
                 this._dynUserValues[f.key] = Array.isArray(values[f.key]) ? values[f.key] : [];
@@ -847,9 +854,7 @@ class ApprovalApp {
             const detail = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
             if (!detail) { this.showToast('加载需求单失败', true); return; }
             this._fillDynStructFromRequirement(target, detail.items || []);
-            // 产品金额 = 关联需求单的预估金额（自动填充）
-            const amtInput = document.querySelector('input[data-k="amount"]');
-            if (amtInput && detail.amount != null && detail.amount !== '') amtInput.value = detail.amount;
+            // 产品金额由领用明细（入库单价 × 领用数量）自动计算，见 _onDynStructChange
         } catch (e) {
             this.showToast((e && e.message) || '加载需求单失败', true);
         }
@@ -865,22 +870,77 @@ class ApprovalApp {
         const cols = this._dynStructCols[target] || [];
         const readonly = this._dynStructReadonly && this._dynStructReadonly[target];
         const stockMode = this._reqLinkStockMode();
+        const self = this;
         rowsEl.innerHTML = '';
+        const maxes = [];
         (items || []).forEach(function (it) {
             let qty;
+            // 单价：领用/入库均以「入库加权单价」为准，无则回退需求单预估单价
+            const unitPrice = (it.stocked_price != null && it.stocked_price !== '') ? it.stocked_price : it.price;
             if (stockMode) {
                 qty = (it.to_receive != null) ? it.to_receive : ((it.quantity != null ? it.quantity : 0) - (it.received || 0));
             } else {
-                qty = it.remaining != null ? it.remaining : it.quantity;
+                const remain = (it.remaining != null) ? it.remaining : it.quantity;
+                qty = remain;
+                maxes.push(Number(remain) || 0);
             }
-            approvalApp._appendDynStructRow(tbl, {
+            self._appendDynStructRow(tbl, {
                 item_name: it.item_name, spec: it.spec, unit: it.unit,
-                price: it.price,
+                price: unitPrice,
                 quantity: qty,
                 remark: it.remark || ''
             }, cols, readonly);
         });
+        // 领用（非入库）模式：领用数量不得超过剩余可领数量，输入超限自动收敛
+        if (!stockMode) {
+            tbl.querySelectorAll('.dyn-struct-row').forEach(function (row, i) {
+                const qi = row.querySelector('.dyn-struct-input[data-c="quantity"]');
+                if (!qi) return;
+                const mx = maxes[i];
+                if (mx == null || isNaN(mx)) return;
+                qi.setAttribute('max', mx);
+                qi.setAttribute('data-max', mx);
+                qi.addEventListener('input', function () {
+                    const v = parseFloat(qi.value);
+                    if (!isNaN(v) && v > mx) {
+                        qi.value = mx;
+                        approvalApp.showToast('领用数量不能超过剩余可领数量 ' + mx, true);
+                    }
+                });
+            });
+        }
         this._onDynStructChange();
+    }
+
+    _validateRequisitionItems() {
+        const tbl = document.querySelector('.dyn-struct-table[data-struct-key="items"]');
+        if (!tbl) return null;
+        let over = null;
+        tbl.querySelectorAll('.dyn-struct-row').forEach(function (row) {
+            if (over !== null) return;
+            const qi = row.querySelector('.dyn-struct-input[data-c="quantity"]');
+            if (!qi) return;
+            const mx = parseFloat(qi.getAttribute('data-max'));
+            const v = parseFloat(qi.value);
+            if (!isNaN(mx) && !isNaN(v) && v > mx) over = mx;
+        });
+        return over;
+    }
+
+    _validateDynRequired() {
+        const schema = this._currentSchema || [];
+        if (!schema.length) return [];
+        const data = this._collectDynamicFormData();
+        const missing = [];
+        schema.forEach(function (f) {
+            if (!f || !f.required || !f.key) return;
+            const v = data[f.key];
+            const empty = (v === undefined || v === null || v === '')
+                || (Array.isArray(v) && v.length === 0)
+                || (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0);
+            if (empty) missing.push(f.label || f.key);
+        });
+        return missing;
     }
 
     _collectDynamicFormData() {
@@ -934,6 +994,13 @@ class ApprovalApp {
         // 关联需求单
         Object.keys(this._dynReqLinkValues || {}).forEach(k => {
             if (this._dynReqLinkValues[k]) data[k] = this._dynReqLinkValues[k];
+        });
+        // 发票字段
+        (this._currentSchema || []).forEach(f => {
+            if (f.type === 'invoice') {
+                const arr = (this._invoiceValues || {})[f.key];
+                if (Array.isArray(arr) && arr.length) data[f.key] = arr;
+            }
         });
         return data;
     }
@@ -1159,6 +1226,14 @@ class ApprovalApp {
                         : '';
                     return '<span style="display:inline-flex;align-items:center;gap:4px;margin:2px;vertical-align:middle;">' + clickWrap + downloadIcon + '</span>';
                 }).join('') || '-';
+            } else if (f.type === 'invoice' && Array.isArray(v) && v.length) {
+                // 发票：只读卡片（审批人/超管可二维码扫描、发票验真、放大预览）
+                var _invKey = '__dyn_inv_' + f.key + '_' + (self._invDetailSeq = (self._invDetailSeq || 0) + 1);
+                self._setInvoiceList(_invKey, v);
+                var _canOp = self._isInvoiceOperator(self._detailApproval);
+                v = '<div style="grid-column:1/-1;">' + v.map(function (inv, i) {
+                    return self._invoiceCardHtml(_invKey, inv, i, { readonly: true, canOperate: _canOp });
+                }).join('') + '</div>';
             } else if (f.type === 'user' && Array.isArray(v)) {
                 v = v.map(u => self._escape(u.name || u)).join('、') || '-';
             } else if ((f.type === 'select' || f.type === 'radio') && typeof v === 'string') {
@@ -1331,7 +1406,7 @@ class ApprovalApp {
             ['text', '单行文本'], ['textarea', '多行文本'], ['number', '数字'],
             ['date', '日期'], ['datetime', '日期时间'], ['amount', '金额'],
             ['select', '下拉选择'], ['radio', '单选'], ['checkbox', '多选'],
-            ['attachment', '附件'], ['department', '部门选择'], ['user', '成员选择'],
+            ['attachment', '附件'], ['invoice', '发票'], ['department', '部门选择'], ['user', '成员选择'],
             ['expense_type', '费用类型选择'], ['struct_table', '结构化数据明细'],
             ['payment_method', '收款方式'], ['link_requisition', '关联需求单']
         ];
@@ -2065,6 +2140,17 @@ class ApprovalApp {
         // 金额行：报销/采购显示
         var amountGroup = document.getElementById('amountGroup');
         if (amountGroup) amountGroup.style.display = (isExpense || type === 'purchase') ? '' : 'none';
+        // 发票：报销/采购显示（超管可直接二维码扫描/验真）
+        var invGroup = document.getElementById('invoiceGroup');
+        if (invGroup) {
+            var _showInv = (isExpense || type === 'purchase');
+            invGroup.style.display = _showInv ? '' : 'none';
+            if (_showInv) {
+                var _isSuper = false;
+                try { _isSuper = (localStorage.getItem('user_type') === 'super_admin'); } catch (e) { /* ignore */ }
+                this._renderBuiltinInvoices(_isSuper);
+            }
+        }
         // 招聘需求表单
         var rForm = document.getElementById('recruitForm');
         if (rForm) rForm.style.display = isRecruit ? 'block' : 'none';
@@ -2623,6 +2709,9 @@ class ApprovalApp {
         document.getElementById('attachmentPreview').innerHTML = '';
         document.getElementById('attachmentPreview').style.display = 'none';
         this._attachmentFiles = [];
+        this._invoiceValues = {};
+        var _invG = document.getElementById('invoiceGroup');
+        if (_invG) _invG.style.display = 'none';
         this._approverNodes = [];
         this._isReEdit = false;
         this._reEditId = null;
@@ -3462,6 +3551,8 @@ class ApprovalApp {
     // ==================== 提交审批 ====================
 
     async submitApproval() {
+        // 发票识别/验真/二维码扫描进行中时，禁止提交，避免提交到未识别完的发票数据
+        if (this._invoiceBusy()) { this.showToast('发票正在识别/验真/二维码扫描中，请稍候再提交', true); return; }
         // 防重复提交：提交期间禁用按钮并阻止重复进入，避免同一审批被重复创建
         if (this._submitting) return;
         this._submitting = true;
@@ -3500,6 +3591,33 @@ class ApprovalApp {
         if (!departmentId) {
             this.showAlert('提示', '请选择所属部门');
             return;
+        }
+        // 报销：费用类型必填
+        if (type === 'expense' && !expenseType) {
+            this.showToast('请选择费用类型', true);
+            const etEl = document.getElementById('newExpenseType');
+            if (etEl) { try { etEl.scrollIntoView({ block: 'center' }); etEl.focus(); } catch (e) { /* ignore */ } }
+            return;
+        }
+        // 请假：请假类型必填
+        if (type === 'leave' && !this._collectLeaveType()) {
+            this.showToast('请选择请假类型', true);
+            const ltRow = document.getElementById('leaveTypeRow');
+            if (ltRow) { try { ltRow.scrollIntoView({ block: 'center' }); } catch (e) { /* ignore */ } }
+            return;
+        }
+        // 物资领用单：领用数量不得超过剩余可领数量
+        if (type === 'material_requisition') {
+            const over = this._validateRequisitionItems();
+            if (over !== null) { this.showToast('领用数量不能超过剩余可领数量 ' + over, true); return; }
+        }
+        // 自定义审批类型：按 schema 校验必填字段（配置必填才必填）
+        if (!this._isBuiltinType(type) || this._isDynamicSchemaType(type)) {
+            const missing = this._validateDynRequired();
+            if (missing.length) {
+                this.showToast('请填写必填项：' + missing.join('、'), true);
+                return;
+            }
         }
         // 审批人可为空，后端会自动根据汇报关系确定审批人
 
@@ -3540,6 +3658,14 @@ class ApprovalApp {
             var fd = this._collectDynamicFormData();
             if (this._paymentMethodFieldKey) fd[this._paymentMethodFieldKey] = this._collectPaymentMethod();
             data.form_data = fd;
+        }
+        // 发票（内置报销/采购）：写入 form_data.invoices
+        if (type === 'expense' || type === 'purchase') {
+            var _inv = this._invoiceList('__builtin__');
+            if (_inv && _inv.length) {
+                data.form_data = data.form_data || {};
+                data.form_data.invoices = _inv;
+            }
         }
         if (startDate) data.start_date = startDate.substring(0, 10);
         if (endDate) data.end_date = endDate.substring(0, 10);
@@ -3588,6 +3714,8 @@ class ApprovalApp {
     }
 
     async saveDraft() {
+        // 发票识别/验真/二维码扫描进行中时，禁止存草稿
+        if (this._invoiceBusy()) { this.showToast('发票正在识别/验真/二维码扫描中，请稍候再保存草稿', true); return; }
         // 防重复提交：保存期间禁用按钮并阻止重复进入，避免同一草稿被重复创建
         if (this._submitting) return;
         this._submitting = true;
@@ -3640,6 +3768,14 @@ class ApprovalApp {
             var _fd = this._collectDynamicFormData();
             if (this._paymentMethodFieldKey) _fd[this._paymentMethodFieldKey] = this._collectPaymentMethod();
             data.form_data = _fd;
+        }
+        // 发票（内置报销/采购）：写入 form_data.invoices
+        if (f.approval_type === 'expense' || f.approval_type === 'purchase') {
+            var _invDraft = this._invoiceList('__builtin__');
+            if (_invDraft && _invDraft.length) {
+                data.form_data = data.form_data || {};
+                data.form_data.invoices = _invDraft;
+            }
         }
         if (f.start_date) data.start_date = f.start_date.substring(0, 10);
         if (f.end_date) data.end_date = f.end_date.substring(0, 10);
@@ -3728,6 +3864,10 @@ class ApprovalApp {
                 });
                 this._renderAttachments();
             }
+            // 发票（报销/采购）：回填
+            var _invList = (d.form_data && Array.isArray(d.form_data.invoices)) ? d.form_data.invoices : [];
+            this._invoiceValues = this._invoiceValues || {};
+            this._invoiceValues['__builtin__'] = _invList;
             // 加载抄送人（用户+部门）
             this._ccUsers = [];
             this._ccDepartments = [];
@@ -5040,8 +5180,15 @@ class ApprovalApp {
             if (!this._isBuiltinType(d.approval_type) || this._isDynamicSchemaType(d.approval_type)) {
                 var dynType = this._getType(d.approval_type);
                 if (dynType && dynType.form_schema && dynType.form_schema.length) {
+                    this._detailApproval = d;
                     html += this._renderDynamicDetail(d.form_data || {}, dynType.form_schema, d.form_data_display || {});
                 }
+            }
+
+            // 内置报销/采购：发票详情（审批人/超管可二维码扫描、发票验真、放大预览）
+            if ((d.approval_type === 'expense' || d.approval_type === 'purchase')
+                && d.form_data && Array.isArray(d.form_data.invoices) && d.form_data.invoices.length) {
+                html += approvalApp._renderBuiltinInvoiceDetail(d);
             }
 
             if (d.content) html += '<div class="detail-item full-width"><label><i class="fas fa-align-left" style="color:#606266;"></i> 审批内容</label><span>' + this._escape(d.content) + '</span></div>';
@@ -5153,6 +5300,8 @@ class ApprovalApp {
             var detailContainer = document.getElementById(modalId);
             var bodyEl = detailContainer ? detailContainer.querySelector('.modal-body') : null;
             if (bodyEl) bodyEl.innerHTML = navHtml + html;
+            // 票据回传：含发票字段时初始化回传发票列表（需在 DOM 插入后渲染）
+            this._initReceiptInvoices(d);
 
             // 设置副标题（截取过长标题）
             var subEl = detailContainer ? detailContainer.querySelector('.approval-detail-subtitle') : null;
@@ -5967,14 +6116,20 @@ class ApprovalApp {
             if (!d) return;
             var body = document.getElementById('matReqDetailBody');
             var itemsHtml = (d.items || []).map(function (i) {
-                var price = (i.price != null && i.price !== '') ? Number(i.price) : null;
+                var estP = (i.price != null && i.price !== '') ? Number(i.price) : null;
+                var actP = (i.stocked_price != null && i.stocked_price !== '') ? Number(i.stocked_price) : null;
+                // 单价以「实际入库单价」为准（取自入库明细/入库单实际金额分摊），无则显示预估单价
+                var price = (actP != null) ? actP : estP;
+                var srcTag = (i.price_source === 'stock_in') ? '<span style="font-size:10px;color:#16a085;">入库</span>'
+                    : (i.price_source === 'stock_in_amount' ? '<span style="font-size:10px;color:#16a085;">入库分摊</span>'
+                        : '<span style="font-size:10px;color:#909399;">预估</span>');
                 var totalAmt = (price != null) ? (price * (Number(i.quantity) || 0)).toFixed(2) : '-';
                 var received = (i.received != null) ? i.received : 0;
                 var toRec = (i.to_receive != null) ? i.to_receive : (Number(i.quantity) - received);
                 return '<tr><td>' + approvalApp._escape(i.item_name) + '</td>'
                     + '<td>' + approvalApp._escape(i.spec || '-') + '</td>'
                     + '<td>' + approvalApp._escape(i.unit || '-') + '</td>'
-                    + '<td style="text-align:right;">' + (price != null ? price.toFixed(2) : '-') + '</td>'
+                    + '<td style="text-align:right;">' + (price != null ? price.toFixed(2) : '-') + ' ' + srcTag + '</td>'
                     + '<td style="text-align:right;">' + i.quantity + '</td>'
                     + '<td style="text-align:right;color:#e6a23c;font-weight:600;">' + totalAmt + '</td>'
                     + '<td style="text-align:right;color:#16a085;font-weight:600;">' + received + '</td>'
@@ -6836,15 +6991,25 @@ class ApprovalApp {
             group.forEach(function (r) {
                 var rName = r.name || '';
                 var rUrl = r.url || '';
+                var isInvoice = (r.kind === 'invoice') || !!r.invoice_number;
                 var isImg = /\.(jpg|jpeg|png|gif|webp)$/i.test(rName || rUrl);
                 var isDoc = /\.(doc|docx|xls|xlsx|ppt|pptx|pdf)$/i.test(rName || rUrl);
-                // 点击行为：图片→预览；文档→自动保存到我的网盘并打开在线编辑；其他→保存到网盘
+                // 点击行为：发票→发票预览；图片→预览；文档→保存到我的网盘并在线编辑；其他→保存到网盘
                 var inner = isImg
                     ? '<img src="' + approvalApp._escape(rUrl) + '" style="width:40px;height:40px;border-radius:4px;object-fit:cover;border:1px solid #d1f2eb;">'
-                    : '<i class="fas ' + (isDoc ? 'fa-file-word' : 'fa-file') + '" style="color:#16a085;font-size:18px;"></i>';
+                    : (isInvoice
+                        ? '<i class="fas fa-file-invoice" style="color:#16a085;font-size:18px;"></i>'
+                        : '<i class="fas ' + (isDoc ? 'fa-file-word' : 'fa-file') + '" style="color:#16a085;font-size:18px;"></i>');
+                var label = isInvoice
+                    ? ('发票' + (r.invoice_number ? ' ' + r.invoice_number : '') + (r.invoice_amount ? '（¥' + r.invoice_amount + '）' : '') + (r.invoice_date ? ' ' + r.invoice_date : ''))
+                    : (rName || '');
+                var onClick = isInvoice
+                    ? 'approvalApp._openInvoicePreview(\'' + approvalApp._escape(rUrl) + '\',\'' + approvalApp._escape(rName || '发票') + '\')'
+                    : 'approvalApp._handleAttach(this)';
+                var title = isInvoice ? '点击预览发票' : (isImg ? '点击预览图片' : '点击保存到我的网盘' + (isDoc ? '并在线编辑' : ''));
                 g += '<div style="display:flex;align-items:center;gap:8px;padding:4px 6px;background:#fff;border:1px solid #e2f3ee;border-radius:6px;">'
-                    + '<a href="javascript:void(0)" data-url="' + approvalApp._escape(rUrl) + '" data-name="' + approvalApp._escape(rName || '') + '" onclick="approvalApp._handleAttach(this)" title="' + (isImg ? '点击预览图片' : '点击保存到我的网盘' + (isDoc ? '并在线编辑' : '')) + '" style="display:inline-flex;align-items:center;gap:6px;color:#16a085;text-decoration:none;flex:1;overflow:hidden;">'
-                    + inner + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + approvalApp._escape(rName || '') + '</span></a>'
+                    + '<a href="javascript:void(0)" data-url="' + approvalApp._escape(rUrl) + '" data-name="' + approvalApp._escape(rName || '') + '" onclick="' + onClick + '" title="' + title + '" style="display:inline-flex;align-items:center;gap:6px;color:#16a085;text-decoration:none;flex:1;overflow:hidden;">'
+                    + inner + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + approvalApp._escape(label) + '</span></a>'
                     + (canDelete ? '<button type="button" title="删除该回传票据" data-url="' + approvalApp._escape(rUrl) + '" onclick="approvalApp._deleteReceipt(' + d.id + ', this)" style="border:none;background:none;color:#f56c6c;cursor:pointer;font-size:14px;line-height:1;padding:2px 4px;flex-shrink:0;"><i class="fas fa-trash-alt"></i></button>' : '')
                     + '</div>';
             });
@@ -6868,6 +7033,15 @@ class ApprovalApp {
                     ? '<button type="button" class="btn btn-sm btn-secondary" onclick="approvalApp._submitReceiptComment(' + d.id + ')"><i class="fas fa-comment-dots"></i> 单独提交审批意见</button>'
                     : '')
                 + '</div>';
+            // 该审批含发票字段时，回传在附件基础上增加发票字段
+            if (this._approvalHasInvoiceField(d)) {
+                var _invKey = '__receipt_' + d.id + '__';
+                html += '<div style="margin-top:10px;border-top:1px dashed #d1f2eb;padding-top:10px;">'
+                    + '<div style="font-size:13px;font-weight:600;color:#16a085;margin-bottom:6px;"><i class="fas fa-file-invoice"></i> 回传发票 <span style="font-weight:400;color:#909399;font-size:12px;">（可上传发票并自动识别，支持二维码扫描/验真）</span></div>'
+                    + this._invoiceBlockHtml(_invKey, { canOperate: this._isInvoiceOperator(d) })
+                    + '<div style="margin-top:8px;"><button type="button" class="btn btn-sm btn-primary" onclick="approvalApp._submitReceiptInvoices(' + d.id + ')"><i class="fas fa-paper-plane"></i> 提交回传发票</button></div>'
+                    + '</div>';
+            }
         }
         html += '</div>';
         return html;
@@ -6955,6 +7129,45 @@ class ApprovalApp {
         }
     }
 
+    // 该审批是否含发票字段（内置报销/采购恒含；自定义/带 schema 内置类型按 schema 判断）
+    _approvalHasInvoiceField(d) {
+        if (!d) return false;
+        if (d.approval_type === 'expense' || d.approval_type === 'purchase') return true;
+        try {
+            var t = this._getType(d.approval_type);
+            var schema = (t && t.form_schema) || [];
+            for (var i = 0; i < schema.length; i++) {
+                if (schema[i] && schema[i].type === 'invoice') return true;
+            }
+        } catch (e) { /* ignore */ }
+        return false;
+    }
+    // 详情渲染后：初始化「回传发票」发票列表（每次打开详情重新开始）
+    _initReceiptInvoices(d) {
+        if (!d || !this._approvalHasInvoiceField(d)) return;
+        var invKey = '__receipt_' + d.id + '__';
+        if (!document.getElementById('invoiceList_' + invKey)) return;
+        this._setInvoiceList(invKey, []);
+        this._renderInvoices(invKey, { canOperate: this._isInvoiceOperator(d) });
+    }
+    // 提交回传发票
+    async _submitReceiptInvoices(id) {
+        if (this._invoiceBusy()) { this.showToast('发票正在识别/验真/二维码扫描中，请稍候再提交', true); return; }
+        var invKey = '__receipt_' + id + '__';
+        var invoices = (this._invoiceList(invKey) || []).slice();
+        if (!invoices.length) { this.showToast('请先添加要回传的发票', true); return; }
+        var commentEl = document.getElementById('receiptComment' + id);
+        var comment = commentEl ? commentEl.value.trim() : '';
+        try {
+            const res = await this.apiPost(OA_API_URL + '/approval/' + id + '/upload-receipt/', { invoices: invoices, comment: comment });
+            this.showToast((res && res.message) || '发票回传成功', false);
+            if (commentEl) commentEl.value = '';
+            this.showDetail(id);
+        } catch (e) {
+            this.showAlert('回传失败', (e && e.message) ? e.message : '请重试');
+        }
+    }
+
     _pickReceiptCloudFiles(id) {
         if (!window.CloudFilePicker) { this.showAlert('提示', '网盘选择组件未加载，请刷新'); return; }
         const self = this;
@@ -6975,6 +7188,508 @@ class ApprovalApp {
             } catch (e) { this.showAlert('提示', (e && e.message) || '添加失败'); break; }
         }
         if (uploaded.length) await this._submitReceiptFiles(id, uploaded);
+    }
+
+    // ==================== 发票字段（报销/采购/自定义发票字段通用） ====================
+    // 数据结构：form_data.invoices = [{url,name,invoice_type,invoice_number,invoice_code,
+    //   invoice_amount,invoice_date,tax_rate,check_code,drawer,buyer_name,buyer_tax_no,
+    //   seller_name,seller_tax_no,ocr_raw_data,verify,qr}]
+    _invoiceRegistry() {
+        if (!this._invoiceValues) this._invoiceValues = {};
+        return this._invoiceValues;
+    }
+    _invoiceList(listKey) {
+        const reg = this._invoiceRegistry();
+        if (!reg[listKey]) reg[listKey] = [];
+        return reg[listKey];
+    }
+    _setInvoiceList(listKey, list) {
+        const reg = this._invoiceRegistry();
+        reg[listKey] = Array.isArray(list) ? list : [];
+    }
+    // 是否可做二维码扫描/发票验真：超级管理员或该审批的审批人
+    _isInvoiceOperator(approval) {
+        try {
+            const ut = localStorage.getItem('user_type') || (this.currentUser && this.currentUser.user_type) || '';
+            if (ut === 'super_admin') return true;
+        } catch (e) { /* ignore */ }
+        if (approval) {
+            const uid = (this.currentUser && this.currentUser.id) || (typeof currentUserId !== 'undefined' ? currentUserId : null);
+            if (approval.applicant === uid) return false;
+            const nodes = approval.approval_nodes || [];
+            for (let i = 0; i < nodes.length; i++) {
+                const as = nodes[i].assignees || [];
+                for (let j = 0; j < as.length; j++) {
+                    if (as[j].user === uid) return true;
+                }
+            }
+        }
+        return false;
+    }
+    _invoiceBlockHtml(listKey, opts) {
+        opts = opts || {};
+        const ro = !!opts.readonly;
+        const self = this;
+        let h = '<div class="dyn-invoice" data-invoice-key="' + self._escape(listKey) + '">';
+        if (!ro) {
+            h += '<input type="file" id="invoiceFileInput_' + self._escape(listKey) + '" accept="image/*,.pdf" multiple style="display:none;" onchange="approvalApp._onInvoiceFileChange(event,\'' + self._escape(listKey) + '\')">'
+                + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">'
+                + '<button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById(\'invoiceFileInput_' + self._escape(listKey) + '\').click()"><i class="fas fa-file-invoice"></i> 上传发票</button>'
+                + '<button type="button" class="btn btn-secondary btn-sm" onclick="approvalApp._pickInvoiceCloud(\'' + self._escape(listKey) + '\')"><i class="fas fa-cloud"></i> 从网盘选择</button>'
+                + '<span style="font-size:12px;color:#909399;align-self:center;">支持图片/PDF，自动识别发票信息</span>'
+                + '</div>';
+        }
+        h += '<div class="invoice-list" id="invoiceList_' + self._escape(listKey) + '"></div></div>';
+        return h;
+    }
+    _renderInvoices(listKey, opts) {
+        opts = opts || {};
+        this._invoiceOpts = this._invoiceOpts || {};
+        this._invoiceOpts[listKey] = opts;
+        this._ensureInvoiceStyles();
+        const container = document.getElementById('invoiceList_' + listKey);
+        if (!container) return;
+        const items = this._invoiceList(listKey);
+        const self = this;
+        if (!items.length) {
+            container.innerHTML = '<div style="font-size:12px;color:#909399;padding:6px 2px;">' + (opts.readonly ? '无发票' : '尚未添加发票') + '</div>';
+            return;
+        }
+        container.innerHTML = items.map(function (inv, i) { return self._invoiceCardHtml(listKey, inv, i, opts); }).join('');
+    }
+    _invoiceCardHtml(listKey, inv, idx, opts) {
+        opts = opts || {};
+        const self = this;
+        const ro = !!opts.readonly;
+        const canOp = !!opts.canOperate;
+        const name = inv.name || ((inv.url || '').split('/').pop() || '发票');
+        const isPdf = /\.pdf$/i.test(name);
+        const cl = '\'' + self._escape(listKey) + '\',' + idx;
+        const thumb = isPdf
+            ? '<div onclick="approvalApp._openInvoicePreview(\'' + self._escape(inv.url || '') + '\',\'' + self._escape(name) + '\')" style="width:64px;height:64px;border-radius:6px;background:#fdecec;display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:zoom-in;" title="点击预览"><i class="fas fa-file-pdf" style="font-size:26px;color:#f56c6c;"></i></div>'
+            : (inv.url
+                ? '<img src="' + self._escape(inv.url) + '" onclick="approvalApp._openInvoicePreview(\'' + self._escape(inv.url) + '\',\'' + self._escape(name) + '\')" style="width:64px;height:64px;border-radius:6px;object-fit:cover;border:1px solid #dcdfe6;flex-shrink:0;cursor:zoom-in;" title="点击预览">'
+                : '<div style="width:64px;height:64px;border-radius:6px;background:#f5f7fa;display:flex;align-items:center;justify-content:center;"><i class="fas fa-file-invoice" style="font-size:24px;color:#909399;"></i></div>');
+        const fld = function (label, field, type) {
+            const v = (inv[field] === undefined || inv[field] === null) ? '' : inv[field];
+            const dd = type === 'date' ? ' data-inv-date="1"' : '';
+            return '<div><div style="font-size:11px;color:#909399;margin-bottom:2px;">' + label + '</div>'
+                + '<input type="' + (type || 'text') + '" class="form-input" style="width:100%;font-size:12px;padding:4px 6px;" value="' + self._escape(v) + '"' + (ro ? ' disabled' : '')
+                + ' oninput="approvalApp._onInvoiceField(this,' + cl + ',\'' + field + '\')"' + dd + '></div>';
+        };
+        const typeOpts = '<option value="">类型未知</option>'
+            + '<option value="special"' + (inv.invoice_type === 'special' ? ' selected' : '') + '>增值税专用发票</option>'
+            + '<option value="ordinary"' + (inv.invoice_type === 'ordinary' ? ' selected' : '') + '>增值税普通发票</option>';
+        let btns = '';
+        if (canOp) {
+            btns += '<button type="button" class="btn btn-secondary btn-sm" onclick="approvalApp._invoiceQr(' + cl + ')"><i class="fas fa-qrcode"></i> 二维码扫描</button>'
+                + '<button type="button" class="btn btn-secondary btn-sm" onclick="approvalApp._invoiceVerify(' + cl + ')"><i class="fas fa-shield-alt"></i> 发票验真</button>';
+        }
+        if (!ro) {
+            btns += '<button type="button" class="btn btn-secondary btn-sm" onclick="approvalApp._invoiceOcr(' + cl + ')"><i class="fas fa-magic"></i> 识别发票</button>'
+                + '<button type="button" class="btn btn-secondary btn-sm" style="color:#f56c6c;" onclick="approvalApp._invoiceRemove(' + cl + ')"><i class="fas fa-trash"></i> 移除</button>';
+        }
+        const vres = inv.verify && inv.verify.result
+            ? self._invoiceVerifyHtml(inv.verify)
+            : '';
+        const ocrHtml = inv._ocrState === 'running'
+            ? '<div style="margin-top:8px;"><div style="height:6px;background:#eef0f3;border-radius:3px;overflow:hidden;"><div style="width:35%;height:100%;background:linear-gradient(90deg,#409eff,#67c23a);animation:invBarMove 1.1s linear infinite;"></div></div><div style="font-size:12px;color:#409eff;margin-top:4px;"><i class="fas fa-spinner fa-spin"></i> 正在自动识别发票信息…</div></div>'
+            : (inv._ocrState === 'error'
+                ? '<div style="margin-top:6px;font-size:12px;color:#e6a23c;"><i class="fas fa-triangle-exclamation"></i> 未识别到发票信息，请手动填写或点击「识别发票」重试</div>'
+                : '');
+        // 发票信息折叠：默认折叠，仅显示「发票类型 + 发票号码」；展开显示全部
+        const expanded = !!inv._expanded;
+        const basicGrid = '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;">'
+            + '<div><div style="font-size:11px;color:#909399;margin-bottom:2px;">发票类型</div>'
+            + '<select class="form-select" style="width:100%;font-size:12px;padding:4px 6px;"' + (ro ? ' disabled' : '')
+            + ' onchange="approvalApp._onInvoiceField(this,' + cl + ',\'invoice_type\')">' + typeOpts + '</select></div>'
+            + fld('发票号码', 'invoice_number')
+            + '</div>';
+        const extraGrid = '<div class="inv-extra" style="display:' + (expanded ? 'grid' : 'none') + ';grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;">'
+            + fld('发票代码', 'invoice_code')
+            + fld('开票日期', 'invoice_date', 'date')
+            + fld('开票金额(元)', 'invoice_amount', 'number')
+            + fld('税率', 'tax_rate')
+            + fld('校验码', 'check_code')
+            + fld('开票人', 'drawer')
+            + fld('购买方名称', 'buyer_name')
+            + fld('购买方税号', 'buyer_tax_no')
+            + fld('销售方名称', 'seller_name')
+            + fld('销售方税号', 'seller_tax_no')
+            + '</div>';
+        const toggleBtn = '<button type="button" class="inv-toggle" onclick="approvalApp._toggleInvoiceExpand(' + cl + ')" style="border:none;background:transparent;cursor:pointer;color:#409eff;font-size:12px;padding:0;margin-left:6px;flex-shrink:0;" title="' + (expanded ? '收起发票信息' : '展开完整发票信息') + '">'
+            + '<i class="fas fa-chevron-' + (expanded ? 'up' : 'down') + '"></i> <span>' + (expanded ? '收起' : '展开') + '</span></button>';
+        return '<div class="invoice-card" id="invoiceCard_' + self._escape(listKey) + '_' + idx + '" style="border:1px solid #e4e7ed;border-radius:8px;padding:10px;margin-bottom:8px;background:#fff;">'
+            + '<div style="display:flex;gap:10px;align-items:flex-start;">'
+            + thumb
+            + '<div style="flex:1;min-width:0;">'
+            + '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12px;color:#606266;word-break:break-all;margin-bottom:6px;"><span style="min-width:0;"><i class="fas fa-paperclip"></i> ' + self._escape(name) + '</span>' + toggleBtn + '</div>'
+            + basicGrid
+            + extraGrid
+            + '</div></div>'
+            + (btns ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">' + btns + '</div>' : '')
+            + ocrHtml
+            + '<div id="invVerify_' + self._escape(listKey) + '_' + idx + '" style="margin-top:6px;">' + vres + '</div>'
+            + '</div>';
+    }
+    // 折叠/展开发票信息（详情/表单均适用：优先局部 DOM 切换，避免整块重渲染）
+    _toggleInvoiceExpand(listKey, idx) {
+        const inv = this._invoiceList(listKey)[idx];
+        if (!inv) return;
+        inv._expanded = !inv._expanded;
+        const card = document.getElementById('invoiceCard_' + listKey + '_' + idx);
+        const extra = card ? card.querySelector('.inv-extra') : null;
+        if (card && extra) {
+            extra.style.display = inv._expanded ? 'grid' : 'none';
+            const ico = card.querySelector('.inv-toggle i');
+            if (ico) ico.className = 'fas fa-chevron-' + (inv._expanded ? 'up' : 'down');
+            const lbl = card.querySelector('.inv-toggle span');
+            if (lbl) lbl.textContent = inv._expanded ? '收起' : '展开';
+            return;
+        }
+        // 兜底：容器存在时整块重渲染
+        this._renderInvoices(listKey, (this._invoiceOpts || {})[listKey]);
+    }
+    _invoiceVerifyHtml(v) {
+        const color = v.result === 'pass' ? '#67c23a' : (v.result === 'fail' ? '#f56c6c' : '#e6a23c');
+        const icon = v.result === 'pass' ? 'fa-circle-check' : (v.result === 'fail' ? 'fa-circle-xmark' : 'fa-triangle-exclamation');
+        return '<span style="color:' + color + ';font-size:12px;"><i class="fas ' + icon + '"></i> '
+            + this._escape(v.result_display || '') + (v.message ? '：' + this._escape(v.message) : '') + (v.cached ? '（缓存结果）' : '') + '</span>';
+    }
+    _onInvoiceField(el, listKey, idx, field) {
+        const items = this._invoiceList(listKey);
+        if (items[idx]) { items[idx][field] = el.value; }
+        this._onInvoiceChanged && this._onInvoiceChanged(listKey);
+    }
+    _onInvoiceFileChange(e, listKey) {
+        const files = Array.prototype.slice.call(e.target.files || []);
+        e.target.value = '';
+        if (!files.length) return;
+        const self = this;
+        files.forEach(function (file) {
+            if (file.size > 20 * 1024 * 1024) { self.showToast('「' + file.name + '」超过20MB', true); return; }
+            const fd = new FormData();
+            fd.append('file', file);
+            fetch(OA_API_URL + '/approval/upload-invoice/', {
+                method: 'POST',
+                headers: { 'Authorization': TokenManager.getHeaders()['Authorization'] },
+                body: fd
+            }).then(function (r) { return r.json(); }).then(function (d) {
+                if (d.url) { self._addInvoiceItem(listKey, { url: d.url, name: d.name || file.name }); }
+                else { self.showToast(d.error || '发票上传失败', true); }
+            }).catch(function () { self.showToast('发票上传失败', true); });
+        });
+    }
+    _addInvoiceItem(listKey, inv) {
+        this._invoiceList(listKey).push(inv);
+        this._renderInvoices(listKey, (this._invoiceOpts || {})[listKey]);
+        this._onInvoiceChanged && this._onInvoiceChanged(listKey);
+        // 上传/添加后自动识别发票信息（带进度展示，参考普惠补贴）
+        this._autoOcrInvoice(listKey, this._invoiceList(listKey).length - 1);
+    }
+    _autoOcrInvoice(listKey, idx) {
+        const inv = this._invoiceList(listKey)[idx];
+        if (!inv || !inv.url) return;
+        this._invoiceOcr(listKey, idx);
+    }
+    _invoiceRemove(listKey, idx) {
+        this._invoiceList(listKey).splice(idx, 1);
+        this._renderInvoices(listKey, (this._invoiceOpts || {})[listKey]);
+        this._onInvoiceChanged && this._onInvoiceChanged(listKey);
+    }
+    _pickInvoiceCloud(listKey) {
+        if (!window.CloudFilePicker) { this.showToast('网盘选择组件未加载，请刷新', true); return; }
+        const self = this;
+        CloudFilePicker.open({ title: '从我的网盘选择发票', onPick: function (list) { self._addInvoiceCloud(listKey, list); } });
+    }
+    async _addInvoiceCloud(listKey, list) {
+        if (!(list && list.length)) return;
+        let added = 0;
+        for (let i = 0; i < list.length; i++) {
+            try {
+                const item = await this._copyOneCloudToAttachment(list[i].cloud_id);
+                this._addInvoiceItem(listKey, { url: item.url, name: item.name });
+                added++;
+            } catch (e) { this.showToast((e && e.message) || '添加失败', true); break; }
+        }
+        if (added) this.showToast('已添加 ' + added + ' 张发票', false);
+    }
+    async _invoiceOcr(listKey, idx) {
+        const inv = this._invoiceList(listKey)[idx];
+        if (!inv || !inv.url) return;
+        if (inv._ocrState === 'running') return;
+        inv._ocrState = 'running';
+        this._renderInvoices(listKey, (this._invoiceOpts || {})[listKey]);
+        try {
+            let r = await this.apiPost(OA_API_URL + '/approval/ocr-invoice/', { url: inv.url });
+            if (r && r.task_id) {
+                const res = await this._pollInvoiceOcr(r.task_id);
+                if (!res) throw new Error('发票识别超时，请重试或手动填写');
+                r = { result: res };
+            }
+            const data = (r && (r.result || r)) || {};
+            if (data.error) throw new Error(data.error);
+            inv._ocrState = 'done';
+            this._applyInvoiceOcr(listKey, idx, data);
+        } catch (e) {
+            inv._ocrState = 'error';
+            this._renderInvoices(listKey, (this._invoiceOpts || {})[listKey]);
+            this.showToast((e && e.message) || '发票识别失败，请手动填写', true);
+        }
+    }
+    _ensureInvoiceStyles() {
+        if (document.getElementById('invoiceFieldStyles')) return;
+        const s = document.createElement('style');
+        s.id = 'invoiceFieldStyles';
+        s.textContent = '@keyframes invBarMove{0%{transform:translateX(-100%);}100%{transform:translateX(300%);}}';
+        document.head.appendChild(s);
+    }
+    async _pollInvoiceOcr(taskId) {
+        for (let i = 0; i < 75; i++) {
+            await new Promise(function (res) { setTimeout(res, 2000); });
+            let s = null;
+            try { s = await this.apiGet(OA_API_URL + '/approval/ocr-status/?task_id=' + encodeURIComponent(taskId)); }
+            catch (e) { continue; }
+            if (!s) continue;
+            if (s.state === 'SUCCESS') return s.result || {};
+            if (s.state === 'FAILURE') return null;
+        }
+        return null;
+    }
+    _applyInvoiceOcr(listKey, idx, data) {
+        const inv = this._invoiceList(listKey)[idx];
+        if (!inv) return;
+        if (data.invoice_type === 'special' || data.invoice_type === 'ordinary') inv.invoice_type = data.invoice_type;
+        if (data.invoice_number) inv.invoice_number = data.invoice_number;
+        if (data.invoice_code) inv.invoice_code = data.invoice_code;
+        if (data.invoice_amount) inv.invoice_amount = data.invoice_amount;
+        if (data.invoice_date) inv.invoice_date = data.invoice_date;
+        if (data.tax_rate) inv.tax_rate = data.tax_rate;
+        if (data.drawer) inv.drawer = data.drawer;
+        if (data.buyer_name) inv.buyer_name = data.buyer_name;
+        if (data.buyer_tax_no) inv.buyer_tax_no = data.buyer_tax_no;
+        if (data.invoice_issuer || data.seller_name) inv.seller_name = data.invoice_issuer || data.seller_name;
+        if (data.seller_tax_no) inv.seller_tax_no = data.seller_tax_no;
+        if (data.raw_data) inv.ocr_raw_data = data.raw_data;
+        this._renderInvoices(listKey, (this._invoiceOpts || {})[listKey]);
+        this.showToast('发票识别完成，请校验信息是否正确', false);
+        this._onInvoiceChanged && this._onInvoiceChanged(listKey);
+    }
+    _invoiceBusy() {
+        const reg = this._invoiceValues || {};
+        let busy = false;
+        Object.keys(reg).forEach(function (k) {
+            (reg[k] || []).forEach(function (inv) {
+                if (inv && (inv._ocrState === 'running' || inv._qrBusy || inv._verifyBusy)) busy = true;
+            });
+        });
+        return busy;
+    }
+    _invoiceScanStyles() {
+        if (document.getElementById('invoiceScanStyles')) return;
+        const s = document.createElement('style');
+        s.id = 'invoiceScanStyles';
+        s.textContent = '@keyframes invScanLine{0%{top:3%}50%{top:94%}100%{top:3%}}'
+            + '@keyframes invScanGlow{0%,100%{opacity:.5}50%{opacity:1}}';
+        document.head.appendChild(s);
+    }
+    _showInvoiceScanning(imgUrl) {
+        this._invoiceScanStyles();
+        let ov = document.getElementById('invoiceScanOverlay');
+        if (!ov) {
+            ov = document.createElement('div');
+            ov.id = 'invoiceScanOverlay';
+            ov.style.cssText = 'position:fixed;inset:0;z-index:100003;background:rgba(0,0,0,.84);display:none;align-items:center;justify-content:center;padding:16px;';
+            document.body.appendChild(ov);
+        }
+        const media = imgUrl
+            ? '<img src="' + imgUrl + '" style="max-width:84vw;max-height:64vh;display:block;">'
+            : '<div style="width:min(84vw,420px);height:280px;display:flex;align-items:center;justify-content:center;background:#101418;"><i class="fas fa-file-invoice" style="font-size:64px;color:#409eff;opacity:.6;"></i></div>';
+        ov.innerHTML = '<div style="text-align:center;">'
+            + '<div style="position:relative;display:inline-block;border-radius:12px;overflow:hidden;border:2px solid rgba(64,158,255,.75);box-shadow:0 0 34px rgba(64,158,255,.55);">'
+            + media
+            + '<div style="position:absolute;left:0;right:0;height:3px;background:linear-gradient(90deg,transparent,#67c23a,#409eff,#67c23a,transparent);box-shadow:0 0 14px #409eff;animation:invScanLine 1.6s ease-in-out infinite;"></div>'
+            + '<div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(64,158,255,.15),transparent 40%,transparent 60%,rgba(64,158,255,.15));pointer-events:none;animation:invScanGlow 1.6s ease-in-out infinite;"></div>'
+            + '</div>'
+            + '<div style="color:#409eff;font-size:14px;margin-top:14px;letter-spacing:3px;"><i class="fas fa-qrcode"></i> 正在扫描发票二维码…</div>'
+            + '</div>';
+        ov.style.display = 'flex';
+    }
+    _hideInvoiceScanning() {
+        const ov = document.getElementById('invoiceScanOverlay');
+        if (ov) ov.style.display = 'none';
+    }
+    async _invoiceQr(listKey, idx) {
+        const inv = this._invoiceList(listKey)[idx];
+        if (!inv || !inv.url) return;
+        inv._qrBusy = true;
+        const isPdf = /\.pdf$/i.test(inv.name || inv.url || '');
+        this._showInvoiceScanning(isPdf ? '' : inv.url);
+        try {
+            const r = await this.apiPost(OA_API_URL + '/approval/qr-scan/', { url: inv.url });
+            inv.qr = r || {};
+            this._hideInvoiceScanning();
+            this._showInvoiceQr(inv, r || {});
+        } catch (e) {
+            this._hideInvoiceScanning();
+            this.showToast((e && e.message) || '二维码扫描失败', true);
+        } finally {
+            inv._qrBusy = false;
+        }
+    }
+    _showInvoiceQr(inv, r) {
+        const self = this;
+        const parsed = (r && r.parsed) || {};
+        const strings = (r && r.qr_strings) || [];
+        const rows = [
+            ['发票号码', parsed.invoice_number, inv.invoice_number],
+            ['开票金额', parsed.invoice_amount, inv.invoice_amount],
+            ['开票日期', parsed.invoice_date, inv.invoice_date],
+            ['校验码', parsed.verify_code, inv.check_code]
+        ];
+        let body = '<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+            + '<tr><th style="border:1px solid #dcdfe6;padding:6px;background:#f5f7fa;">字段</th>'
+            + '<th style="border:1px solid #dcdfe6;padding:6px;background:#f5f7fa;">二维码</th>'
+            + '<th style="border:1px solid #dcdfe6;padding:6px;background:#f5f7fa;">识别/填写</th>'
+            + '<th style="border:1px solid #dcdfe6;padding:6px;background:#f5f7fa;">对比</th></tr>';
+        rows.forEach(function (row) {
+            const q = row[1] === undefined || row[1] === null ? '' : String(row[1]);
+            const o = row[2] === undefined || row[2] === null ? '' : String(row[2]);
+            const same = q && o && q === o;
+            const mark = (!q || !o) ? '<span style="color:#909399;">-</span>'
+                : (same ? '<span style="color:#67c23a;"><i class="fas fa-check"></i> 一致</span>' : '<span style="color:#f56c6c;"><i class="fas fa-times"></i> 不一致</span>');
+            body += '<tr><td style="border:1px solid #dcdfe6;padding:6px;">' + row[0] + '</td>'
+                + '<td style="border:1px solid #dcdfe6;padding:6px;word-break:break-all;">' + self._escape(q) + '</td>'
+                + '<td style="border:1px solid #dcdfe6;padding:6px;word-break:break-all;">' + self._escape(o) + '</td>'
+                + '<td style="border:1px solid #dcdfe6;padding:6px;">' + mark + '</td></tr>';
+        });
+        body += '</table>';
+        if (strings.length) {
+            body += '<div style="margin-top:8px;font-size:12px;color:#909399;">二维码原文：</div>'
+                + '<div style="font-size:12px;word-break:break-all;background:#f5f7fa;padding:6px;border-radius:4px;max-height:120px;overflow:auto;">' + self._escape(strings.join('\n')) + '</div>';
+        } else {
+            body += '<div style="margin-top:8px;font-size:13px;color:#e6a23c;"><i class="fas fa-info-circle"></i> 未在发票中扫描到二维码</div>';
+        }
+        let ov = document.getElementById('invoiceQrOverlay');
+        if (!ov) {
+            ov = document.createElement('div');
+            ov.id = 'invoiceQrOverlay';
+            ov.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;padding:16px;';
+            document.body.appendChild(ov);
+            ov.addEventListener('click', function (e) { if (e.target === ov) ov.style.display = 'none'; });
+        }
+        ov.innerHTML = '<div style="background:#fff;border-radius:10px;max-width:620px;width:100%;max-height:86vh;overflow:auto;padding:16px;">'
+            + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
+            + '<h4 style="margin:0;font-size:15px;"><i class="fas fa-qrcode" style="color:#409eff;"></i> 发票二维码扫描结果</h4>'
+            + '<button type="button" onclick="document.getElementById(\'invoiceQrOverlay\').style.display=\'none\'" style="border:none;background:transparent;font-size:18px;cursor:pointer;color:#909399;"><i class="fas fa-times"></i></button></div>'
+            + body + '</div>';
+        ov.style.display = 'flex';
+    }
+    async _invoiceVerify(listKey, idx) {
+        const inv = this._invoiceList(listKey)[idx];
+        if (!inv) return;
+        if (!inv.invoice_number) { this.showToast('缺少发票号码，无法验真', true); return; }
+        const box = document.getElementById('invVerify_' + listKey + '_' + idx);
+        inv._verifyBusy = true;
+        if (box) box.innerHTML = '<span style="color:#909399;font-size:12px;"><i class="fas fa-spinner fa-spin"></i> 验真中…</span>';
+        try {
+            const r = await this.apiPost(OA_API_URL + '/approval/verify-invoice/', {
+                invoice_number: inv.invoice_number, invoice_code: inv.invoice_code || '',
+                invoice_date: inv.invoice_date || '', invoice_type: inv.invoice_type || '',
+                invoice_amount: inv.invoice_amount || '', check_code: inv.check_code || '',
+                ocr_raw_data: inv.ocr_raw_data || {}
+            });
+            inv.verify = r || {};
+            if (box) box.innerHTML = this._invoiceVerifyHtml(inv.verify);
+        } catch (e) {
+            if (box) box.innerHTML = '<span style="color:#f56c6c;font-size:12px;"><i class="fas fa-circle-xmark"></i> ' + this._escape((e && e.message) || '发票验真失败') + '</span>';
+        } finally {
+            inv._verifyBusy = false;
+        }
+    }
+    _openInvoicePreview(url, name) {
+        if (!url) return;
+        const self = this;
+        let ov = document.getElementById('invoicePreviewOverlay');
+        if (!ov) {
+            ov = document.createElement('div');
+            ov.id = 'invoicePreviewOverlay';
+            ov.style.cssText = 'position:fixed;inset:0;z-index:100002;background:rgba(0,0,0,0.88);display:none;align-items:center;justify-content:center;touch-action:pan-y;';
+            ov.innerHTML = '<div style="position:absolute;top:12px;right:14px;display:flex;gap:8px;z-index:2;">'
+                + '<button type="button" onclick="approvalApp._invoiceZoom(-1)" style="width:38px;height:38px;border:none;border-radius:50%;background:rgba(255,255,255,0.9);cursor:pointer;font-size:18px;"><i class="fas fa-search-minus"></i></button>'
+                + '<button type="button" onclick="approvalApp._invoiceZoom(1)" style="width:38px;height:38px;border:none;border-radius:50%;background:rgba(255,255,255,0.9);cursor:pointer;font-size:18px;"><i class="fas fa-search-plus"></i></button>'
+                + '<button type="button" onclick="approvalApp._invoiceZoom(0)" style="height:38px;padding:0 14px;border:none;border-radius:19px;background:rgba(255,255,255,0.9);cursor:pointer;font-size:13px;">重置</button>'
+                + '<button type="button" onclick="approvalApp._closeInvoicePreview()" style="width:38px;height:38px;border:none;border-radius:50%;background:rgba(255,255,255,0.9);cursor:pointer;font-size:18px;"><i class="fas fa-times"></i></button></div>'
+                + '<div id="invoicePreviewWrap" style="width:100%;height:100%;overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:grab;">'
+                + '<img id="invoicePreviewImg" alt="" style="max-width:96vw;max-height:92vh;transform-origin:center center;user-select:none;pointer-events:none;"></div>';
+            document.body.appendChild(ov);
+            ov.addEventListener('click', function (e) { if (e.target === ov) self._closeInvoicePreview(); });
+            document.addEventListener('keydown', function (e) { if (e.key === 'Escape') self._closeInvoicePreview(); });
+            ov.addEventListener('wheel', function (e) { e.preventDefault(); self._invoiceZoom(e.deltaY < 0 ? 1 : -1); }, { passive: false });
+            let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+            const wrap = document.getElementById('invoicePreviewWrap');
+            wrap.addEventListener('mousedown', function (e) { dragging = true; sx = e.clientX; sy = e.clientY; ox = self._invPanX || 0; oy = self._invPanY || 0; wrap.style.cursor = 'grabbing'; e.preventDefault(); });
+            window.addEventListener('mousemove', function (e) { if (!dragging) return; self._invPanX = ox + (e.clientX - sx); self._invPanY = oy + (e.clientY - sy); self._applyInvoiceTransform(); });
+            window.addEventListener('mouseup', function () { dragging = false; if (wrap) wrap.style.cursor = 'grab'; });
+            let tsx = 0, tsy = 0, tox = 0, toy = 0;
+            wrap.addEventListener('touchstart', function (e) { if (e.touches.length !== 1) return; tsx = e.touches[0].clientX; tsy = e.touches[0].clientY; tox = self._invPanX || 0; toy = self._invPanY || 0; }, { passive: true });
+            wrap.addEventListener('touchmove', function (e) { if (e.touches.length !== 1) return; self._invPanX = tox + (e.touches[0].clientX - tsx); self._invPanY = toy + (e.touches[0].clientY - tsy); self._applyInvoiceTransform(); }, { passive: true });
+        }
+        this._invScale = 1; this._invPanX = 0; this._invPanY = 0;
+        const img = document.getElementById('invoicePreviewImg');
+        this._applyInvoiceTransform();
+        ov.style.display = 'flex';
+        // PDF 经后端渲染为 PNG（需带鉴权），图片直接使用媒体地址
+        if (/\.pdf$/i.test(url)) {
+            fetch(OA_API_URL + '/approval/invoice-preview/?url=' + encodeURIComponent(url), { headers: TokenManager.getHeaders() })
+                .then(function (r) { if (!r.ok) throw new Error('预览失败'); return r.blob(); })
+                .then(function (b) { img.src = URL.createObjectURL(b); })
+                .catch(function () { self.showToast('发票预览失败', true); self._closeInvoicePreview(); });
+        } else {
+            img.src = url;
+        }
+    }
+    _applyInvoiceTransform() {
+        const img = document.getElementById('invoicePreviewImg');
+        if (!img) return;
+        const s = this._invScale || 1;
+        img.style.transform = 'translate(' + (this._invPanX || 0) + 'px,' + (this._invPanY || 0) + 'px) scale(' + s + ')';
+    }
+    _invoiceZoom(dir) {
+        if (dir === 0) { this._invScale = 1; this._invPanX = 0; this._invPanY = 0; }
+        else {
+            let s = (this._invScale || 1) + dir * 0.25;
+            if (s < 0.25) s = 0.25;
+            if (s > 8) s = 8;
+            this._invScale = s;
+        }
+        this._applyInvoiceTransform();
+    }
+    _closeInvoicePreview() {
+        const ov = document.getElementById('invoicePreviewOverlay');
+        if (ov) ov.style.display = 'none';
+    }
+
+    // ===== 内置报销/采购：发票区块（form_data.invoices） =====
+    _renderBuiltinInvoices(canOperate) {
+        const box = document.getElementById('builtinInvoiceBlock');
+        if (!box) return;
+        box.innerHTML = this._invoiceBlockHtml('__builtin__', { canOperate: !!canOperate });
+        this._renderInvoices('__builtin__', { canOperate: !!canOperate });
+    }
+    _renderBuiltinInvoiceDetail(d) {
+        const invoices = (d.form_data && Array.isArray(d.form_data.invoices)) ? d.form_data.invoices : [];
+        if (!invoices.length) return '';
+        const self = this;
+        const canOp = this._isInvoiceOperator(d);
+        const key = '__detail_' + d.id + '__';
+        this._setInvoiceList(key, invoices);
+        const cards = invoices.map(function (inv, i) {
+            return self._invoiceCardHtml(key, inv, i, { readonly: true, canOperate: canOp });
+        }).join('');
+        return '<div class="detail-item full-width" style="border:1px solid #e8d5f5;border-radius:8px;padding:12px;background:#faf7ff;margin-top:8px;">'
+            + '<div style="font-size:14px;font-weight:600;color:#9b59b6;margin-bottom:8px;border-bottom:1px solid #e8d5f5;padding-bottom:6px;"><i class="fas fa-file-invoice"></i> 发票（' + invoices.length + '）</div>'
+            + '<div>' + cards + '</div></div>';
     }
 
 

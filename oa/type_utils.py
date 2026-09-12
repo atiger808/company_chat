@@ -34,13 +34,13 @@ BUILTIN_TYPES = [
      'form_schema': [
          {'key': 'link_req', 'label': '关联需求单', 'type': 'link_requisition', 'required': True, 'target': 'items'},
          {'key': 'amount', 'label': '产品金额', 'type': 'amount', 'required': True, 'readonly': True},
-         {'key': 'items', 'label': '领用明细', 'type': 'struct_table', 'required': True, 'readonly': True,
+         {'key': 'items', 'label': '领用明细（可修改，数量不超过剩余可领；单价按入库单价）', 'type': 'struct_table', 'required': True,
           'columns': [
               {'key': 'item_name', 'label': '物品名称', 'type': 'item'},
               {'key': 'spec', 'label': '规格型号', 'type': 'text'},
               {'key': 'unit', 'label': '单位', 'type': 'text'},
               {'key': 'price', 'label': '单价', 'type': 'amount'},
-              {'key': 'quantity', 'label': '数量', 'type': 'number'},
+              {'key': 'quantity', 'label': '领用数量', 'type': 'number'},
               {'key': 'remark', 'label': '备注', 'type': 'text'},
           ]},
          {'key': 'purpose', 'label': '用途', 'type': 'textarea', 'required': True},
@@ -61,6 +61,7 @@ BUILTIN_TYPES = [
               {'key': 'spec', 'label': '规格型号', 'type': 'text'},
               {'key': 'unit', 'label': '单位', 'type': 'text'},
               {'key': 'quantity', 'label': '本次入库数量', 'type': 'number'},
+              {'key': 'price', 'label': '入库单价', 'type': 'amount'},
           ]},
          {'key': 'remark', 'label': '备注', 'type': 'textarea'},
      ]},

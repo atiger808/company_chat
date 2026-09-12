@@ -281,6 +281,8 @@ REST_FRAMEWORK = {
 
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 50,
+    # 关闭 DRF 的 ?format= 内容协商覆盖（避免业务接口使用 ?format=xxx 时被 DRF 当作渲染格式解析而返回 404）
+    'URL_FORMAT_OVERRIDE': None,
 }
 
 # JWT 配置
@@ -413,7 +415,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20260908-7d959d0'
+STATIC_VERSION = '20260912-a142ee4'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -651,6 +653,20 @@ API_MODEL_MAP = {
     "/api/oa/work-summary/cloud-file/": "每日总结从网盘添加文件",
     "/api/oa/approval/attach-cloud/": "审批从网盘添加附件",
     "/api/oa/approval/cloud-picker/": "从我的网盘选择-文件浏览",
+    "/api/oa/approval/upload-invoice/": "审批发票上传",
+    "/api/oa/approval/ocr-invoice/": "审批发票OCR识别",
+    "/api/oa/approval/ocr-status/": "审批发票识别状态",
+    "/api/oa/approval/invoice-preview/": "审批发票预览",
+    "/api/oa/approval/qr-scan/": "审批发票二维码扫描",
+    "/api/oa/approval/verify-invoice/": "审批发票验真",
+    "/api/cloud/folders/ensure/": "网盘-确保目录存在(报表导出)",
+    "/api/oa/approval/report-overview/": "OA审批-流程效率分析",
+    "/api/oa/approval/report-business/": "OA审批-业务统计分析",
+    "/api/oa/approval/report-export/": "OA审批-报表导出",
+    "/api/oa/approval/report-pdf/": "OA审批-报表导出PDF(整页内容)",
+    "/api/oa/subsidy/report-stats/": "普惠补贴-报表统计",
+    "/api/oa/subsidy/report-export/": "普惠补贴-报表导出",
+    "/api/oa/subsidy/report-pdf/": "普惠补贴-报表导出PDF(整页内容)",
     "/api/oa/work-summary/all/": "每日总结团队列表",
     "/api/oa/work-summary/config/": "每日总结模型配置",
     "/api/oa/work-summary/members/": "每日总结成员列表",

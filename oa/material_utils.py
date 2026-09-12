@@ -144,6 +144,76 @@ def _resolve_link(form_data):
     return link
 
 
+def actual_unit_prices(requirement):
+    """各物品「实际入库单价」：优先取入库明细逐条单价（按数量加权平均），
+    明细缺单价时按该入库单「实际金额」按数量分摊，最后回退需求单预估单价。
+    返回 {item_name: {'price': Decimal|None, 'source': 'stock_in'|'stock_in_amount'|'estimate'}}
+    物资领用明细的单价/金额以此为准（需求单单价仅为预估）。"""
+    res = {}
+    if not requirement:
+        return res
+    priced = {}
+    try:
+        from .models import MaterialStockIn
+        for si in MaterialStockIn.objects.filter(requirement=requirement, status='approved').prefetch_related('items'):
+            its = list(si.items.all())
+            total_q = 0.0
+            for x in its:
+                try:
+                    total_q += float(x.quantity or 0)
+                except (TypeError, ValueError):
+                    pass
+            amt = si.actual_amount
+            for x in its:
+                try:
+                    q = float(x.quantity or 0)
+                except (TypeError, ValueError):
+                    q = 0.0
+                if q <= 0:
+                    continue
+                unit, src = None, ''
+                if x.price is not None:
+                    unit, src = _num(x.price), 'stock_in'
+                elif amt is not None and total_q > 0:
+                    unit, src = _num(amt) / _num(total_q), 'stock_in_amount'
+                if unit is None:
+                    continue
+                d = priced.setdefault(x.item_name, {'qty': 0.0, 'amt': 0.0, 'src': src})
+                d['qty'] += q
+                d['amt'] += float(unit) * q
+                if src == 'stock_in':
+                    d['src'] = 'stock_in'
+    except Exception:
+        priced = {}
+    for i in requirement.items.all():
+        d = priced.get(i.item_name)
+        if i.stocked_price is not None:
+            res[i.item_name] = {'price': i.stocked_price, 'source': 'stock_in'}
+        elif d and d['qty'] > 0:
+            res[i.item_name] = {'price': _num(d['amt'] / d['qty']), 'source': d['src']}
+        else:
+            res[i.item_name] = {'price': i.price, 'source': 'estimate'}
+    return res
+
+
+def pending_requisition_qty(requirement, exclude_approval_id=None):
+    """在途（进行中）物资领用单各物品已占用数量：领用单 status=pending 且关联审批未结束
+    （待审批/暂缓/办理中）。用于允许多个领用单并发的同时，避免同一物品被超领。"""
+    res = {}
+    if not requirement:
+        return res
+    qs = MaterialRequisition.objects.filter(
+        requirement=requirement, status='pending',
+        request__status__in=['pending', 'deferred', 'processing'],
+    )
+    if exclude_approval_id:
+        qs = qs.exclude(request_id=exclude_approval_id)
+    for q in qs.prefetch_related('items'):
+        for it in q.items.all():
+            res[it.item_name] = res.get(it.item_name, 0) + it.quantity
+    return res
+
+
 def ensure_material_requisition(approval, form_data):
     """按审批 form_data 创建/更新物资领用单业务记录并校验（关联需求单+防超领）"""
     req_id = _resolve_link(form_data)
@@ -160,25 +230,32 @@ def ensure_material_requisition(approval, form_data):
     if not items:
         return None, '领用明细为空'
     req_items = {i.item_name: i for i in requirement.items.all()}
+    # 在途（进行中）领用占用：允许多个领用单并发，但同一物品的可领数量需扣除其他未结束领用单的占用
+    inflight = pending_requisition_qty(requirement, exclude_approval_id=approval.id)
+    # 需求单已全部领完（含在途占用）→ 不允许再发起领用
+    if req_items and all(
+        (ri.quantity - ri.requisitioned_quantity - inflight.get(ri.item_name, 0)) <= 0
+        for ri in req_items.values()
+    ):
+        return None, '该需求单物资已全部领用，无法再发起领用'
+    # 校验 + 以「实际入库单价」为准计算领用明细单价与产品金额（后端强一致，不信任前端传入值）
+    _prices = actual_unit_prices(requirement)
+    amount_total = _num(0)
     for it in items:
         ri = req_items.get(it['item_name'])
         if not ri:
             return None, f'物品「{it["item_name"]}」不在需求单明细中'
-        remaining = ri.quantity - ri.requisitioned_quantity
+        remaining = ri.quantity - ri.requisitioned_quantity - inflight.get(it['item_name'], 0)
+        if remaining <= 0:
+            return None, f'物品「{it["item_name"]}」已全部领用，无法再领用'
         if it['quantity'] > remaining:
             return None, f'物品「{it["item_name"]}」领用数量({it["quantity"]})超出剩余可领数量({remaining})'
-    # 产品金额 = 关联需求单的预估金额（后端强一致，不信任前端传入值）
-    from .models import ApprovalRequest
-    req_amount = None
-    if requirement.request_id:
-        _req = ApprovalRequest.objects.filter(id=requirement.request_id).first()
-        if _req:
-            if _req.amount:
-                req_amount = _req.amount
-            elif _req.form_data.get('amount'):
-                req_amount = _num(_req.form_data.get('amount'))
-    if req_amount is not None:
-        form_data['amount'] = str(req_amount)
+        # 单价以「实际入库单价」为准（取自入库明细单价/入库单实际金额分摊），无则回退需求单预估单价
+        unit_price = (_prices.get(it['item_name']) or {}).get('price')
+        it['price'] = unit_price
+        if unit_price is not None:
+            amount_total += unit_price * it['quantity']
+    form_data['amount'] = str(amount_total)
 
     rec = MaterialRequisition.objects.filter(request=approval).first()
     if rec:
@@ -283,7 +360,7 @@ def ensure_material_stock_in(approval, form_data):
     for it in items:
         MaterialStockInItem.objects.create(
             stock_in=rec, item_name=it['item_name'], spec=it['spec'],
-            unit=it['unit'], quantity=it['quantity'])
+            unit=it['unit'], quantity=it['quantity'], price=it.get('price'))
     if 'doc_no' not in form_data:
         form_data['doc_no'] = rec.doc_no
     if 'requirement_doc_no' not in form_data:
@@ -309,8 +386,16 @@ def apply_stock_in(rec):
             add = min(it.quantity, remaining)
             if add <= 0:
                 continue
-            ri.received_quantity = ri.received_quantity + add
-            ri.save(update_fields=['received_quantity'])
+            # 更新入库加权单价（供领用金额计算，以实际入库单价为准）
+            if it.price is not None:
+                prev_amt = (ri.stocked_price or 0) * ri.received_quantity
+                new_qty = ri.received_quantity + add
+                ri.stocked_price = (prev_amt + it.price * add) / new_qty if new_qty > 0 else it.price
+                ri.received_quantity = new_qty
+                ri.save(update_fields=['received_quantity', 'stocked_price'])
+            else:
+                ri.received_quantity = ri.received_quantity + add
+                ri.save(update_fields=['received_quantity'])
             write_stock_log(rec.tenant, item_name=ri.item_name, spec=ri.spec, delta=add,
                             ref_type='stock_in', ref_id=rec.id, doc_no=rec.doc_no,
                             operator=getattr(rec, 'created_by', None), note=f'入库单 {rec.doc_no}')
@@ -331,9 +416,16 @@ def rebuild_ledger(tenant):
     n = 0
     for r in MaterialRequirement.objects.filter(tenant=tenant, status='stocked').prefetch_related('items'):
         for i in r.items.all():
+            upd = []
             if i.received_quantity != i.quantity:
                 i.received_quantity = i.quantity
-                i.save(update_fields=['received_quantity'])
+                upd.append('received_quantity')
+            # 历史数据无入库加权单价时，以需求单预估单价兜底，保证领用金额可计算
+            if i.stocked_price is None and i.price is not None:
+                i.stocked_price = i.price
+                upd.append('stocked_price')
+            if upd:
+                i.save(update_fields=upd)
             write_stock_log(tenant, item_name=i.item_name, spec=i.spec, delta=i.quantity,
                             ref_type='requirement', ref_id=r.id, doc_no=r.doc_no,
                             note=f'历史整单入库 {r.doc_no}')

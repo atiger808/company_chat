@@ -81,6 +81,7 @@ class ApprovalType(models.Model):
         ('radio', '单选'),
         ('checkbox', '多选'),
         ('attachment', '附件'),
+        ('invoice', '发票'),
         ('department', '部门选择'),
         ('user', '成员选择'),
         ('expense_type', '费用类型选择'),
@@ -1096,6 +1097,9 @@ class MaterialRequirementItem(models.Model):
     # 通过「物资入库单」审批分批发货累计的已入库数量（全收完需求单才置为已入库可领用）
     received_quantity = models.DecimalField(max_digits=12, decimal_places=2, default=0,
                                             verbose_name='已入库数量')
+    # 实际入库加权单价：按各次入库单明细单价加权平均，作为领用金额的计算依据（与需求单预估单价可能不同）
+    stocked_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True,
+                                        verbose_name='入库加权单价')
 
     class Meta:
         verbose_name = '物资需求单明细'
@@ -1201,6 +1205,7 @@ class MaterialStockInItem(models.Model):
     spec = models.CharField(max_length=100, blank=True, default='', verbose_name='规格型号')
     unit = models.CharField(max_length=20, blank=True, default='', verbose_name='单位')
     quantity = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='实收数量')
+    price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, verbose_name='入库单价')
 
     class Meta:
         verbose_name = '物资入库单明细'

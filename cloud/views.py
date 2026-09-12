@@ -464,6 +464,41 @@ class FolderViewSet(viewsets.ModelViewSet, UtilsTools):
 
         return queryset.select_related('owner').prefetch_related('children')
 
+    @action(detail=False, methods=['post'])
+    def ensure(self, request):
+        """按名称在「我的网盘根目录」确保文件夹存在（不存在则自动创建），返回该文件夹。
+        POST /api/cloud/folders/ensure/  {name: '文档（来自审批）'}
+        供各模块（报表导出等）保存到网盘指定目录使用。"""
+        name = (request.data.get('name') or '').strip()
+        if not name:
+            return Response({'error': '缺少文件夹名称'}, status=400)
+        user = request.user
+        try:
+            folder = Folder.objects.filter(
+                owner=user, name=name, parent__isnull=True, deleted_at__isnull=True,
+            ).order_by('created_at').first()
+            created = False
+            if folder is None:
+                folder = Folder.objects.create(
+                    name=name, parent=None, owner=user, tenant=_cloud_tenant(request),
+                    description='系统模块导出自动创建', is_public=False,
+                )
+                created = True
+                try:
+                    FileOperationLog.objects.create(
+                        folder=folder, user=user, operation='create',
+                        description=f'创建文件夹：{name}',
+                        ip_address=get_request_ip(request),
+                        user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                        extra_data={'folder_name': name, 'folder_id': str(folder.id)},
+                    )
+                except Exception as e:
+                    logger.warning(f'记录文件夹创建日志失败: {e}')
+            return Response({'id': str(folder.id), 'name': folder.name, 'created': created})
+        except Exception as e:
+            logger.error(f'确保文件夹存在失败: {e}')
+            return Response({'error': f'创建文件夹失败: {e}'}, status=500)
+
     def create(self, request, *args, **kwargs):
         """
         🔧 创建文件夹

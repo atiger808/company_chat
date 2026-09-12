@@ -1,7 +1,17 @@
 from django.urls import path
 from .views import AttendanceViewSet, ApprovalViewSet, ApprovalTypeViewSet, WorkNotificationViewSet, SubsidyViewSet, WorkCalendarViewSet, MaterialViewSet, DailyWorkSummaryViewSet, AnnouncementViewSet
+from .reports import ApprovalReportViewSet, SubsidyReportViewSet
 
 urlpatterns = [
+    # OA审批 / 普惠补贴 报表与数据分析（置于最前，扁平路径，避免与其它路由冲突）
+    path('approval/report-overview/', ApprovalReportViewSet.as_view({'get': 'overview'}), name='approval-report-overview'),
+    path('approval/report-business/', ApprovalReportViewSet.as_view({'get': 'business'}), name='approval-report-business'),
+    path('approval/report-export/', ApprovalReportViewSet.as_view({'get': 'export'}), name='approval-report-export'),
+    path('approval/report-pdf/', ApprovalReportViewSet.as_view({'post': 'pdf_export'}), name='approval-report-pdf'),
+    path('subsidy/report-stats/', SubsidyReportViewSet.as_view({'get': 'stats'}), name='subsidy-report-stats'),
+    path('subsidy/report-export/', SubsidyReportViewSet.as_view({'get': 'export'}), name='subsidy-report-export'),
+    path('subsidy/report-pdf/', SubsidyReportViewSet.as_view({'post': 'pdf_export'}), name='subsidy-report-pdf'),
+
     # 集团公告
     path('announcements/', AnnouncementViewSet.as_view({'get': 'list', 'post': 'create'}), name='announcement-list'),
     path('announcements/<int:pk>/', AnnouncementViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'}), name='announcement-detail'),
@@ -42,6 +52,13 @@ urlpatterns = [
     path('approval/upload-attachment/', ApprovalViewSet.as_view({'post': 'upload_attachment'}), name='approval-upload'),
     path('approval/attach-cloud/', ApprovalViewSet.as_view({'post': 'attach_cloud'}), name='approval-attach-cloud'),
     path('approval/cloud-picker/', ApprovalViewSet.as_view({'get': 'cloud_picker'}), name='approval-cloud-picker'),
+    # 发票字段（报销/采购/自定义发票字段通用）
+    path('approval/upload-invoice/', ApprovalViewSet.as_view({'post': 'upload_invoice'}), name='approval-upload-invoice'),
+    path('approval/ocr-invoice/', ApprovalViewSet.as_view({'post': 'ocr_invoice'}), name='approval-ocr-invoice'),
+    path('approval/ocr-status/', ApprovalViewSet.as_view({'get': 'ocr_status'}), name='approval-ocr-status'),
+    path('approval/invoice-preview/', ApprovalViewSet.as_view({'get': 'invoice_preview'}), name='approval-invoice-preview'),
+    path('approval/qr-scan/', ApprovalViewSet.as_view({'post': 'qr_scan'}), name='approval-qr-scan'),
+    path('approval/verify-invoice/', ApprovalViewSet.as_view({'post': 'verify_invoice'}), name='approval-verify-invoice'),
     path('approval/dept-configs/', ApprovalViewSet.as_view({'get': 'dept_configs'}), name='approval-dept-configs'),
     path('approval/save-dept-config/', ApprovalViewSet.as_view({'post': 'save_dept_config'}), name='approval-save-dept-config'),
     path('approval/delete-dept-config/<int:pk>/', ApprovalViewSet.as_view({'delete': 'delete_dept_config'}), name='approval-delete-dept-config'),

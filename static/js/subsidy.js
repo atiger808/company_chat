@@ -79,6 +79,8 @@ class SubsidyApp {
         const pi = document.getElementById('subsidyPayNavItem');
         if (vi) vi.style.display = canVerify ? 'flex' : 'none';
         if (pi) pi.style.display = canPay ? 'flex' : 'none';
+        const ri = document.getElementById('subsidyReportNavItem');
+        if (ri) ri.style.display = (ut === 'super_admin' || this._isVerifier || this._isPaymentStaff) ? 'flex' : 'none';
         this._updateFinanceMenuVisibility();
     }
 
@@ -101,7 +103,7 @@ class SubsidyApp {
         const wrap = document.getElementById('financeSvcWrap');
         if (!wrap) return;
         let visible = false;
-        ['subsidyConfigNavItem', 'subsidyVerifyNavItem', 'subsidyPayNavItem'].forEach(function (id) {
+        ['subsidyConfigNavItem', 'subsidyVerifyNavItem', 'subsidyPayNavItem', 'subsidyReportNavItem'].forEach(function (id) {
             const el = document.getElementById(id);
             if (el && el.style.display !== 'none') visible = true;
         });

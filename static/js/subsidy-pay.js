@@ -205,6 +205,8 @@ class SubsidyPayApp {
         if (rBtn) rBtn.style.display = canPay ? '' : 'none';
         const ci = document.getElementById('subsidyConfigNavItem');
         if (ci) ci.style.display = (ut === 'super_admin' || this._isVerifier || this._isPaymentStaff) ? 'flex' : 'none';
+        const ri = document.getElementById('subsidyReportNavItem');
+        if (ri) ri.style.display = (ut === 'super_admin' || this._isVerifier || this._isPaymentStaff) ? 'flex' : 'none';
         this._updateFinanceMenuVisibility();
     }
 
@@ -213,7 +215,7 @@ class SubsidyPayApp {
         const wrap = document.getElementById('financeSvcWrap');
         if (!wrap) return;
         let visible = false;
-        ['subsidyConfigNavItem', 'subsidyVerifyNavItem', 'subsidyPayNavItem'].forEach(function (id) {
+        ['subsidyConfigNavItem', 'subsidyVerifyNavItem', 'subsidyPayNavItem', 'subsidyReportNavItem'].forEach(function (id) {
             const el = document.getElementById(id);
             if (el && el.style.display !== 'none') visible = true;
         });

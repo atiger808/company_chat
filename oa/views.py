@@ -1825,8 +1825,36 @@ class ApprovalViewSet(viewsets.ViewSet):
             name = (f.get('name') or '').strip() or url.split('/')[-1]
             if any(r.get('url') == url for r in receipts):
                 continue
-            receipts.append({'url': url, 'name': name, 'uploaded_at': now_iso, 'uploader_role': uploader_role})
+            receipts.append({'kind': 'attachment', 'url': url, 'name': name,
+                             'uploaded_at': now_iso, 'uploader_role': uploader_role})
             added_files.append({'url': url, 'name': name})
+            added += 1
+        # 发票回传：审批含发票字段时，回传可同时提交发票（含识别/验真信息），与附件同存 receipts（kind=invoice）
+        invoices = request.data.get('invoices') or []
+        if not isinstance(invoices, list):
+            invoices = [invoices]
+        added_invoices = []
+        for inv in invoices:
+            if not isinstance(inv, dict):
+                continue
+            url = (inv.get('url') or '').strip()
+            if not url:
+                continue
+            if any(r.get('url') == url for r in receipts):
+                continue
+            item = {'kind': 'invoice', 'url': url,
+                    'name': (inv.get('name') or '').strip() or url.split('/')[-1],
+                    'uploaded_at': now_iso, 'uploader_role': uploader_role}
+            for k in ('invoice_type', 'invoice_number', 'invoice_code', 'invoice_amount',
+                      'invoice_date', 'tax_rate', 'check_code', 'drawer', 'buyer_name',
+                      'buyer_tax_no', 'seller_name', 'seller_tax_no', 'verify'):
+                v = inv.get(k)
+                if v not in (None, '', {}, []):
+                    item[k] = v
+            if inv.get('ocr_raw_data'):
+                item['ocr_raw_data'] = inv['ocr_raw_data']
+            receipts.append(item)
+            added_invoices.append({'url': url, 'name': item['name']})
             added += 1
         approval.receipts = receipts
         approval.save(update_fields=['receipts'])
@@ -1844,7 +1872,7 @@ class ApprovalViewSet(viewsets.ViewSet):
                 operator=request.user,
                 action='receipt_return',
                 comment=receipt_comment or '回传了付款凭证/票据',
-                attachments=added_files,
+                attachments=added_files + added_invoices,
             )
         except Exception as e:
             logger.warning(f'记录票据回传日志失败: {e}')
@@ -2145,6 +2173,12 @@ class ApprovalViewSet(viewsets.ViewSet):
         expense_items = serializer.validated_data.get('expense_items', [])
         leave_type = serializer.validated_data.get('leave_type', '')
         trip_data = serializer.validated_data.get('trip_data', {}) or {}
+        # 报销：费用类型必填
+        if approval_type == 'expense' and not serializer.validated_data.get('expense_type'):
+            return Response({'error': '请选择费用类型'}, status=400)
+        # 请假：请假类型必填
+        if approval_type == 'leave' and not str(serializer.validated_data.get('leave_type') or '').strip():
+            return Response({'error': '请选择请假类型'}, status=400)
         # 根据物项/项目自动计算总金额
         amount = serializer.validated_data.get('amount')
         auto_amount = None
@@ -4118,6 +4152,255 @@ class ApprovalViewSet(viewsets.ViewSet):
             results.append(it)
         return Response({'results': results})
 
+    # ==================== 发票字段（报销/采购/自定义发票字段通用） ====================
+    def _oa_subsidy_config(self, request):
+        """OA 发票识别/验真复用普惠补贴配置（OCR 版本、税率阈值、验真开关）；无配置返回 None"""
+        try:
+            sv = SubsidyViewSet()
+            tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+            dept_id = SubsidyViewSet._applicant_primary_dept_id(request.user)
+            return sv._get_subsidy_config(tenant, dept_id)
+        except Exception as e:
+            logger.warning(f'读取发票OCR配置失败: {e}')
+            return None
+
+    def _can_operate_invoice(self, request):
+        """发票二维码扫描/验真权限：超级管理员或审批人（有审批节点/待办记录）"""
+        u = request.user
+        if not u or not u.is_authenticated:
+            return False
+        if getattr(u, 'user_type', '') == 'super_admin':
+            return True
+        try:
+            from .models import ApprovalNode, ApprovalAssignee
+            return (ApprovalNode.objects.filter(user=u).exists()
+                    or ApprovalAssignee.objects.filter(user=u).exists())
+        except Exception:
+            return False
+
+    @action(detail=False, methods=['post'])
+    def upload_invoice(self, request):
+        """上传发票文件（图片/PDF），落审批发票存储，供报销/采购/自定义发票字段使用"""
+        file = request.FILES.get('file')
+        if not file:
+            return Response({'error': '请选择发票文件'}, status=400)
+        if file.size > 20 * 1024 * 1024:
+            return Response({'error': '发票文件不能超过20MB'}, status=400)
+        ext = os.path.splitext(file.name)[1].lower()
+        allowed = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.pdf']
+        if ext not in allowed:
+            return Response({'error': '发票仅支持图片或PDF格式'}, status=400)
+        from django.core.files.storage import default_storage
+        filename = f'approval_invoices/{uuid.uuid4().hex}{ext}'
+        saved_path = default_storage.save(filename, file)
+        return Response({'url': settings.MEDIA_URL + saved_path, 'name': file.name})
+
+    @action(detail=False, methods=['post'])
+    def ocr_invoice(self, request):
+        """发票OCR识别（复用补贴异步任务 + MD5缓存）：传 url（本模块发票地址）或 file"""
+        import hashlib
+        from django.core.cache import cache
+        cfg = self._oa_subsidy_config(request)
+        ocr_version = (request.data.get('ocr_version') or '').strip()
+        if not ocr_version:
+            ocr_version = (cfg.default_ocr_version if cfg and cfg.default_ocr_version else 'paddle')
+        ocr_version = ocr_version.strip() or 'paddle'
+        if ocr_version not in ('baidu_vat', 'baidu_general', 'paddle'):
+            return Response({'error': '不支持的OCR识别版本'}, status=400)
+        try:
+            tax_rate_threshold = float(request.data.get('tax_rate_threshold') or 0)
+        except (ValueError, TypeError):
+            tax_rate_threshold = 0
+        if tax_rate_threshold <= 0:
+            try:
+                tax_rate_threshold = float(cfg.tax_rate_threshold) if cfg and cfg.tax_rate_threshold else 0.06
+            except Exception:
+                tax_rate_threshold = 0.06
+        try:
+            ocr_cache_ttl = int(cfg.ocr_cache_ttl) if cfg and cfg.ocr_cache_ttl else 604800
+        except (ValueError, TypeError):
+            ocr_cache_ttl = 604800
+        if ocr_cache_ttl < 60:
+            ocr_cache_ttl = 60
+        url = (request.data.get('url') or request.data.get('file_url') or '').strip()
+        file = request.FILES.get('file')
+        image_path = SubsidyViewSet._resolve_media_path(url) if url else None
+        image_data = None
+        delete_after = False
+        if image_path:
+            try:
+                with open(image_path, 'rb') as f:
+                    image_data = f.read()
+            except Exception as e:
+                logger.warning(f'读取发票文件失败: {e}')
+                image_data = None
+        if image_data is None:
+            if file:
+                image_data = file.read()
+            elif url:
+                full = url if not url.startswith('/') else f"{request.scheme}://{request.get_host()}{url}"
+                try:
+                    resp = requests.get(full, timeout=30)
+                    resp.raise_for_status()
+                    image_data = resp.content
+                except Exception as e:
+                    return Response({'error': f'下载发票文件失败: {e}'}, status=400)
+            if image_data is not None:
+                import tempfile
+                ext = os.path.splitext(url or '')[-1] or '.img'
+                tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+                tmp.write(image_data)
+                tmp.close()
+                image_path = tmp.name
+                delete_after = True
+        if image_data is None or not image_path or not os.path.exists(image_path):
+            return Response({'error': '缺少发票文件'}, status=400)
+        md5 = hashlib.md5(image_data).hexdigest()
+        cache_key = f'subsidy_ocr:{md5}:{ocr_version}'
+        cached = cache.get(cache_key)
+        if cached:
+            return Response({'encrypt': True, 'data': encrypt_data({'task_id': '', 'result': cached, 'cached': True})})
+        try:
+            from .tasks import subsidy_ocr_task
+            task = subsidy_ocr_task.delay(image_path, ocr_version, cache_key, delete_after, tax_rate_threshold, ocr_cache_ttl)
+        except Exception as e:
+            logger.error(f'OA发票OCR任务入队失败: {e}')
+            return Response({'error': f'识别任务提交失败: {e}'}, status=500)
+        return Response({'encrypt': True, 'data': encrypt_data({'task_id': task.id})})
+
+    @action(detail=False, methods=['get'])
+    def ocr_status(self, request):
+        """轮询发票异步OCR任务状态：PENDING / SUCCESS(result) / FAILURE(error)"""
+        task_id = request.query_params.get('task_id', '').strip()
+        if not task_id:
+            return Response({'error': '缺少 task_id 参数'}, status=400)
+        try:
+            from celery.result import AsyncResult
+            res = AsyncResult(task_id)
+        except Exception as e:
+            return Response({'error': f'查询任务失败: {e}'}, status=500)
+        state = res.state
+        if state == 'SUCCESS':
+            result = res.result or {}
+            if isinstance(result, dict) and result.get('error'):
+                return Response({'encrypt': True, 'data': encrypt_data({'state': 'FAILURE', 'error': result['error']})})
+            return Response({'encrypt': True, 'data': encrypt_data({'state': 'SUCCESS', 'result': result})})
+        if state == 'FAILURE':
+            return Response({'encrypt': True, 'data': encrypt_data({'state': 'FAILURE', 'error': str(res.result or '识别失败')})})
+        return Response({'encrypt': True, 'data': encrypt_data({'state': 'PENDING'})})
+
+    @action(detail=False, methods=['get'])
+    def invoice_preview(self, request):
+        """发票预览图：图片直接返回原图；PDF 渲染第一页为 PNG（供放大缩小预览）"""
+        from django.http import HttpResponse
+        url = request.query_params.get('url', '').strip()
+        if not url:
+            return Response({'error': '缺少 url 参数'}, status=400)
+        image_path = SubsidyViewSet._resolve_media_path(url)
+        if not image_path:
+            return Response({'error': '发票文件不存在'}, status=404)
+        if image_path.lower().endswith('.pdf'):
+            try:
+                with open(image_path, 'rb') as f:
+                    pdf_bytes = f.read()
+            except Exception as e:
+                return Response({'error': f'读取PDF失败: {e}'}, status=500)
+            png = SubsidyViewSet._render_pdf_preview_png(pdf_bytes)
+            if not png:
+                return Response({'error': '服务器未安装 PDF 渲染库，无法预览该PDF'}, status=500)
+            return HttpResponse(png, content_type='image/png')
+        ext = os.path.splitext(image_path)[1].lower().lstrip('.')
+        ctype = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'gif': 'image/gif',
+                 'webp': 'image/webp', 'bmp': 'image/bmp'}.get(ext, 'application/octet-stream')
+        try:
+            with open(image_path, 'rb') as f:
+                return HttpResponse(f.read(), content_type=ctype)
+        except Exception as e:
+            return Response({'error': f'读取发票失败: {e}'}, status=500)
+
+    @action(detail=False, methods=['post'])
+    def qr_scan(self, request):
+        """发票二维码扫描：解码原文 + 解析发票字段（供审批人/超管核验参考）"""
+        if not self._can_operate_invoice(request):
+            return Response({'error': '仅超级管理员或审批人可扫描发票二维码'}, status=403)
+        url = (request.data.get('url') or '').strip()
+        if not url:
+            return Response({'error': '缺少发票url参数'}, status=400)
+        image_path = SubsidyViewSet._resolve_media_path(url)
+        if not image_path:
+            return Response({'error': '发票文件不存在'}, status=404)
+        try:
+            with open(image_path, 'rb') as f:
+                image_data = f.read()
+        except Exception as e:
+            return Response({'error': f'读取发票失败: {e}'}, status=500)
+        if image_path.lower().endswith('.pdf'):
+            png = SubsidyViewSet._render_pdf_preview_png(image_data)
+            if not png:
+                return Response({'error': 'PDF渲染失败，无法扫描二维码'}, status=500)
+            image_data = png
+        from utils.qr_scan import scan_qr_strings, parse_qr_fields
+        try:
+            qr_strings = scan_qr_strings(image_data)
+        except Exception as e:
+            logger.warning(f'发票二维码扫描失败: {e}')
+            qr_strings = []
+        if not qr_strings:
+            return Response({'encrypt': True, 'data': encrypt_data({'qr_strings': [], 'parsed': {}})})
+        parsed = parse_qr_fields(qr_strings[0])
+        return Response({'encrypt': True, 'data': encrypt_data({'qr_strings': qr_strings, 'parsed': parsed})})
+
+    @action(detail=False, methods=['post'])
+    def verify_invoice(self, request):
+        """发票验真（百度增值税发票验真）：按发票要素参数化查验，缓存去重（无模型，24h）"""
+        if not self._can_operate_invoice(request):
+            return Response({'error': '仅超级管理员或审批人可验真'}, status=403)
+        import hashlib
+        from django.core.cache import cache
+        number = str(request.data.get('invoice_number') or '').strip()
+        code = str(request.data.get('invoice_code') or '').strip()
+        date = str(request.data.get('invoice_date') or '').strip()
+        itype = str(request.data.get('invoice_type') or '').strip()
+        amount = str(request.data.get('invoice_amount') or '').strip()
+        check_code = str(request.data.get('check_code') or '').strip()
+        ocr_raw = request.data.get('ocr_raw_data') or {}
+        if not isinstance(ocr_raw, dict):
+            ocr_raw = {}
+        if not number:
+            return Response({'error': '缺少发票号码，无法验真'}, status=400)
+        baidu_type = _baidu_invoice_type(itype, ocr_raw)
+        wr = ocr_raw.get('words_result') if isinstance(ocr_raw.get('words_result'), dict) else {}
+        if not check_code:
+            check_code = str(wr.get('CheckCode') or '').strip()
+        total_amount = ''
+        if baidu_type in ('elec_invoice_special', 'elec_invoice_normal'):
+            total_amount = amount
+        elif itype == 'special':
+            total_amount = str(wr.get('TotalAmount') or '').strip()
+        md5 = hashlib.md5(f'{number}|{code}|{date}'.encode('utf-8')).hexdigest()
+        ckey = f'oa_invoice_verify:{md5}'
+        cached = cache.get(ckey)
+        if cached:
+            payload = dict(cached)
+            payload['cached'] = True
+            return Response({'encrypt': True, 'data': encrypt_data(payload)})
+        from utils.baidu_ocr import verify_vat_invoice
+        try:
+            res = verify_vat_invoice(invoice_code=code, invoice_num=number,
+                                     invoice_date=date, invoice_type=baidu_type,
+                                     check_code=check_code, total_amount=total_amount)
+        except Exception as e:
+            return Response({'error': f'发票验真服务暂不可用：{e}'}, status=500)
+        display = {'pass': '验真通过', 'fail': '验真不通过', 'error': '验真异常'}.get(res.get('result'), res.get('result'))
+        payload = {'result': res.get('result'), 'result_display': display,
+                   'message': res.get('message', ''), 'cached': False}
+        try:
+            cache.set(ckey, {'result': payload['result'], 'result_display': display,
+                             'message': payload['message']}, 86400)
+        except Exception:
+            pass
+        return Response({'encrypt': True, 'data': encrypt_data(payload)})
+
     @action(detail=False, methods=['get'])
     def approval_chain(self, request):
         """获取当前用户的审批链预览（根据所选部门和审批类型动态生成）"""
@@ -4738,18 +5021,28 @@ class MaterialViewSet(viewsets.ViewSet):
             from django.db.models import Q
             qs = qs.filter(Q(doc_no__icontains=keyword) | Q(purpose__icontains=keyword)
                           | Q(branch_dept__name__icontains=keyword) | Q(items__item_name__icontains=keyword))
-        qs = qs.distinct().order_by('-updated_at')[:50]
+        qs = list(qs.distinct().order_by('-updated_at')[:50])
         status_labels = dict(MaterialRequirement.STATUS_CHOICES)
+        # 在途（进行中）领用占用：批量统计，避免逐条查询；可领数量需扣除其他未结束领用单的占用
+        inflight_map = {}
+        if mode != 'stock_in' and qs:
+            for mq in MaterialRequisition.objects.filter(
+                    requirement_id__in=[r.id for r in qs], status='pending',
+                    request__status__in=['pending', 'deferred', 'processing']).prefetch_related('items'):
+                d = inflight_map.setdefault(mq.requirement_id, {})
+                for mqi in mq.items.all():
+                    d[mqi.item_name] = d.get(mqi.item_name, 0) + float(mqi.quantity)
         data = []
         for r in qs:
             req_approved = bool(r.request_id and r.request.status == 'approved')
             total_remain = 0.0
             total_receive = 0.0
             total_quantity = 0.0
+            _if = inflight_map.get(r.id, {})
             for i in r.items.all():
                 q = float(i.quantity)
                 total_quantity += q
-                total_remain += q - float(i.requisitioned_quantity)
+                total_remain += q - float(i.requisitioned_quantity) - _if.get(i.item_name, 0)
                 total_receive += q - float(i.received_quantity)
             if mode == 'stock_in':
                 linkable = bool(req_approved and r.status in ('approved', 'purchasing') and total_receive > 0)
@@ -4781,15 +5074,27 @@ class MaterialViewSet(viewsets.ViewSet):
             r = MaterialRequirement.objects.select_related('created_by', 'request').get(id=int(rid))
         except (ValueError, TypeError, MaterialRequirement.DoesNotExist):
             return Response({'error': '需求单不存在'}, status=404)
-        items = [{
-            'item_name': i.item_name, 'spec': i.spec, 'unit': i.unit,
-            'price': float(i.price) if i.price is not None else None,
-            'quantity': float(i.quantity),
-            'received': float(i.received_quantity),
-            'to_receive': float(i.quantity - i.received_quantity),
-            'remaining': float(i.quantity - i.requisitioned_quantity),
-            'remark': i.remark,
-        } for i in r.items.all()]
+        from .material_utils import pending_requisition_qty, actual_unit_prices
+        _inflight = pending_requisition_qty(r)
+        _prices = actual_unit_prices(r)
+        items = []
+        for i in r.items.all():
+            _ap = _prices.get(i.item_name) or {}
+            _unit = _ap.get('price')
+            _recv = float(i.received_quantity)
+            items.append({
+                'item_name': i.item_name, 'spec': i.spec, 'unit': i.unit,
+                'price': float(i.price) if i.price is not None else None,
+                'stocked_price': float(_unit) if _unit is not None else None,
+                'price_source': _ap.get('source', 'estimate'),
+                'stocked_amount': round(float(_unit) * _recv, 2) if _unit is not None else None,
+                'quantity': float(i.quantity),
+                'received': _recv,
+                'to_receive': float(i.quantity - i.received_quantity),
+                'pending_requisition': float(_inflight.get(i.item_name, 0)),
+                'remaining': float(i.quantity - i.requisitioned_quantity - _inflight.get(i.item_name, 0)),
+                'remark': i.remark,
+            })
         status_labels = dict(MaterialRequirement.STATUS_CHOICES)
         # 预估金额：优先取审批金额字段，兜底取审批 form_data
         amount = None

@@ -8915,6 +8915,8 @@ body.pwa-mode .sidebar {
     font-size: 12px;
     line-height: 1.7;
     margin-top: 8px;
+    margin-left: 10px;
+    margin-right: 10px;
     padding: 8px 12px;
     background: rgba(0, 0, 0, 0.15);
     border-radius: 6px;
