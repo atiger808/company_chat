@@ -196,6 +196,25 @@ def actual_unit_prices(requirement):
     return res
 
 
+def inflight_qty_map(requirements):
+    """批量统计「在途（进行中）领用占用」：{requirement_id: {item_name: 占用数量}}。
+    口径与 pending_requisition_qty 一致：领用单 status='pending' 且关联审批未结束
+    （待审批/暂缓/办理中）。供需求单搜索与可领用物资目录共用，避免两处口径漂移。"""
+    res = {}
+    reqs = [r for r in (requirements or []) if r is not None]
+    if not reqs:
+        return res
+    qs = MaterialRequisition.objects.filter(
+        requirement_id__in=[r.id for r in reqs], status='pending',
+        request__status__in=['pending', 'deferred', 'processing'],
+    ).prefetch_related('items')
+    for q in qs:
+        d = res.setdefault(q.requirement_id, {})
+        for it in q.items.all():
+            d[it.item_name] = d.get(it.item_name, 0) + it.quantity
+    return res
+
+
 def pending_requisition_qty(requirement, exclude_approval_id=None):
     """在途（进行中）物资领用单各物品已占用数量：领用单 status=pending 且关联审批未结束
     （待审批/暂缓/办理中）。用于允许多个领用单并发的同时，避免同一物品被超领。"""

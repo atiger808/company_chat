@@ -2550,8 +2550,10 @@ class SystemSettingsViewSet(viewsets.ViewSet):
             )
 
         configs = []
+        seen_keys = set()
         for config in queryset.order_by('key'):
             predefined = self.PREDEFINED_CONFIGS.get(config.key, {})
+            seen_keys.add(config.key)
             configs.append({
                 'key': config.key,
                 'name': config.name,
@@ -2566,6 +2568,34 @@ class SystemSettingsViewSet(viewsets.ViewSet):
                 'updated_by': config.updated_by.username if config.updated_by else None,
                 'is_modified': config.value != config.default_value
             })
+
+        # 补齐「预定义但尚未落库」的配置项：新增配置无需手工初始化即可在后台直接看到并修改
+        for key, predefined in self.PREDEFINED_CONFIGS.items():
+            if key in seen_keys:
+                continue
+            if category and predefined.get('category') != category:
+                continue
+            if search:
+                kw = search.lower()
+                if kw not in key.lower() \
+                        and kw not in (predefined.get('name') or '').lower() \
+                        and kw not in (predefined.get('description') or '').lower():
+                    continue
+            configs.append({
+                'key': key,
+                'name': predefined.get('name', key),
+                'value': predefined.get('default', ''),
+                'value_type': predefined.get('value_type', 'string'),
+                'category': predefined.get('category', 'basic'),
+                'description': predefined.get('description', ''),
+                'default_value': predefined.get('default', ''),
+                'choices': predefined.get('choices'),
+                'validation': predefined.get('validation'),
+                'updated_at': None,
+                'updated_by': None,
+                'is_modified': False
+            })
+        configs.sort(key=lambda c: c['key'])
 
         return Response({
             'configs': configs,

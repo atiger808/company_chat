@@ -142,6 +142,7 @@ urlpatterns = [
     path('material/item-search/', MaterialViewSet.as_view({'get': 'item_search'}), name='material-item-search'),
     path('material/items/<int:pk>/', MaterialViewSet.as_view({'get': 'retrieve_item', 'put': 'update_item', 'delete': 'delete_item'}), name='material-item-detail'),
     path('material/requirement-search/', MaterialViewSet.as_view({'get': 'requirement_search'}), name='material-requirement-search'),
+    path('material/available-items/', MaterialViewSet.as_view({'get': 'available_items'}), name='material-available-items'),
     path('material/requirement-detail/', MaterialViewSet.as_view({'get': 'requirement_detail'}), name='material-requirement-detail'),
     path('material/stock-in/', MaterialViewSet.as_view({'post': 'stock_in'}), name='material-stock-in'),
     path('material/requirements/', MaterialViewSet.as_view({'get': 'requirements'}), name='material-requirements'),

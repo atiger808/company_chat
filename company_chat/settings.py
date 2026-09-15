@@ -415,7 +415,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20260912-a142ee4'
+STATIC_VERSION = '20260914-8bfeb2c'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -598,6 +598,7 @@ API_MODEL_MAP = {
     "/api/oa/material/item-search/": "物资物品联想",
     "/api/oa/material/items/<int:pk>/": "物资物品编辑/删除",
     "/api/oa/material/requirement-search/": "可领用需求单搜索",
+    "/api/oa/material/available-items/": "可领用物资目录",
     "/api/oa/material/requirement-detail/": "需求单详情(自动带出)",
     "/api/oa/material/stock-in/": "物资入库确认",
     "/api/oa/material/requirements/": "物资需求单列表",
@@ -934,6 +935,18 @@ PREDEFINED_CONFIGS = {
         'description': '消息可撤回时间（分钟）',
         'category': 'chat',
         'validation': {'min': 1, 'max': 60}
+    },
+    'chat.screenshot_version': {
+        'name': '截图功能版本',
+        'value_type': 'string',
+        'default': 'fullscreen',
+        'description': '聊天室截图按钮使用的版本。整屏截图：截屏选择框默认勾选「整个屏幕」，无需切换标签页/窗口，一键截取整屏后在预览里确认发送；区域截图：拖拽框选范围后发送。',
+        'category': 'chat',
+        'choices': [
+            {'value': 'fullscreen', 'label': '整屏截图（推荐：默认整屏，一键截取发送）'},
+            {'value': 'region', 'label': '区域截图（拖拽框选范围后发送）'}
+        ],
+        'validation': {'required': True}
     },
     'chat.read_receipt_enabled': {
         'name': '已读回执',

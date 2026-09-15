@@ -1026,6 +1026,7 @@ class FrontendConfigManager {
             'chat.max_message_length': 2000,
             'chat.message_retention_days': 365,
             'chat.typing_timeout': 5,
+            'chat.screenshot_version': 'fullscreen',
             'security.login_max_attempts': 5,
             'security.login_lockout_minutes': 15,
             'security.session_timeout_hours': 24,

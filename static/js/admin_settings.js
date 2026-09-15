@@ -273,12 +273,14 @@ class AdminSettingsClient {
 
             case 'string':
                 if (config.choices) {
-                    // 下拉选择
-                    const options = config.choices.map(choice =>
-                        `<option value="${choice}" ${value === choice ? 'selected' : ''}>${choice}</option>`
-                    ).join('');
+                    // 下拉选择：兼容 ['a','b'] 与 [{value,label}] 两种写法
+                    const options = config.choices.map(choice => {
+                        const v = (choice && typeof choice === 'object') ? choice.value : choice;
+                        const l = (choice && typeof choice === 'object') ? (choice.label || choice.value) : choice;
+                        return `<option value="${v}" ${String(value) === String(v) ? 'selected' : ''}>${l}</option>`;
+                    }).join('');
                     return `
-                        <select id="config_${key}" 
+                        <select id="config_${key}"
                                 class="form-select"
                                 onchange="adminSettings.onConfigChange('${key}', this.value)">
                             ${options}

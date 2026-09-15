@@ -29,7 +29,7 @@ from .models import (
 )
 from .type_utils import (
     ensure_builtin_types, resolve_approval_type,
-    collect_form_data, validate_form_data,
+    collect_form_data, validate_form_data, invoice_field_key,
 )
 
 
@@ -37,6 +37,12 @@ def _approval_type_label(approval):
     """审批类型展示名（动态类型表解析，兼容历史数据）"""
     t = resolve_approval_type(approval.approval_type, approval.tenant)
     return t.name if t else approval.approval_type
+
+
+def _approval_schema(approval):
+    """审批类型对应的表单 schema（自定义/带表单的内置类型；无则空列表）"""
+    t = resolve_approval_type(approval.approval_type, approval.tenant)
+    return (t.form_schema or []) if t else []
 
 
 def _threshold_field_label(config):
@@ -1834,6 +1840,7 @@ class ApprovalViewSet(viewsets.ViewSet):
         if not isinstance(invoices, list):
             invoices = [invoices]
         added_invoices = []
+        new_invoice_items = []
         for inv in invoices:
             if not isinstance(inv, dict):
                 continue
@@ -1854,10 +1861,29 @@ class ApprovalViewSet(viewsets.ViewSet):
             if inv.get('ocr_raw_data'):
                 item['ocr_raw_data'] = inv['ocr_raw_data']
             receipts.append(item)
+            new_invoice_items.append(item)
             added_invoices.append({'url': url, 'name': item['name']})
             added += 1
         approval.receipts = receipts
-        approval.save(update_fields=['receipts'])
+        update_fields = ['receipts']
+        # 同步把回传发票写入动态表单数据（form_data），使审批人在表单/详情里也能看到该发票
+        # 并直接使用二维码扫描、发票验真（与发起时填写的发票同等对待）
+        if new_invoice_items:
+            inv_key = invoice_field_key(approval.approval_type, _approval_schema(approval))
+            if inv_key:
+                fd = dict(approval.form_data or {})
+                cur = fd.get(inv_key)
+                if not isinstance(cur, list):
+                    cur = []
+                for item in new_invoice_items:
+                    if any(isinstance(x, dict) and x.get('url') == item['url'] for x in cur):
+                        continue
+                    cur.append({k: v for k, v in item.items()
+                                if k not in ('kind', 'uploaded_at', 'uploader_role')})
+                fd[inv_key] = cur
+                approval.form_data = fd
+                update_fields.append('form_data')
+        approval.save(update_fields=update_fields)
 
         receipt_comment = (request.data.get('comment') or '').strip()
         # 既未选择票据也未填写审批意见 → 无操作，不发送通知
@@ -5024,14 +5050,8 @@ class MaterialViewSet(viewsets.ViewSet):
         qs = list(qs.distinct().order_by('-updated_at')[:50])
         status_labels = dict(MaterialRequirement.STATUS_CHOICES)
         # 在途（进行中）领用占用：批量统计，避免逐条查询；可领数量需扣除其他未结束领用单的占用
-        inflight_map = {}
-        if mode != 'stock_in' and qs:
-            for mq in MaterialRequisition.objects.filter(
-                    requirement_id__in=[r.id for r in qs], status='pending',
-                    request__status__in=['pending', 'deferred', 'processing']).prefetch_related('items'):
-                d = inflight_map.setdefault(mq.requirement_id, {})
-                for mqi in mq.items.all():
-                    d[mqi.item_name] = d.get(mqi.item_name, 0) + float(mqi.quantity)
+        from .material_utils import inflight_qty_map
+        inflight_map = inflight_qty_map(qs) if mode != 'stock_in' else {}
         data = []
         for r in qs:
             req_approved = bool(r.request_id and r.request.status == 'approved')
@@ -5039,11 +5059,14 @@ class MaterialViewSet(viewsets.ViewSet):
             total_receive = 0.0
             total_quantity = 0.0
             _if = inflight_map.get(r.id, {})
+            _names = []
             for i in r.items.all():
                 q = float(i.quantity)
                 total_quantity += q
                 total_remain += q - float(i.requisitioned_quantity) - _if.get(i.item_name, 0)
                 total_receive += q - float(i.received_quantity)
+                if i.item_name and i.item_name not in _names:
+                    _names.append(i.item_name)
             if mode == 'stock_in':
                 linkable = bool(req_approved and r.status in ('approved', 'purchasing') and total_receive > 0)
             else:
@@ -5053,6 +5076,7 @@ class MaterialViewSet(viewsets.ViewSet):
                 'branch_dept': r.branch_dept.name if r.branch_dept else '',
                 'purpose': r.purpose,
                 'item_count': r.items.count(),
+                'item_names': ('、'.join(_names[:3]) + (f' 等 {len(_names)} 项' if len(_names) > 3 else '')),
                 'remaining': round(total_remain, 2),
                 'to_receive': round(total_receive, 2),
                 'total_quantity': round(total_quantity, 2),
@@ -5063,6 +5087,108 @@ class MaterialViewSet(viewsets.ViewSet):
                 'created_at': r.created_at.strftime('%Y-%m-%d'),
             })
         return Response({'results': data})
+
+    # ===== 可领用/待入库物资目录（全员可用：按物品聚合，解决「不知道需求单号」） =====
+    def available_items(self, request):
+        """按物资名称聚合需求单明细，支持两种口径（?mode=）：
+        领用（默认）：已入库且仍有剩余可领 → 可领用多少、物品库结存、来源需求单；
+        stock_in：已审批通过且仍有待收 → 待收多少、来源需求单。
+        供「可领用物资」标签页与领用单/入库单表单的「按物资查找」共用。"""
+        from django.db.models import Q, Sum
+        from .material_utils import inflight_qty_map, actual_unit_prices
+        tenant = self._tenant(request)
+        keyword = (request.query_params.get('search', '') or '').strip()
+        # mode='' → 领用（可领用数量 = 需求数量 − 已领用 − 在途领用占用，仅已入库需求单）
+        # mode=stock_in → 入库（待收数量 = 需求数量 − 已入库数量，仅已通过且未入库完的需求单）
+        stock_in = (request.query_params.get('mode', '') or '').strip() == 'stock_in'
+
+        if stock_in:
+            reqs = MaterialRequirement.objects.filter(
+                tenant=tenant, status__in=('approved', 'purchasing'), request__status='approved')
+        else:
+            reqs = MaterialRequirement.objects.filter(tenant=tenant, status='stocked')
+        # 已有「进行中」入库单审批的需求单不允许再发起（与 ensure_material_stock_in 的防重复校验一致），
+        # 直接不列出，避免用户填完才被拒
+        busy_ids = set()
+        if stock_in:
+            busy_ids = set(MaterialStockIn.objects.filter(
+                requirement__isnull=False, status='pending',
+                request__status__in=['pending', 'deferred', 'processing'],
+            ).values_list('requirement_id', flat=True))
+        reqs = reqs.select_related('branch_dept', 'created_by', 'request').prefetch_related('items')
+        if keyword:
+            reqs = reqs.filter(
+                Q(doc_no__icontains=keyword) | Q(purpose__icontains=keyword)
+                | Q(branch_dept__name__icontains=keyword)
+                | Q(items__item_name__icontains=keyword) | Q(items__spec__icontains=keyword)
+            )
+        reqs = list(reqs.distinct().order_by('-updated_at'))
+        if busy_ids:
+            reqs = [r for r in reqs if r.id not in busy_ids]
+        inflight = {} if stock_in else inflight_qty_map(reqs)
+
+        # 物品库结存：一次查询按「名称+规格」汇总，同时覆盖挂到 MaterialItem 与历史无 FK 的流水
+        stock_map = {}
+        for row in MaterialStockLog.objects.filter(tenant=tenant) \
+                .values('item_name', 'spec').annotate(t=Sum('delta')):
+            stock_map[(row['item_name'], row['spec'] or '')] = float(row['t'] or 0)
+
+        agg = {}
+        for r in reqs:
+            prices = actual_unit_prices(r)
+            _if = inflight.get(r.id, {})
+            applicant = ''
+            if r.created_by:
+                applicant = getattr(r.created_by, 'real_name', '') or r.created_by.username
+            for i in r.items.all():
+                if stock_in:
+                    remaining = float(i.quantity) - float(i.received_quantity)
+                else:
+                    remaining = (float(i.quantity) - float(i.requisitioned_quantity)
+                                 - float(_if.get(i.item_name, 0) or 0))
+                if remaining <= 0:
+                    continue
+                ap = prices.get(i.item_name) or {}
+                unit_price = ap.get('price')
+                d = agg.setdefault((i.item_name, i.spec or ''), {
+                    'item_name': i.item_name, 'spec': i.spec or '', 'unit': i.unit or '',
+                    'total_remaining': 0.0, 'sources': [],
+                })
+                if not d['unit']:
+                    d['unit'] = i.unit or ''
+                d['total_remaining'] = round(d['total_remaining'] + remaining, 2)
+                d['sources'].append({
+                    'requirement_id': r.id,
+                    'doc_no': r.doc_no,
+                    'branch_dept': r.branch_dept.name if r.branch_dept else '',
+                    'applicant': applicant,
+                    'purpose': r.purpose or '',
+                    'remaining': round(remaining, 2),
+                    'unit_price': float(unit_price) if unit_price is not None else None,
+                    'price_source': ap.get('source', 'estimate'),
+                })
+
+        results = []
+        for d in agg.values():
+            if d['total_remaining'] <= 0:
+                continue
+            distinct_prices = {s['unit_price'] for s in d['sources'] if s['unit_price'] is not None}
+            # 各来源单价一致时才在汇总行显示单价，否则交由来源行各自展示，避免误导
+            d['price'] = distinct_prices.pop() if len(distinct_prices) == 1 else None
+            d['stock'] = round(stock_map.get((d['item_name'], d['spec']), 0), 2)
+            d['source_count'] = len(d['sources'])
+            results.append(d)
+        results.sort(key=lambda x: (x['item_name'], x['spec']))
+
+        page = max(1, int(request.query_params.get('page', 1) or 1))
+        page_size = max(1, int(request.query_params.get('page_size', 20) or 20))
+        total = len(results)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        return Response({
+            'results': results[(page - 1) * page_size: page * page_size],
+            'count': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages,
+            'mode': 'stock_in' if stock_in else 'requisition',
+        })
 
     def requirement_detail(self, request):
         """需求单详情 + 明细（含已领/待领/已收/待收）+ 相关入库单，供领用/入库自动带出"""

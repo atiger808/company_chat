@@ -89,6 +89,19 @@ def ensure_builtin_types():
         pass
 
 
+def invoice_field_key(approval_type, schema=None):
+    """该审批在 form_data 中存放发票的键：
+    内置「报销/采购」恒为 'invoices'（前端固定区块，schema 里没有该字段）；
+    其余类型取 schema 中第一个 type='invoice' 的字段 key；都没有则返回 None。
+    票据回传的发票据此合并进 form_data，使审批人可在表单/详情中查看、扫码与验真。"""
+    if approval_type in ('expense', 'purchase'):
+        return 'invoices'
+    for f in (schema or []):
+        if isinstance(f, dict) and f.get('type') == 'invoice' and f.get('key'):
+            return f['key']
+    return None
+
+
 def resolve_approval_type(code, tenant):
     """按 (tenant, code) 优先、全局 (None, code) 兜底解析审批类型。
 

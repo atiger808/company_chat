@@ -1110,6 +1110,10 @@ class ChatClient {
         // 消息可撤回时间限制
         this.messageCanrevokeMinutes = frontendConfig.get('chat.message_canrevoke_minutes', 10);
 
+        // 截图功能版本（管理控制台可切换）：fullscreen=整屏截图（默认） / region=区域截图
+        this.screenshotVersion = frontendConfig.get('chat.screenshot_version', 'fullscreen') || 'fullscreen';
+        this.applyScreenshotButtonUI();
+
         console.log('📋 系统配置已应用:', {
             fileMaxSizeMB: this.fileMaxSizeMB,
             voiceMinDuration: this.voiceMinDuration,
@@ -3763,7 +3767,10 @@ class ChatClient {
         }
     }
 
-    // 屏幕截图：调用浏览器原生屏幕捕获，截取一帧并作为图片消息发送到当前聊天
+    // 截图入口：按「截图功能版本」（管理控制台 → 系统设置 → 聊天设置 可切换）分发
+    //   fullscreen（默认）：整屏截图 —— 截屏选择框默认勾选「整个屏幕」，无需切换标签页/窗口，
+    //                       抓取整屏后在预览里确认发送（Enter 发送 / Esc 取消）
+    //   region：区域截图 —— 拖拽框选范围后发送（原版行为）
     async captureScreenshot() {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
             this.showError('当前浏览器不支持屏幕截图，请使用 Chrome / Edge 浏览器');
@@ -3773,14 +3780,35 @@ class ChatClient {
             this.showError('请先选择聊天对象，再进行截图发送');
             return;
         }
-        let stream = null;
-        try {
-            // 弹出系统选择框：屏幕 / 窗口 / 标签页
-            stream = await navigator.mediaDevices.getDisplayMedia({
-                video: {cursor: 'always'},
-                audio: false,
-            });
+        if (this.screenshotVersion === 'region') {
+            return this._captureScreenshotRegion();
+        }
+        return this._captureScreenshotFullscreen();
+    }
 
+    // 截图按钮文案随版本变化
+    applyScreenshotButtonUI() {
+        const btn = document.getElementById('screenshotBtn');
+        if (!btn) return;
+        btn.title = (this.screenshotVersion === 'region')
+            ? '区域截图（拖拽框选范围后发送）'
+            : '整屏截图（选择框默认整个屏幕，可在当前屏幕直接拖拽框选区域，不框选则发送整屏）';
+    }
+
+    // 抓取一帧屏幕画面。surface 为预设提示（monitor=整个屏幕 / window=窗口 / browser=标签页），
+    // 传 'monitor' 可让 Chrome 在选择框里默认选中「整个屏幕」，用户无需再切换标签页或窗口。
+    async _grabScreenFrame(surface) {
+        const constraints = {
+            video: {cursor: 'always'},
+            audio: false,
+            // 候选里不出现本标签页，并隐藏「切换共享内容」悬浮栏，进一步减少误选与干扰
+            preferCurrentTab: false,
+            selfBrowserSurface: 'exclude',
+            surfaceSwitching: 'exclude',
+        };
+        if (surface) constraints.video.displaySurface = {ideal: surface};
+        const stream = await navigator.mediaDevices.getDisplayMedia(constraints);
+        try {
             const video = document.createElement('video');
             video.srcObject = stream;
             video.playsInline = true;
@@ -3800,39 +3828,56 @@ class ChatClient {
             const canvas = document.createElement('canvas');
             canvas.width = video.videoWidth || window.screen.width || 1280;
             canvas.height = video.videoHeight || window.screen.height || 720;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, 0, 0);
-
-            // 释放屏幕共享（停止屏幕占用提示）
-            stream.getTracks().forEach(t => t.stop());
-            stream = null;
-
-            // 打开区域选择浮层：鼠标拖拽自定义截图范围
-            const blob = await this._openScreenshotCropper(canvas);
-            if (blob) {
-                // 作为图片消息发送到当前聊天
-                await this.sendImageFromClipboard(blob);
-            }
-        } catch (e) {
-            // 用户取消选择或浏览器拒绝
-            console.warn('截图取消或失败:', e);
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            return canvas;
         } finally {
-            if (stream) {
-                try {
-                    stream.getTracks().forEach(t => t.stop());
-                } catch (ignore) {
-                }
+            // 释放屏幕共享（停止屏幕占用提示）
+            try {
+                stream.getTracks().forEach(t => t.stop());
+            } catch (ignore) {
             }
         }
     }
 
-    // 截图区域选择浮层：把截取的全屏图铺满视口，鼠标拖拽框选范围，返回裁剪后的 PNG blob（取消返回 null）
-    _openScreenshotCropper(sourceCanvas) {
+    // 版本一（默认）：整屏截图 —— 默认整个屏幕，抓取后预览确认即可发送
+    async _captureScreenshotFullscreen() {
+        let canvas;
+        try {
+            canvas = await this._grabScreenFrame('monitor');
+        } catch (e) {
+            // 用户取消选择或浏览器拒绝
+            console.warn('整屏截图取消或失败:', e);
+            return;
+        }
+        // 整屏画面铺满视口：在当前屏幕直接拖拽框选区域；不框选则发送整屏（Enter 发送 / Esc 取消）
+        const blob = await this._openScreenshotCropper(canvas, {allowFullScreen: true});
+        if (blob) await this.sendImageFromClipboard(blob);
+    }
+
+    // 版本二：区域截图 —— 拖拽框选范围后发送
+    async _captureScreenshotRegion() {
+        let canvas;
+        try {
+            canvas = await this._grabScreenFrame(null);
+        } catch (e) {
+            console.warn('区域截图取消或失败:', e);
+            return;
+        }
+        const blob = await this._openScreenshotCropper(canvas);
+        if (blob) await this.sendImageFromClipboard(blob);
+    }
+
+    // 截图区域选择浮层：把抓取到的整屏图铺满视口，鼠标在当前屏幕直接拖拽框选范围，返回裁剪后的 PNG blob（取消返回 null）。
+    // opts.allowFullScreen=true（整屏截图版本）：不框选也可直接发送整屏，Enter 发送（有选区则发选区）。
+    _openScreenshotCropper(sourceCanvas, opts) {
+        opts = opts || {};
+        const allowFull = !!opts.allowFullScreen;
         return new Promise((resolve) => {
             const overlay = document.createElement('div');
             overlay.id = 'screenshotCropOverlay';
             overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:999999;'
-                + 'background:rgba(0,0,0,0.6);cursor:crosshair;user-select:none;-webkit-user-drag:none;';
+                + 'background:' + (allowFull ? 'rgba(0,0,0,0.72)' : 'rgba(0,0,0,0.6)')
+                + ';cursor:crosshair;user-select:none;-webkit-user-drag:none;';
             document.body.appendChild(overlay);
 
             const img = new Image();
@@ -3859,21 +3904,38 @@ class ChatClient {
                 const hint = document.createElement('div');
                 hint.style.cssText = 'position:absolute;top:12px;left:50%;transform:translateX(-50%);color:#fff;'
                     + 'background:rgba(0,0,0,0.6);padding:6px 14px;border-radius:6px;font-size:13px;z-index:3;pointer-events:none;white-space:nowrap;';
-                hint.textContent = '按住鼠标左键拖拽选择截图区域，Esc 取消';
+                const hintDefault = allowFull
+                    ? '已默认截取整个屏幕 —— 在当前屏幕按住鼠标左键拖拽可框选区域，不框选则发送整屏；Enter 发送 · Esc 取消'
+                    : '按住鼠标左键拖拽选择截图区域，Esc 取消';
+                hint.textContent = hintDefault;
                 overlay.appendChild(hint);
 
                 const toolbar = document.createElement('div');
-                toolbar.style.cssText = 'position:absolute;display:none;z-index:3;gap:8px;align-items:center;';
-                toolbar.innerHTML = '<button style="padding:6px 18px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">✓ 发送</button>'
-                    + '<button style="padding:6px 18px;background:rgba(255,255,255,0.92);color:#333;border:none;border-radius:6px;cursor:pointer;font-size:13px;">取消</button>';
+                toolbar.style.cssText = 'position:absolute;z-index:3;gap:8px;align-items:center;'
+                    + (allowFull
+                        ? 'display:flex;left:50%;transform:translateX(-50%);bottom:24px;'
+                        : 'display:none;');
+                toolbar.innerHTML =
+                    '<button type="button" data-act="sel" style="display:none;padding:6px 18px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">✓ 发送选区</button>'
+                    + (allowFull ? '<button type="button" data-act="full" style="padding:6px 18px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">✓ 发送整屏</button>' : '')
+                    + '<button type="button" data-act="cancel" style="padding:6px 18px;background:rgba(255,255,255,0.92);color:#333;border:none;border-radius:6px;cursor:pointer;font-size:13px;">取消</button>'
+                    + (allowFull ? '<span style="color:rgba(255,255,255,.65);font-size:12px;">拖拽可框选区域</span>' : '');
                 overlay.appendChild(toolbar);
-                const sendBtn = toolbar.querySelector('button:first-child');
-                const cancelBtn = toolbar.querySelector('button:last-child');
+                const selBtn = toolbar.querySelector('[data-act="sel"]');
+                const fullBtn = toolbar.querySelector('[data-act="full"]');
+                const cancelBtn = toolbar.querySelector('[data-act="cancel"]');
 
                 let drawing = false;
                 let startX = 0, startY = 0;
                 let sel = null; // {x,y,w,h} 视口坐标
                 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+                const hasSel = () => !!(sel && sel.w >= 4 && sel.h >= 4);
+                // 有选区 → 只显示「发送选区」；无选区 → 整屏版本显示「发送整屏」
+                const updateBtns = () => {
+                    const ok = hasSel();
+                    selBtn.style.display = ok ? '' : 'none';
+                    if (fullBtn) fullBtn.style.display = ok ? 'none' : '';
+                };
 
                 const cleanup = () => {
                     document.removeEventListener('mousemove', onMove);
@@ -3895,13 +3957,16 @@ class ChatClient {
                     selRect.style.top = y + 'px';
                     selRect.style.width = w + 'px';
                     selRect.style.height = h + 'px';
-                    // 工具栏跟随选区边缘
-                    let tx = x + w + 6, ty = y;
-                    if (tx + 130 > vw) tx = Math.max(4, x - 136);
-                    if (ty + 90 > vh) ty = Math.max(4, y + h - 90);
-                    toolbar.style.left = tx + 'px';
-                    toolbar.style.top = ty + 'px';
-                    toolbar.style.display = 'flex';
+                    updateBtns();
+                    // 区域截图版本：工具栏跟随选区边缘（整屏版本工具栏固定在底部，避免跳动）
+                    if (!allowFull) {
+                        let tx = x + w + 6, ty = y;
+                        if (tx + 130 > vw) tx = Math.max(4, x - 136);
+                        if (ty + 90 > vh) ty = Math.max(4, y + h - 90);
+                        toolbar.style.left = tx + 'px';
+                        toolbar.style.top = ty + 'px';
+                        toolbar.style.display = 'flex';
+                    }
                 };
 
                 const onDown = (e) => {
@@ -3912,27 +3977,36 @@ class ChatClient {
                     startX = e.clientX; startY = e.clientY;
                     sel = null;
                     selRect.style.display = 'none';
-                    toolbar.style.display = 'none';
+                    updateBtns();
+                    if (!allowFull) toolbar.style.display = 'none';
                 };
 
                 const onUp = (e) => {
                     if (!drawing) return;
                     drawing = false;
                     onMove(e);
-                    if (!sel || sel.w < 4 || sel.h < 4) {
+                    if (!hasSel()) {
                         hint.textContent = '拖拽范围太小，请重新框选';
-                        setTimeout(() => { hint.textContent = '按住鼠标左键拖拽选择截图区域，Esc 取消'; }, 1500);
+                        setTimeout(() => { hint.textContent = hintDefault; }, 1500);
                     }
                 };
 
                 const onKey = (e) => {
-                    if (e.key === 'Escape') { cleanup(); resolve(null); }
+                    if (e.key === 'Escape') {
+                        e.preventDefault();
+                        cleanup(); resolve(null);
+                    } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        // 有选区发送选区；整屏版本无选区则发送整屏；区域截图版本无选区不发送
+                        finish(hasSel() ? 'sel' : (allowFull ? 'full' : 'cancel'));
+                    }
                 };
 
                 const onResize = () => { cleanup(); resolve(null); };
 
-                const finish = (send) => {
-                    if (send && sel && sel.w >= 4 && sel.h >= 4) {
+                const finish = (mode) => {
+                    if (mode === 'cancel') { cleanup(); resolve(null); return; }
+                    if (mode === 'sel' && hasSel()) {
                         const ox = clamp(sel.x - offsetX, 0, dispW);
                         const oy = clamp(sel.y - offsetY, 0, dispH);
                         const ow = Math.min(sel.w, dispW - ox);
@@ -3947,14 +4021,21 @@ class ChatClient {
                             0, 0, cropCanvas.width, cropCanvas.height
                         );
                         cropCanvas.toBlob((blob) => { cleanup(); resolve(blob); }, 'image/png');
-                    } else {
-                        cleanup();
-                        resolve(null);
+                        return;
                     }
+                    if (mode === 'full' && allowFull) {
+                        // 发送整屏：直接用抓取到的原始画面，保证与原分辨率一致
+                        sourceCanvas.toBlob((blob) => { cleanup(); resolve(blob); }, 'image/png');
+                        return;
+                    }
+                    cleanup();
+                    resolve(null);
                 };
 
-                sendBtn.addEventListener('click', () => finish(true));
-                cancelBtn.addEventListener('click', () => finish(false));
+                updateBtns();
+                selBtn.addEventListener('click', () => finish('sel'));
+                if (fullBtn) fullBtn.addEventListener('click', () => finish('full'));
+                cancelBtn.addEventListener('click', () => finish('cancel'));
                 overlay.addEventListener('mousedown', onDown);
                 document.addEventListener('mousemove', onMove);
                 document.addEventListener('mouseup', onUp);

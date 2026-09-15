@@ -1449,6 +1449,14 @@ class SubsidyVerifyApp {
         this._toastTimer = setTimeout(function () { el.style.display = 'none'; }, 2600);
     }
 
+    showError(message) {
+        this.showToast(message, true);
+    }
+
+    showSuccess(message) {
+        this.showToast(message, false);
+    }
+
     showAlert(title, message) {
         return new Promise((resolve) => {
             const dialog = document.createElement('div');
@@ -1469,6 +1477,42 @@ class SubsidyVerifyApp {
             setTimeout(() => dialog.classList.add('show'), 10);
         });
     }
+
+    // ==================== 优雅的确认对话框 ====================
+    showConfirmDialog(title, message, type) {
+        if (type === undefined) type = 'confirm';
+        return new Promise((resolve) => {
+            const iconMap = {danger: 'exclamation-triangle', confirm: 'check-circle'};
+            const icon = iconMap[type] || 'question-circle';
+            const dialog = document.createElement('div');
+            dialog.className = 'confirm-dialog';
+            dialog.innerHTML = '<div class="confirm-dialog-content">'
+                + '<div class="confirm-dialog-header">'
+                + '<i class="fas fa-' + icon + '"></i>'
+                + '<span>' + this._escape(title) + '</span>'
+                + '<button class="close-btn"><i class="fas fa-times"></i></button></div>'
+                + '<div class="confirm-dialog-body">' + message + '</div>'
+                + '<div class="confirm-dialog-footer">'
+                + '<button class="confirm-dialog-btn cancel">取消</button>'
+                + '<button class="confirm-dialog-btn ' + type + '">确定</button></div></div>';
+            document.body.appendChild(dialog);
+            const close = (result) => {
+                dialog.classList.remove('show');
+                setTimeout(() => {
+                    if (dialog.parentNode) document.body.removeChild(dialog);
+                }, 250);
+                resolve(result);
+            };
+            dialog.querySelector('.cancel').addEventListener('click', () => close(false));
+            dialog.querySelector('.' + type).addEventListener('click', () => close(true));
+            dialog.querySelector('.close-btn').addEventListener('click', () => close(false));
+            dialog.addEventListener('click', (e) => {
+                if (e.target === dialog) close(false);
+            });
+            setTimeout(() => dialog.classList.add('show'), 10);
+        });
+    }
+
 }
 
 const subsidyVerifyApp = new SubsidyVerifyApp();

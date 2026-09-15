@@ -1119,7 +1119,8 @@ class SubsidyPayApp {
 
     // 清除发票识别缓存（修改识别版本/税率阈值后立即生效）
     async _clearOcrCache() {
-        if (!confirm('确定清除全部发票识别缓存吗？清除后下次识别将重新进行（修改的识别版本/税率阈值立即生效）。')) return;
+        const confirmed = await this.showConfirmDialog('清除发票识别缓存', '确定清除全部发票识别缓存吗？清除后下次识别将重新进行（修改的识别版本/税率阈值立即生效）。', 'danger');
+        if (!confirmed) return;
         try {
             const res = await this.apiPost(SUBSIDY_API + '/clear-ocr-cache/', {});
             this.showToast((res && res.message) || '发票识别缓存已清除', false);
@@ -1256,6 +1257,11 @@ class SubsidyPayApp {
         }, this).join('');
     }
 
+    toggleMaximize(btn) {
+        const content = btn.closest('.modal-content');
+        if (content) content.classList.toggle('maximized');
+    }
+
     showToast(message, isError) {
         let el = document.getElementById('payToast');
         if (!el) {
@@ -1271,9 +1277,12 @@ class SubsidyPayApp {
         this._toastTimer = setTimeout(function () { el.style.display = 'none'; }, 2600);
     }
 
-    toggleMaximize(btn) {
-        const content = btn.closest('.modal-content');
-        if (content) content.classList.toggle('maximized');
+    showError(message) {
+        this.showToast(message, true);
+    }
+
+    showSuccess(message) {
+        this.showToast(message, false);
     }
 
     showAlert(title, message) {
@@ -1296,6 +1305,42 @@ class SubsidyPayApp {
             setTimeout(() => dialog.classList.add('show'), 10);
         });
     }
+
+    // ==================== 优雅的确认对话框 ====================
+    showConfirmDialog(title, message, type) {
+        if (type === undefined) type = 'confirm';
+        return new Promise((resolve) => {
+            const iconMap = {danger: 'exclamation-triangle', confirm: 'check-circle'};
+            const icon = iconMap[type] || 'question-circle';
+            const dialog = document.createElement('div');
+            dialog.className = 'confirm-dialog';
+            dialog.innerHTML = '<div class="confirm-dialog-content">'
+                + '<div class="confirm-dialog-header">'
+                + '<i class="fas fa-' + icon + '"></i>'
+                + '<span>' + this._escape(title) + '</span>'
+                + '<button class="close-btn"><i class="fas fa-times"></i></button></div>'
+                + '<div class="confirm-dialog-body">' + message + '</div>'
+                + '<div class="confirm-dialog-footer">'
+                + '<button class="confirm-dialog-btn cancel">取消</button>'
+                + '<button class="confirm-dialog-btn ' + type + '">确定</button></div></div>';
+            document.body.appendChild(dialog);
+            const close = (result) => {
+                dialog.classList.remove('show');
+                setTimeout(() => {
+                    if (dialog.parentNode) document.body.removeChild(dialog);
+                }, 250);
+                resolve(result);
+            };
+            dialog.querySelector('.cancel').addEventListener('click', () => close(false));
+            dialog.querySelector('.' + type).addEventListener('click', () => close(true));
+            dialog.querySelector('.close-btn').addEventListener('click', () => close(false));
+            dialog.addEventListener('click', (e) => {
+                if (e.target === dialog) close(false);
+            });
+            setTimeout(() => dialog.classList.add('show'), 10);
+        });
+    }
+
 }
 
 const subsidyPayApp = new SubsidyPayApp();

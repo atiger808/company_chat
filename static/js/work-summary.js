@@ -758,19 +758,35 @@ class WorkSummaryApp {
             : '';
         ov.innerHTML = '<button onclick="workSummaryApp._closePreview()" style="position:absolute;top:max(14px,env(safe-area-inset-top,0px));right:14px;background:transparent;border:none;color:#fff;font-size:26px;cursor:pointer;z-index:2;"><i class="fas fa-times"></i></button>'
             + '<div style="color:#fff;font-size:14px;margin-bottom:10px;">' + (this._previewIdx + 1) + ' / ' + imgs.length + '</div>'
-            + '<img src="' + self.escapeHtml(cur.url || '') + '" style="max-width:94vw;max-height:76vh;object-fit:contain;border-radius:6px;background:#111;box-shadow:0 8px 30px rgba(0,0,0,.5);">'
+            + '<img src="' + self.escapeHtml(cur.url || '') + '" title="点击图片返回" style="max-width:94vw;max-height:76vh;object-fit:contain;border-radius:6px;background:#111;box-shadow:0 8px 30px rgba(0,0,0,.5);cursor:zoom-out;">'
             + '<div style="color:rgba(255,255,255,.85);font-size:13px;margin-top:12px;max-width:86vw;text-align:center;word-break:break-all;">' + self.escapeHtml(cur.name || '') + '</div>'
+            + '<div style="color:rgba(255,255,255,.6);font-size:12px;margin-top:6px;pointer-events:none;">点击图片返回</div>'
             + nav;
         if (ov._keyHandler) document.removeEventListener('keydown', ov._keyHandler);
         ov._keyHandler = function (e) { if (e.key === 'ArrowLeft') self._prevImage(); else if (e.key === 'ArrowRight') self._nextImage(); else if (e.key === 'Escape') self._closePreview(); };
         document.addEventListener('keydown', ov._keyHandler);
+        // 点击图片 / 遮罩空白处返回
+        ov.onclick = function (e) {
+            if (ov._swiped) { ov._swiped = false; return; }
+            const t = e.target;
+            if (t === ov || (t && t.tagName === 'IMG')) self._closePreview();
+        };
         ov._touchStart = null;
-        ov.ontouchstart = function (e) { ov._touchStart = e.touches[0].clientX; };
+        ov._swiped = false;
+        ov.ontouchstart = function (e) { ov._swiped = false; ov._touchStart = e.touches.length === 1 ? e.touches[0].clientX : null; };
         ov.ontouchend = function (e) {
-            if (ov._touchStart == null) return;
+            if (ov._touchStart == null) { ov._touchStart = null; return; }
             const dx = e.changedTouches[0].clientX - ov._touchStart;
             ov._touchStart = null;
-            if (Math.abs(dx) > 40) { if (dx < 0) self._nextImage(); else self._prevImage(); }
+            if (Math.abs(dx) > 40) {
+                ov._swiped = true;   // 抑制随后的 click，避免滑动后被误关闭
+                if (dx < 0) self._nextImage(); else self._prevImage();
+                return;
+            }
+            // 轻点：点在按钮上则交给按钮处理，否则返回
+            const t = e.target;
+            if (t && t.closest && t.closest('button')) return;
+            self._closePreview();
         };
     }
     _prevImage() { this._previewIdx = Math.max(0, (this._previewIdx || 0) - 1); this._renderPreview(); }
