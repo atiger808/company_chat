@@ -993,7 +993,6 @@ class WorkSummaryApp {
             + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openExportModal(' + s.id + ')"><i class="fas fa-download"></i> 导出</button>'
             + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openShareModal(' + s.id + ')"><i class="fas fa-share-alt"></i> 分享</button>'
             + (s.user === this._myId ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.editSummary(' + s.id + ')"><i class="fas fa-edit"></i> 编辑</button>' : '')
-            + (this._isSuperAdmin ? '<button class="btn btn-sm btn-danger" onclick="workSummaryApp.deleteSummary(' + s.id + ')"><i class="fas fa-trash"></i> 删除</button>' : '')
             + '</div></div>';
     }
     _socialBar(s) {
@@ -1099,7 +1098,6 @@ class WorkSummaryApp {
                 + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openExportModal(' + s.id + ')"><i class="fas fa-download"></i> 导出</button>'
             + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openShareModal(' + s.id + ')"><i class="fas fa-share-alt"></i> 分享</button>'
             + (s.user === this._myId ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.editSummary(' + s.id + ')"><i class="fas fa-edit"></i> 编辑</button>' : '')
-                + (this._isSuperAdmin ? '<button class="btn btn-sm btn-danger" onclick="workSummaryApp.deleteSummary(' + s.id + ')"><i class="fas fa-trash"></i> 删除</button>' : '')
                 + '</div></div>';
         }).join('');
         list.forEach(s => { if (s.status === 'analyzing') { this._ensurePolling(s.id); this._showThinking(document.getElementById('wsAnalysis_' + s.id)); } });
@@ -1213,8 +1211,7 @@ class WorkSummaryApp {
                     + '<button class="btn btn-secondary" onclick="workSummaryApp.openExportModal(' + d.id + ')"><i class="fas fa-download"></i> 导出</button>'
                     + '<button class="btn btn-secondary" onclick="workSummaryApp.openShareModal(' + d.id + ')"><i class="fas fa-share-alt"></i> 分享</button>'
                     + '<button class="btn btn-secondary" onclick="workSummaryApp.openPrintModal(' + d.id + ')"><i class="fas fa-print"></i> 打印</button>'
-                    + (d.user === this._myId ? '<button class="btn btn-secondary" onclick="workSummaryApp.editSummary(' + d.id + ')"><i class="fas fa-edit"></i> 编辑</button>' : '')
-                    + (this._isSuperAdmin ? '<button class="btn btn-danger" onclick="workSummaryApp.deleteSummary(' + d.id + ')"><i class="fas fa-trash"></i> 删除</button>' : '');
+                    + (d.user === this._myId ? '<button class="btn btn-secondary" onclick="workSummaryApp.editSummary(' + d.id + ')"><i class="fas fa-edit"></i> 编辑</button>' : '');
             }
             // 分析与建议：已完成→从零开始打字呈现；分析中/待分析→科技感动态 AI 提示 + 轮询
             const titleHtml = '<div class="ws-analysis-title"><i class="fas fa-robot"></i> 大模型分析建议</div>';
@@ -1448,18 +1445,6 @@ class WorkSummaryApp {
             this._refreshCurrent();
         } catch (e) {
             this.toast('触发失败：' + (e.message || ''), true);
-        }
-    }
-    async deleteSummary(id) {
-        var confirmed = await this.showConfirmDialog('删除每日工作总结', '确定删除该条每日工作总结吗？');
-        if (!confirmed) return;
-        try {
-            await this.apiDelete(WS_API + '/' + id + '/');
-            this.toast('已删除', false);
-            this.closeDetail();
-            this._refreshCurrent();
-        } catch (e) {
-            this.toast('删除失败：' + (e.message || ''), true);
         }
     }
     _refreshCurrent() {

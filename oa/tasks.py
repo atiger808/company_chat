@@ -568,3 +568,113 @@ def analyze_work_summary_range_task(self, analysis_id):
             logger.warning(f'每日总结范围分析重试耗尽: {analysis_id} {e}')
             return {'error': 'max retries exceeded'}
         raise self.retry(exc=e)
+
+
+# ==================== 审批生命周期自动治理 ====================
+
+def apply_approval_lifecycle(cfg, now=None):
+    """执行单个企业配置下的审批治理，返回统计 dict。
+
+    - 已通过且最后通过时间早于 archive_days 天 → 自动归档（归档人留空，说明标注为系统自动）；
+    - 已撤回 / 草稿：保留 delete_days 天，到期前一天发一次「即将删除」通知，满期删除。
+    通知与删除都用 `purge_notified_at` 去重/标记，重复执行不会重复通知。
+    """
+    from datetime import timedelta
+    from django.db.models import OuterRef, Subquery, Max, DateTimeField
+    from django.db.models.functions import Coalesce
+    from .models import ApprovalLog, ApprovalRequest
+    now = now or timezone.now()
+    tenant_id = cfg.tenant_id
+    stat = {'archived': 0, 'notified': 0, 'deleted': 0}
+    if not cfg.enabled:
+        return stat
+
+    def _scoped(qs, tid):
+        return qs.filter(tenant_id=tid) if tid else qs.filter(tenant__isnull=True)
+
+    # —— 1) 已通过的审批自动归档 ——
+    # 归档基准取「最后一次通过时间」（updated_at 会被回传票据/改说明等后续保存刷新，用它判断会推迟归档）；
+    # 历史异常数据缺通过记录时回退到 updated_at。
+    archive_days = max(1, int(cfg.archive_days or 30))
+    cutoff = now - timedelta(days=archive_days)
+    last_approve = ApprovalLog.objects.filter(
+        request_id=OuterRef('pk'), action='approve'
+    ).order_by().values('request_id').annotate(m=Max('created_at')).values('m')
+    due_ids = list(_scoped(
+        ApprovalRequest.objects.filter(status='approved', is_archived=False), tenant_id
+    ).annotate(
+        done_at=Coalesce(Subquery(last_approve), 'updated_at', output_field=DateTimeField())
+    ).filter(done_at__lte=cutoff).values_list('id', flat=True))
+    if due_ids:
+        stat['archived'] = ApprovalRequest.objects.filter(id__in=due_ids).update(
+            is_archived=True, archived_at=now, archived_by=None,
+            archive_note='系统自动归档（已通过超过 %d 天）' % archive_days)
+
+    # —— 2) 已撤回 / 草稿：保留 keep_days 天，删除前一天通知，满期删除 ——
+    # 通知窗口取 [keep_days-1, keep_days)：按天运行时每条记录正好命中一次（前一天通知、次日删除）；
+    # 若定时任务中断导致错过该窗口，超期记录会被直接删除（不再补发通知）。
+    for status in ('cancelled', 'draft'):
+        keep_days = max(1, int(cfg.delete_days_for(status) or 0))
+        if keep_days <= 0:
+            continue
+        qs = _scoped(ApprovalRequest.objects.filter(status=status), tenant_id)
+        notice_from = now - timedelta(days=keep_days - 1)
+        delete_before = now - timedelta(days=keep_days)
+        notify_due = list(qs.filter(
+            purge_notified_at__isnull=True,
+            updated_at__lte=notice_from,
+            updated_at__gt=delete_before,
+        ).values_list('id', 'title', 'applicant_id', 'updated_at'))
+        for rid, title, applicant_id, updated in notify_due:
+            deadline = timezone.localtime(updated + timedelta(days=keep_days)).strftime('%Y-%m-%d')
+            label = '已撤回' if status == 'cancelled' else '草稿'
+            try:
+                from .views import send_work_notification
+                send_work_notification(
+                    user_id=applicant_id,
+                    title='审批即将自动删除',
+                    content='您有一条%s的审批「%s」仅保留 %d 天，将于 %s 自动删除，'
+                            '如需保留请及时修改或重新提交。' % (label, title, keep_days, deadline),
+                    notification_type='approval',
+                    related_url='/oa/approval/?approval_id=%d' % rid,
+                    extra_data={'approval_id': rid, 'kind': 'purge_notice', 'deadline': deadline},
+                )
+                ApprovalRequest.objects.filter(id=rid).update(purge_notified_at=now)
+                stat['notified'] += 1
+            except Exception as e:
+                logger.warning(f'审批即将删除通知发送失败({rid}): {e}')
+        # 删除：已满保留期限
+        stat['deleted'] += qs.filter(updated_at__lte=delete_before).delete()[0]
+    return stat
+
+
+@app.task(bind=True)
+def approval_lifecycle_task(self):
+    """每日定时：按各企业配置自动归档已通过审批、清理超期撤回/草稿审批并提前一天通知"""
+    from .models import ApprovalLifecycleConfig, ApprovalRequest
+    total = {'archived': 0, 'notified': 0, 'deleted': 0}
+    try:
+        # 有审批数据的企业都要治理（含未配置企业，用默认 30/15/15 保证开箱即用）
+        tenant_ids = set(ApprovalLifecycleConfig.objects.values_list('tenant_id', flat=True))
+        tenant_ids |= set(ApprovalRequest.objects.exclude(tenant__isnull=True)
+                          .values_list('tenant_id', flat=True).distinct())
+        for tid in tenant_ids:
+            cfg = ApprovalLifecycleConfig.get_config_by_id(tid)
+            if not cfg.enabled:
+                continue
+            st = apply_approval_lifecycle(cfg)
+            for k in total:
+                total[k] += st[k]
+        # 无企业的历史数据同样按默认配置治理
+        orphan = ApprovalRequest.objects.filter(tenant__isnull=True)
+        if orphan.exists():
+            st = apply_approval_lifecycle(
+                ApprovalLifecycleConfig(tenant=None, **ApprovalLifecycleConfig.DEFAULTS))
+            for k in total:
+                total[k] += st[k]
+        logger.info(f'审批生命周期治理完成：归档 {total["archived"]} 条、'
+                    f'通知 {total["notified"]} 条、删除 {total["deleted"]} 条')
+        return total
+    except Exception as e:
+        logger.warning(f'审批生命周期治理任务异常: {e}')
+        return {'error': str(e)}

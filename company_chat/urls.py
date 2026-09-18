@@ -24,6 +24,47 @@ from .views import service_worker_view, admin_console_view
 from oa.views import WatermarkViewSet, PrintLogViewSet
 import sys
 
+
+class AttendancePageView(TemplateView):
+    """考勤页：额外把百度地图浏览器端 AK 交给前端（仅用于地图圈选考勤范围）。
+
+    地图库只在「管理员/超管」页面里同步加载：普通员工根本用不到地图圈选，
+    没必要为每个打卡的人加载地图库、更不该让他们遇到 AK 校验类报错。
+    注意必须用同步 <script> 标签——百度地图 JS API 内部依赖 document.write，
+    动态注入的脚本会报 "It isn't possible to write into a document from an
+    asynchronously-loaded external script"，地图永远初始化不出来。
+    """
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ak = getattr(settings, 'BAIDU_MAP_JS_AK', '') or ''
+        ctx['baidu_map_js_ak'] = ak
+        # 「显示考勤打卡范围配置」开关行是否暴露（.env: ATTENDANCE_GEO_VISIBLE_SWITCH，默认隐藏）
+        ctx['att_geo_visible_switch'] = bool(getattr(settings, 'ATTENDANCE_GEO_VISIBLE_SWITCH', False))
+        user = getattr(self.request, 'user', None)
+        authed = bool(getattr(user, 'is_authenticated', False))
+        # 配置端地图（考勤范围圈选）：仅管理员/超管
+        can_use = bool(authed and getattr(user, 'user_type', '') in ('admin', 'super_admin'))
+        ctx['baidu_map_can_use'] = can_use
+        # 用户端地图（打卡时看自己在不在范围内）：只要该员工被启用了指定区域打卡就需要
+        need_for_user = False
+        if authed and not can_use:
+            try:
+                from org.models import UserDepartment
+                from oa.views import AttendanceViewSet
+                tenant = user.get_active_tenant()
+                primary = UserDepartment.objects.filter(
+                    user=user, is_primary=True).select_related('department').first()
+                required, ranges, _ = AttendanceViewSet()._attendance_geo_config(
+                    tenant, primary.department_id if primary else None, user)
+                need_for_user = bool(required and ranges)
+            except Exception:
+                need_for_user = False
+        ctx['baidu_map_needed_for_user'] = need_for_user
+        # 需要时才同步加载地图库（百度地图依赖 document.write，不能用异步注入）
+        ctx['baidu_map_load'] = bool(ak and (can_use or need_for_user))
+        return ctx
+
 urlpatterns = [
     path('admin/', admin.site.urls),
 
@@ -52,6 +93,7 @@ urlpatterns = [
     path('', TemplateView.as_view(template_name='index.html'), name='index'),
     path('contact/', TemplateView.as_view(template_name='contact.html'), name='contact'),
     path('docs/api/', TemplateView.as_view(template_name='docs/api_docs.html'), name='api_docs'),
+    path('ByteDanceVerify.html', TemplateView.as_view(template_name='ByteDanceVerify.html'), name='ByteDanceVerify'),
 
     # 🔧 聊天页面路由
     path('chat/', TemplateView.as_view(template_name='chat/chat.html'), name='chat'),
@@ -66,7 +108,10 @@ urlpatterns = [
     path('tasks/', TemplateView.as_view(template_name='tasks/tasks.html'), name='tasks'),
 
     # OA办公页面路由
-    path('oa/attendance/', TemplateView.as_view(template_name='oa/attendance.html'), name='oa-attendance'),
+    # 考勤页需要把「百度地图浏览器端 AK」交给前端（考勤范围地图圈选），故用带 context 的 TemplateView；
+    # 未配置 AK 时前端自动降级为手填经纬度，不影响其它功能。
+    path('oa/attendance/', AttendancePageView.as_view(template_name='oa/attendance.html'),
+         name='oa-attendance'),
     path('oa/approval/', TemplateView.as_view(template_name='oa/approval.html'), name='oa-approval'),
     path('oa/subsidy/', TemplateView.as_view(template_name='oa/subsidy.html'), name='oa-subsidy'),
     path('oa/subsidy-verify/', TemplateView.as_view(template_name='oa/subsidy-verify.html'), name='oa-subsidy-verify'),

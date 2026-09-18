@@ -20,6 +20,7 @@ from .models import (
     DailyWorkSummary, WorkSummaryRangeAnalysis,
     WorkSummaryConfig,
     FinanceSpecialist, Announcement, AnnouncementComment, AnnouncementOperation,
+    ApprovalLifecycleConfig,
 )
 
 
@@ -32,7 +33,7 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
 
 @admin.register(AttendanceConfig)
 class AttendanceConfigAdmin(admin.ModelAdmin):
-    list_display = ['id', 'tenant', 'sub_tenant', 'department', 'shift_type', 'makeup_allowance', 'clock_out_limit', 'clock_in_enabled', 'clock_in_time', 'clock_out_enabled', 'clock_out_time', 'updated_at', 'created_at']
+    list_display = ['id', 'tenant', 'sub_tenant', 'department', 'shift_type', 'location_required', 'makeup_allowance', 'clock_out_limit', 'clock_in_enabled', 'clock_in_time', 'clock_out_enabled', 'clock_out_time', 'updated_at', 'created_at']
     list_filter = ['clock_in_enabled', 'clock_out_enabled', 'shift_type']
     search_fields = ['id', 'tenant__name', 'sub_tenant__name', 'department__name']
     list_per_page = 20
@@ -47,10 +48,10 @@ class UserAttendanceConfigAdmin(admin.ModelAdmin):
 
 @admin.register(ApprovalRequest)
 class ApprovalRequestAdmin(admin.ModelAdmin):
-    list_display = ['id', 'applicant', 'title', 'approval_type', 'status', 'receipt_deadline', 'sign_type', 'approval_mode', 'updated_at',
+    list_display = ['id', 'applicant', 'title', 'approval_type', 'status', 'receipt_deadline', 'sign_type', 'approval_mode', 'is_archived', 'archived_by', 'archived_at', 'updated_at',
                     'created_at']
-    list_filter = ['status', 'approval_type', 'sign_type', 'approval_mode']
-    search_fields = ['id', 'title', 'applicant__username', 'applicant__real_name']
+    list_filter = ['status', 'approval_type', 'sign_type', 'approval_mode', 'is_archived']
+    search_fields = ['id', 'title', 'applicant__username', 'applicant__real_name', 'archive_note']
     list_per_page = 20
 
 
@@ -94,7 +95,7 @@ class ApprovalCarbonCopyAdmin(admin.ModelAdmin):
 
 @admin.register(ApprovalDeptConfig)
 class ApprovalDeptConfigAdmin(admin.ModelAdmin):
-    list_display = ['id', 'tenant', 'sub_tenant', 'approval_type', 'enable_receipt_return', 'require_signature', 'final_approver',
+    list_display = ['id', 'tenant', 'sub_tenant', 'approval_type', 'invoice_max_count', 'receipt_max_count', 'enable_receipt_return', 'require_signature', 'final_approver',
                     'threshold_enabled', 'threshold_field', 'department', 'updated_at', 'created_at']
     list_filter = ['approval_type', 'enable_receipt_return', 'require_signature', 'threshold_enabled', 'threshold_field']
     search_fields = ['tenant__name', 'department__name']
@@ -322,4 +323,12 @@ class AnnouncementOperationAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'user', 'announcement', 'action', 'title', 'created_at']
     search_fields = ['title', 'user__username', 'user__real_name']
     list_filter = ['action']
+    list_per_page = 20
+
+
+@admin.register(ApprovalLifecycleConfig)
+class ApprovalLifecycleConfigAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'enabled', 'archive_days',
+                    'withdrawn_delete_days', 'draft_delete_days', 'updated_at']
+    list_filter = ['enabled']
     list_per_page = 20

@@ -234,8 +234,17 @@ class ApprovalRequest(models.Model):
     # 票据回传：最终审批通过后，申请人在时限内回传的付款凭证/票据
     receipts = models.JSONField(default=list, blank=True, verbose_name='回传票据')
     receipt_deadline = models.DateTimeField(null=True, blank=True, verbose_name='回传截止时间')
+    # 归档：审批结束后由超管/财务专员归档，移出常规列表便于月度/季度/年度归档与审计复盘
+    is_archived = models.BooleanField(default=False, db_index=True, verbose_name='是否归档')
+    archived_at = models.DateTimeField(null=True, blank=True, verbose_name='归档时间')
+    archived_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='archived_approvals', verbose_name='归档人')
+    archive_note = models.CharField(max_length=200, blank=True, default='', verbose_name='归档说明')
     # 驳回后重新提交的起始节点（被驳回时记录，重新提交/撤回时清空；兼容驳回→存草稿→再提交路径）
     resume_node_order = models.IntegerField(null=True, blank=True, verbose_name='驳回后重新提交的起始节点')
+    # 即将删除提醒：撤回/草稿审批到期前一天由定时任务发通知，已通知过则不再重复
+    purge_notified_at = models.DateTimeField(null=True, blank=True, verbose_name='即将删除通知时间')
     current_node_order = models.IntegerField(default=0, verbose_name='当前节点序号')
     approver = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -505,6 +514,12 @@ class ApprovalDeptConfig(models.Model):
     # 票据回传开关：关闭时发起人与最后审批人均不可使用票据回传，审批人通过时审批弹窗不显示"通知发起人回传票据"
     enable_receipt_return = models.BooleanField(default=False, verbose_name='开启票据回传',
                                                help_text='开启后发起人与最后审批人可使用票据回传，审批人通过时可通知发起人回传票据')
+    # 票据回传数量上限：每次审批回传的附件与发票分别不超过该数量（默认 10）
+    receipt_max_count = models.IntegerField(default=10, verbose_name='票据回传数量上限',
+                                           help_text='每次审批回传的附件与发票分别不超过该数量')
+    # 审批发票上传数量上限（报销/采购/自定义类型的发票字段）：0 表示沿用「票据回传数量上限」
+    invoice_max_count = models.IntegerField(default=0, verbose_name='审批发票数量上限',
+                                           help_text='新建/编辑审批时每个发票字段最多上传的发票数量；0 表示与「票据回传数量上限」一致')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
@@ -548,6 +563,54 @@ class FinanceSpecialist(models.Model):
 
     def __str__(self):
         return f'{self.user} 财务专员'
+
+
+class ApprovalLifecycleConfig(models.Model):
+    """审批生命周期自动治理配置（每企业一条，超管可改）：
+    已通过的审批超过 archive_days 天自动归档；
+    已撤回 / 存草稿的审批超过 withdrawn_delete_days / draft_delete_days 天自动删除，
+    删除前一天给发起人发一次「即将删除」工作通知。"""
+    DEFAULTS = {'archive_days': 30, 'withdrawn_delete_days': 30, 'draft_delete_days': 30}
+    # 三个期限的合法范围（天）
+    MIN_DAYS, MAX_DAYS = 1, 365
+
+    tenant = models.OneToOneField(
+        'accounts.Tenant', on_delete=models.CASCADE,
+        related_name='approval_lifecycle_config', verbose_name='所属企业')
+    enabled = models.BooleanField(default=True, verbose_name='启用自动治理')
+    archive_days = models.PositiveIntegerField(default=30, verbose_name='已通过自动归档期限(天)')
+    withdrawn_delete_days = models.PositiveIntegerField(default=30, verbose_name='已撤回自动删除期限(天)')
+    draft_delete_days = models.PositiveIntegerField(default=30, verbose_name='草稿自动删除期限(天)')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '审批生命周期配置'
+        verbose_name_plural = '审批生命周期配置'
+
+    def __str__(self):
+        return f'{self.tenant} 审批生命周期配置'
+
+    @classmethod
+    def get_config(cls, tenant):
+        """取该企业配置；未配置时返回一份带默认值的未保存实例（保证开箱即用）"""
+        return cls.get_config_by_id(tenant.id if tenant is not None else None)
+
+    @classmethod
+    def get_config_by_id(cls, tenant_id):
+        """按企业 id 取配置；无配置行时返回带默认值的未保存实例"""
+        if tenant_id:
+            cfg = cls.objects.filter(tenant_id=tenant_id).first()
+            if cfg:
+                return cfg
+        return cls(tenant_id=tenant_id, **cls.DEFAULTS)
+
+    def delete_days_for(self, status):
+        """该状态（draft/cancelled）的保留天数"""
+        if status == 'draft':
+            return self.draft_delete_days
+        if status == 'cancelled':
+            return self.withdrawn_delete_days
+        return 0
 
 
 class CustomPaymentMethod(models.Model):
@@ -698,6 +761,14 @@ class AttendanceConfig(models.Model):
         ('night', '夜班'),
     ]
     shift_type = models.CharField(max_length=10, choices=SHIFT_TYPE_CHOICES, default='day', verbose_name='班次类型')
+    # 指定区域打卡总开关：仅「集团级默认配置」这一行有效（其他层级即使读写也不参与判定）
+    location_required = models.BooleanField(default=False, verbose_name='启用指定区域打卡')
+    # 是否显示「考勤打卡范围配置」：默认隐藏，仅超级管理员可开启/隐藏；
+    # 同样只认「集团级默认配置」这一行。其他角色无权查看/配置打卡范围。
+    location_config_visible = models.BooleanField(default=False, verbose_name='显示考勤范围配置')
+    # 考勤打卡范围：多个圆形区域（公司多个办公地点），每项 {name, lat, lng, radius}，
+    # 经纬度按 WGS84 存储（与浏览器定位/打卡记录一致），前端展示时再转 BD09
+    location_ranges = models.JSONField(default=list, blank=True, verbose_name='考勤打卡范围')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
@@ -729,6 +800,8 @@ class UserAttendanceConfig(models.Model):
     clock_out_time = models.TimeField(null=True, blank=True, verbose_name='下班打卡开始时间')
     makeup_allowance = models.PositiveIntegerField(default=3, verbose_name='每月补卡次数(0=禁用补卡)')
     clock_out_limit = models.PositiveIntegerField(default=3, verbose_name='下班卡最多打卡次数(至少1)')
+    # 个人考勤打卡范围（优先级最高）：为空表示沿用部门/子公司/集团的配置
+    location_ranges = models.JSONField(default=list, blank=True, verbose_name='考勤打卡范围')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
@@ -998,13 +1071,15 @@ class DailyDigestConfig(models.Model):
 ACTIVITY_WEIGHT_LABELS = {
     'chat': '聊天', 'approval': '审批', 'attendance': '考勤', 'task': '任务',
     'cloud': '网盘', 'doc': '文档', 'summary_pub': '发布总结', 'summary_cmt': '评论总结',
-    'summary_like': '点赞总结', 'announce_pub': '发布公告', 'announce_cmt': '评论公告',
+    'summary_like': '点赞总结', 'summary_share': '分享总结', 'announce_pub': '发布公告',
+    'announce_cmt': '评论公告', 'announce_like': '点赞公告',
 }
 # 活跃度权重默认值（可被 ActivityWeightConfig 覆盖，工作日历页超管可视化配置）
 DEFAULT_ACTIVITY_WEIGHTS = {
     'chat': 1, 'approval': 5, 'attendance': 1, 'task': 3,
     'cloud': 1, 'doc': 2, 'summary_pub': 3, 'summary_cmt': 2,
-    'summary_like': 1, 'announce_pub': 4, 'announce_cmt': 2,
+    'summary_like': 1, 'summary_share': 2, 'announce_pub': 4,
+    'announce_cmt': 2, 'announce_like': 1,
 }
 
 
@@ -1626,6 +1701,26 @@ class AnnouncementComment(models.Model):
 
     def __str__(self):
         return f'{self.author} 评论 {self.announcement}'
+
+
+class AnnouncementLike(models.Model):
+    """集团公告点赞（每人每篇仅一次）；点赞行为计入成员关系与活跃度「点赞公告」维度"""
+    announcement = models.ForeignKey(
+        Announcement, on_delete=models.CASCADE,
+        related_name='likes', verbose_name='公告')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='announcement_likes', verbose_name='点赞人')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='点赞时间')
+
+    class Meta:
+        unique_together = ('announcement', 'user')
+        ordering = ['created_at']
+        verbose_name = '集团公告点赞'
+        verbose_name_plural = '集团公告点赞'
+
+    def __str__(self):
+        return f'{self.user} 点赞 {self.announcement}'
 
 
 class AnnouncementOperation(models.Model):

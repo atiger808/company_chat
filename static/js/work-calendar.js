@@ -1,8 +1,8 @@
 // static/js/work-calendar.js - 工作日历
 const WC_API = '/api/oa/work-calendar';
 const WS_NET_PALETTE = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#9b59b6', '#00a1ff', '#16a085', '#e74c3c', '#8e44ad', '#d35400', '#2f9e44', '#5c6bc0', '#ec407a', '#795548'];
-const WS_NET_TYPE_COLOR = {'chat': '#409eff', 'approval': '#e6a23c', 'task': '#f56c6c', 'doc': '#9b59b6', 'share': '#00a1ff', 'announcement': '#16a085', 'summary_comment': '#7c4dff', 'summary_like': '#c0a3ff'};
-const WS_NET_TYPE_LABEL = {'chat': '私聊消息', 'approval': 'OA审批', 'task': '任务指派', 'doc': '协作文档', 'share': '网盘分享', 'announcement': '公告评论', 'summary_comment': '总结评论', 'summary_like': '总结点赞'};
+const WS_NET_TYPE_COLOR = {'chat': '#409eff', 'approval': '#e6a23c', 'task': '#f56c6c', 'doc': '#9b59b6', 'share': '#00a1ff', 'announcement': '#16a085', 'announce_like': '#4dd0c4', 'summary_comment': '#7c4dff', 'summary_like': '#c0a3ff', 'summary_share': '#5c6bc0'};
+const WS_NET_TYPE_LABEL = {'chat': '私聊消息', 'approval': 'OA审批', 'task': '任务指派', 'doc': '协作文档', 'share': '网盘分享', 'announcement': '公告评论', 'announce_like': '公告点赞', 'summary_comment': '总结评论', 'summary_like': '总结点赞', 'summary_share': '总结分享'};
 
 class WorkCalendarApp {
     constructor() {
@@ -163,6 +163,27 @@ class WorkCalendarApp {
         }
     }
 
+    // 月度日历徽标维度：每一项操作单独成徽标（含审批提交/审批操作、公告发布/评论/点赞、总结发布/评论/点赞/分享）
+    _badgeDefs(info) {
+        return [
+            [info.approvals, '审', '#409eff', '提交审批'],
+            [info.approval_ops, '批', '#66b1ff', '审批操作'],
+            [info.invoices, '补', '#e6a23c', '补贴/核验'],
+            [info.withdrawals, '提', '#16a085', '提现'],
+            [info.tasks, '任', '#f56c6c', '任务'],
+            [info.docs, '文', '#9b59b6', '文档'],
+            [info.cloud, '云', '#00a1ff', '网盘/协作'],
+            [info.org, '组', '#2f9e44', '组织'],
+            [info.summary_pub, '总', '#7c4dff', '发布每日总结'],
+            [info.summary_cmt, '评', '#a86df5', '评论每日总结'],
+            [info.summary_like, '赞', '#c0a3ff', '点赞每日总结'],
+            [info.summary_share, '享', '#5c6bc0', '分享每日总结'],
+            [info.announce_pub, '公', '#16a085', '发布公告'],
+            [info.announce_cmt, '议', '#48c9b0', '评论公告'],
+            [info.announce_like, '顶', '#4dd0c4', '点赞公告']
+        ];
+    }
+
     _renderCalendar(days, year, month) {
         const grid = document.getElementById('wcCalGrid');
         if (!grid) return;
@@ -176,19 +197,11 @@ class WorkCalendarApp {
             const ds = year + '-' + String(month).padStart(2, '0') + '-' + String(d).padStart(2, '0');
             const info = days[ds] || {};
             let badges = '';
-            const badgeMap = [
-                [info.approvals, '审', '#409eff'],
-                [info.invoices, '补', '#e6a23c'],
-                [info.withdrawals, '提', '#16a085'],
-                [info.tasks, '任', '#f56c6c'],
-                [info.docs, '文', '#9b59b6'],
-                [info.cloud, '云', '#00a1ff'],
-                [info.org, '组', '#2f9e44'],
-                [info.work_summary, '总', '#7c4dff'],
-                [info.announcement, '公', '#7c4dff']
-            ];
-            badgeMap.forEach(function (b) {
-                if (b[0] > 0) badges += '<span class="wc-cal-badge" style="background:' + b[2] + ';">' + b[1] + '</span>';
+            const self = this;
+            this._badgeDefs(info).forEach(function (b) {
+                if (b[0] > 0) {
+                    badges += '<span class="wc-cal-badge" style="background:' + b[2] + ';" title="' + self._escape(b[3]) + ' ' + b[0] + '">' + b[1] + '</span>';
+                }
             });
             let attr = '';
             if (info.clock_in || info.clock_out) {
@@ -298,6 +311,26 @@ class WorkCalendarApp {
         if (this._isSuperAdmin) this._loadSummaryStats(this._rangeParams());
         this._loadOrgActivity(params);
     }
+    // 工作统计时间线维度：与工作日历徽标一一对应，覆盖审批/补贴/提现/任务/文档/网盘/组织/总结/公告/打卡
+    _statsDefs() {
+        return [
+            ['approvals', '审批', '#409eff'],
+            ['invoices', '核验发票', '#e6a23c'],
+            ['withdrawals', '支付提现', '#16a085'],
+            ['tasks', '任务', '#f56c6c'],
+            ['docs', '文档', '#9b59b6'],
+            ['cloud', '网盘/协作', '#00a1ff'],
+            ['org', '组织变更', '#2f9e44'],
+            ['attendance', '打卡', '#67c23a'],
+            ['summary_pub', '发布总结', '#7c4dff'],
+            ['summary_cmt', '评论总结', '#a86df5'],
+            ['summary_like', '点赞总结', '#c0a3ff'],
+            ['summary_share', '分享总结', '#5c6bc0'],
+            ['announce_pub', '发布公告', '#16a085'],
+            ['announce_cmt', '评论公告', '#48c9b0'],
+            ['announce_like', '点赞公告', '#4dd0c4']
+        ];
+    }
     async _loadStats(params) {
         var wrap = document.getElementById('wcStatsChart');
         var empty = document.getElementById('wcStatsEmpty');
@@ -305,11 +338,11 @@ class WorkCalendarApp {
         try {
             const d = await this.apiGet(WC_API + '/stats/?' + params);
             if (!d) return;
+            var defs = this._statsDefs();
             var total = 0;
-            (d.approvals || []).forEach(function (n) { total += n; });
-            (d.invoices || []).forEach(function (n) { total += n; });
-            (d.withdrawals || []).forEach(function (n) { total += n; });
-            (d.tasks || []).forEach(function (n) { total += n; });
+            defs.forEach(function (df) {
+                (d[df[0]] || []).forEach(function (n) { total += n; });
+            });
             if (total <= 0) {
                 wrap.style.display = 'none';
                 if (empty) empty.style.display = 'block';
@@ -319,19 +352,31 @@ class WorkCalendarApp {
             if (empty) empty.style.display = 'none';
             if (!window.echarts) { wrap.innerHTML = '<div style="text-align:center;color:#909399;padding:60px 0;">图表组件加载失败</div>'; return; }
             if (!this._statsChart) this._statsChart = echarts.init(wrap);
+            // 维度较多时用可滚动图例，默认只勾选核心四项，其余按需开启，避免折线重叠；
+            // 用户勾选状态跨时间范围切换保留
+            var defaultOn = {'审批': 1, '核验发票': 1, '支付提现': 1, '任务': 1};
+            var self = this;
+            if (!this._statsLegendSel) {
+                this._statsLegendSel = {};
+                defs.forEach(function (df) { self._statsLegendSel[df[1]] = !!defaultOn[df[1]]; });
+            }
+            var legendSelected = this._statsLegendSel;
+            this._statsChart.off('legendselectchanged');
+            this._statsChart.on('legendselectchanged', function (p) {
+                if (p && p.selected) self._statsLegendSel = p.selected;
+            });
             this._statsChart.setOption({
                 tooltip: {trigger: 'axis'},
-                legend: {data: ['审批', '核验发票', '支付提现', '任务'], textStyle: {color: '#909399'}},
-                grid: {left: 40, right: 16, top: 36, bottom: 28},
+                legend: {type: 'scroll', data: defs.map(function (df) { return df[1]; }), selected: legendSelected,
+                         textStyle: {color: '#909399'}, bottom: 0},
+                grid: {left: 40, right: 16, top: 36, bottom: 46},
                 xAxis: {type: 'category', data: d.labels || [], axisLabel: {color: '#909399'}},
                 yAxis: {type: 'value', minInterval: 1, axisLabel: {color: '#909399'}},
-                series: [
-                    {name: '审批', type: 'line', smooth: true, data: d.approvals, itemStyle: {color: '#409eff'}},
-                    {name: '核验发票', type: 'line', smooth: true, data: d.invoices, itemStyle: {color: '#e6a23c'}},
-                    {name: '支付提现', type: 'line', smooth: true, data: d.withdrawals, itemStyle: {color: '#16a085'}},
-                    {name: '任务', type: 'line', smooth: true, data: d.tasks, itemStyle: {color: '#f56c6c'}}
-                ]
-            });
+                series: defs.map(function (df) {
+                    return {name: df[1], type: 'line', smooth: true, symbol: 'none',
+                            data: d[df[0]] || [], itemStyle: {color: df[2]}};
+                })
+            }, true);
             this._statsChart.resize();
         } catch (e) {
             this.showToast('加载工作统计失败', true);
@@ -563,8 +608,10 @@ class WorkCalendarApp {
             ['summary_pub', '发总结', '#7c4dff'],
             ['summary_cmt', '评总结', '#a86df5'],
             ['summary_like', '赞总结', '#c0a3ff'],
+            ['summary_share', '享总结', '#5c6bc0'],
             ['announce_pub', '发公告', '#16a085'],
-            ['announce_cmt', '评公告', '#48c9b0']
+            ['announce_cmt', '评公告', '#48c9b0'],
+            ['announce_like', '赞公告', '#4dd0c4']
         ];
     }
     async _loadOrgActivity(params) {
@@ -1098,7 +1145,8 @@ class WorkCalendarApp {
         if (!m) { m = (d.members || [])[0] || null; }
         if (!m) { wrap.innerHTML = '<div style="text-align:center;color:#909399;font-size:13px;padding:80px 0;">暂无成员数据</div>'; return; }
         var a = act[String(m.id)] || {chat: 0, approval: 0, attendance: 0, task: 0, cloud: 0, doc: 0,
-                                      summary_pub: 0, summary_cmt: 0, summary_like: 0, announce_pub: 0, announce_cmt: 0};
+                                      summary_pub: 0, summary_cmt: 0, summary_like: 0, summary_share: 0,
+                                      announce_pub: 0, announce_cmt: 0, announce_like: 0};
         var types = this._ACT_TYPES();
         var values = types.map(function (t) { return a[t[0]] || 0; });
         var maxV = Math.max.apply(null, values.concat([1]));
@@ -1360,7 +1408,7 @@ class WorkCalendarApp {
             if (!d) return;
             const rows = document.getElementById('wcWeightRows');
             if (!rows) return;
-            const colors = ['#409eff', '#e6a23c', '#67c23a', '#f56c6c', '#00a1ff', '#9b59b6', '#7c4dff', '#a86df5', '#c0a3ff', '#16a085', '#48c9b0'];
+            const colors = ['#409eff', '#e6a23c', '#67c23a', '#f56c6c', '#00a1ff', '#9b59b6', '#7c4dff', '#a86df5', '#c0a3ff', '#5c6bc0', '#16a085', '#48c9b0', '#4dd0c4'];
             const self = this;
             rows.innerHTML = (d.types || []).map(function (t, i) {
                 const c = colors[i % colors.length];

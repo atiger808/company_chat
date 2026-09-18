@@ -546,11 +546,203 @@ class ApprovalReportViewSet(_AdminReportBase):
         fmt = (request.query_params.get('export_format') or 'xlsx').strip().lower()
         return self._export_file(request, kind, fmt)
 
+    # ==================== 审计复盘（超管 / 财务专员） ====================
+    def _can_audit(self, request):
+        """审计复盘权限：超级管理员 或 本企业启用的财务专员"""
+        u = request.user
+        if getattr(u, 'user_type', '') == 'super_admin':
+            return True
+        try:
+            from .models import FinanceSpecialist
+            tenant = self._tenant(request)
+            return FinanceSpecialist.objects.filter(tenant=tenant, user=u, is_active=True).exists()
+        except Exception:
+            return False
+
+    @staticmethod
+    def _period_key(d, period):
+        """把日期归到 月/季/年 的周期键与展示名"""
+        if period == 'year':
+            return '%04d' % d.year, '%d年' % d.year
+        if period == 'quarter':
+            q = (d.month - 1) // 3 + 1
+            return '%04dQ%d' % (d.year, q), '%d年Q%d' % (d.year, q)
+        return '%04d-%02d' % (d.year, d.month), '%d年%02d月' % (d.year, d.month)
+
+    def _audit_data(self, request):
+        """审计复盘聚合：期间汇总 + 按 月/季/年 的周期构成 + 审批类型构成 + 审计台账明细"""
+        start_d, end_d, start_dt, end_dt = self._parse_range(request)
+        period = (request.query_params.get('period') or 'month').strip().lower()
+        if period not in ('month', 'quarter', 'year'):
+            period = 'month'
+        qs = self._base_qs(request, start_dt, end_dt)
+        t = (request.query_params.get('type') or '').strip()
+        if t:
+            qs = qs.filter(approval_type=t)
+        # 归档筛选：审计复盘默认看全量（含已归档）；archived=1 只看已归档；archived=0 只看未归档
+        archived_filter = (request.query_params.get('archived') or '').strip().lower()
+        if archived_filter in ('1', 'true', 'yes', 'archived'):
+            qs = qs.filter(is_archived=True)
+        elif archived_filter in ('0', 'false', 'no'):
+            qs = qs.filter(is_archived=False)
+
+        STATUS_LABELS = dict(ApprovalRequest.STATUS_CHOICES)
+        type_names = self._type_names(request)
+
+        # —— 汇总 ——
+        total = qs.count()
+        status_counts = dict(qs.values_list('status').annotate(c=Count('id')))
+        approved_cnt = status_counts.get('approved', 0)
+        rejected_cnt = status_counts.get('rejected', 0)
+        approved_amount = _f(qs.filter(status='approved').aggregate(s=Sum('amount'))['s'])
+        total_amount = _f(qs.aggregate(s=Sum('amount'))['s'])
+        archived_cnt = qs.filter(is_archived=True).count()
+        decided = approved_cnt + rejected_cnt
+
+        # —— 周期构成（按月聚合后按 月/季/年 重新归并）——
+        month_rows = list(qs.annotate(m=TruncMonth('created_at')).values('m').annotate(
+            cnt=Count('id'), amount=Sum('amount')).order_by('m'))
+        month_appr = dict(qs.filter(status='approved').annotate(m=TruncMonth('created_at'))
+                          .values_list('m').annotate(c=Count('id')))
+        month_rej = dict(qs.filter(status='rejected').annotate(m=TruncMonth('created_at'))
+                         .values_list('m').annotate(c=Count('id')))
+        month_arch = dict(qs.filter(is_archived=True).annotate(m=TruncMonth('created_at'))
+                          .values_list('m').annotate(c=Count('id')))
+        periods = {}
+        for r in month_rows:
+            m = r['m']
+            if not m:
+                continue
+            key, label = self._period_key(m, period)
+            it = periods.setdefault(key, {'key': key, 'label': label, 'total': 0,
+                                          'amount': 0.0, 'approved': 0, 'rejected': 0, 'archived': 0})
+            it['total'] += r['cnt']
+            it['amount'] += _f(r['amount'])
+            it['approved'] += month_appr.get(m, 0)
+            it['rejected'] += month_rej.get(m, 0)
+            it['archived'] += month_arch.get(m, 0)
+        period_rows = [dict(v, amount=round(v['amount'], 2)) for v in periods.values()]
+
+        # —— 审批类型构成 ——
+        type_rows = []
+        for r in qs.values('approval_type').annotate(cnt=Count('id'), amount=Sum('amount')).order_by('-cnt'):
+            code = r['approval_type']
+            type_rows.append({
+                'code': code, 'name': type_names.get(code, code),
+                'total': r['cnt'], 'amount': round(_f(r['amount']), 2),
+                'approved': qs.filter(approval_type=code, status='approved').count(),
+                'rejected': qs.filter(approval_type=code, status='rejected').count(),
+                'archived': qs.filter(approval_type=code, is_archived=True).count(),
+            })
+
+        # —— 审计台账明细 ——
+        LEDGER_LIMIT = 1000
+        ledger = []
+        detail_qs = qs.select_related('applicant', 'department').prefetch_related('logs').order_by('-created_at')
+        for a in detail_qs[:LEDGER_LIMIT + 1]:
+            if len(ledger) >= LEDGER_LIMIT:
+                break
+            # 结束时间取「通过/驳回/撤回」最后一次记录，避免归档保存改动 updated_at 造成失真
+            done_at = None
+            for lg in a.logs.all():
+                if lg.action in ('approve', 'reject', 'cancel'):
+                    if done_at is None or lg.created_at > done_at:
+                        done_at = lg.created_at
+            minutes = round((done_at - a.created_at).total_seconds() / 60.0, 1) if done_at else None
+            ledger.append({
+                'id': a.id,
+                'type_code': a.approval_type,
+                'type_name': type_names.get(a.approval_type, a.approval_type),
+                'title': a.title,
+                'applicant': (a.applicant.real_name or a.applicant.username) if a.applicant else '',
+                'department': a.department.name if a.department else '',
+                'amount': _f(a.amount),
+                'status': a.status,
+                'status_label': STATUS_LABELS.get(a.status, a.status),
+                'created_at': timezone.localtime(a.created_at).strftime('%Y-%m-%d %H:%M') if a.created_at else '',
+                'finished_at': timezone.localtime(done_at).strftime('%Y-%m-%d %H:%M') if done_at else '',
+                'minutes': minutes,
+                'is_archived': bool(a.is_archived),
+                'archived_at': timezone.localtime(a.archived_at).strftime('%Y-%m-%d %H:%M') if a.archived_at else '',
+                'archive_note': a.archive_note or '',
+            })
+        return {
+            'range': {'start': start_d.isoformat(), 'end': end_d.isoformat()},
+            'period': period,
+            'period_label': {'month': '月度', 'quarter': '季度', 'year': '年度'}.get(period, '月度'),
+            'summary': {
+                'total': total,
+                'amount_total': round(total_amount, 2),
+                'approved': approved_cnt,
+                'rejected': rejected_cnt,
+                'approved_amount': round(approved_amount, 2),
+                'decided': decided,
+                'reject_rate': round(rejected_cnt / decided * 100, 2) if decided else 0,
+                'archived_count': archived_cnt,
+                'unarchived_count': total - archived_cnt,
+            },
+            'periods': period_rows,
+            'types': type_rows,
+            'ledger': ledger,
+            'ledger_limit': LEDGER_LIMIT,
+            'ledger_truncated': total > LEDGER_LIMIT,
+        }
+
+    @action(detail=False, methods=['get'])
+    def audit_summary(self, request):
+        """审计复盘：期间汇总 + 月度/季度/年度构成 + 审批类型构成 + 审计台账（超管/财务专员）
+        带 export_format=xlsx 时直接导出审计复盘 Excel（含台账明细）。"""
+        if not self._can_audit(request):
+            return Response({'error': '仅超级管理员或财务专员可查看审计复盘'}, status=403)
+        if (request.query_params.get('export_format') or '').strip().lower() in ('xlsx', 'pdf'):
+            return self._export_file(request, 'audit', request.query_params.get('export_format').strip().lower())
+        return Response({'encrypt': True, 'data': encrypt_data(self._audit_data(request))})
+
     def _export_file(self, request, kind, fmt):
-        """构建并返回报表文件（xlsx/pdf）：供 overview/business/export 复用"""
+        """构建并返回报表文件（xlsx/pdf）：供 overview/business/audit/export 复用"""
         start_d, end_d, _, _ = self._parse_range(request)
         extra = []
-        if kind == 'business':
+        if kind == 'audit':
+            data = self._audit_data(request)
+            s = data.get('summary', {})
+            title = 'OA审批-审计复盘（%s）' % data.get('period_label', '')
+            headers = ['统计项', '数值']
+            rows = [
+                ['统计区间', '%s ~ %s' % (start_d.isoformat(), end_d.isoformat())],
+                ['汇总粒度', data.get('period_label', '')],
+                ['审批总数', s.get('total', 0)],
+                ['金额合计(元)', s.get('amount_total', 0)],
+                ['已通过', s.get('approved', 0)],
+                ['已驳回', s.get('rejected', 0)],
+                ['已通过金额(元)', s.get('approved_amount', 0)],
+                ['驳回率(%)', s.get('reject_rate', 0)],
+                ['已归档', s.get('archived_count', 0)],
+                ['未归档', s.get('unarchived_count', 0)],
+            ]
+            # 第二张表：周期构成
+            p_rows = [[p.get('label', ''), p.get('total', 0), p.get('amount', 0),
+                       p.get('approved', 0), p.get('rejected', 0), p.get('archived', 0)]
+                      for p in data.get('periods', [])]
+            extra.append((('%s构成' % data.get('period_label', '周期'))[:28],
+                          ['周期', '笔数', '金额(元)', '已通过', '已驳回', '已归档'],
+                          p_rows, [18, 10, 14, 10, 10, 10]))
+            # 第三张表：审批类型构成
+            t_rows = [[t.get('name', ''), t.get('total', 0), t.get('amount', 0),
+                       t.get('approved', 0), t.get('rejected', 0), t.get('archived', 0)]
+                      for t in data.get('types', [])]
+            extra.append(('审批类型构成', ['审批类型', '笔数', '金额(元)', '已通过', '已驳回', '已归档'],
+                          t_rows, [20, 10, 14, 10, 10, 10]))
+            # 第四张表：审计台账明细
+            l_rows = [[x.get('id', ''), x.get('type_name', ''), x.get('title', ''),
+                       x.get('applicant', ''), x.get('department', ''), x.get('amount', 0),
+                       x.get('status_label', ''), x.get('created_at', ''), x.get('finished_at', ''),
+                       (x.get('minutes') if x.get('minutes') is not None else ''),
+                       ('已归档' if x.get('is_archived') else '未归档'), x.get('archived_at', '')]
+                      for x in data.get('ledger', [])]
+            extra.append(('审计台账', ['审批ID', '审批类型', '审批标题', '申请人', '所属部门', '金额(元)',
+                                       '状态', '提交时间', '结束时间', '耗时(分钟)', '归档状态', '归档时间'],
+                          l_rows, [10, 16, 26, 12, 16, 12, 10, 18, 18, 12, 10, 18]))
+        elif kind == 'business':
             data = self._business_data(request)
             title = 'OA审批-业务统计分析'
             headers = ['统计项', '数值']

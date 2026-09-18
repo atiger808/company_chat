@@ -130,6 +130,67 @@ class AnnouncementApp {
         }
     }
 
+    // 点赞按钮（列表卡片与详情共用；data-ann-like 便于局部同步状态）
+    _likeBtnHtml(a, big) {
+        var liked = !!a.liked_by_me;
+        var cnt = a.like_count || 0;
+        return '<button type="button" data-ann-like="' + a.id + '" onclick="event.stopPropagation();annApp.toggleLike(' + a.id + ')"'
+            + ' title="' + (liked ? '取消点赞' : '点赞') + '"'
+            + ' style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;border-radius:14px;'
+            + 'padding:' + (big ? '4px 14px' : '2px 10px') + ';font-size:' + (big ? '13px' : '11px') + ';'
+            + 'border:1px solid ' + (liked ? '#fbc4c4' : '#dcdfe6') + ';'
+            + 'background:' + (liked ? '#fdf0ef' : 'transparent') + ';'
+            + 'color:' + (liked ? '#f56c6c' : '#909399') + ';">'
+            + '<i class="' + (liked ? 'fas' : 'far') + ' fa-thumbs-up"></i> <span>' + cnt + '</span></button>';
+    }
+
+    // 点赞/取消点赞（同步更新列表与详情中的按钮，无需整页重渲染）
+    async toggleLike(id) {
+        var a = (this._list || []).filter(function (x) { return String(x.id) === String(id); })[0];
+        var liked = a ? !!a.liked_by_me
+            : !!(this._currentAnn && String(this._currentAnn.id) === String(id) && this._currentAnn.liked_by_me);
+        try {
+            var resp = await fetch(ANN_API + '/' + id + '/like/', {
+                method: liked ? 'DELETE' : 'POST',
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) {
+                var b = await resp.json().catch(function () { return {}; });
+                throw new Error(b.error || b.detail || '操作失败');
+            }
+            var raw = await resp.json();
+            var d = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+            if (!d) return;
+            if (a) { a.liked_by_me = !!d.liked; a.like_count = d.like_count || 0; }
+            if (this._currentAnn && String(this._currentAnn.id) === String(id)) {
+                this._currentAnn.liked_by_me = !!d.liked;
+                this._currentAnn.like_count = d.like_count || 0;
+            }
+            this._syncLikeUI(id);
+            this.showToast(d.liked ? '已点赞' : '已取消点赞', false);
+        } catch (e) {
+            this.showToast((e && e.message) || '操作失败', true);
+        }
+    }
+
+    _syncLikeUI(id) {
+        var a = (this._list || []).filter(function (x) { return String(x.id) === String(id); })[0];
+        var cur = (this._currentAnn && String(this._currentAnn.id) === String(id)) ? this._currentAnn : a;
+        if (!cur) return;
+        var liked = !!cur.liked_by_me;
+        document.querySelectorAll('[data-ann-like="' + id + '"]').forEach(function (btn) {
+            btn.classList.toggle('liked', liked);
+            btn.title = liked ? '取消点赞' : '点赞';
+            btn.style.borderColor = liked ? '#fbc4c4' : '#dcdfe6';
+            btn.style.background = liked ? '#fdf0ef' : 'transparent';
+            btn.style.color = liked ? '#f56c6c' : '#909399';
+            var i = btn.querySelector('i');
+            if (i) i.className = (liked ? 'fas' : 'far') + ' fa-thumbs-up';
+            var s = btn.querySelector('span');
+            if (s) s.textContent = cur.like_count || 0;
+        });
+    }
+
     _renderList() {
         var listEl = document.getElementById('annList');
         var self = this;
@@ -163,6 +224,7 @@ class AnnouncementApp {
                 + '<span><i class="fas fa-eye"></i> ' + (a.view_count || 0) + ' 浏览</span>'
                 + '<span><i class="fas fa-clock"></i> ' + self._escape(time) + '</span>'
                 + '<span><i class="fas fa-comment-dots"></i> ' + (a.comment_count || 0) + ' 条评论</span>'
+                + self._likeBtnHtml(a, false)
                 + '</div>'
                 + (contentText ? '<div class="ann-content-box">' + self._escape(contentText) + '</div>' : '')
                 + '</div>';
@@ -211,6 +273,82 @@ class AnnouncementApp {
 
     closeEditor() {
         var modal = document.getElementById('annEditModal');
+        if (modal) { modal.classList.remove('show'); setTimeout(function () { modal.style.display = 'none'; }, 150); }
+    }
+
+    // ==================== 预览（编辑时查看最终效果） ====================
+    openPreview() {
+        var title = (document.getElementById('annTitle').value || '').trim();
+        var content = document.getElementById('rteEditor').innerHTML || '';
+        if (!title && !content) {
+            this.showAlert('提示', '请先填写公告标题或内容');
+            return;
+        }
+        var self = this;
+        var scopeType = (document.querySelector('input[name="annScope"]:checked') || {}).value || 'all';
+        var scopeLabel = {all: '集团全员', sub_tenants: '指定子公司', departments: '指定部门', users: '指定成员'}[scopeType] || '集团全员';
+        var mode = (document.getElementById('annCommentMode').value || 'public');
+        var enableComments = document.getElementById('annEnableComments').checked;
+        var me = {};
+        try { me = JSON.parse(localStorage.getItem('current_user') || '{}') || {}; } catch (e) { me = {}; }
+        var meName = me.real_name || me.username || '我';
+        var meAvatar = me.avatar_url || '/static/images/default-avatar.png';
+        var now = new Date();
+        var timeStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0')
+            + ' ' + String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+        var scopeDetail = '';
+        if (scopeType === 'sub_tenants') {
+            var subs = [];
+            document.querySelectorAll('.ann-sub-cb:checked').forEach(function (c) {
+                var lab = c.closest('label');
+                subs.push(((lab && lab.textContent) || '').trim());
+            });
+            if (subs.length) scopeDetail = '（' + self._escape(subs.join('、')) + '）';
+        } else if (scopeType === 'departments') {
+            var depts = [];
+            document.querySelectorAll('.ann-dept-cb:checked').forEach(function (c) {
+                var lab = c.closest('label');
+                depts.push(((lab && lab.textContent) || '').trim());
+            });
+            if (depts.length) scopeDetail = '（' + self._escape(depts.join('、')) + '）';
+        } else if (scopeType === 'users') {
+            if ((this._scopeUsers || []).length) {
+                scopeDetail = '（' + self._escape(this._scopeUsers.map(function (u) { return u.name; }).join('、')) + '）';
+            }
+        }
+        var body = document.getElementById('annPreviewBody');
+        if (!body) return;
+        body.innerHTML =
+            '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+            + '<span class="ann-badge" style="background:#409eff;">预览效果</span>'
+            + '<span class="ann-badge" style="background:#7c4dff;">' + this._escape(scopeLabel) + scopeDetail + '</span>'
+            + '<span style="font-size:12px;color:#909399;">未发布，以下为发布后详情页的展示效果</span>'
+            + '</div>'
+            + '<div class="ann-detail-title" style="margin-top:10px;">' + this._escape(title || '（未填写标题）') + '</div>'
+            + '<div class="ann-detail-meta">'
+            + '<span><img src="' + this._escape(meAvatar) + '" style="width:22px;height:22px;border-radius:50%;vertical-align:middle;margin-right:4px;">' + this._escape(meName) + '</span>'
+            + '<span><i class="fas fa-eye"></i> 0 浏览</span>'
+            + '<span><i class="fas fa-clock"></i> ' + this._escape(timeStr) + '</span>'
+            + '<span><i class="fas fa-comment-dots"></i> 0 条评论</span>'
+            + '<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 14px;font-size:13px;border-radius:14px;border:1px solid #dcdfe6;color:#c0c4cc;"><i class="far fa-thumbs-up"></i> 0</span>'
+            + '</div>'
+            + '<div class="ann-detail-content" style="margin-bottom:16px;">' + (content || '<span style="color:#909399;">（未填写内容）</span>') + '</div>'
+            + '<div style="border-top:1px solid #ebeef5;padding-top:14px;">'
+            + '<div style="font-size:15px;font-weight:600;margin-bottom:10px;"><i class="fas fa-comment-dots" style="color:#7c4dff;"></i> 评论 <span style="font-size:12px;color:#909399;font-weight:400;">(0)</span></div>'
+            + '<div style="color:#909399;font-size:12px;">暂无评论</div>'
+            + '<div style="margin-top:12px;color:#909399;font-size:12px;">'
+            + (enableComments
+                ? '发布后范围内成员可评论（评论方式：' + (mode === 'anonymous' ? '匿名，仅本人与发布人可见' : '公开，范围成员可见') + '）'
+                : '该公告未开启评论')
+            + '</div></div>';
+        var modal = document.getElementById('annPreviewModal');
+        if (modal) {
+            modal.style.display = 'flex';
+            setTimeout(function () { modal.classList.add('show'); }, 10);
+        }
+    }
+    closePreview() {
+        var modal = document.getElementById('annPreviewModal');
         if (modal) { modal.classList.remove('show'); setTimeout(function () { modal.style.display = 'none'; }, 150); }
     }
 
@@ -417,6 +555,7 @@ class AnnouncementApp {
                 + '<span><i class="fas fa-eye"></i> ' + (a.view_count || 0) + ' 浏览</span>'
                 + '<span><i class="fas fa-clock"></i> ' + this._escape(time) + '</span>'
                 + '<span><i class="fas fa-comment-dots"></i> ' + (a.comment_count || 0) + ' 条评论</span>'
+                + '<span>' + this._likeBtnHtml(a, true) + '</span>'
                 + '</div>'
                 + '<div class="ann-detail-content" style="margin-bottom:16px;">' + (a.content || '') + '</div>'
                 + '<div style="border-top:1px solid #ebeef5;padding-top:14px;">'
@@ -549,9 +688,13 @@ class AnnouncementApp {
             wrap.innerHTML = '<div style="color:#909399;font-size:12px;padding:10px 0;">暂无评论</div>';
             return;
         }
+        // 按评论时间倒序：最新评论在最上面（一级评论与二级回复均倒序）
+        var sorted = (list || []).slice().sort(function (x, y) {
+            return String(y.created_at || '').localeCompare(String(x.created_at || ''));
+        });
         // 一级评论 + 二级回复（按 parent 分组）
         var top = [], children = {};
-        list.forEach(function (c) {
+        sorted.forEach(function (c) {
             if (c.parent) { (children[c.parent] = children[c.parent] || []).push(c); }
             else top.push(c);
         });

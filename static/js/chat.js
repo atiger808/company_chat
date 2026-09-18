@@ -11,6 +11,44 @@ class VersionManager {
         this.isChecking = false;
         this.updateBanner = null;
         this.updateBannerTimeout = 2 * 60 * 1000 // 2分钟后自动关闭
+        // 「稍后更新」的提醒间隔
+        this.updateLaterDelay = 10 * 60 * 1000;
+        // 更新提示的用户选择（localStorage，跨会话）：{dismissed_version, snooze_until}
+        this.UPDATE_PREF_KEY = 'update_prompt_prefs';
+    }
+
+    // ================= 更新提示的用户选择 =================
+    // 「不再提示」→ dismissed_version（该版本永久忽略，服务端发布新版本后自动恢复提示）
+    // 「稍后更新」→ snooze_until（静默到某个时间点）
+    // 「关闭」    → sessionStorage 记本次打开页面期间不再提示（刷新页面后若仍未更新会再出现）
+    _updatePrefs() {
+        try {
+            return JSON.parse(localStorage.getItem(this.UPDATE_PREF_KEY) || '{}') || {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    _saveUpdatePrefs(patch) {
+        try {
+            localStorage.setItem(this.UPDATE_PREF_KEY, JSON.stringify(Object.assign(this._updatePrefs(), patch)));
+        } catch (e) {
+            console.warn('保存更新提示偏好失败:', e);
+        }
+    }
+
+    _markClosedThisSession(version) {
+        try {
+            sessionStorage.setItem('update_closed_version', version || '');
+        } catch (e) { /* 忽略 */ }
+    }
+
+    _closedThisSession(version) {
+        try {
+            return !!version && sessionStorage.getItem('update_closed_version') === version;
+        } catch (e) {
+            return false;
+        }
     }
 
     // 获取存储的版本信息
@@ -130,6 +168,23 @@ class VersionManager {
             });
 
             if (hasUpdate) {
+                const serverVer = serverVersion.static_version || serverVersion.app_version || '';
+                const prefs = this._updatePrefs();
+
+                // 用户点过「不再提示」：该版本不再提示（服务端发布新版本后自动恢复提示）
+                if (prefs.dismissed_version && prefs.dismissed_version === serverVer) {
+                    this.saveVersionInfo(serverVersion);
+                    return null;
+                }
+                // 用户点过「稍后更新」：静默期内不再提示（静默期结束后恢复提示）
+                if (prefs.snooze_until && Date.now() < prefs.snooze_until) {
+                    return null;
+                }
+                // 用户点过「关闭」：本次打开页面期间不再提示（刷新页面后若仍未更新会再提示）
+                if (this._closedThisSession(serverVer)) {
+                    return null;
+                }
+
                 const updateInfo = {
                     hasUpdate: true,
                     staticUpdated: staticDiff > 0,
@@ -140,9 +195,9 @@ class VersionManager {
                     updateMessage: serverVersion.update_message || '发现新版本，建议更新以获得最佳体验'
                 };
 
-                // 保存最新版本信息
-                this.saveVersionInfo(serverVersion);
-
+                // ⚠️ 这里不能保存服务端版本号：一旦保存，下次比较就没有差异了，
+                //    「稍后更新 / 关闭」之后再也不会提示（旧实现在这里保存，导致「稍后更新」形同虚设）。
+                //    真正执行更新（performUpdate）或检测到无更新时才会同步版本号。
                 return updateInfo;
             }
 
@@ -173,63 +228,88 @@ class VersionManager {
         const isCritical = updateInfo.forceUpdate || updateInfo.appUpdated;
         this.updateBanner.classList.add(isCritical ? 'critical' : 'minor');
 
-        // 🔧 版本更新日志折叠：默认只显示前 2 条，其余收起，点击「查看全部/收起」展开/折叠
+        // 🔧 版本更新日志折叠：默认只显示前 2 条，其余收起，点击「查看全部/收起」展开/折叠。
+        // 🔧 预览的每一行还要截断：日志是「一行一个段落」（动辄几百字），原样塞进横幅会把横幅撑得
+        //    比屏幕还高，把后面的「版本 / 更新时间 / 立即更新按钮」顶出视口（fixed 元素超出的部分
+        //    无法靠页面滚动看到 → 用户点不到按钮）。完整内容仍在「查看全部更新日志」里可看。
+        const PREVIEW_LINE_COUNT = 2;
+        const PREVIEW_MAX_CHARS = 80;
+        const clipText = (s) => (s.length > PREVIEW_MAX_CHARS ? s.slice(0, PREVIEW_MAX_CHARS) + '…' : s);
         const logLines = String(updateInfo.updateMessage || '').split('<br>').map(l => l.trim()).filter(Boolean);
-        const previewLines = logLines.slice(0, 2);
-        const moreLines = logLines.slice(2);
-        let descHtml = '<div class="update-desc">' + (previewLines.join('<br>') || (updateInfo.updateMessage || '')) + '</div>';
+        const previewLines = logLines.slice(0, PREVIEW_LINE_COUNT).map(clipText);
+        const moreLines = logLines.slice(PREVIEW_LINE_COUNT);
+        let descHtml = '<div class="update-desc">'
+            + (previewLines.join('<br>') || '发现新版本，建议更新以获得最佳体验') + '</div>';
         if (moreLines.length) {
             descHtml += '<button class="update-log-toggle" id="updateLogToggle"><i class="fas fa-chevron-down"></i> 查看全部更新日志 (' + logLines.length + ')</button>'
                 + '<div class="update-log-full" id="updateLogFull" style="display:none;">' + moreLines.join('<br>') + '</div>';
         }
 
-        // 构建提示内容
+        // 版本信息做兜底：即使接口少了 latest / 字段缺失，也只是少显示一行，
+        // 不能让模板字符串抛错（一抛错整个横幅都不会渲染出来，用户彻底没法更新）
+        const latest = updateInfo.latest || {};
+        const latestVersion = latest.static_version || latest.app_version || '未知';
+        const buildTime = latest.build_time || '';
+
+        // 构建提示内容。
+        // ⚠️ 布局要点：把「版本 / 更新时间 / 操作按钮」全部放在**第一行（头部）**，更新说明放在
+        //    下面的正文区（限高可滚动）。这样无论更新日志多长，按钮都不可能被顶到屏幕外
+        //    （之前把按钮排在长文本之后，内容一长按钮就看不见、点不到；即使样式没加载出来，
+        //     按这个 DOM 顺序按钮也排在长文本之前，依然可见）。
         let content = `
             <div class="update-content">
-                <div class="update-icon">
-                    <i class="fas fa-${isCritical ? 'exclamation-triangle' : 'sync-alt'}"></i>
-                </div>
-                <div class="update-text">
-                    <div class="update-title">
-                        ${isCritical ? '重要更新' : '发现新版本'}
+                <div class="update-head">
+                    <div class="update-icon">
+                        <i class="fas fa-${isCritical ? 'exclamation-triangle' : 'sync-alt'}"></i>
                     </div>
-                    ${descHtml}
-                    ${updateInfo.latest.build_time ? `
-                    <div class="update-time">
-                        <small>版本: ${updateInfo.latest.static_version}</small>
-                        <small>更新时间: ${updateInfo.latest.build_time}</small>
+                    <div class="update-title-wrap">
+                        <div class="update-title">
+                            ${isCritical ? '重要更新' : '发现新版本'}
+                        </div>
+                        <div class="update-time">
+                            <small>版本: ${latestVersion}</small>
+                            ${buildTime ? `<small>更新时间: ${buildTime}</small>` : ''}
+                        </div>
                     </div>
-                    ` : ''}
-                </div>
-                <div class="update-actions">
+                    <div class="update-actions">
         `;
 
         if (isCritical) {
-            // 强制更新：只有"立即更新"按钮
+            // 强制更新：只给「立即更新」（5 秒后还会自动更新，不给忽略入口）
             content += `
-                <button class="update-btn critical" id="updateNowBtn">
+                <button class="update-btn critical" id="updateNowBtn" title="立即刷新并清除缓存">
                     <i class="fas fa-redo"></i> 立即更新
                 </button>
             `;
         } else {
-            // 静默更新：提供"稍后更新"选项
+            // 普通更新：立即更新 / 稍后更新 / 不再提示 / 关闭（右上角 ×）
             content += `
-                <button class="update-btn minor" id="updateNowBtn">
+                <button class="update-btn minor" id="updateNowBtn" title="立即刷新并清除缓存">
                     <i class="fas fa-redo"></i> 立即更新
                 </button>
-                <button class="update-btn later" id="updateLaterBtn">
-                    稍后
+                <button class="update-btn later" id="updateLaterBtn" title="10 分钟后再提醒我">
+                    <i class="far fa-clock"></i> 稍后更新
+                </button>
+                <button class="update-btn never" id="updateNeverBtn" title="本版本不再提示（发布新版本后会重新提示）">
+                    <i class="fas fa-ban"></i> 不再提示
                 </button>
             `;
         }
 
         content += `
+                    </div>
+                    <button class="update-close" id="updateCloseBtn" title="关闭（本次打开页面期间不再提示）">
+                        <i class="fas fa-times"></i>
+                    </button>
                 </div>
-                <button class="update-close" id="updateCloseBtn">
-                    <i class="fas fa-times"></i>
-                </button>
+                <div class="update-body">
+                    ${descHtml}
+                </div>
             </div>
         `;
+
+        // 记住这次提示的是哪个版本：关闭/稍后/不再提示时要按版本号记录用户的选择
+        this._lastUpdateVersion = latestVersion === '未知' ? '' : latestVersion;
 
         this.updateBanner.innerHTML = content;
         document.body.appendChild(this.updateBanner);
@@ -248,32 +328,44 @@ class VersionManager {
             };
         }
 
-        // 绑定事件
-        document.getElementById('updateNowBtn').onclick = () => {
-            this.performUpdate(updateInfo);
-        };
+        // 绑定事件（取到元素再绑，避免个别情况下取不到元素抛错、导致横幅上的按钮全部失效）
+        const nowBtn = document.getElementById('updateNowBtn');
+        if (nowBtn) {
+            nowBtn.onclick = () => {
+                this.performUpdate(updateInfo);
+            };
+        } else {
+            console.warn('⚠️ 未找到「立即更新」按钮，版本更新横幅无法交互');
+        }
 
         const closeBtn = document.getElementById('updateCloseBtn');
         if (closeBtn) {
             closeBtn.onclick = () => {
-                this.dismissUpdatePrompt(false);
+                this.dismissUpdatePrompt('close');
             };
         }
 
         const laterBtn = document.getElementById('updateLaterBtn');
         if (laterBtn) {
             laterBtn.onclick = () => {
-                this.dismissUpdatePrompt(true);
+                this.dismissUpdatePrompt('later');
             };
         }
 
-        // 自动隐藏（非强制更新）
+        const neverBtn = document.getElementById('updateNeverBtn');
+        if (neverBtn) {
+            neverBtn.onclick = () => {
+                this.dismissUpdatePrompt('never');
+            };
+        }
+
+        // 自动隐藏（非强制更新）：超过设定时间没人操作就收起，本次打开页面期间不再打扰
         if (!isCritical) {
             setTimeout(() => {
                 if (this.updateBanner && this.updateBanner.parentNode) {
-                    this.dismissUpdatePrompt(true);
+                    this.dismissUpdatePrompt('close');
                 }
-            }, this.updateBannerTimeout); // 30秒后自动隐藏
+            }, this.updateBannerTimeout);
         }
 
         // 强制更新：5秒后自动刷新
@@ -285,7 +377,29 @@ class VersionManager {
     }
 
     // 消除更新提示
-    dismissUpdatePrompt(remindLater = false) {
+    // mode:
+    //   'close' 关闭       —— 本次打开页面期间不再提示（刷新页面后若仍未更新会再提示）
+    //   'later' 稍后更新   —— 静默 10 分钟，到点后再次检查并提示
+    //   'never' 不再提示   —— 该版本不再提示（服务端发布新版本后自动恢复提示）
+    dismissUpdatePrompt(mode) {
+        // 兼容旧的布尔调用（true=稍后，false=关闭）
+        if (mode === true) mode = 'later';
+        else if (mode === false) mode = 'close';
+        mode = mode || 'close';
+
+        const version = this._lastUpdateVersion || '';
+        if (version) {
+            if (mode === 'never') {
+                this._saveUpdatePrefs({dismissed_version: version, snooze_until: 0});
+                console.log('已选择「不再提示」的版本:', version);
+            } else if (mode === 'later') {
+                this._saveUpdatePrefs({snooze_until: Date.now() + this.updateLaterDelay});
+                console.log('已选择「稍后更新」，' + (this.updateLaterDelay / 60000) + ' 分钟后再提醒');
+            } else {
+                this._markClosedThisSession(version);
+            }
+        }
+
         if (!this.updateBanner || !this.updateBanner.parentNode) return;
 
         this.updateBanner.classList.add('fade-out');
@@ -296,22 +410,32 @@ class VersionManager {
             }
         }, 300);
 
-        // 稍后提醒：10分钟后再次检查
-        if (remindLater) {
-            console.log('稍后提醒：10分钟后再次检查');
+        // 稍后提醒：到点后再检查一次
+        if (mode === 'later') {
             setTimeout(() => {
                 this.checkForUpdates(true).then(updateInfo => {
                     if (updateInfo && updateInfo.hasUpdate) {
                         this.showUpdatePrompt(updateInfo);
                     }
                 });
-            }, 10 * 60 * 1000);
+            }, this.updateLaterDelay);
         }
+    }
+
+    // 清除「不再提示 / 稍后更新」的记录（用户实际更新过、或版本已同步时调用）
+    clearUpdatePrefs() {
+        try {
+            localStorage.removeItem(this.UPDATE_PREF_KEY);
+            sessionStorage.removeItem('update_closed_version');
+        } catch (e) { /* 忽略 */ }
     }
 
 
     // 执行更新（清除所有缓存层）
     performUpdate(updateInfo) {
+        // 用户主动更新：清掉「稍后更新 / 不再提示」等提示偏好
+        this.clearUpdatePrefs();
+
         // 1. 清除 Service Worker
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(registrations => {
@@ -3220,9 +3344,9 @@ class ChatClient {
                  onclick="window.open('/oa/approval/?approval_id=${data.approval_id}', '_blank')"
                  style="max-width: 320px; padding: 0; overflow: hidden; border-radius: 8px; border: 1px solid #e4e7ed; background: #fff; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); cursor: pointer; transition: all 0.3s;">
                 <!-- 卡片头部 -->
-                <div style="padding: 12px 16px; gap: 8px; background: linear-gradient(135deg, #eef6ff 0%, #dbeafe 100%); border-bottom: 1px solid #e4e7ed; display: flex; justify-content: space-between; align-items: center;">
+                <div style="padding: 12px 16px; gap: 8px; background: linear-gradient(135deg, ${data.mention ? '#fff7e6 0%, #ffedd6 100%' : '#eef6ff 0%, #dbeafe 100%'}); border-bottom: 1px solid #e4e7ed; display: flex; justify-content: space-between; align-items: center;">
                     <span style="font-weight: 600; color: #303133; font-size: 14px; display: flex; align-items: center; gap: 6px;">
-                        <i class="fas fa-clipboard-check" style="color: var(--primary-color, #409eff);"></i> ${typeName ? typeName + ' ' : ''}审批卡片
+                        <i class="fas ${data.mention ? 'fa-at' : 'fa-clipboard-check'}" style="color: ${data.mention ? '#e6a23c' : 'var(--primary-color, #409eff)'};"></i> ${data.mention ? this.escapeHtml(data.sender_name || '') + ' 在审批中提及了您' : (typeName ? typeName + ' ' : '') + '审批卡片'}
                     </span>
                     <span style="font-size: 10px; padding: 4px 8px; border-radius: 10px; color: #fff; background: ${statusColor}; white-space: nowrap;">${statusText}</span>
                 </div>
@@ -3233,6 +3357,10 @@ class ChatClient {
                         <span title="发起人"><i class="fas fa-user-circle" style="width: 14px;"></i> ${applicant}</span>
                         ${amount ? `<span title="金额"><i class="fas fa-yen-sign" style="width: 14px;"></i> ${amount}</span>` : ''}
                     </div>
+                    ${data.mention && data.mention_comment ? `
+                    <div style="margin-top: 10px; padding: 8px 10px; background: #fdf6ec; border-left: 3px solid #e6a23c; border-radius: 4px; font-size: 12px; color: #8a6d3b; line-height: 1.5; word-break: break-all;">
+                        <i class="fas fa-comment-dots" style="margin-right: 4px;"></i>审批意见：${this.escapeHtml(data.mention_comment)}
+                    </div>` : ''}
                 </div>
                 <!-- 卡片底部 -->
                 <div style="padding: 8px 16px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;">
@@ -3611,6 +3739,9 @@ class ChatClient {
             if (c.indexOf('{') === 0) {
                 try {
                     const d = JSON.parse(c);
+                    if (d.mention) {
+                        return '📢 ' + (d.sender_name || '') + ' 在审批中提及了您：' + (d.title || '');
+                    }
                     return '📨 ' + (d.applicant_name || '') + ' 的审批' + (d.title ? '：' + d.title : '');
                 } catch (e) {}
             }

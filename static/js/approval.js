@@ -182,10 +182,9 @@ class ApprovalApp {
                 }
                 var realAdmin = (me.user_type === 'super_admin' || me.user_type === 'admin');
                 console.log('realAdmin::', realAdmin);
-                if (realAdmin !== isAdmin) {
-                    isAdmin = realAdmin;
-                    this._applyAdminButtons(isAdmin);
-                }
+                // 一律按接口返回的真实角色刷新（超管专属入口依赖 user_type，缓存可能过期）
+                isAdmin = realAdmin;
+                this._applyAdminButtons(isAdmin);
             }
         } catch (e) {
             console.warn('获取当前用户失败，使用本地 user_type:', isAdmin ? '管理员' : '非管理员');
@@ -221,6 +220,11 @@ class ApprovalApp {
         if (svcWrap) svcWrap.style.display = isAdmin ? 'inline-flex' : 'none';
         var matWrap = document.getElementById('materialEntryWrap');
         if (matWrap) matWrap.style.display = isAdmin ? 'none' : '';
+        // 审批生命周期期限配置仅超级管理员可见（归档/撤回/草稿保留天数）
+        var lcItem = document.getElementById('approvalLifecycleNavItem');
+        if (lcItem) {
+            lcItem.style.display = localStorage.getItem('user_type') === 'super_admin' ? '' : 'none';
+        }
     }
 
     // 内置类型兜底（接口异常时保证类型筛选/选择仍可用）
@@ -330,7 +334,7 @@ class ApprovalApp {
         const container = document.getElementById('approvalTypeSelector');
         if (!container) return;
         container.innerHTML = (this._approvalTypes || []).map(t => {
-            return '<div class="type-card" data-type="' + this._escape(t.code) + '" onclick="approvalApp.selectType(\'' + this._escape(t.code) + '\')">'
+            return '<div class="type-card" data-type="' + this._escape(t.code) + '" onclick="approvalApp.selectType(\'' + this._escape(t.code) + '\', {userSwitch:true})">'
                 + '<div class="type-card-icon" style="background:' + this._hexA(t.color, 0.14) + ';color:' + this._escape(t.color) + ';"><i class="fas ' + this._escape(t.icon || 'fa-file-lines') + '"></i></div>'
                 + '<div class="type-card-label">' + this._escape(t.name) + '</div>'
                 + '</div>';
@@ -461,7 +465,7 @@ class ApprovalApp {
                         + '<div class="dyn-attach-list" id="dynAttach_' + self._escape(key) + '" style="width:100%;"></div></div>';
                     break;
                 case 'invoice':
-                    html += self._invoiceBlockHtml(key, { canOperate: self._isInvoiceOperator(null) });
+                    html += self._invoiceBlockHtml(key, { canOperate: self._isInvoiceOperator(null), max: self._currentInvoiceMax || 10 });
                     break;
                 case 'department':
                     html += '<select class="form-select" data-k="' + self._escape(key) + '" id="dynDept_' + self._escape(key) + '"><option value="">请选择部门</option></select>';
@@ -603,6 +607,9 @@ class ApprovalApp {
         const rowsEl = tbl.querySelector('.dyn-struct-rows');
         if (!rowsEl || !columns || !columns.length) return;
         row = row || {};
+        // 含「单价 + 数量」的明细（物资需求/领用/入库）逐行显示产品金额 = 数量 × 单价
+        const hasLineAmount = columns.some(function (c) { return c.key === 'price'; })
+            && columns.some(function (c) { return c.key === 'quantity'; });
         const wrap = document.createElement('div');
         wrap.className = 'dyn-struct-row';
         wrap.innerHTML = '<div class="dyn-struct-fields">'
@@ -630,6 +637,9 @@ class ApprovalApp {
                     + '</div>';
             }).join('')
             + '</div>'
+            + (hasLineAmount
+                ? '<div class="dyn-struct-line-amount" style="margin-top:4px;font-size:12px;color:#e6a23c;text-align:right;"></div>'
+                : '')
             + (readonly ? '' : '<button type="button" class="dyn-struct-del" title="删除此行" onclick="approvalApp._removeDynStructRow(this)"><i class="fas fa-times"></i></button>');
         rowsEl.appendChild(wrap);
         // 物品名称列：挂接物品库联想（只读明细不挂接）
@@ -712,11 +722,17 @@ class ApprovalApp {
                 const priceCol = cols.find(function (c) { return c.key === 'price' && (c.type === 'amount' || c.type === 'number'); });
                 const qtyCol = cols.find(function (c) { return c.key === 'quantity' && (c.type === 'number' || c.type === 'amount'); });
                 if (priceCol && qtyCol) {
-                    // 物资明细：预估金额 = Σ(单价 × 数量)
+                    // 物资明细：产品金额 = Σ(数量 × 单价)，并逐行展示该行产品金额
                     tbl.querySelectorAll('.dyn-struct-row').forEach(function (row) {
-                        const p = parseFloat(row.querySelector('.dyn-struct-input[data-c="price"]').value) || 0;
-                        const q = parseFloat(row.querySelector('.dyn-struct-input[data-c="quantity"]').value) || 0;
-                        totalSum += p * q;
+                        const p = parseFloat((row.querySelector('.dyn-struct-input[data-c="price"]') || {}).value) || 0;
+                        const q = parseFloat((row.querySelector('.dyn-struct-input[data-c="quantity"]') || {}).value) || 0;
+                        const lineTotal = p * q;
+                        totalSum += lineTotal;
+                        const out = row.querySelector('.dyn-struct-line-amount');
+                        if (out) {
+                            const show = (p > 0 || q > 0);
+                            out.textContent = show ? ('产品金额 ¥' + lineTotal.toFixed(2)) : '';
+                        }
                     });
                     return;
                 }
@@ -728,13 +744,16 @@ class ApprovalApp {
                     });
                 });
             });
-            // 若 schema 存在顶层「金额/合计」数字字段，自动写入合计值
+            // 若 schema 存在顶层「金额/合计/实际金额」数字字段，自动写入合计值
+            // （物资入库单的顶层字段是「实际金额」actual_amount：入库数量 × 入库单价 自动汇总）
             const amountField = schema.find(function (f) {
-                return (f.key === 'amount' || f.key === 'total' || f.key === 'total_amount')
+                return (f.key === 'amount' || f.key === 'total' || f.key === 'total_amount'
+                        || f.key === 'actual_amount')
                     && (f.type === 'amount' || f.type === 'number');
             });
             if (amountField) {
                 const el = document.querySelector('input[data-k="' + amountField.key + '"]');
+                // 只读字段（如领用单的「产品金额」是 disabled）同样要写入，取值仍会随表单收集
                 if (el) el.value = totalSum > 0 ? totalSum.toFixed(2) : '';
             }
         }
@@ -1265,12 +1284,18 @@ class ApprovalApp {
         const self = this;
         let html = '<div class="detail-item full-width" style="border:1px solid #e8d5f5;border-radius:8px;padding:12px;background:#faf7ff;margin-top:8px;">'
             + '<div style="font-size:14px;font-weight:600;color:#9b59b6;margin-bottom:8px;border-bottom:1px solid #e8d5f5;padding-bottom:6px;"><i class="fas fa-clipboard-list"></i> 表单详情</div>'
-            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;">';
+            + '<div class="dyn-detail-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;">';
+        this._ensureInvoiceStyles();
+        // 这些字段的内容本身很宽（发票卡片 / 附件 / 明细表）→ 必须整行显示，
+        // 否则会被两列布局挤成窄条，手机上更难看
+        const WIDE_FIELD_TYPES = ['invoice', 'attachment', 'struct_table'];
         schema.forEach(f => {
             const key = f.key;
+            const wide = WIDE_FIELD_TYPES.indexOf(f.type) >= 0;
+            const rowOpen = '<div class="dyn-detail-row"' + (wide ? ' style="grid-column:1/-1;"' : '') + '>';
             // 后端已解析好的可读值（如部门名称）优先
             if (display[key] !== undefined && display[key] !== null && display[key] !== '') {
-                html += '<div><strong>' + self._escape(f.label || key) + '：</strong>' + self._escape(String(display[key])) + '</div>';
+                html += rowOpen + '<strong>' + self._escape(f.label || key) + '：</strong>' + self._escape(String(display[key])) + '</div>';
                 return;
             }
             let v = (form_data || {})[key];
@@ -1303,7 +1328,7 @@ class ApprovalApp {
                 var _invKey = '__dyn_inv_' + f.key + '_' + (self._invDetailSeq = (self._invDetailSeq || 0) + 1);
                 self._setInvoiceList(_invKey, v);
                 var _canOp = self._isInvoiceOperator(self._detailApproval);
-                v = '<div style="grid-column:1/-1;">' + v.map(function (inv, i) {
+                v = '<div class="inv-detail-wrap">' + v.map(function (inv, i) {
                     return self._invoiceCardHtml(_invKey, inv, i, { readonly: true, canOperate: _canOp });
                 }).join('') + '</div>';
             } else if (f.type === 'user' && Array.isArray(v)) {
@@ -1365,7 +1390,7 @@ class ApprovalApp {
             } else if (typeof v === 'object') {
                 v = JSON.stringify(v);
             }
-            html += '<div><strong>' + self._escape(f.label || key) + '：</strong>' + v + '</div>';
+            html += rowOpen + '<strong>' + self._escape(f.label || key) + '：</strong>' + v + '</div>';
         });
         html += '</div></div>';
         return html;
@@ -1435,11 +1460,19 @@ class ApprovalApp {
                 var tag = t.is_builtin
                     ? '<span style="font-size:11px;color:#909399;background:#f0f2f5;border-radius:4px;padding:1px 6px;flex-shrink:0;">内置</span>'
                     : '<span class="tm-fields">' + (t.form_schema || []).length + ' 字段</span>';
+                // 启用/禁用审批类型：仅超级管理员可操作，其他用户只看到状态（不可点）
+                var isSuper = false;
+                try { isSuper = (localStorage.getItem('user_type') === 'super_admin'); } catch (e) { /* ignore */ }
+                var enableHtml = isSuper
+                    ? '<label class="oa-switch" onclick="event.stopPropagation()" title="打开后该类型在新建审批和顶部筛选中显示"><input type="checkbox"' + (t.enabled ? ' checked' : '') + ' onchange="approvalApp._toggleTypeEnabled(' + t.id + ', this.checked)"><span class="oa-switch-slider"></span></label>'
+                    : '<span title="仅超级管理员可启用/禁用审批类型" style="font-size:11px;border-radius:4px;padding:1px 6px;flex-shrink:0;'
+                      + (t.enabled ? 'color:#67c23a;background:#f0f9eb;' : 'color:#909399;background:#f0f2f5;') + '">'
+                      + (t.enabled ? '已启用' : '已禁用') + '</span>';
                 return '<div class="config-list-item' + active + '" data-id="' + t.id + '" onclick="approvalApp._editTypeManage(' + t.id + ')">'
                     + '<i class="fas ' + (t.icon || 'fa-file-lines') + '" style="color:' + t.color + ';width:16px;text-align:center;"></i>'
                     + '<span style="flex:1;">' + this._escape(t.name) + '</span>'
                     + tag
-                    + '<label class="oa-switch" onclick="event.stopPropagation()" title="打开后该类型在新建审批和顶部筛选中显示"><input type="checkbox"' + (t.enabled ? ' checked' : '') + ' onchange="approvalApp._toggleTypeEnabled(' + t.id + ', this.checked)"><span class="oa-switch-slider"></span></label>'
+                    + enableHtml
                     + '</div>';
             }, this).join('') || '<div style="padding:12px;color:#909399;font-size:13px;">暂无审批类型</div>';
         } catch (e) {
@@ -1550,8 +1583,9 @@ class ApprovalApp {
             + '<div><label style="font-size:12px;">颜色</label><input type="color" id="tmColor" value="' + this._escape(type.color || '#409EFF') + '"' + locked + ' style="height:34px;width:100%;border:none;"></div>'
             + '<div style="display:flex;align-items:flex-end;padding-bottom:6px;gap:6px;">'
             + '<label style="font-size:12px;white-space:nowrap;">启用开关</label>'
-            + '<label class="oa-switch" title="打开后该类型在新建审批和顶部筛选中显示"><input type="checkbox" id="tmEnabled"' + (type.enabled !== false ? ' checked' : '') + ' onchange="approvalApp._updateTypeEnabledLabel()"><span class="oa-switch-slider"></span></label>'
-            + '<span id="tmEnabledLabel" style="font-size:12px;white-space:nowrap;color:' + (type.enabled !== false ? '#67c23a' : '#909399') + ';">' + (type.enabled !== false ? '启用' : '禁用') + '</span>'
+            // 启用/禁用审批类型仅超级管理员可操作：其他用户此处只读展示状态
+            + '<label class="oa-switch"' + (this._isSuperAdmin() ? '' : ' style="display:none;"') + ' title="打开后该类型在新建审批和顶部筛选中显示"><input type="checkbox" id="tmEnabled"' + (type.enabled !== false ? ' checked' : '') + ' onchange="approvalApp._updateTypeEnabledLabel()"><span class="oa-switch-slider"></span></label>'
+            + '<span id="tmEnabledLabel" style="font-size:12px;white-space:nowrap;color:' + (type.enabled !== false ? '#67c23a' : '#909399') + ';">' + (type.enabled !== false ? '启用' : '禁用') + (this._isSuperAdmin() ? '' : '（仅超管可改）') + '</span>'
             + '</div>'
             + '</div>'
             + '<div class="form-group" style="margin-bottom:10px;"><label style="font-size:12px;">说明</label><input type="text" id="tmDesc" class="form-input" value="' + this._escape(type.description || '') + '"' + locked + '></div>'
@@ -1560,7 +1594,7 @@ class ApprovalApp {
             + '<button type="button" class="btn btn-sm btn-secondary" onclick="approvalApp._addSchemaField()"' + locked + '><i class="fas fa-plus"></i> 添加字段</button></div>'
             + '<div id="tmSchemaFields">' + fieldRows + '</div>'
             + '<div style="display:flex;justify-content:space-between;margin-top:12px;">'
-            + (type.is_builtin ? '' : '<button type="button" class="btn btn-danger" onclick="approvalApp._deleteType()"><i class="fas fa-trash"></i> 删除类型</button>')
+            + ((type.is_builtin || !this._isSuperAdmin()) ? '' : '<button type="button" class="btn btn-danger" onclick="approvalApp._deleteType()"><i class="fas fa-trash"></i> 删除类型</button>')
             + '<div style="display:flex;gap:8px;' + (type.is_builtin ? 'margin-left:auto;' : '') + '">'
             + '<button type="button" class="btn btn-secondary" onclick="approvalApp._renderTypeManageForm(null)">取消</button>'
             + '<button type="button" class="btn btn-primary" onclick="approvalApp._saveType()"><i class="fas fa-save"></i> 保存类型</button>'
@@ -1639,6 +1673,11 @@ class ApprovalApp {
         if (!t) return;
         // 内置类型：仅可切换启用/禁用，其它字段锁定
         if (t.is_builtin) {
+            // 内置类型只能改启用/禁用，而该权限仅超级管理员有
+            if (!this._isSuperAdmin()) {
+                this.showAlert('提示', '仅超级管理员可启用/禁用审批类型');
+                return;
+            }
             try {
                 const r = await fetch(OA_API_URL + '/approval/types/' + t.id + '/', {
                     method: 'PATCH',
@@ -1711,6 +1750,11 @@ class ApprovalApp {
         } catch (e) {
             this.showAlert('保存失败', e.message || '请重试');
         }
+    }
+
+    // 是否超级管理员（启用/禁用审批类型、删除类型、删除配置等仅超管可操作）
+    _isSuperAdmin() {
+        try { return localStorage.getItem('user_type') === 'super_admin'; } catch (e) { return false; }
     }
 
     // 类型列表快捷启用/禁用开关：保存 enabled 并同步刷新新建审批与顶部筛选
@@ -1893,6 +1937,7 @@ class ApprovalApp {
             if (this.statusFilter) url += '&status=' + this.statusFilter;
             if (this.typeFilter) url += '&type=' + this.typeFilter;
             if (this.scopeFilter) url += '&scope=' + this.scopeFilter;
+            if (this.archivedFilter) url += '&archived=' + this.archivedFilter;
             const data = await this.apiGet(url);
             this._renderList(data, container);
             this._renderPagination(data, pagination);
@@ -1904,10 +1949,16 @@ class ApprovalApp {
 
     _renderList(data, container) {
         const rows = data.results || [];
+        // 归档/审计权限（超管 或 财务专员）由后端判定，用于显示归档操作与审计入口
+        if (data && typeof data.can_archive !== 'undefined') {
+            this._canArchive = !!data.can_archive;
+            var _auditNav = document.getElementById('approvalAuditNavItem');
+            if (_auditNav) _auditNav.style.display = this._canArchive ? 'flex' : 'none';
+        }
         // 🔧 记录当前页审批ID列表（用于详情上一条/下一条切换）
         this._listApprovalIds = rows.map(function (r) { return r.id; });
         if (!rows.length) {
-            container.innerHTML = '<div class="empty-state"><i class="fas fa-inbox"></i><p>暂无审批记录</p></div>';
+            container.innerHTML = '<div class="empty-state"><i class="fas fa-inbox"></i><p>' + (this.archivedFilter ? '暂无已归档的审批' : '暂无审批记录') + '</p></div>';
             return;
         }
         const statusMap = {
@@ -1947,12 +1998,23 @@ class ApprovalApp {
                 + '<img src="' + avatar + '" style="width:32px;height:32px;border-radius:50%;object-fit:cover;">'
                 + '<div><div class="approval-item-title">' + self._escape(r.title) + '</div>'
                 + '<div class="approval-item-meta">'
+                + '<span title="审批ID（可在搜索框输入该ID检索）" style="cursor:pointer;" onclick="event.stopPropagation();approvalApp._copyText(\'' + r.id + '\')"><i class="fas fa-hashtag"></i> ' + r.id + '</span>'
                 + '<span><i class="fas fa-user"></i> ' + self._escape(r.applicant_name || '') + '</span>'
                 + '<span><i class="fas fa-tag"></i> <span class="type-icon-badge type-' + r.approval_type + '" style="color:' + (r.approval_type_color || self._getTypeColor(r.approval_type)) + ';"><i class="fas ' + (r.approval_type_icon || self._getTypeIcon(r.approval_type)) + '"></i> ' + self._escape(r.approval_type_display || r.approval_type) + '</span></span>'
                 + '<span title="更新时间"><i class="fas fa-clock"></i> ' + self._formatTime(r.updated_at) + '</span>'
                 + (r.department_name ? '<span><i class="fas fa-building"></i> ' + self._escape(r.department_name) + '</span>' : '')
+                + (r.is_archived ? '<span title="已归档' + (r.archived_at ? '：' + self._formatTime(r.archived_at) : '') + (r.archived_by_name ? '（' + self._escape(r.archived_by_name) + '）' : '') + '" style="color:#e6a23c;"><i class="fas fa-box-archive"></i> 已归档</span>' : '')
                 + (amt || '') + '</div></div></div></div>'
-                + '<div class="approval-item-right"><span class="' + (scMap[r.status] || '') + '">' + (statusMap[r.status] || r.status) + '</span></div></div>';
+                + '<div class="approval-item-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">'
+                + '<span class="' + (scMap[r.status] || '') + '">' + (statusMap[r.status] || r.status) + '</span>'
+                + (self._canArchive
+                    ? (r.is_archived
+                        ? '<button class="action-btn" title="取消归档（回到常规列表）" onclick="event.stopPropagation();approvalApp.unarchiveApproval(' + r.id + ')"><i class="fas fa-box-open" style="color:#409eff;"></i></button>'
+                        : (r.status === 'approved'
+                            ? '<button class="action-btn" title="归档（移出常规列表，便于审计复盘）" onclick="event.stopPropagation();approvalApp.archiveApproval(' + r.id + ')"><i class="fas fa-box-archive" style="color:#e6a23c;"></i></button>'
+                            : ''))
+                    : '')
+                + '</div></div>';
         }).join('');
     }
 
@@ -1986,7 +2048,8 @@ class ApprovalApp {
     }
 
     filterByStatus(btn, status) {
-        document.querySelectorAll('.filter-btn:not(.filter-scope-btn)').forEach(function (b) {
+        // 「已归档」是独立的归档状态筛选，不随状态/范围筛选互斥清除
+        document.querySelectorAll('.filter-btn:not(.filter-scope-btn):not(.filter-arch-btn)').forEach(function (b) {
             b.classList.remove('active');
         });
         btn.classList.add('active');
@@ -1996,13 +2059,49 @@ class ApprovalApp {
 
     // 我发起的 / 抄送我的 过滤（互斥，再次点击取消）
     filterByScope(btn, scope) {
-        document.querySelectorAll('.filter-scope-btn').forEach(function (b) {
+        document.querySelectorAll('.filter-scope-btn:not(.filter-arch-btn)').forEach(function (b) {
             b.classList.remove('active');
         });
         var activate = this.scopeFilter !== scope;
         this.scopeFilter = activate ? scope : '';
         if (activate) btn.classList.add('active');
         this.loadList(1);
+    }
+
+    // 已归档筛选（再次点击取消，回到未归档列表）
+    toggleArchivedFilter(btn) {
+        var activate = this.archivedFilter !== '1';
+        this.archivedFilter = activate ? '1' : '';
+        if (btn) btn.classList.toggle('active', activate);
+        this.loadList(1);
+    }
+
+    // 归档 / 取消归档（超管或财务专员，后端二次校验）
+    async archiveApproval(id) {
+        var ok = await this.showConfirmDialog('归档审批',
+            '归档后该审批将从常规列表移出（可在「已归档」中查看），便于月度/季度/年度归档与审计复盘。是否继续？', 'confirm');
+        if (!ok) return;
+        await this._doArchive(id, false);
+    }
+
+    async unarchiveApproval(id) {
+        var ok = await this.showConfirmDialog('取消归档', '取消归档后该审批将回到常规列表。是否继续？', 'confirm');
+        if (!ok) return;
+        await this._doArchive(id, true);
+    }
+
+    async _doArchive(id, unarchive) {
+        try {
+            var res = await this.apiPost(OA_API_URL + '/approval/' + id + '/' + (unarchive ? 'unarchive' : 'archive') + '/', {});
+            this.showToast(unarchive ? '已取消归档' : '已归档（可在「已归档」筛选查看）', false);
+            this.loadList(this.currentPage);
+            var dm = document.getElementById('approvalDetailModal');
+            if (dm && dm.style.display === 'flex' && this._detailApproval && this._detailApproval.id === id) {
+                this.showDetail(id);
+            }
+        } catch (e) {
+            this.showAlert(unarchive ? '取消归档失败' : '归档失败', (e && e.message) || '请重试');
+        }
     }
 
     filterByType() {
@@ -2029,13 +2128,21 @@ class ApprovalApp {
         this.loadList(p);
     }
 
-    selectType(type) {
+    // opts.userSwitch：用户点击类型卡片主动切换（会清空上一个类型填过的内容）
+    selectType(type, opts) {
+        var prev = document.getElementById('newApprovalType').value;
         // 更新隐藏字段
         document.getElementById('newApprovalType').value = type;
         // 更新选中状态
         document.querySelectorAll('.type-card').forEach(function (c) {
             c.classList.toggle('selected', c.dataset.type === type);
         });
+        // ⚠️ 用户切换审批类型且类型确实变了 → 先清空上一个类型填过的所有内容。
+        //    否则上一种类型残留的值（尤其金额）会跟着提交，导致「审批金额」与「表单金额」不一致。
+        //    注意：程序化设置类型（打开弹窗自动选中、编辑/驳回续审回填）不带 userSwitch，不会清空。
+        if (opts && opts.userSwitch && prev !== type) {
+            this._resetApprovalForm();
+        }
         this.onTypeChange();
         this._onDeptOrTypeChange();
     }
@@ -2112,6 +2219,9 @@ class ApprovalApp {
 
     onTypeChange() {
         const type = document.getElementById('newApprovalType').value;
+        // 当前类型的「发票上传数量上限」（来自审批类型配置，默认 10）→ 供发票区块提示与限制使用
+        var _tObj = this._getType(type);
+        this._currentInvoiceMax = (_tObj && _tObj.invoice_max_count) ? parseInt(_tObj.invoice_max_count, 10) : 10;
         // 收款方式：报销/采购/自定义类型显示
         this._togglePaymentSection(type);
         // 自定义类型 / 带表单的内置类型（物资需求单等）：隐藏内置专属表单，按 schema 渲染动态表单
@@ -2759,15 +2869,15 @@ class ApprovalApp {
 
     // ==================== 新建审批 - 审批人配置 ====================
 
-    async openCreateModal() {
-        var self = this;
-        document.getElementById('createApprovalForm').reset();
+    // 清空「新建审批」表单里已填写的一切（内置字段 + 动态表单 + 附件/发票/抄送人/审批链状态）。
+    // 打开弹窗时和「用户切换审批类型」时都会调用，避免上一个类型的内容残留到下一个类型
+    // （最典型的后果：换了类型后提交，金额还是上一个类型填的值）。
+    _resetApprovalForm() {
+        var form = document.getElementById('createApprovalForm');
+        if (form) form.reset();
         // 内置费用类型下拉：首次构建自定义下拉，重置后同步收起态显示
         this._buildExpenseSelect(document.getElementById('newExpenseType'));
         this._syncExpenseTypeDisplay();
-        document.querySelectorAll('.type-card').forEach(function (c) {
-            c.classList.remove('selected');
-        });
         // 隐藏所有内置类型专属表单（含请假类型/出差/采购物项/报销项目等）
         this._hideBuiltinFields();
         var recruitInputs = document.querySelectorAll('#recruitForm input, #recruitForm textarea, #recruitForm select');
@@ -2776,28 +2886,41 @@ class ApprovalApp {
             else if (el.type === 'number') el.value = '';
             else if (el.tagName === 'SELECT') el.selectedIndex = 0;
         });
-        document.getElementById('recruitStaffingRemarkRow').style.display = 'none';
+        var remarkRow = document.getElementById('recruitStaffingRemarkRow');
+        if (remarkRow) remarkRow.style.display = 'none';
         this._clearTypeRows();
-        document.getElementById('attachmentPreview').innerHTML = '';
-        document.getElementById('attachmentPreview').style.display = 'none';
+        // 附件
+        var ap = document.getElementById('attachmentPreview');
+        if (ap) {
+            ap.innerHTML = '';
+            ap.style.display = 'none';
+        }
         this._attachmentFiles = [];
         this._invoiceValues = {};
         var _invG = document.getElementById('invoiceGroup');
         if (_invG) _invG.style.display = 'none';
+        // 动态表单：既要清容器，也要清挂在容器之外的状态（附件字段/人员字段/联动值/当前 schema），
+        // 否则 _collectDynamicFormData 会把它们合并进来，跨审批类型带到提交数据里
+        this._editFormData = {};
+        this._currentSchema = [];
+        this._dynAttachmentValues = {};
+        this._dynUserValues = {};
+        this._dynReqLinkValues = {};
+        this._paymentMethodFieldKey = null;
+        var dynC = document.getElementById('dynamicFormFields');
+        if (dynC) {
+            dynC.innerHTML = '';
+            dynC.style.display = 'none';
+        }
+        // 审批链 / 抄送人（不同审批类型的审批链与默认抄送人不同，重置后按新类型重新带出）
         this._approverNodes = [];
         this._isReEdit = false;
         this._reEditId = null;
-        this._editFormData = {};
-        // 自定义类型/带表单内置类型：重置动态表单为空白
-        var _curType = document.getElementById('newApprovalType') ? document.getElementById('newApprovalType').value : '';
-        if (_curType && (!this._isBuiltinType(_curType) || this._isDynamicSchemaType(_curType))) {
-            var _t = this._getType(_curType);
-            this._renderDynamicFields(_t ? (_t.form_schema || []) : [], {});
-        }
         this._ccUsers = [];
         this._ccDepartments = [];
         this._ccTab = 'users';
         this._ccSearchTimer = null;
+        this._currentCcType = '';
         var sdB = document.getElementById('saveDraftBtn');
         if (sdB) sdB.textContent = '存草稿';
         var sab = document.getElementById('submitApprovalBtn');
@@ -2805,12 +2928,21 @@ class ApprovalApp {
 
         // 固定为会签 + 顺序审批，不可修改
         this._lockApprovalDefaults();
-
-        // Init CC display
-        this._ccUsers = [];
-        this._ccDepartments = [];
-        this._currentCcType = '';
         this._renderCcTags();
+    }
+
+    async openCreateModal() {
+        var self = this;
+        this._resetApprovalForm();
+        document.querySelectorAll('.type-card').forEach(function (c) {
+            c.classList.remove('selected');
+        });
+        // 自定义类型/带表单内置类型：重置动态表单为空白
+        var _curType = document.getElementById('newApprovalType') ? document.getElementById('newApprovalType').value : '';
+        if (_curType && (!this._isBuiltinType(_curType) || this._isDynamicSchemaType(_curType))) {
+            var _t = this._getType(_curType);
+            this._renderDynamicFields(_t ? (_t.form_schema || []) : [], {});
+        }
 
         // Load department tree and chain preview before showing modal
         await this._loadDepartmentTree();
@@ -3638,6 +3770,13 @@ class ApprovalApp {
             if (sab) { sab.disabled = false; sab.innerHTML = sabHtml; }
         }
     }
+    // 金额是否由「内置金额输入框」提交：只有报销/采购的金额是用户可见可填的。
+    // 其余类型（自定义类型、带表单的内置类型）一律以后端按「表单金额字段」取值为准，
+    // 前端不再提交 amount —— 否则切换审批类型时会带上上一个类型残留的金额。
+    _isBuiltinAmountType(type) {
+        return type === 'expense' || type === 'purchase';
+    }
+
     async _doSubmitApproval() {
         const type = document.getElementById('newApprovalType').value;
         const title = document.getElementById('newApprovalTitle').value.trim();
@@ -3742,7 +3881,8 @@ class ApprovalApp {
         if (startDate) data.start_date = startDate.substring(0, 10);
         if (endDate) data.end_date = endDate.substring(0, 10);
         if (duration) data.duration = parseFloat(duration);
-        if (amount) data.amount = parseFloat(amount);
+        // 仅报销/采购提交内置金额；其余类型的金额由后端按表单金额字段取值（防止残留金额混入）
+        if (amount && this._isBuiltinAmountType(type)) data.amount = parseFloat(amount);
         if (expenseType) data.expense_type = expenseType;
         if (expenseDate) data.expense_date = expenseDate;
         if (this._attachmentFiles.length) data.attachments = this._attachmentFiles.map(function (f) {
@@ -3852,7 +3992,7 @@ class ApprovalApp {
         if (f.start_date) data.start_date = f.start_date.substring(0, 10);
         if (f.end_date) data.end_date = f.end_date.substring(0, 10);
         if (f.duration) data.duration = parseFloat(f.duration);
-        if (f.amount) data.amount = parseFloat(f.amount);
+        if (f.amount && this._isBuiltinAmountType(data.approval_type || f.approval_type)) data.amount = parseFloat(f.amount);
         if (f.expense_type) data.expense_type = f.expense_type;
         if (f.expense_date) data.expense_date = f.expense_date;
         if (this._attachmentFiles.length) data.attachments = this._attachmentFiles.map(function (x) {
@@ -4037,6 +4177,63 @@ class ApprovalApp {
         }
     }
 
+    // ==================== 审批生命周期配置（仅超管） ====================
+
+    async openLifecycleConfigModal() {
+        try {
+            const d = await this.apiGet(OA_API_URL + '/approval/lifecycle-config/');
+            if (!d) return;
+            const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+            const chk = document.getElementById('alcEnabled');
+            if (chk) chk.checked = d.enabled !== false;
+            set('alcArchiveDays', d.archive_days);
+            set('alcWithdrawnDays', d.withdrawn_delete_days);
+            set('alcDraftDays', d.draft_delete_days);
+            ['alcArchiveDays', 'alcWithdrawnDays', 'alcDraftDays'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) { el.min = d.min_days || 1; el.max = d.max_days || 365; }
+            });
+            const hint = document.getElementById('alcHint');
+            if (hint) {
+                hint.innerHTML = '允许范围 ' + (d.min_days || 1) + '~' + (d.max_days || 365) + ' 天。'
+                    + '定时任务每天 03:17 执行一次；修改后立即生效。';
+            }
+            const modal = document.getElementById('approvalLifecycleModal');
+            modal.style.display = 'flex';
+            setTimeout(function () { modal.classList.add('show'); }, 10);
+        } catch (e) {
+            this.showToast((e && e.message) || '加载生命周期配置失败', true);
+        }
+    }
+
+    async saveLifecycleConfig() {
+        const val = id => {
+            const el = document.getElementById(id);
+            const n = parseInt(el ? el.value : '', 10);
+            return isNaN(n) ? null : n;
+        };
+        const payload = {
+            enabled: !!(document.getElementById('alcEnabled') || {}).checked,
+            archive_days: val('alcArchiveDays'),
+            withdrawn_delete_days: val('alcWithdrawnDays'),
+            draft_delete_days: val('alcDraftDays'),
+        };
+        try {
+            const resp = await fetch(OA_API_URL + '/approval/lifecycle-config/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify(payload),
+            });
+            const raw = await resp.json().catch(() => ({}));
+            const d = raw && raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+            if (!resp.ok) throw new Error((d && (d.error || d.detail)) || '保存失败');
+            this.closeModal('approvalLifecycleModal');
+            this.showToast('生命周期配置已保存，即时生效', false);
+        } catch (e) {
+            this.showToast((e && e.message) || '保存失败', true);
+        }
+    }
+
     // ==================== 审批配置（企业管理员） ====================
 
     async openConfigModal() {
@@ -4213,7 +4410,8 @@ class ApprovalApp {
                 var scopeSel2 = document.getElementById('configScopeSelect');
                 if (scopeSel2) scopeSel2.value = cfg.scope_department ? String(cfg.scope_department) : '';
             }
-            if (delBtn) delBtn.style.display = cfg ? 'inline-flex' : 'none';
+            // 删除配置仅超级管理员可操作：其他用户不显示该按钮（后端同样会拦截）
+            if (delBtn) delBtn.style.display = (cfg && this._isSuperAdmin()) ? 'inline-flex' : 'none';
             var deptSel = document.getElementById('configFinalDept');
             if (deptSel && cfg && cfg.department) deptSel.value = cfg.department;
             else if (deptSel) deptSel.value = '';
@@ -4283,6 +4481,10 @@ class ApprovalApp {
             if (rhEl) rhEl.value = (cfg && cfg.receipt_return_hours !== null && cfg.receipt_return_hours !== undefined) ? cfg.receipt_return_hours : 24;
             var erEl = document.getElementById('configEnableReceiptReturn');
             if (erEl) erEl.checked = !!(cfg && cfg.enable_receipt_return);
+            var rmcEl = document.getElementById('configReceiptMaxCount');
+            if (rmcEl) rmcEl.value = (cfg && cfg.receipt_max_count) ? cfg.receipt_max_count : 10;
+            var imcEl = document.getElementById('configInvoiceMaxCount');
+            if (imcEl) imcEl.value = (cfg && cfg.invoice_max_count != null) ? cfg.invoice_max_count : 0;
             this._onReceiptConfigChange();
         } catch (e) {
             console.error('Load config failed:', e);
@@ -4291,8 +4493,14 @@ class ApprovalApp {
 
     _onReceiptConfigChange() {
         var erEl = document.getElementById('configEnableReceiptReturn');
+        var show = erEl && erEl.checked ? 'block' : 'none';
         var grp = document.getElementById('configReceiptReturnHoursGroup');
-        if (grp) grp.style.display = erEl && erEl.checked ? 'block' : 'none';
+        if (grp) grp.style.display = show;
+        // 回传数量上限与回传时限一起，只在开启票据回传时才需要配置
+        var grpMax = document.getElementById('configReceiptMaxCountGroup');
+        if (grpMax) grpMax.style.display = show;
+        var grpInv = document.getElementById('configInvoiceMaxCountGroup');
+        if (grpInv) grpInv.style.display = show;
     }
 
     // 第一审批人（财务专员）自定义下拉：每项姓名前头像 + 最右侧职位（原生 option 不渲染 img/样式，改用 div 下拉）
@@ -4757,6 +4965,8 @@ class ApprovalApp {
             require_signature: document.getElementById('configRequireSignature') ? document.getElementById('configRequireSignature').checked : false,
             receipt_return_hours: parseInt(document.getElementById('configReceiptReturnHours') ? (document.getElementById('configReceiptReturnHours').value || 0) : 24),
             enable_receipt_return: document.getElementById('configEnableReceiptReturn') ? document.getElementById('configEnableReceiptReturn').checked : false,
+            receipt_max_count: parseInt(document.getElementById('configReceiptMaxCount') ? (document.getElementById('configReceiptMaxCount').value || 10) : 10),
+            invoice_max_count: parseInt(document.getElementById('configInvoiceMaxCount') ? (document.getElementById('configInvoiceMaxCount').value || 0) : 0),
         };
         if (deptScopeId) data.scope_department_id = parseInt(deptScopeId);
         try {
@@ -5033,7 +5243,39 @@ class ApprovalApp {
                 ? '<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:#fdf0ef;border:1px solid #f8d0cd;border-radius:8px;color:#c0392b;font-size:13px;margin-bottom:12px;"><i class="fas fa-ban" style="flex-shrink:0;"></i> <span>该审批已被发起人撤回（撤销），无需继续处理。</span></div>'
                 : '';
 
-            let html = cancelledBanner + '<div class="detail-grid">'
+            // 审批请求ID（顶部展示 + 一键复制，方便用户报问题/互相检索）
+            var idBanner = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 14px;background:var(--bg-secondary,#f5f7fa);border:1px solid var(--border-color,#ebeef5);border-radius:8px;font-size:13px;color:#606266;margin-bottom:12px;">'
+                + '<span><i class="fas fa-hashtag" style="color:#409eff;"></i> 审批ID</span>'
+                + '<b style="font-size:16px;color:#409eff;letter-spacing:1px;cursor:pointer;" title="点击复制" onclick="approvalApp._copyText(\'' + d.id + '\')">' + d.id + '</b>'
+                + '<button class="btn btn-secondary" onclick="approvalApp._copyText(\'' + d.id + '\')" title="复制审批ID" style="font-size:12px;padding:3px 10px;border:1px solid #409eff;border-radius:4px;color:#409eff;background:#fff;cursor:pointer;"><i class="fas fa-copy"></i> 复制</button>'
+                + '<span style="font-size:12px;color:#909399;">可在审批列表的搜索框输入该ID快速定位</span>'
+                + '</div>';
+
+            // 已归档提示：归档人/时间/说明（审计复盘时可快速核对归档状态）
+            var archivedBanner = d.is_archived
+                ? '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;background:#fdf6ec;border:1px solid #f5dab1;border-radius:8px;color:#b88230;font-size:13px;margin-bottom:12px;">'
+                    + '<i class="fas fa-box-archive" style="flex-shrink:0;"></i>'
+                    + '<span>该审批已归档'
+                    + (d.archived_at ? '（归档时间：' + this._escape(this._formatTime(d.archived_at)) : '')
+                    + (d.archived_by_name ? '　归档人：' + this._escape(d.archived_by_name) : '')
+                    + (d.is_archived ? '）' : '')
+                    + (d.archive_note ? '　说明：' + this._escape(d.archive_note) : '')
+                    + '</span></div>'
+                : '';
+
+            // 保留期限提示：本人已撤回 / 草稿的审批只保留 N 天，到期由系统自动删除（到期前一天会发通知）
+            var lifecycle = d.lifecycle;
+            var lifecycleBanner = lifecycle
+                ? '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;background:#fdf0ef;border:1px solid #f8d0cd;border-radius:8px;color:#c0392b;font-size:13px;margin-bottom:12px;">'
+                    + '<i class="fas fa-hourglass-half" style="flex-shrink:0;"></i>'
+                    + '<span>该审批（' + this._escape(lifecycle.status === 'draft' ? '草稿' : '已撤回') + '）仅保存 <b>'
+                    + lifecycle.keep_days + '</b> 天，将于 <b>' + this._escape(lifecycle.deadline) + '</b> 由系统自动删除'
+                    + '（剩余 ' + lifecycle.remaining_days + ' 天）。'
+                    + (lifecycle.notified ? '已发送过即将删除提醒，' : '')
+                    + '如需保留请在到期前修改并重新提交。</span></div>'
+                : '';
+
+            let html = cancelledBanner + archivedBanner + lifecycleBanner + idBanner + '<div class="detail-grid">'
                 + '<div class="detail-item" style="grid-column:1/-1;"><label><i class="fas fa-user-circle" style="color:var(--primary-color,#409eff);"></i> 申请人</label><span style="display:flex;align-items:center;gap:8px;"><img src="' + (d.applicant_avatar || defAv) + '" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">' + (d.applicant === currentUserId ? '我' : this._escape(d.applicant_name || '')) + '</span></div>'
                 + '<div class="detail-item"><label><i class="fas fa-tag" style="color:#409eff;"></i> 审批标题</label><span>' + this._escape(d.title) + '</span></div>'
                 + '<div class="detail-item"><label><i class="fas fa-list" style="color:#67c23a;"></i> 审批类型</label><span><span class="type-icon-badge type-' + d.approval_type + '" style="color:' + (d.approval_type_color || this._getTypeColor(d.approval_type)) + ';"><i class="fas ' + (d.approval_type_icon || this._getTypeIcon(d.approval_type)) + '"></i> ' + this._escape(d.approval_type_name || d.approval_type_display || d.approval_type) + '</span></span></div>'
@@ -5459,6 +5701,12 @@ class ApprovalApp {
                 footer.innerHTML = btns;
             } else {
                 footer.innerHTML = '<button class="btn btn-secondary" onclick="approvalApp.closeModal(\'' + modalId + '\')">关闭</button> <button class="btn btn-secondary" onclick="approvalApp._printDetail()"><i class="fas fa-print"></i> 打印</button>';
+            }
+            // 归档 / 取消归档（超管或财务专员；仅「已通过」的审批可归档，后端二次校验）
+            if (this._canArchive && (d.is_archived || d.status === 'approved')) {
+                footer.innerHTML += (d.is_archived
+                    ? ' <button class="btn btn-secondary" onclick="approvalApp.unarchiveApproval(' + d.id + ')"><i class="fas fa-box-open" style="color:#409eff;"></i> 取消归档</button>'
+                    : ' <button class="btn btn-secondary" onclick="approvalApp.archiveApproval(' + d.id + ')"><i class="fas fa-box-archive" style="color:#e6a23c;"></i> 归档</button>');
             }
 
 
@@ -6602,6 +6850,12 @@ class ApprovalApp {
                 + '<input type="file" id="actionFileInput" style="display:none;" accept=".jpg,.jpeg,.png,.gif,.pdf,.doc,.docx,.xls,.xlsx,.zip,.mp4,.avi,.mov,.mp3,.wav" onchange="approvalApp._handleActionFileSelect(event)">'
                 + '<span style="font-size:11px;color:#909399;">支持 jpg/png/pdf/doc/zip/mp4等，不超过10MB</span></div>'
                 + '<div id="actionAttachmentPreview" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;"></div></div>'
+                + '<div id="actionMentionWrap" style="display:none;position:relative;margin-top:12px;">'
+                + '<label style="font-size:13px;font-weight:500;display:block;margin-bottom:6px;"><i class="fas fa-at" style="color:#409eff;"></i> 提及成员 <span style="font-weight:400;font-size:11px;color:#909399;">（可多选：本审批发起人 + 您之前的各位审批人，将以私聊卡片消息发送，并附带本次审批意见）</span></label>'
+                + '<div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;">'
+                + '<button type="button" class="btn btn-secondary" id="actionMentionBtn" onclick="approvalApp._toggleMentionPicker(event)" style="font-size:12px;padding:6px 12px;"><i class="fas fa-at"></i> 选择成员</button>'
+                + '<div id="actionMentionChips" style="display:flex;flex-wrap:wrap;gap:6px;"></div></div>'
+                + '<div id="actionMentionPanel" style="display:none;position:absolute;z-index:20;margin-top:6px;width:340px;max-width:88vw;max-height:260px;overflow-y:auto;background:#fff;border:1px solid #dcdfe6;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,0.12);"></div></div>'
                 + '<p id="actionError" class="error-message" style="color:#f56c6c;display:none;"></p>'
                 + '<div id="actionSignatureWrap" style="display:none;margin-top:12px;">'
                 + '<label style="font-size:13px;font-weight:500;display:flex;align-items:center;gap:6px;margin-bottom:6px;"><i class="fas fa-signature" style="color:#9b59b6;"></i> 手写签名 <span style="font-weight:400;font-size:11px;color:#f56c6c;">（必填）</span>'
@@ -6680,6 +6934,24 @@ class ApprovalApp {
         if (notifyWrap) notifyWrap.style.display = (action === 'approve' && this._currentApprovalEnableReceipt) ? 'block' : 'none';
         var notifyCb = document.getElementById('actionNotifyReceipt');
         if (notifyCb) notifyCb.checked = false;
+        // @ 提及：仅「通过」时可用（可 @ 发起人 + 自己之前的审批人），每次打开重置
+        this._mentionCandidates = [];
+        this._mentionSelected = [];
+        var mentionWrap = document.getElementById('actionMentionWrap');
+        var mentionPanel = document.getElementById('actionMentionPanel');
+        if (mentionPanel) mentionPanel.style.display = 'none';
+        if (mentionWrap) mentionWrap.style.display = (action === 'approve') ? 'block' : 'none';
+        this._renderMentionChips();
+        // 点击 @ 候选面板与按钮之外的位置时收起面板（只绑定一次）
+        if (!this._mentionOutsideBound) {
+            this._mentionOutsideBound = true;
+            document.addEventListener('click', function (e) {
+                var p = document.getElementById('actionMentionPanel');
+                if (!p || p.style.display !== 'block') return;
+                if (e.target.closest && (e.target.closest('#actionMentionPanel') || e.target.closest('#actionMentionBtn'))) return;
+                p.style.display = 'none';
+            });
+        }
         // 提升详情层级，保证在物资管理/物品库等其它模态框之上打开（不关闭下层模态框）
         modal.style.zIndex = '3000';
         modal.style.display = 'flex';
@@ -6760,12 +7032,94 @@ class ApprovalApp {
         }).join('') || '';
     }
 
+    // ==================== 审批通过弹窗 @ 提及 ====================
+
+    async _toggleMentionPicker(e) {
+        if (e && e.stopPropagation) e.stopPropagation();
+        var panel = document.getElementById('actionMentionPanel');
+        if (!panel) return;
+        if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
+        if (this._mentionCandidates && this._mentionCandidates.length) {
+            this._renderMentionPanel();
+            panel.style.display = 'block';
+            return;
+        }
+        panel.innerHTML = '<div style="padding:10px 12px;color:#909399;font-size:13px;">正在加载可提及成员...</div>';
+        panel.style.display = 'block';
+        try {
+            const d = await this.apiGet(OA_API_URL + '/approval/' + this._actionId + '/mention-candidates/');
+            this._mentionCandidates = (d && d.results) || [];
+            this._mentionApplicantId = d ? d.applicant_id : null;
+            this._renderMentionPanel();
+        } catch (err) {
+            panel.innerHTML = '<div style="padding:10px 12px;color:#f56c6c;font-size:13px;">'
+                + this._escape((err && err.message) || '加载失败') + '</div>';
+        }
+    }
+
+    _renderMentionPanel() {
+        var panel = document.getElementById('actionMentionPanel');
+        if (!panel) return;
+        var list = this._mentionCandidates || [];
+        if (!list.length) {
+            panel.innerHTML = '<div style="padding:10px 12px;color:#909399;font-size:13px;">暂无可提及成员（本审批发起人及您之前的审批人为空）</div>';
+            return;
+        }
+        var self = this;
+        var selected = this._mentionSelected || [];
+        panel.innerHTML = list.map(function (u, i) {
+            var on = selected.indexOf(u.id) > -1;
+            var isApplicant = (self._mentionApplicantId != null && u.id === self._mentionApplicantId);
+            return '<div class="mention-item" onclick="approvalApp._toggleMentionUser(' + u.id + ')" '
+                + 'style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;border-bottom:1px solid #f5f5f5;'
+                + (on ? 'background:#ecf5ff;' : '') + '">'
+                + '<img src="' + self._escape(u.avatar || '/static/images/default-avatar.png') + '" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0;">'
+                + '<div style="flex:1;min-width:0;">'
+                + '<div style="font-size:13px;color:#303133;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
+                + self._escape(u.name || '') + (i === 0 || isApplicant ? ' <span style="font-size:10px;color:#409eff;background:#ecf5ff;border-radius:6px;padding:1px 5px;">发起人</span>' : '') + '</div>'
+                + '<div style="font-size:11px;color:#909399;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
+                + self._escape([u.position, u.department].filter(Boolean).join(' · ') || '未填职位') + '</div></div>'
+                + '<i class="fas ' + (on ? 'fa-check-circle' : 'fa-circle') + '" style="color:' + (on ? '#409eff' : '#dcdfe6') + ';flex-shrink:0;"></i>'
+                + '</div>';
+        }).join('');
+    }
+
+    _toggleMentionUser(uid) {
+        var selected = this._mentionSelected || [];
+        var idx = selected.indexOf(uid);
+        if (idx > -1) selected.splice(idx, 1);
+        else selected.push(uid);
+        this._mentionSelected = selected;
+        this._renderMentionPanel();
+        this._renderMentionChips();
+    }
+
+    _renderMentionChips() {
+        var wrap = document.getElementById('actionMentionChips');
+        if (!wrap) return;
+        var self = this;
+        var selected = this._mentionSelected || [];
+        var list = this._mentionCandidates || [];
+        wrap.innerHTML = selected.map(function (uid) {
+            var u = list.find(function (x) { return x.id === uid; }) || {id: uid, name: '#' + uid};
+            return '<span style="display:inline-flex;align-items:center;gap:5px;padding:2px 8px;background:#ecf5ff;border:1px solid #c6e2ff;border-radius:12px;font-size:12px;color:#409eff;">'
+                + '<img src="' + self._escape(u.avatar || '/static/images/default-avatar.png') + '" style="width:16px;height:16px;border-radius:50%;object-fit:cover;">'
+                + '<span>@' + self._escape(u.name || '') + '</span>'
+                + '<i class="fas fa-times" style="cursor:pointer;font-size:10px;" onclick="event.stopPropagation();approvalApp._toggleMentionUser(' + uid + ')"></i>'
+                + '</span>';
+        }).join('');
+    }
+
     async _confirmAction() {
         var id = this._actionId;
         var action = this._actionType;
         if (!id || !action) return;
         var comment = document.getElementById('actionComment').value.trim();
         var data = {comment: comment};
+        // @ 提及：仅通过时提交被选中的成员（后端会再校验是否在可提及范围内）
+        if (action === 'approve' && this._mentionSelected && this._mentionSelected.length) {
+            data.mention_user_ids = this._mentionSelected.slice();
+        }
         if (this._actionAttachments && this._actionAttachments.length) {
             data.attachments = this._actionAttachments;
         }
@@ -7301,8 +7655,19 @@ class ApprovalApp {
             g += '</div></div>';
             return g;
         };
-        html += renderReceiptGroup('最后审批人回传', '（对发起人的反馈）', lastApproverReceipts, isLastApprover);
-        html += renderReceiptGroup('发起人回传', '（对审批人的反馈）', applicantReceipts, isApplicant);
+        // 审批通过后：回传的票据/发票一律不可删除（发起人与最后审批人都不能删，留痕备查）
+        var canDeleteAny = (d.status !== 'approved');
+        html += renderReceiptGroup('最后审批人回传', '（对发起人的反馈）', lastApproverReceipts, isLastApprover && canDeleteAny);
+        html += renderReceiptGroup('发起人回传', '（对审批人的反馈）', applicantReceipts, isApplicant && canDeleteAny);
+        // 回传数量上限提示（默认 10，可在「审批类型配置」里改）
+        if (receipts.length) {
+            var _maxN = d.receipt_max_count || 10;
+            var _fileN = receipts.filter(function (r) { return (r.kind || 'attachment') !== 'invoice'; }).length;
+            var _invN = receipts.filter(function (r) { return (r.kind || '') === 'invoice'; }).length;
+            html += '<div style="font-size:12px;color:#909399;margin-bottom:6px;">已回传附件 ' + _fileN + '/' + _maxN
+                + ' 个、发票 ' + _invN + '/' + _maxN + ' 张'
+                + (d.status === 'approved' ? '；<span style="color:#e6a23c;">审批已通过，回传的票据不可删除</span>' : '') + '</div>';
+        }
         // 最后审批人可填写审批意见（随票据一起回传，展示在审批记录最下面）
         if (canUpload && isLastApprover && !isApplicant) {
             html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;"><i class="fas fa-comment-dots" style="color:#16a085;"></i> 审批意见</label>'
@@ -7317,13 +7682,15 @@ class ApprovalApp {
                 + (isLastApprover && !isApplicant
                     ? '<button type="button" class="btn btn-sm btn-secondary" onclick="approvalApp._submitReceiptComment(' + d.id + ')"><i class="fas fa-comment-dots"></i> 单独提交审批意见</button>'
                     : '')
+                + '<span style="font-size:12px;color:#909399;">本审批回传上限：附件/发票分别最多 '
+                + (d.receipt_max_count || 10) + ' 个（可在「审批类型配置」里调整）</span>'
                 + '</div>';
             // 该审批含发票字段时，回传在附件基础上增加发票字段
             if (this._approvalHasInvoiceField(d)) {
                 var _invKey = '__receipt_' + d.id + '__';
                 html += '<div style="margin-top:10px;border-top:1px dashed #d1f2eb;padding-top:10px;">'
                     + '<div style="font-size:13px;font-weight:600;color:#16a085;margin-bottom:6px;"><i class="fas fa-file-invoice"></i> 回传发票 <span style="font-weight:400;color:#909399;font-size:12px;">（可上传发票并自动识别，支持二维码扫描/验真；提交后同步写入本审批的发票信息，审批人可直接查看）</span></div>'
-                    + this._invoiceBlockHtml(_invKey, { canOperate: this._isInvoiceOperator(d) })
+                    + this._invoiceBlockHtml(_invKey, { canOperate: this._isInvoiceOperator(d), max: (d.invoice_max_count || d.receipt_max_count || 10) })
                     + '<div style="margin-top:8px;"><button type="button" class="btn btn-sm btn-primary" onclick="approvalApp._submitReceiptInvoices(' + d.id + ')"><i class="fas fa-paper-plane"></i> 提交回传发票</button></div>'
                     + '</div>';
             }
@@ -7515,13 +7882,18 @@ class ApprovalApp {
         opts = opts || {};
         const ro = !!opts.readonly;
         const self = this;
+        // 记录该列表的上限（后续上传/网盘选择/回传都按它限制）；opts.max 缺省为 10
+        this._invoiceOpts = this._invoiceOpts || {};
+        this._invoiceOpts[listKey] = Object.assign({}, this._invoiceOpts[listKey] || {}, opts);
+        const max = this._invoiceMaxOf(listKey);
         let h = '<div class="dyn-invoice" data-invoice-key="' + self._escape(listKey) + '">';
         if (!ro) {
             h += '<input type="file" id="invoiceFileInput_' + self._escape(listKey) + '" accept="image/*,.pdf" multiple style="display:none;" onchange="approvalApp._onInvoiceFileChange(event,\'' + self._escape(listKey) + '\')">'
-                + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">'
+                + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;align-items:center;">'
                 + '<button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById(\'invoiceFileInput_' + self._escape(listKey) + '\').click()"><i class="fas fa-file-invoice"></i> 上传发票</button>'
                 + '<button type="button" class="btn btn-secondary btn-sm" onclick="approvalApp._pickInvoiceCloud(\'' + self._escape(listKey) + '\')"><i class="fas fa-cloud"></i> 从网盘选择</button>'
-                + '<span style="font-size:12px;color:#909399;align-self:center;">支持图片/PDF，自动识别发票信息</span>'
+                + '<span style="font-size:12px;color:#909399;align-self:center;">仅支持<b>图片</b>或<b>PDF</b>（其它格式会被过滤），自动识别发票信息；'
+                + '<b>最多 ' + max + ' 张</b></span>'
                 + '</div>';
         }
         h += '<div class="invoice-list" id="invoiceList_' + self._escape(listKey) + '"></div></div>';
@@ -7536,8 +7908,9 @@ class ApprovalApp {
         if (!container) return;
         const items = this._invoiceList(listKey);
         const self = this;
+        const _max = this._invoiceMaxOf(listKey);
         if (!items.length) {
-            container.innerHTML = '<div style="font-size:12px;color:#909399;padding:6px 2px;">' + (opts.readonly ? '无发票' : '尚未添加发票') + '</div>';
+            container.innerHTML = '<div style="font-size:12px;color:#909399;padding:6px 2px;">' + (opts.readonly ? '无发票' : '尚未添加发票（最多 ' + _max + ' 张）') + '</div>';
             return;
         }
         container.innerHTML = items.map(function (inv, i) { return self._invoiceCardHtml(listKey, inv, i, opts); }).join('');
@@ -7649,12 +8022,46 @@ class ApprovalApp {
         if (items[idx]) { items[idx][field] = el.value; }
         this._onInvoiceChanged && this._onInvoiceChanged(listKey);
     }
+    // 发票只支持图片与 PDF：其它格式直接过滤掉并提示（后端同样会校验，防止未校验文件进入 OCR 任务）
+    _isInvoiceFileAllowed(name, mime) {
+        const n = String(name || '').toLowerCase();
+        if (/\.(jpe?g|png|gif|webp|bmp|pdf)$/.test(n)) return true;
+        const m = String(mime || '').toLowerCase();
+        return m === 'application/pdf' || m.indexOf('image/') === 0;
+    }
+
+    // 当前发票列表能达到的上限（默认 10；可被审批类型配置里的值覆盖）
+    _invoiceMaxOf(listKey) {
+        const o = (this._invoiceOpts || {})[listKey] || {};
+        const n = parseInt(o.max, 10);
+        return (n > 0) ? n : 10;
+    }
+
     _onInvoiceFileChange(e, listKey) {
         const files = Array.prototype.slice.call(e.target.files || []);
         e.target.value = '';
         if (!files.length) return;
         const self = this;
-        files.forEach(function (file) {
+        // 先按格式过滤，不支持的格式给出提示并跳过（不发起上传）
+        const rejected = files.filter(function (f) { return !self._isInvoiceFileAllowed(f.name, f.type); });
+        const ok = files.filter(function (f) { return self._isInvoiceFileAllowed(f.name, f.type); });
+        if (rejected.length) {
+            self.showToast('不支持该格式（仅支持图片/PDF）：' + rejected.map(function (f) { return f.name; }).join('、'), true);
+        }
+        if (!ok.length) return;
+        // 数量上限：只上传还能放下的部分
+        const max = this._invoiceMaxOf(listKey);
+        const cur = this._invoiceList(listKey).length;
+        const room = max - cur;
+        if (room <= 0) {
+            self.showToast('发票最多上传 ' + max + ' 张，已达上限', true);
+            return;
+        }
+        const use = ok.slice(0, room);
+        if (ok.length > room) {
+            self.showToast('发票最多 ' + max + ' 张，本次只上传前 ' + room + ' 张', true);
+        }
+        use.forEach(function (file) {
             if (file.size > 20 * 1024 * 1024) { self.showToast('「' + file.name + '」超过20MB', true); return; }
             const fd = new FormData();
             fd.append('file', file);
@@ -7669,11 +8076,19 @@ class ApprovalApp {
         });
     }
     _addInvoiceItem(listKey, inv) {
+        // 所有入口（本地上传 / 网盘选择 / 回传）最终都走这里 → 在此统一卡数量上限，
+        // 防止绕过界面无限添加把服务器压垮
+        const max = this._invoiceMaxOf(listKey);
+        if (this._invoiceList(listKey).length >= max) {
+            this.showToast('发票最多上传 ' + max + ' 张，已达上限', true);
+            return false;
+        }
         this._invoiceList(listKey).push(inv);
         this._renderInvoices(listKey, (this._invoiceOpts || {})[listKey]);
         this._onInvoiceChanged && this._onInvoiceChanged(listKey);
         // 上传/添加后自动识别发票信息（带进度展示，参考普惠补贴）
         this._autoOcrInvoice(listKey, this._invoiceList(listKey).length - 1);
+        return true;
     }
     _autoOcrInvoice(listKey, idx) {
         const inv = this._invoiceList(listKey)[idx];
@@ -7692,11 +8107,23 @@ class ApprovalApp {
     }
     async _addInvoiceCloud(listKey, list) {
         if (!(list && list.length)) return;
+        // 只挑图片/PDF，其它格式过滤掉并提示（网盘里可能有任意类型的文件）
+        const self = this;
+        const okList = list.filter(function (it) { return self._isInvoiceFileAllowed(it.name || '', it.mime_type || ''); });
+        const bad = list.filter(function (it) { return !self._isInvoiceFileAllowed(it.name || '', it.mime_type || ''); });
+        if (bad.length) {
+            this.showToast('不支持该格式（仅支持图片/PDF），已跳过：' + bad.map(function (it) { return it.name || ''; }).join('、'), true);
+        }
         let added = 0;
-        for (let i = 0; i < list.length; i++) {
+        for (let i = 0; i < okList.length; i++) {
+            const max = this._invoiceMaxOf(listKey);
+            if (this._invoiceList(listKey).length >= max) {
+                this.showToast('发票最多上传 ' + max + ' 张，已达上限', true);
+                break;
+            }
             try {
-                const item = await this._copyOneCloudToAttachment(list[i].cloud_id);
-                this._addInvoiceItem(listKey, { url: item.url, name: item.name });
+                const item = await this._copyOneCloudToAttachment(okList[i].cloud_id);
+                if (!this._addInvoiceItem(listKey, { url: item.url, name: item.name })) break;
                 added++;
             } catch (e) { this.showToast((e && e.message) || '添加失败', true); break; }
         }
@@ -7729,7 +8156,17 @@ class ApprovalApp {
         if (document.getElementById('invoiceFieldStyles')) return;
         const s = document.createElement('style');
         s.id = 'invoiceFieldStyles';
-        s.textContent = '@keyframes invBarMove{0%{transform:translateX(-100%);}100%{transform:translateX(300%);}}';
+        s.textContent = '@keyframes invBarMove{0%{transform:translateX(-100%);}100%{transform:translateX(300%);}}'
+            // 自定义审批类型的「表单详情」：窄屏（手机）改为单列，避免两列挤成窄条
+            + '@media (max-width:640px){.dyn-detail-grid{grid-template-columns:1fr !important;}}'
+            // 发票卡片内部字段：窄屏单列（大屏两列），并让缩略图小一点
+            + '@media (max-width:640px){'
+            + '.inv-grid,.inv-extra{grid-template-columns:1fr !important;}}'
+            // 发票卡片在详情里整行铺满、内容自适应换行
+            + '.inv-detail-wrap,.inv-detail-wrap .invoice-card,.inv-detail-wrap .inv-card{width:100%;box-sizing:border-box;min-width:0;overflow-wrap:anywhere;}'
+            + '.dyn-detail-row{min-width:0;}'
+            // 卡片头部的缩略图在窄屏缩小一些，给右侧字段留出空间
+            + '@media (max-width:640px){.inv-detail-wrap img,.inv-detail-wrap .inv-thumb{width:48px !important;height:48px !important;}}';
         document.head.appendChild(s);
     }
     async _pollInvoiceOcr(taskId) {
@@ -7998,8 +8435,9 @@ class ApprovalApp {
     _renderBuiltinInvoices(canOperate) {
         const box = document.getElementById('builtinInvoiceBlock');
         if (!box) return;
-        box.innerHTML = this._invoiceBlockHtml('__builtin__', { canOperate: !!canOperate });
-        this._renderInvoices('__builtin__', { canOperate: !!canOperate });
+        const _max = this._currentInvoiceMax || 10;
+        box.innerHTML = this._invoiceBlockHtml('__builtin__', { canOperate: !!canOperate, max: _max });
+        this._renderInvoices('__builtin__', { canOperate: !!canOperate, max: _max });
     }
     _renderBuiltinInvoiceDetail(d) {
         const invoices = (d.form_data && Array.isArray(d.form_data.invoices)) ? d.form_data.invoices : [];

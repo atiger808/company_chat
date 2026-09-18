@@ -29,7 +29,8 @@ from .models import (
 )
 from .type_utils import (
     ensure_builtin_types, resolve_approval_type,
-    collect_form_data, validate_form_data, invoice_field_key,
+    collect_form_data, validate_form_data, invoice_field_key, invoice_field_keys,
+    is_image_or_pdf_head,
 )
 
 
@@ -294,6 +295,10 @@ class AttendanceViewSet(viewsets.ViewSet):
         config = self._get_attendance_config(tenant, dept_id, request.user)
         if config and not config.clock_in_enabled:
             return Response({'error': '该时段无需打卡（已配置为不打卡）', 'skip': True}, status=200)
+        # 指定区域打卡：不在范围内（或拿不到定位）直接拒绝打卡
+        loc_err, loc_hit, loc_dist = self._check_clock_location(request, tenant, dept_id, serializer)
+        if loc_err:
+            return loc_err
 
         existing = AttendanceRecord.objects.filter(user=request.user, date=today, clock_type='clock_in').first()
         if existing:
@@ -319,7 +324,8 @@ class AttendanceViewSet(viewsets.ViewSet):
             user_agent=serializer.validated_data.get('user_agent', '') or request.META.get('HTTP_USER_AGENT', ''),
         )
         location_text = serializer.validated_data.get('location', '')
-        logger.info(f'{request.user} 上班打卡 {today} status={status_val}')
+        logger.info(f'{request.user} 上班打卡 {today} status={status_val}'
+                    + (f' 命中打卡范围={loc_hit} 距离={int(loc_dist)}米' if loc_hit else ''))
         # 通知用户本人
         status_text = '迟到' if status_val == 'late' else '正常'
         loc = f' 位置：{location_text}' if location_text else ''
@@ -338,23 +344,31 @@ class AttendanceViewSet(viewsets.ViewSet):
                 from accounts.models import CustomUser
                 notified_ids = set()
                 try:
-                    # 通知部门负责人
+                    # 通知部门负责人：只取「当前激活企业下该用户的主部门」的负责人，
+                    # 避免把迟到消息发给该员工在其它企业/其它部门（含子公司）的负责人（多企业隔离）
                     from org.models import UserDepartment
-                    dept_rels = UserDepartment.objects.filter(user=request.user).select_related('department__manager')
-                    for ud_rel in dept_rels:
-                        mgr = ud_rel.department.manager
-                        if mgr and mgr.id not in notified_ids and mgr.id != request.user.id:
-                            notified_ids.add(mgr.id)
-                            send_work_notification(
-                                user_id=mgr.id,
-                                title='迟到提醒',
-                                content=f'{request.user.real_name or request.user.username} 今日上班打卡迟到',
-                                notification_type='attendance',
-                                related_url='/oa/attendance/',
-                                extra_data={'user_id': request.user.id, 'status': 'late', 'date': str(today)},
-                            )
-                except Exception:
-                    pass
+                    mgr_rel = UserDepartment.objects.filter(
+                        user=request.user, is_primary=True, department__tenant=tenant
+                    ).select_related('department__manager').first()
+                    if mgr_rel is None:
+                        mgr_rel = UserDepartment.objects.filter(
+                            user=request.user, department__tenant=tenant
+                        ).select_related('department__manager').order_by('-is_primary', 'id').first()
+                    mgr = mgr_rel.department.manager if (mgr_rel and mgr_rel.department) else None
+                    if mgr and mgr.id not in notified_ids and mgr.id != request.user.id:
+                        notified_ids.add(mgr.id)
+                        dept_name = mgr_rel.department.name if mgr_rel.department else ''
+                        send_work_notification(
+                            user_id=mgr.id,
+                            title='迟到提醒',
+                            content=f'{request.user.real_name or request.user.username} 今日上班打卡迟到'
+                                    + (f'（部门：{dept_name}）' if dept_name else ''),
+                            notification_type='attendance',
+                            related_url='/oa/attendance/',
+                            extra_data={'user_id': request.user.id, 'status': 'late', 'date': str(today)},
+                        )
+                except Exception as e:
+                    logger.warning(f'迟到提醒通知部门负责人失败: {e}')
                 # 通知企业超级管理员
                 # admins = CustomUser.objects.filter(
                 #     Q(user_type='super_admin') & Q(tenant_memberships__tenant=tenant, tenant_memberships__is_active=True)
@@ -386,6 +400,10 @@ class AttendanceViewSet(viewsets.ViewSet):
         config = self._get_attendance_config(tenant, dept_id, request.user)
         if config and not config.clock_out_enabled:
             return Response({'error': '该时段无需打卡（已配置为不打卡）', 'skip': True}, status=200)
+        # 指定区域打卡：不在范围内（或拿不到定位）直接拒绝打卡
+        loc_err, _loc_hit, _loc_dist = self._check_clock_location(request, tenant, dept_id, serializer)
+        if loc_err:
+            return loc_err
 
         # 下班卡可重复打（防止误打下班卡），以最后一次打卡时间为准，上限由配置控制
         out_limit = config.clock_out_limit if config and config.clock_out_limit else 3
@@ -891,40 +909,186 @@ class AttendanceViewSet(viewsets.ViewSet):
 
     # ──────── 考勤配置 ────────
 
+    def _attendance_config_chain(self, tenant, department_id=None, user=None):
+        """按优先级产出考勤配置候选链（只含存在的配置）：
+        个人 > 部门 > 子公司 > 当前企业默认 > 上级集团默认。
+
+        部门级按「部门自身所属企业」匹配（兼容历史数据里配置写在父集团下的情况）；
+        子公司级为「配置在父集团上、sub_tenant=当前企业」这一既有约定。
+        """
+        from accounts.models import Department
+        chain = []
+        if user:
+            personal = UserAttendanceConfig.objects.filter(user=user).first()
+            if personal:
+                chain.append(('personal', personal))
+        if not tenant:
+            return chain
+        if department_id:
+            # 部门 id 本身已唯一确定所属企业，不再用 tenant 过滤——
+            # 集团管理员给「子公司部门」保存的配置 tenant 是集团，用 tenant 过滤会读不到
+            qs = AttendanceConfig.objects.filter(department_id=department_id, sub_tenant__isnull=True)
+            dept = Department.objects.filter(id=department_id).only('id', 'tenant_id').first()
+            cfg = None
+            if dept is not None and dept.tenant_id:
+                cfg = qs.filter(tenant_id=dept.tenant_id).first()
+            if cfg is None:
+                cfg = qs.order_by('id').first()
+            if cfg is not None:
+                chain.append(('department', cfg))
+        if tenant.parent_id:
+            cfg = AttendanceConfig.objects.filter(
+                tenant=tenant.parent, sub_tenant=tenant, department__isnull=True).first()
+            if cfg is not None:
+                chain.append(('sub_tenant', cfg))
+        cfg = AttendanceConfig.objects.filter(
+            tenant=tenant, sub_tenant__isnull=True, department__isnull=True).first()
+        if cfg is not None:
+            chain.append(('tenant_default', cfg))
+        # 向上回溯多级集团
+        parent = tenant.parent
+        depth = 0
+        while parent is not None and depth < 10:
+            cfg = AttendanceConfig.objects.filter(
+                tenant=parent, sub_tenant__isnull=True, department__isnull=True).first()
+            if cfg is not None:
+                chain.append(('group_default', cfg))
+                break
+            parent = parent.parent
+            depth += 1
+        return chain
+
     def _get_attendance_config(self, tenant, department_id=None, user=None):
         """按优先级获取考勤配置：个人配置 > 部门配置 > 子企业配置 > 企业默认 > 父级回溯"""
-        if user:
-            try:
-                return UserAttendanceConfig.objects.get(user=user)
-            except UserAttendanceConfig.DoesNotExist:
-                pass
+        chain = self._attendance_config_chain(tenant, department_id, user)
+        return chain[0][1] if chain else None
+
+    def _group_default_config(self, tenant):
+        """该企业所属「集团最顶层」的默认考勤配置（无父级时即自身默认）。
+        仅用于「指定区域打卡」总开关的读取——开关是集团级单一开关，
+        避免某个部门/子公司配置里该字段为默认 False 而把全公司范围限制意外关掉；
+        与保存侧一致：只认最顶层，写在子公司默认配置上的开关不生效。"""
         if not tenant:
             return None
-        # 1. 部门级配置
-        if department_id:
+        root, depth = tenant, 0
+        while root.parent is not None and depth < 10:
+            root = root.parent
+            depth += 1
+        return AttendanceConfig.objects.filter(
+            tenant=root, sub_tenant__isnull=True, department__isnull=True).first()
+
+    def _enabled_ranges(self, cfg):
+        """取该层配置里「已启用」的打卡点（未显式带 enabled 的历史数据按启用处理）"""
+        if not cfg:
+            return []
+        raw = cfg.location_ranges if isinstance(cfg.location_ranges, list) else []
+        return [r for r in raw if isinstance(r, dict) and r.get('enabled', True) is not False]
+
+    def _attendance_geo_config(self, tenant, department_id=None, user=None):
+        """解析当前用户生效的打卡范围配置，返回 (是否强制范围, WGS84 范围列表, 来源标签)。
+
+        - 是否强制：只由集团默认配置的 location_required 决定（单个总开关）；
+        - 范围：按 个人 > 部门 > 子公司 > 集团 取第一个「有已启用打卡点」的层级；
+          某层级的打卡点即使配了、但全部被停用，等同于该层级没配 → 继续沿用上一层；
+        - 开关关闭时仍返回范围（供页面展示），但调用方不应据此拦截打卡。
+        """
+        group_cfg = self._group_default_config(tenant)
+        required = bool(group_cfg and group_cfg.location_required)
+        ranges, source = [], ''
+        for label, cfg in self._attendance_config_chain(tenant, department_id, user):
+            r = self._enabled_ranges(cfg)
+            if r:
+                ranges, source = r, label
+                break
+        return required, ranges, source
+
+    def _parse_location_ranges(self, raw):
+        """规整前端提交的打卡范围，返回 (WGS84 范围列表, 错误信息)。
+
+        前端直接从百度地图取到的是 BD09，若带 bd09_lat/bd09_lng 则在此转成 WGS84 存储；
+        只有 lat/lng 时按 WGS84 处理（手工输入/定位取值场景）。坐标换算只发生在后端。
+        """
+        from utils.coord_transform import bd09_to_wgs84
+        if raw is None:
+            return [], None
+        if not isinstance(raw, list):
+            return None, '打卡范围格式错误'
+        if len(raw) > 50:
+            return None, '打卡范围最多 50 个'
+        out = []
+        for i, item in enumerate(raw):
+            if not isinstance(item, dict):
+                return None, '第 %d 个打卡范围格式错误' % (i + 1)
+            name = (item.get('name') or '').strip()[:50] or ('打卡点%d' % (len(out) + 1))
             try:
-                return AttendanceConfig.objects.get(tenant=tenant, department_id=department_id)
-            except AttendanceConfig.DoesNotExist:
-                pass
-        # 2. 子企业专属配置（配置在 parent tenant 上，sub_tenant=当前企业）
-        if tenant.parent:
+                radius = float(item.get('radius'))
+            except (TypeError, ValueError):
+                return None, '第 %d 个打卡范围的半径不合法' % (i + 1)
+            if radius <= 0 or radius > 20000:
+                return None, '第 %d 个打卡范围的半径需在 1~20000 米之间' % (i + 1)
             try:
-                return AttendanceConfig.objects.get(
-                    tenant=tenant.parent, sub_tenant=tenant, department__isnull=True)
-            except AttendanceConfig.DoesNotExist:
-                pass
-        # 3. 当前企业默认配置
-        try:
-            return AttendanceConfig.objects.get(
-                tenant=tenant, sub_tenant__isnull=True, department__isnull=True)
-        except AttendanceConfig.DoesNotExist:
-            pass
-        # 4. 父级集团回溯
-        if tenant.parent:
-            parent = self._get_parent_tenant(tenant)
-            if parent:
-                return self._get_attendance_config(parent, user=user)
-        return None
+                if item.get('bd09_lat') is not None and item.get('bd09_lng') is not None:
+                    lng, lat = bd09_to_wgs84(float(item['bd09_lng']), float(item['bd09_lat']))
+                else:
+                    lat, lng = float(item.get('lat')), float(item.get('lng'))
+            except (TypeError, ValueError):
+                return None, '第 %d 个打卡范围的经纬度不合法' % (i + 1)
+            if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+                return None, '第 %d 个打卡范围的经纬度超出有效范围' % (i + 1)
+            out.append({'name': name, 'lat': round(lat, 7), 'lng': round(lng, 7),
+                        'radius': int(round(radius)),
+                        # 每个打卡点可单独启停，便于细颗粒度管理（停用后不参与打卡判定，
+                        # 但坐标/半径保留，随时可以重新启用）
+                        'enabled': bool(item.get('enabled', True))})
+        return out, None
+
+    def _location_ranges_out(self, ranges):
+        """范围出参：附上 BD09 坐标供百度地图直接绘制（存 WGS84，展示 BD09）"""
+        from utils.coord_transform import wgs84_to_bd09
+        out = []
+        for r in ranges or []:
+            if not isinstance(r, dict):
+                continue
+            item = dict(r)
+            try:
+                lng, lat = wgs84_to_bd09(float(r.get('lng')), float(r.get('lat')))
+                item['bd09_lat'], item['bd09_lng'] = round(lat, 7), round(lng, 7)
+            except (TypeError, ValueError):
+                item['bd09_lat'] = item['bd09_lng'] = None
+            out.append(item)
+        return out
+
+    def _check_clock_location(self, request, tenant, dept_id, serializer):
+        """「指定区域打卡」校验。返回 (错误响应 | None, 命中的范围名, 距离米)。
+
+        只有「集团默认配置开启该功能」且「该用户解析出的范围非空」时才拦截；
+        开启但一个范围都没配时不做限制（否则会把全公司都挡住），并记 warning 便于排查。
+        """
+        required, ranges, source = self._attendance_geo_config(tenant, dept_id, request.user)
+        if not required:
+            return None, '', None
+        if not ranges:
+            logger.warning(f'已启用指定区域打卡但未配置任何范围（tenant={getattr(tenant, "id", None)}），本次不做位置限制')
+            return None, '', None
+        lat = serializer.validated_data.get('latitude')
+        lng = serializer.validated_data.get('longitude')
+        if lat is None or lng is None:
+            return Response({
+                'error': '当前已启用「指定区域打卡」，但未获取到您的位置信息，无法打卡。'
+                         '请在手机/浏览器中允许定位后重试。',
+                'location_required': True,
+            }, status=400), '', None
+        from utils.coord_transform import distance_to_ranges_m
+        dist, hit = distance_to_ranges_m(lat, lng, ranges)
+        if hit is None:
+            nearest = ('，最近打卡点约 %d 米' % int(dist)) if dist is not None else ''
+            names = '、'.join([str(r.get('name') or '打卡点') for r in ranges if isinstance(r, dict)])
+            return Response({
+                'error': '您当前不在考勤打卡范围内，无法打卡%s。允许范围：%s' % (nearest, names),
+                'location_required': True,
+                'nearest_m': int(dist) if dist is not None else None,
+            }, status=400), '', dist
+        return None, hit, dist
 
     def _get_parent_tenant(self, tenant):
         return tenant.parent if tenant.parent else None
@@ -957,6 +1121,21 @@ class AttendanceViewSet(viewsets.ViewSet):
             'id', 'name', 'short_name', 'tenant_type'))} if hasattr(tenant, 'sub_tenants') else {'sub_tenants': []}
         if managed is not None:
             extra['managed_dept_ids'] = managed
+        # 打卡范围配置权限：默认隐藏；仅超级管理员可开启/隐藏、查看与配置。
+        # 其他角色（含普通管理员）一律不下发范围数据，前端也据此隐藏整块「考勤打卡范围」。
+        is_su = (request.user.user_type == 'super_admin')
+        group_cfg = self._group_default_config(tenant)
+        visible = bool(group_cfg and group_cfg.location_config_visible)
+        can_config = bool(is_su and visible)
+        if not can_config:
+            for item in data:
+                item.pop('location_ranges', None)
+                item.pop('location_ranges_map', None)
+                item.pop('location_required', None)
+                item.pop('location_config_visible', None)
+        # 「指定区域打卡」总开关只在最顶层集团的默认配置上可改（前端据此决定是否显示开关）
+        extra['can_set_geo_switch'] = bool(is_su and tenant.parent_id is None)
+        extra['geo_config'] = {'visible': visible, 'can_config': can_config}
         return Response({'results': data, **extra})
 
     @action(detail=False, methods=['post'])
@@ -980,8 +1159,16 @@ class AttendanceViewSet(viewsets.ViewSet):
         department_id = request.data.get('department_id')
         dept = None
         if department_id:
+            # 部门可属于当前企业，也可属于其子公司（下拉里可选到子公司部门）——
+            # 原先限定 tenant=当前企业，导致「子公司部门的考勤配置」一直保存失败（看起来配置不生效）
+            sub_ids = []
             try:
-                dept = Department.objects.get(id=int(department_id), tenant=tenant)
+                sub_ids = [t.id for t in tenant.sub_tenants.filter(is_active=True)]
+            except Exception:
+                sub_ids = []
+            try:
+                dept = Department.objects.get(id=int(department_id),
+                                              tenant_id__in=[tenant.id] + sub_ids)
             except (ValueError, Department.DoesNotExist):
                 return Response({'error': '部门不存在'}, status=400)
         # 普通管理员：只能配置本部门（含子部门）考勤规则，集团/子公司不可配置
@@ -1033,6 +1220,22 @@ class AttendanceViewSet(viewsets.ViewSet):
             'clock_out_limit': clock_out_limit,
             'shift_type': shift_type,
         }
+        # 考勤打卡范围：仅超级管理员可写；且只在请求里带了该字段时才改动，
+        # 避免其他角色（前端已隐藏该块、不带此字段）保存部门配置时把已有范围清空。
+        if request.user.user_type == 'super_admin' and 'location_ranges' in request.data:
+            ranges, rerr = self._parse_location_ranges(request.data.get('location_ranges'))
+            if rerr:
+                return Response({'error': rerr}, status=400)
+            defaults['location_ranges'] = ranges
+        # 「指定区域打卡」总开关与「显示范围配置」开关：都只认「集团最顶层企业的默认配置」，
+        # 且仅超级管理员可改（读取方 _group_default_config 只认最顶层，
+        # 写在其它的地方会被忽略，这里直接挡住避免误导）
+        is_group_default = (sub_tenant_obj is None and dept is None and tenant.parent_id is None)
+        if is_group_default and request.user.user_type == 'super_admin':
+            if 'location_required' in request.data:
+                defaults['location_required'] = bool(request.data.get('location_required'))
+            if 'location_config_visible' in request.data:
+                defaults['location_config_visible'] = bool(request.data.get('location_config_visible'))
         try:
             config, created = AttendanceConfig.objects.update_or_create(
                 tenant=tenant,
@@ -1073,6 +1276,7 @@ class AttendanceViewSet(viewsets.ViewSet):
             'config': config,
             'default_clock_in_time': '09:00',
             'default_clock_out_time': '18:00',
+            'geo': self._my_geo_payload(tenant, dept_id, request.user),
         }
         if config:
             if isinstance(config, UserAttendanceConfig):
@@ -1082,6 +1286,71 @@ class AttendanceViewSet(viewsets.ViewSet):
                 from .serializers import AttendanceConfigSerializer
                 result['config'] = AttendanceConfigSerializer(config).data
         return Response({'encrypt': True, 'data': encrypt_data(result)})
+
+    def _my_geo_payload(self, tenant, dept_id=None, user=None, lat=None, lng=None):
+        """当前用户生效的打卡范围（供考勤页展示提示：是否强制、哪些范围、命中哪个层级）。
+
+        若同时传入用户当前位置（WGS84），则用与打卡校验**完全相同**的规则算出
+        inside / 命中的打卡点 / 最近距离，供前端在地图上直接显示「是否在范围内」，
+        避免前后端各写一套距离算法导致口径不一致。
+        """
+        required, ranges, source = self._attendance_geo_config(tenant, dept_id, user)
+        label = {'personal': '个人配置', 'department': '部门配置',
+                 'sub_tenant': '子公司配置', 'tenant_default': '企业默认配置',
+                 'group_default': '集团默认配置'}.get(source, '')
+        payload = {
+            'required': bool(required and ranges),
+            'switch_on': bool(required),
+            'source': source,
+            'source_label': label,
+            'ranges': self._location_ranges_out(ranges),
+        }
+        if payload['required'] and lat is not None and lng is not None:
+            from utils.coord_transform import distance_to_ranges_m
+            dist, hit = distance_to_ranges_m(lat, lng, ranges)
+            payload['inside'] = hit is not None
+            payload['hit_name'] = hit or ''
+            payload['nearest_m'] = int(dist) if dist is not None else None
+        return payload
+
+    @action(detail=False, methods=['get'])
+    def attendance_geo(self, request):
+        """当前用户生效的考勤打卡范围（打卡页/小程序用于提示与前端预校验）。
+        可选带上 ?lat=&lng=（WGS84），返回 inside / hit_name / nearest_m 供地图显示是否在范围内。"""
+        from org.models import UserDepartment
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        primary_dept = UserDepartment.objects.filter(
+            user=request.user, is_primary=True).select_related('department').first()
+        dept_id = primary_dept.department_id if primary_dept else None
+        lat = lng = None
+        try:
+            if request.query_params.get('lat') is not None and request.query_params.get('lng') is not None:
+                lat = float(request.query_params.get('lat'))
+                lng = float(request.query_params.get('lng'))
+        except (TypeError, ValueError):
+            lat = lng = None
+        return Response({'encrypt': True, 'data': encrypt_data(
+            self._my_geo_payload(tenant, dept_id, request.user, lat=lat, lng=lng))})
+
+    @action(detail=False, methods=['get'])
+    def geo_convert(self, request):
+        """坐标换算（纯数学，不依赖地图 AK/网络）：?lat=&lng=&to=bd09|wgs84
+        前端「用我当前位置」拿到的是 WGS84，而百度地图需要 BD09；
+        为避免前后端各写一份换算逻辑，统一由后端换算。"""
+        from utils.coord_transform import wgs84_to_bd09, bd09_to_wgs84
+        try:
+            lat = float(request.query_params.get('lat'))
+            lng = float(request.query_params.get('lng'))
+        except (TypeError, ValueError):
+            return Response({'error': '缺少或非法经纬度'}, status=400)
+        to = (request.query_params.get('to') or 'bd09').lower()
+        if to == 'bd09':
+            out_lng, out_lat = wgs84_to_bd09(lng, lat)
+            return Response({'encrypt': True, 'data': encrypt_data(
+                {'bd09_lat': round(out_lat, 7), 'bd09_lng': round(out_lng, 7)})})
+        out_lng, out_lat = bd09_to_wgs84(lng, lat)
+        return Response({'encrypt': True, 'data': encrypt_data(
+            {'lat': round(out_lat, 7), 'lng': round(out_lng, 7)})})
 
     @action(detail=False, methods=['get'])
     def members(self, request):
@@ -1187,18 +1456,28 @@ class AttendanceViewSet(viewsets.ViewSet):
             return Response({'error': '下班卡最多打卡次数格式错误'}, status=400)
         if clock_out_limit < 1:
             return Response({'error': '下班卡最多打卡次数不能小于1'}, status=400)
+        # 个人考勤打卡范围（优先级最高；留空表示沿用部门/子公司/集团）。
+        # 同样仅超级管理员可写，且只在请求带该字段时才改动，避免清空已有范围。
+        _udefaults = {}
+        if request.user.user_type == 'super_admin' and 'location_ranges' in request.data:
+            _uranges, uerr = self._parse_location_ranges(request.data.get('location_ranges'))
+            if uerr:
+                return Response({'error': uerr}, status=400)
+            _udefaults['location_ranges'] = _uranges
 
+        _defaults = {
+            'shift_type': shift_type,
+            'clock_in_enabled': request.data.get('clock_in_enabled', True),
+            'clock_in_time': clock_in_time,
+            'clock_out_enabled': request.data.get('clock_out_enabled', True),
+            'clock_out_time': clock_out_time,
+            'makeup_allowance': makeup_allowance,
+            'clock_out_limit': clock_out_limit,
+        }
+        _defaults.update(_udefaults)
         config, created = UserAttendanceConfig.objects.update_or_create(
             user=target_user,
-            defaults={
-                'shift_type': shift_type,
-                'clock_in_enabled': request.data.get('clock_in_enabled', True),
-                'clock_in_time': clock_in_time,
-                'clock_out_enabled': request.data.get('clock_out_enabled', True),
-                'clock_out_time': clock_out_time,
-                'makeup_allowance': makeup_allowance,
-                'clock_out_limit': clock_out_limit,
-            },
+            defaults=_defaults,
         )
         from .serializers import UserAttendanceConfigSerializer
         data = UserAttendanceConfigSerializer(config).data
@@ -1254,6 +1533,8 @@ class ApprovalTypeViewSet(viewsets.ViewSet):
             'form_schema': t.form_schema or [],
             'sort_order': t.sort_order,
             'enabled': t.enabled,
+            # 该类型「发票字段」允许上传的最大数量（前端据此提示并限制，默认 10）
+            'invoice_max_count': self._invoice_max_for_type(request, tenant, t),
         } for t in qs]
         return Response({'results': data, 'count': len(data)})
 
@@ -1327,6 +1608,26 @@ class ApprovalTypeViewSet(viewsets.ViewSet):
     def _admin(request):
         return request.user.user_type in ('super_admin', 'admin')
 
+    @staticmethod
+    def _super_admin(request):
+        return getattr(request.user, 'user_type', '') == 'super_admin'
+
+    @staticmethod
+    def _invoice_max_for_type(request, tenant, type_obj):
+        """该审批类型对当前用户生效的「发票上传数量上限」（前端据此提示与限制，默认 10）"""
+        from oa.views import ApprovalViewSet
+        try:
+            from org.models import UserDepartment
+            primary = UserDepartment.objects.filter(
+                user=request.user, is_primary=True).select_related('department').first()
+            dept_id = primary.department_id if primary else None
+            config = ApprovalViewSet()._get_config_for_tenant(
+                tenant, type_obj.code, department_id=dept_id) if tenant else None
+            return ApprovalViewSet._effective_invoice_max(config)
+        except Exception as e:
+            logger.warning(f'解析类型发票数量上限失败（{getattr(type_obj, "code", "")}）: {e}')
+            return 10
+
     def create(self, request):
         if not self._admin(request):
             return Response({'error': '仅企业超级管理员或管理员可操作'}, status=403)
@@ -1362,6 +1663,10 @@ class ApprovalTypeViewSet(viewsets.ViewSet):
             t = ApprovalType.objects.get(pk=pk)
         except ApprovalType.DoesNotExist:
             return Response({'error': '类型不存在'}, status=404)
+        # 启用/禁用审批类型：仅超级管理员可操作（普通管理员可改名称/图标/表单，但不能开关类型）
+        if 'enabled' in request.data and bool(request.data.get('enabled')) != bool(t.enabled) \
+                and not self._super_admin(request):
+            return Response({'error': '仅超级管理员可启用/禁用审批类型'}, status=403)
         if t.is_builtin:
             # 内置类型：仅允许切换启用/禁用，其它字段（名称/编码/图标/颜色/表单）锁定
             if set(request.data.keys()) - {'enabled'}:
@@ -1393,8 +1698,9 @@ class ApprovalTypeViewSet(viewsets.ViewSet):
         return Response({'message': '更新成功'})
 
     def destroy(self, request, pk=None):
-        if not self._admin(request):
-            return Response({'error': '仅企业超级管理员或管理员可操作'}, status=403)
+        # 删除审批类型：仅超级管理员可操作
+        if not self._super_admin(request):
+            return Response({'error': '仅超级管理员可删除审批类型'}, status=403)
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
         try:
             t = ApprovalType.objects.get(pk=pk)
@@ -1409,6 +1715,18 @@ class ApprovalTypeViewSet(viewsets.ViewSet):
 class ApprovalViewSet(viewsets.ViewSet):
     """OA审批视图集"""
     permission_classes = [permissions.IsAuthenticated]
+
+    def _can_archive(self, request):
+        """归档/审计权限：超级管理员 或 本企业启用的财务专员"""
+        u = request.user
+        if getattr(u, 'user_type', '') == 'super_admin':
+            return True
+        try:
+            from .models import FinanceSpecialist
+            tenant = getattr(request, 'tenant', None) or u.get_active_tenant()
+            return FinanceSpecialist.objects.filter(tenant=tenant, user=u, is_active=True).exists()
+        except Exception:
+            return False
 
     def list(self, request):
         user = request.user
@@ -1539,11 +1857,27 @@ class ApprovalViewSet(viewsets.ViewSet):
         if type_filter:
             qs = qs.filter(approval_type=type_filter)
         if search:
-            qs = qs.filter(
-                Q(title__icontains=search) |
-                Q(applicant__username__icontains=search) |
-                Q(applicant__real_name__icontains=search)
-            )
+            from django.db.models import CharField
+            from django.db.models.functions import Cast
+            cond = (Q(title__icontains=search) |
+                    Q(applicant__username__icontains=search) |
+                    Q(applicant__real_name__icontains=search))
+            # 支持按「审批请求ID」检索：输入 123 或 #123 均可（ID 为数字，转成文本做包含匹配，
+            # 因此既能精确命中 #123，也能用片段如 12 命中 #123）
+            _id_kw = search.lstrip('#').strip()
+            if _id_kw:
+                qs = qs.annotate(_id_text=Cast('id', output_field=CharField()))
+                cond |= Q(_id_text__icontains=_id_kw)
+            qs = qs.filter(cond)
+
+        # 归档过滤：默认只显示未归档（归档记录移出常规列表）；archived=1 只看已归档；archived=all 全部
+        archived_filter = (request.query_params.get('archived') or '').strip().lower()
+        if archived_filter in ('1', 'true', 'yes', 'archived'):
+            qs = qs.filter(is_archived=True)
+        elif archived_filter == 'all':
+            pass
+        else:
+            qs = qs.filter(is_archived=False)
 
         qs = qs.order_by('-updated_at')
         total = qs.count()
@@ -1555,6 +1889,7 @@ class ApprovalViewSet(viewsets.ViewSet):
         return Response({'encrypt': True, 'data': encrypt_data({
             'results': results, 'count': total, 'page': page,
             'page_size': page_size, 'total_pages': total_pages,
+            'can_archive': self._can_archive(request),
         })})
 
     def retrieve(self, request, pk=None):
@@ -1594,11 +1929,18 @@ class ApprovalViewSet(viewsets.ViewSet):
                 data['receipt_return_hours'] = int(config.receipt_return_hours) if config is not None and config.receipt_return_hours is not None else 24
                 # 票据回传开关（默认关闭）
                 data['enable_receipt_return'] = bool(config and config.enable_receipt_return)
+                # 票据回传数量上限（附件/发票分别不超过该数量，默认 10）
+                _rmc = getattr(config, 'receipt_max_count', None) if config is not None else None
+                data['receipt_max_count'] = int(_rmc) if _rmc else 10
+                # 审批发票上传数量上限（未单独配置时沿用票据回传上限）
+                data['invoice_max_count'] = self._effective_invoice_max(config)
             except Exception as e:
                 logger.warning(f'解析审批签名配置失败: {e}')
                 data['require_signature'] = False
                 data['receipt_return_hours'] = 0
                 data['enable_receipt_return'] = False
+                data['receipt_max_count'] = 10
+                data['invoice_max_count'] = 10
 
             # 收款信息可见性：仅超级管理员、申请人、最终审批节点的审批人可见（保护申请人隐私）
             try:
@@ -1625,6 +1967,29 @@ class ApprovalViewSet(viewsets.ViewSet):
                             n['final_approver_source_label'] = fa_source_label
             except Exception as e:
                 logger.warning(f'标注最终审批人配置来源失败: {e}')
+
+            # 生命周期期限提示：本人发起的「已撤回/草稿」审批仅保留 N 天，到期自动删除
+            # （到期前一天由定时任务发一次「即将删除」通知）
+            try:
+                from datetime import timedelta as _td
+                from .models import ApprovalLifecycleConfig
+                lc_tenant = approval.tenant or getattr(request, 'tenant', None) or request.user.get_active_tenant()
+                cfg = ApprovalLifecycleConfig.get_config(lc_tenant)
+                if (approval.applicant_id == request.user.id
+                        and approval.status in ('draft', 'cancelled') and cfg.enabled):
+                    days = int(cfg.delete_days_for(approval.status) or 0)
+                    if days > 0:
+                        deadline = timezone.localtime(
+                            (approval.updated_at or approval.created_at) + _td(days=days))
+                        data['lifecycle'] = {
+                            'status': approval.status,
+                            'keep_days': days,
+                            'deadline': deadline.strftime('%Y-%m-%d'),
+                            'remaining_days': max(0, (deadline.date() - timezone.localdate()).days),
+                            'notified': bool(approval.purge_notified_at),
+                        }
+            except Exception as e:
+                logger.warning(f'解析审批生命周期期限失败: {e}')
 
             return Response({'encrypt': True, 'data': encrypt_data(data)})
         except ApprovalRequest.DoesNotExist:
@@ -1733,6 +2098,158 @@ class ApprovalViewSet(viewsets.ViewSet):
 
         return Response({'encrypt': True, 'data': encrypt_data({'success': True, 'message': '已发送私聊提醒'})})
 
+    # ==================== 审批通过时 @ 提及 ====================
+
+    def _mention_candidate_users(self, approval, user):
+        """本次审批中当前审批人可 @ 的对象：发起人 + 「自己之前顺位」的所有审批人。
+
+        审批节点 order=0 为发起人节点，审批人节点从 1 起按顺位递增，
+        因此「之前的审批人」= order 在 [1, 我所在最小 order) 区间内节点的审批人。
+        返回顺序：发起人第一，其余按审批顺位（order）排列，已去重、已排除本人。
+        """
+        if not approval or not user:
+            return []
+        try:
+            my_order = ApprovalAssignee.objects.filter(
+                node__request=approval, user=user, node__order__gte=1
+            ).order_by('node__order').values_list('node__order', flat=True).first()
+            if not my_order:
+                return []
+            prior_ids = list(ApprovalAssignee.objects.filter(
+                node__request=approval, node__order__gte=1, node__order__lt=my_order
+            ).order_by('node__order', 'id').values_list('user_id', flat=True))
+        except Exception as e:
+            logger.warning(f'解析审批 @ 候选人失败: {e}')
+            return []
+
+        # 顺序：发起人第一，然后按审批顺位；去重并排除本人
+        ordered_ids = []
+        if approval.applicant_id and approval.applicant_id != user.id:
+            ordered_ids.append(approval.applicant_id)
+        for uid in prior_ids:
+            if uid and uid != user.id and uid not in ordered_ids:
+                ordered_ids.append(uid)
+        if not ordered_ids:
+            return []
+        from accounts.models import CustomUser
+        user_map = {u.id: u for u in CustomUser.objects.filter(id__in=ordered_ids)}
+        return [user_map[uid] for uid in ordered_ids if uid in user_map]
+
+    def _mention_user_items(self, users):
+        """@ 候选人的前端展示数据（头像 + 名字 + 职位）"""
+        users = list(users)
+        dept_map = {}
+        ids = [u.id for u in users]
+        if ids:
+            try:
+                from org.models import UserDepartment
+                dept_map = dict(UserDepartment.objects.filter(
+                    user_id__in=ids, is_primary=True
+                ).values_list('user_id', 'department__name'))
+            except Exception as e:
+                logger.warning(f'读取 @ 候选人部门失败: {e}')
+        items = []
+        for u in users:
+            dept = dept_map.get(u.id) or (u.department.name if getattr(u, 'department', None) else '')
+            items.append({
+                'id': u.id,
+                'name': u.real_name or u.username,
+                'avatar': u.get_avatar_url() if hasattr(u, 'get_avatar_url') else '',
+                'position': u.position or '',
+                'department': dept or '',
+            })
+        return items
+
+    @action(detail=True, methods=['get'])
+    def mention_candidates(self, request, pk=None):
+        """审批通过弹窗可 @ 的对象：发起人 + 自己之前顺位的审批人（仅当前审批人可查）"""
+        try:
+            approval = ApprovalRequest.objects.select_related('applicant').get(id=pk)
+        except ApprovalRequest.DoesNotExist:
+            return Response({'error': '审批不存在'}, status=404)
+        if not self._check_user_can_approve(approval, request.user):
+            return Response({'error': '您不在当前审批节点中，无法查看可提及成员'}, status=403)
+        users = self._mention_candidate_users(approval, request.user)
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'results': self._mention_user_items(users),
+            'applicant_id': approval.applicant_id,
+        })})
+
+    def _send_mention_cards(self, approval, from_user, targets, comment=''):
+        """把审批以私聊卡片消息发给被 @ 的成员（附带本次审批意见），并同步工作通知"""
+        from chat.models import ChatRoom, Message
+        type_label = _approval_type_label(approval)
+        sender_name = from_user.real_name or from_user.username
+        channel_layer = get_channel_layer()
+        sent = 0
+        for target in targets:
+            try:
+                room = ChatRoom.objects.filter(
+                    room_type='private', members=from_user
+                ).filter(members__id=target.id).first()
+                if not room:
+                    room = ChatRoom.objects.create(room_type='private', name='', creator=from_user)
+                    room.members.add(from_user, target)
+
+                card_data = {
+                    'approval_id': approval.id,
+                    'title': approval.title,
+                    'type_name': type_label,
+                    'applicant_name': (approval.applicant.real_name or approval.applicant.username)
+                    if approval.applicant else '',
+                    'applicant_id': approval.applicant_id,
+                    'amount': str(approval.amount) if approval.amount is not None else None,
+                    'status': approval.status,
+                    'status_display': approval.get_status_display(),
+                    'created_at': approval.created_at.isoformat() if approval.created_at else None,
+                    'sender_name': sender_name,
+                    'mention': True,
+                    'mention_comment': comment or '',
+                }
+                message = Message.objects.create(
+                    chat_room=room, sender=from_user,
+                    content=json.dumps(card_data, ensure_ascii=False),
+                    message_type='approval_card',
+                )
+                preview_text = f'📢 {sender_name} 在审批中提及了您：{approval.title}'
+                try:
+                    async_to_sync(channel_layer.group_send)(
+                        f'chat_{room.id}',
+                        {
+                            'type': 'chat_message',
+                            'chat_room': room.id,
+                            'message_id': str(message.id),
+                            'sender': {
+                                'id': from_user.id,
+                                'username': from_user.username,
+                                'real_name': from_user.real_name,
+                                'avatar': from_user.avatar.url if getattr(from_user, 'avatar', None) else None,
+                            },
+                            'sender_id': from_user.id,
+                            'sender_name': sender_name,
+                            'content': preview_text,
+                            'message_type': 'approval_card',
+                            'timestamp': message.timestamp.isoformat(),
+                            'approval_data': card_data,
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(f'审批 @ 提醒 WebSocket 广播失败: {e}')
+                send_work_notification(
+                    target.id,
+                    '审批中提及了您',
+                    f'{sender_name} 在审批「{approval.title}」中提及了您'
+                    + (f'：{comment}' if comment else ''),
+                    notification_type='approval',
+                    related_url=f'/oa/approval/?approval_id={approval.id}',
+                    extra_data={'approval_id': approval.id, 'action': 'mention',
+                                'mention_comment': comment or ''},
+                )
+                sent += 1
+            except Exception as e:
+                logger.warning(f'审批 @ 私聊卡片发送失败（target={target.id}）: {e}')
+        return sent
+
     def _get_receipt_return_hours(self, approval):
         """获取票据回传时限（小时，0=禁止回传；未配置默认 24 小时）"""
         try:
@@ -1754,6 +2271,52 @@ class ApprovalViewSet(viewsets.ViewSet):
         except Exception as e:
             logger.warning(f'解析票据回传开关配置失败: {e}')
         return False
+
+    def _get_receipt_max_count(self, approval):
+        """票据回传数量上限（附件/发票各算一份，默认 10；配置 receipt_max_count 可改）"""
+        try:
+            tenant = approval.tenant or approval.applicant.get_active_tenant()
+            config = self._get_config_for_tenant(tenant, approval.approval_type) if tenant else None
+            n = getattr(config, 'receipt_max_count', None) if config is not None else None
+            if n:
+                return max(1, int(n))
+        except Exception as e:
+            logger.warning(f'解析票据回传数量上限失败: {e}')
+        return 10
+
+    @classmethod
+    def _effective_invoice_max(cls, config):
+        """审批发票上传数量上限：配置了 invoice_max_count 就按它，否则沿用「票据回传数量上限」"""
+        if config is not None:
+            n = getattr(config, 'invoice_max_count', 0) or 0
+            if n:
+                return max(1, int(n))
+        n2 = getattr(config, 'receipt_max_count', 0) if config is not None else 0
+        return max(1, int(n2)) if n2 else 10
+
+    def _get_invoice_max_count(self, approval):
+        """某条审批生效的「发票上传数量上限」"""
+        try:
+            tenant = approval.tenant or approval.applicant.get_active_tenant()
+            config = self._get_config_for_tenant(tenant, approval.approval_type) if tenant else None
+            return self._effective_invoice_max(config)
+        except Exception as e:
+            logger.warning(f'解析发票数量上限失败: {e}')
+            return 10
+
+    def _check_invoice_count(self, approval_type, type_obj, tenant, form_data, department_id=None):
+        """上传发票数量校验：每个「发票」字段的发票数不超过配置上限。
+        返回错误文案或 None。前端也会限制，这里再兜一道（防止绕过前端无限上传拖垮服务器）。"""
+        keys = invoice_field_keys(approval_type, getattr(type_obj, 'form_schema', None) or [])
+        if not keys:
+            return None
+        config = self._get_config_for_tenant(tenant, approval_type, department_id=department_id) if tenant else None
+        max_n = self._effective_invoice_max(config)
+        for k in keys:
+            val = (form_data or {}).get(k)
+            if isinstance(val, list) and len(val) > max_n:
+                return f'发票最多上传 {max_n} 张（「{k}」当前 {len(val)} 张）'
+        return None
 
     def _is_last_approver(self, approval, user):
         """是否为最后审批人（最终审批节点审批人；未标记最终节点时取最高 order 节点）"""
@@ -1864,6 +2427,18 @@ class ApprovalViewSet(viewsets.ViewSet):
             new_invoice_items.append(item)
             added_invoices.append({'url': url, 'name': item['name']})
             added += 1
+        # 回传数量上限（附件与发票分别计算）：默认 10，可在「审批类型配置」里改。
+        # 发起人与最后审批人共用同一额度，按整条审批累计，避免反复回传把数量刷爆。
+        max_count = self._get_receipt_max_count(approval)
+        old_list = approval.receipts or []
+        old_files = len([r for r in old_list if (r.get('kind') or 'attachment') != 'invoice'])
+        old_invoices = len([r for r in old_list if (r.get('kind') or '') == 'invoice'])
+        if old_files + len(added_files) > max_count:
+            return Response({'error': f'回传附件最多 {max_count} 个（已有 {old_files} 个，'
+                                      f'本次最多还能传 {max(0, max_count - old_files)} 个）'}, status=400)
+        if old_invoices + len(added_invoices) > max_count:
+            return Response({'error': f'回传发票最多 {max_count} 张（已有 {old_invoices} 张，'
+                                      f'本次最多还能传 {max(0, max_count - old_invoices)} 张）'}, status=400)
         approval.receipts = receipts
         update_fields = ['receipts']
         # 同步把回传发票写入动态表单数据（form_data），使审批人在表单/详情里也能看到该发票
@@ -1949,11 +2524,14 @@ class ApprovalViewSet(viewsets.ViewSet):
 
     @action(detail=True, methods=['post'])
     def delete_receipt(self, request, pk=None):
-        """删除已回传的票据（仅回传本人可删除自己的票据）"""
+        """删除已回传的票据（仅回传本人可删除自己的票据；审批通过后一律不可删除）"""
         try:
             approval = ApprovalRequest.objects.get(id=pk)
         except ApprovalRequest.DoesNotExist:
             return Response({'error': '审批不存在'}, status=404)
+        # 审批一旦通过：发起人/最后审批人回传的票据与发票都不可再删除（留痕备查）
+        if approval.status == 'approved':
+            return Response({'error': '审批已通过，回传的票据/发票不可删除'}, status=403)
         # 当前用户的回传角色：发起人删自己回传的；最后审批人删自己回传的
         user_role = 'applicant' if approval.applicant_id == request.user.id else ('last_approver' if self._is_last_approver(approval, request.user) else 'other')
         if user_role == 'other':
@@ -2031,6 +2609,137 @@ class ApprovalViewSet(viewsets.ViewSet):
             return Response({'error': '收款方式不存在'}, status=404)
         m.delete()
         return Response({'message': 'ok'})
+
+    # ==================== 归档（超管 / 财务专员） ====================
+    # 归档后审批移出常规列表（默认只显示未归档），便于月度/季度/年度归档管理与审计复盘。
+    # 仅「已通过」的审批可归档；其他状态（待审批/办理中/暂缓/已驳回/已撤回/草稿）一律不可归档。
+    ARCHIVABLE_STATUS = ('approved',)
+
+    @action(detail=True, methods=['post'])
+    def archive(self, request, pk=None):
+        """归档单条审批：POST {note?}（仅「已通过」的审批可归档）"""
+        if not self._can_archive(request):
+            return Response({'error': '仅超级管理员或财务专员可归档'}, status=403)
+        try:
+            a = ApprovalRequest.objects.get(id=pk)
+        except ApprovalRequest.DoesNotExist:
+            return Response({'error': '审批不存在'}, status=404)
+        if a.status not in self.ARCHIVABLE_STATUS:
+            return Response({'error': '仅「已通过」的审批可归档（当前状态：%s）' % a.get_status_display()}, status=400)
+        a.is_archived = True
+        a.archived_at = timezone.now()
+        a.archived_by = request.user
+        if request.data.get('note') is not None:
+            a.archive_note = (request.data.get('note') or '').strip()[:200]
+        a.save(update_fields=['is_archived', 'archived_at', 'archived_by', 'archive_note'])
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'ok': True, 'id': a.id, 'is_archived': True,
+            'archived_at': a.archived_at.isoformat() if a.archived_at else '',
+        })})
+
+    @action(detail=True, methods=['post'])
+    def unarchive(self, request, pk=None):
+        """取消归档单条审批"""
+        if not self._can_archive(request):
+            return Response({'error': '仅超级管理员或财务专员可取消归档'}, status=403)
+        try:
+            a = ApprovalRequest.objects.get(id=pk)
+        except ApprovalRequest.DoesNotExist:
+            return Response({'error': '审批不存在'}, status=404)
+        a.is_archived = False
+        a.archived_at = None
+        a.archived_by = None
+        a.save(update_fields=['is_archived', 'archived_at', 'archived_by'])
+        return Response({'encrypt': True, 'data': encrypt_data({'ok': True, 'id': a.id, 'is_archived': False})})
+
+    @action(detail=False, methods=['post'])
+    def archive_batch(self, request):
+        """批量归档：POST {ids?:[...]} 或 {start,end?,type?,note?}
+        按日期区间批量归档该期间内「已通过」的审批，便于月度/季度/年度一次性归档。"""
+        if not self._can_archive(request):
+            return Response({'error': '仅超级管理员或财务专员可归档'}, status=403)
+        from datetime import date as _date
+        note = (request.data.get('note') or '').strip()[:200]
+        qs = None
+        ids = request.data.get('ids')
+        if isinstance(ids, list) and ids:
+            try:
+                id_list = [int(x) for x in ids]
+            except (ValueError, TypeError):
+                return Response({'error': 'ids 参数不合法'}, status=400)
+            qs = ApprovalRequest.objects.filter(id__in=id_list)
+        else:
+            start_s = (request.data.get('start') or '').strip()
+            end_s = (request.data.get('end') or '').strip()
+            if not start_s or not end_s:
+                return Response({'error': '请选择归档的起止日期，或传入 ids'}, status=400)
+            try:
+                start_d = _date.fromisoformat(start_s)
+                end_d = _date.fromisoformat(end_s)
+            except ValueError:
+                return Response({'error': '日期格式应为 YYYY-MM-DD'}, status=400)
+            if start_d > end_d:
+                start_d, end_d = end_d, start_d
+            tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+            qs = ApprovalRequest.objects.filter(
+                created_at__date__gte=start_d, created_at__date__lte=end_d,
+                status__in=self.ARCHIVABLE_STATUS, is_archived=False)
+            if tenant:
+                qs = qs.filter(tenant=tenant)
+            t = (request.data.get('type') or '').strip()
+            if t:
+                qs = qs.filter(approval_type=t)
+        qs = qs.filter(status__in=self.ARCHIVABLE_STATUS, is_archived=False)
+        n = qs.update(is_archived=True, archived_at=timezone.now(),
+                      archived_by=request.user, archive_note=note)
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'ok': True, 'archived': n,
+            'message': '已归档 %d 条审批' % n,
+        })})
+
+    @action(detail=False, methods=['get', 'post'])
+    def lifecycle_config(self, request):
+        """审批生命周期自动治理配置：GET 读取 / POST 保存（仅超级管理员，按企业生效）
+        期限含义：已通过超过 N 天自动归档；已撤回/草稿超过 N 天自动删除，删除前一天发通知。"""
+        from .models import ApprovalLifecycleConfig
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        if request.method == 'POST':
+            if getattr(request.user, 'user_type', '') != 'super_admin':
+                return Response({'error': '仅超级管理员可配置审批生命周期期限'}, status=403)
+            if not tenant:
+                return Response({'error': '未找到所属企业'}, status=400)
+            cfg = ApprovalLifecycleConfig.get_config(tenant)
+            cfg.tenant = tenant
+            for field, default in ApprovalLifecycleConfig.DEFAULTS.items():
+                raw = request.data.get(field)
+                if raw is None or raw == '':
+                    continue
+                try:
+                    days = int(float(raw))
+                except (ValueError, TypeError):
+                    return Response({'error': '期限天数必须是数字'}, status=400)
+                if not (ApprovalLifecycleConfig.MIN_DAYS <= days <= ApprovalLifecycleConfig.MAX_DAYS):
+                    return Response({'error': '期限天数需在 %d~%d 之间' % (
+                        ApprovalLifecycleConfig.MIN_DAYS, ApprovalLifecycleConfig.MAX_DAYS)}, status=400)
+                setattr(cfg, field, days)
+            if 'enabled' in request.data:
+                cfg.enabled = bool(request.data.get('enabled'))
+            cfg.save()
+            return Response({'encrypt': True, 'data': encrypt_data(self._lifecycle_payload(tenant))})
+        return Response({'encrypt': True, 'data': encrypt_data(self._lifecycle_payload(tenant))})
+
+    def _lifecycle_payload(self, tenant):
+        from .models import ApprovalLifecycleConfig
+        cfg = ApprovalLifecycleConfig.get_config(tenant)
+        return {
+            'enabled': bool(cfg.enabled),
+            'archive_days': int(cfg.archive_days),
+            'withdrawn_delete_days': int(cfg.withdrawn_delete_days),
+            'draft_delete_days': int(cfg.draft_delete_days),
+            'min_days': ApprovalLifecycleConfig.MIN_DAYS,
+            'max_days': ApprovalLifecycleConfig.MAX_DAYS,
+            'can_config': True,
+        }
 
     def _resolve_payment_method(self, user, payment_method, approval_type, type_obj=None):
         """解析审批付款方式（报销/采购/自定义类型，收款方式可选）。
@@ -2171,6 +2880,11 @@ class ApprovalViewSet(viewsets.ViewSet):
             verr = validate_form_data(type_obj.form_schema or [], form_data)
             if verr:
                 return Response({'error': '表单校验失败', 'fields': verr}, status=400)
+        # 发票数量上限（报销/采购的发票区块 + 自定义类型的发票字段，分别按配置上限校验）
+        _inv_err = self._check_invoice_count(approval_type, type_obj, tenant, form_data,
+                                             department_id=department_id)
+        if _inv_err:
+            return Response({'error': _inv_err}, status=400)
 
         # 审批人自动根据所选部门和审批类型生成
         approver_nodes = serializer.validated_data.get('approver_nodes', [])
@@ -2225,6 +2939,11 @@ class ApprovalViewSet(viewsets.ViewSet):
                 auto_amount = None
         if auto_amount is not None:
             amount = auto_amount
+        # 其余类型（自定义类型、带表单的内置类型，以及请假/加班/招聘等本就没有金额的类型）：
+        # 金额只认「表单金额字段」，前端若带了残留的 amount 也一律不采用
+        # （用户在新建审批里切换审批类型时最容易把上一个类型的金额带进来）
+        if approval_type not in self.AMOUNT_FROM_CLIENT_TYPES:
+            amount = self._form_amount_value(type_obj, form_data)
         # 出差天数
         duration = serializer.validated_data.get('duration')
         if approval_type == 'trip' and trip_data.get('days'):
@@ -2271,18 +2990,16 @@ class ApprovalViewSet(viewsets.ViewSet):
             )
             # 物资单据：创建业务记录 + 自动生成单据号（失败则回滚整单）；金额镜像到审批金额字段以支持阈值审批
             if approval_type in ('material_requirement', 'material_requisition', 'material_stock_in'):
-                from decimal import Decimal as _D, InvalidOperation as _IO
                 from .material_utils import ensure_material_record
                 _mrec, merr = ensure_material_record(approval, form_data)
                 if merr:
                     raise serializers.ValidationError(merr)
                 approval.form_data = form_data
-                if form_data.get('amount'):
-                    try:
-                        approval.amount = _D(str(form_data['amount']))
-                    except (_IO, ValueError, TypeError):
-                        pass
-                approval.save(update_fields=['form_data', 'amount'] if form_data.get('amount') else ['form_data'])
+                # 用「schema 里的金额字段」取值：需求单/领用单是 amount，入库单是 actual_amount
+                _amt = self._form_amount_value(type_obj, form_data)
+                if _amt is not None:
+                    approval.amount = _amt
+                approval.save(update_fields=['form_data', 'amount'] if _amt is not None else ['form_data'])
             from accounts.models import CustomUser, Department
 
             # 创建发起人节点（order 0，展示用）
@@ -2609,6 +3326,41 @@ class ApprovalViewSet(viewsets.ViewSet):
                         })
         return result
 
+    # 金额允许「由前端直接传入」的审批类型：这三个类型的金额对用户是可见可填的
+    # （报销/采购按明细汇总、出差取出差数据）。**其余类型**（自定义类型、带表单的内置类型）
+    # 一律以「表单里的金额字段」为准，不采信前端传来的 amount —— 否则用户在新建审批时
+    # 先选了报销填了金额、又切到自定义类型提交，会把上一个类型残留的金额带进来，
+    # 造成「审批金额」与「表单金额」不一致。
+    AMOUNT_FROM_CLIENT_TYPES = ('expense', 'purchase', 'trip')
+
+    def _schema_amount_field(self, type_obj):
+        """取审批类型 schema 里的金额字段：优先 key=amount，其次第一个顶层 type=amount 的字段"""
+        schema = (getattr(type_obj, 'form_schema', None) or []) if type_obj else []
+        first = None
+        for f in schema:
+            if not isinstance(f, dict) or f.get('type') != 'amount':
+                continue
+            if f.get('key') == 'amount':
+                return f
+            if first is None:
+                first = f
+        return first
+
+    def _form_amount_value(self, type_obj, form_data):
+        """从表单数据里读金额字段的值（Decimal 或 None）"""
+        from decimal import Decimal as _D, InvalidOperation as _IO
+        field = self._schema_amount_field(type_obj)
+        key = (field or {}).get('key')
+        if not key:
+            return None
+        val = (form_data or {}).get(key)
+        if val is None or val == '' or isinstance(val, (list, dict, bool)):
+            return None
+        try:
+            return _D(str(val))
+        except (_IO, ValueError, TypeError):
+            return None
+
     def _gather_threshold_values(self, validated_data, form_data=None):
         """收集用于阈值判断的数字字段：form_data（自定义/镜像）+ legacy（内置兜底）"""
         threshold_values = {}
@@ -2630,12 +3382,15 @@ class ApprovalViewSet(viewsets.ViewSet):
                 threshold_values['duration'] = float(duration)
             except (ValueError, TypeError):
                 pass
-        amount = validated_data.get('amount')
-        if amount:
-            try:
-                threshold_values['amount'] = float(amount)
-            except (ValueError, TypeError):
-                pass
+        # 金额阈值：只有报销/采购/出差采信前端传入的金额；其它类型的金额字段已经按自己的 key
+        # 进入上面的 form_data 收集里，不再额外塞一个 amount —— 避免切换类型时残留的金额影响审批链
+        if validated_data.get('approval_type') in self.AMOUNT_FROM_CLIENT_TYPES:
+            amount = validated_data.get('amount')
+            if amount:
+                try:
+                    threshold_values['amount'] = float(amount)
+                except (ValueError, TypeError):
+                    pass
         recruit_data = validated_data.get('recruit_data', {})
         if recruit_data and isinstance(recruit_data, dict):
             hc = recruit_data.get('headcount', 0)
@@ -3206,6 +3961,22 @@ class ApprovalViewSet(viewsets.ViewSet):
                     extra_data={'approval_id': approval.id, 'action': 'pending'},
                 )
 
+        # @ 提及：把本次审批以私聊卡片消息发给被 @ 的成员（发起人 + 自己之前顺位的审批人），
+        # 一并带上本次审批意见。仅接受候选人范围内的 id，避免越权给任意用户发私聊。
+        mention_ids = request.data.get('mention_user_ids') or []
+        if isinstance(mention_ids, (list, tuple)) and mention_ids:
+            want = set()
+            for mid in mention_ids:
+                try:
+                    want.add(int(mid))
+                except (ValueError, TypeError):
+                    continue
+            candidates = self._mention_candidate_users(approval, request.user)
+            targets = [u for u in candidates if u.id in want]
+            if targets:
+                sent = self._send_mention_cards(approval, request.user, targets, comment)
+                logger.info(f'{request.user} 在审批 {approval.id} 中 @ 了 {sent} 人')
+
         logger.info(f'{request.user} 通过审批 {approval.title}')
         data = ApprovalRequestSerializer(approval, context={'request': request}).data
         return Response({'encrypt': True, 'data': encrypt_data(data)})
@@ -3573,9 +4344,9 @@ class ApprovalViewSet(viewsets.ViewSet):
         if serializer.validated_data.get('trip_data') is not None:
             approval.trip_data = serializer.validated_data['trip_data']
         # 付款方式：重新编辑提交时同样校验/快照（报销/采购/自定义类型）
+        from .type_utils import resolve_approval_type
+        t_obj = resolve_approval_type(approval.approval_type, request.tenant or request.user.get_active_tenant())
         if 'payment_method' in serializer.validated_data or approval.approval_type in ('expense', 'purchase'):
-            from .type_utils import resolve_approval_type
-            t_obj = resolve_approval_type(approval.approval_type, request.tenant or request.user.get_active_tenant())
             pm, pm_err = self._resolve_payment_method(
                 request.user, serializer.validated_data.get('payment_method'), approval.approval_type, t_obj)
             if pm_err:
@@ -3611,20 +4382,25 @@ class ApprovalViewSet(viewsets.ViewSet):
         form_data = collect_form_data(serializer.validated_data,
                                       serializer.validated_data.get('form_data') or {},
                                       approval.approval_type)
+        # 发票数量上限（重新提交时同样校验，避免绕过前端）
+        _inv_err = self._check_invoice_count(approval.approval_type, t_obj, request.tenant, form_data)
+        if _inv_err:
+            return Response({'error': _inv_err}, status=400)
         approval.form_data = form_data
+        # 金额口径与新建一致：除报销/采购/出差外，一律以「表单金额字段」为准，
+        # 不采信前端传来的 amount（重新提交时前端同样可能带上残留金额）
+        if approval.approval_type not in self.AMOUNT_FROM_CLIENT_TYPES:
+            approval.amount = self._form_amount_value(t_obj, form_data)
         # 物资单据：重新提交时同步业务记录（保留原单据号），校验失败则拒绝重新提交
         if approval.approval_type in ('material_requirement', 'material_requisition', 'material_stock_in'):
-            from decimal import Decimal as _D, InvalidOperation as _IO
             from .material_utils import ensure_material_record
             _mrec, merr = ensure_material_record(approval, form_data)
             if merr:
                 return Response({'error': merr}, status=400)
             approval.form_data = form_data
-            if form_data.get('amount'):
-                try:
-                    approval.amount = _D(str(form_data['amount']))
-                except (_IO, ValueError, TypeError):
-                    pass
+            _amt = self._form_amount_value(t_obj, form_data)
+            if _amt is not None:
+                approval.amount = _amt
         # 被驳回后重新提交：从驳回节点继续审批（已通过节点不再重审）。
         # 优先使用驳回时持久化的 resume_node_order（兼容“驳回→存草稿→再提交”路径，
         # 因为 update_draft 会重建审批链并清空节点状态）；同时收集当前链中驳回节点之前的已通过节点，
@@ -3853,6 +4629,13 @@ class ApprovalViewSet(viewsets.ViewSet):
         elif serializer.validated_data.get('payment_method') is not None:
             approval.payment_method = {}
         approval.form_data = form_data
+        # 金额口径与新建/重新提交一致：除报销/采购/出差外，一律以「表单金额字段」为准
+        if approval.approval_type not in self.AMOUNT_FROM_CLIENT_TYPES:
+            approval.amount = self._form_amount_value(_tobj, form_data)
+        # 发票数量上限（存草稿同样校验，避免绕过前端无限上传）
+        _inv_err = self._check_invoice_count(approval.approval_type, _tobj, request.tenant, form_data)
+        if _inv_err:
+            return Response({'error': _inv_err}, status=400)
         # 重新编辑时保存为草稿
         if approval.status in ('cancelled', 'rejected'):
             approval.status = 'draft'
@@ -4206,7 +4989,9 @@ class ApprovalViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['post'])
     def upload_invoice(self, request):
-        """上传发票文件（图片/PDF），落审批发票存储，供报销/采购/自定义发票字段使用"""
+        """上传发票文件（图片/PDF），落审批发票存储，供报销/采购/自定义发票字段使用。
+        只放行图片与 PDF：先看扩展名，再校验文件头（魔数），避免「改了后缀的其它格式文件」
+        混进来后被丢给 OCR 的 celery 任务（识别不了还白耗资源）。"""
         file = request.FILES.get('file')
         if not file:
             return Response({'error': '请选择发票文件'}, status=400)
@@ -4215,7 +5000,15 @@ class ApprovalViewSet(viewsets.ViewSet):
         ext = os.path.splitext(file.name)[1].lower()
         allowed = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.pdf']
         if ext not in allowed:
-            return Response({'error': '发票仅支持图片或PDF格式'}, status=400)
+            return Response({'error': '发票仅支持图片或 PDF 格式，其它格式不支持'}, status=400)
+        # 文件头校验（只读前 16 字节，读完 seek 回 0，不影响后续保存）
+        try:
+            head = file.read(16)
+            file.seek(0)
+        except Exception:
+            head = b''
+        if not is_image_or_pdf_head(head):
+            return Response({'error': '文件内容不是图片或 PDF（请勿修改文件后缀），已拒绝上传'}, status=400)
         from django.core.files.storage import default_storage
         filename = f'approval_invoices/{uuid.uuid4().hex}{ext}'
         saved_path = default_storage.save(filename, file)
@@ -4717,6 +5510,18 @@ class ApprovalViewSet(viewsets.ViewSet):
         # 票据回传开关（默认关闭）
         if 'enable_receipt_return' in request.data:
             defaults['enable_receipt_return'] = bool(request.data.get('enable_receipt_return'))
+        # 票据回传数量上限（附件/发票分别不超过该数量，默认 10）
+        if 'receipt_max_count' in request.data:
+            try:
+                defaults['receipt_max_count'] = max(1, int(request.data.get('receipt_max_count') or 10))
+            except (ValueError, TypeError):
+                pass
+        # 审批发票上传数量上限（0 表示沿用「票据回传数量上限」）
+        if 'invoice_max_count' in request.data:
+            try:
+                defaults['invoice_max_count'] = max(0, int(request.data.get('invoice_max_count') or 0))
+            except (ValueError, TypeError):
+                pass
 
         # 配置查找键：公司/虚拟组织级部门适用范围 > 子公司 > 集团默认
         lookup_kwargs = {'tenant': config_tenant, 'approval_type': approval_type}
@@ -6204,15 +7009,11 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
         return Response({'encrypt': True, 'data': encrypt_data(self._summary_data(s, True))})
 
     def destroy(self, request, pk=None):
-        """仅超级管理员可删除工作总结"""
-        if request.user.user_type != 'super_admin':
-            return Response({'error': '仅超级管理员可删除工作总结'}, status=403)
-        try:
-            s = DailyWorkSummary.objects.get(id=pk)
-        except DailyWorkSummary.DoesNotExist:
-            return Response({'error': '工作总结不存在'}, status=404)
-        s.delete()
-        return Response({'encrypt': True, 'data': encrypt_data({'ok': True})})
+        """每日工作总结不可删除（含超级管理员）：作为归档留痕数据长期保留。
+        接口保留仅为给出明确提示，避免旧客户端/直接调用静默失败。"""
+        return Response({
+            'error': '每日工作总结不可删除（含超级管理员）。总结将作为归档留痕长期保留，便于后续查阅与复盘。'
+        }, status=403)
 
     @action(detail=True, methods=['post'])
     def analyze(self, request, pk=None):
@@ -6685,12 +7486,28 @@ class WorkCalendarViewSet(viewsets.ViewSet):
         from tasks.models import Task
         from cloud.models import CloudFile, FileOperationLog
         from org.models import OrgChangeLog
-        from .models import ApprovalRequest, SubsidyApplication, SubsidyWithdrawal, AttendanceRecord, AnnouncementOperation
+        from chat.models import Message
+        from .models import (
+            ApprovalRequest, ApprovalLog, SubsidyApplication, SubsidyWithdrawal,
+            AttendanceRecord, AnnouncementOperation,
+            DailyWorkSummaryLike as _DWSLike, DailyWorkSummaryComment as _DWSComment,
+            AnnouncementLike as _AnnLike,
+        )
         _, last = cal.monthrange(year, month)
         start, end = date(year, month, 1), date(year, month, last)
         days = {}
         for d in range(1, last + 1):
-            days[f'{year:04d}-{month:02d}-{d:02d}'] = {'approvals': 0, 'invoices': 0, 'withdrawals': 0, 'tasks': 0, 'docs': 0, 'cloud': 0, 'org': 0, 'work_summary': 0, 'announcement': 0, 'clock_in': None, 'clock_out': None}
+            days[f'{year:04d}-{month:02d}-{d:02d}'] = {
+                # 提交审批 / 审批操作（审批他人）
+                'approvals': 0, 'approval_ops': 0,
+                'invoices': 0, 'withdrawals': 0, 'tasks': 0, 'docs': 0, 'cloud': 0, 'org': 0,
+                # 每日总结：创建 / 评论 / 点赞 / 分享（work_summary 为四者合计，保持兼容）
+                'summary_pub': 0, 'summary_cmt': 0, 'summary_like': 0, 'summary_share': 0,
+                'work_summary': 0,
+                # 集团公告：发布/存草稿/编辑/删除 / 评论 / 点赞（announcement 为三者合计，保持兼容）
+                'announce_pub': 0, 'announce_cmt': 0, 'announce_like': 0, 'announcement': 0,
+                'clock_in': None, 'clock_out': None,
+            }
 
         def _bump(qs, key):
             for dt in qs:
@@ -6698,8 +7515,28 @@ class WorkCalendarViewSet(viewsets.ViewSet):
                 if ds in days:
                     days[ds][key] += 1
 
+        def _bump_each(pairs):
+            """pairs: [(datetime, key), ...]，用于一条日期字段同时计入合计维度"""
+            for dt, keys in pairs:
+                ds = dt.strftime('%Y-%m-%d')
+                if ds in days:
+                    for k in keys:
+                        days[ds][k] += 1
+
         _bump(ApprovalRequest.objects.filter(applicant=user, created_at__date__range=[start, end]).values_list('created_at', flat=True), 'approvals')
-        _bump(DailyWorkSummary.objects.filter(user=user, summary_date__range=[start, end]).values_list('summary_date', flat=True), 'work_summary')
+        # 审批操作：我作为审批人对他人审批的处理（提交人自己的审批不重复计）
+        _bump(ApprovalLog.objects.filter(operator=user, created_at__date__range=[start, end]).exclude(request__applicant=user).values_list('created_at', flat=True), 'approval_ops')
+        _bump_each((dt, ('summary_pub', 'work_summary')) for dt in
+                   DailyWorkSummary.objects.filter(user=user, summary_date__range=[start, end]).values_list('summary_date', flat=True))
+        _bump_each((dt, ('summary_like', 'work_summary')) for dt in
+                   _DWSLike.objects.filter(user=user, created_at__date__range=[start, end]).values_list('created_at', flat=True))
+        _bump_each((dt, ('summary_cmt', 'work_summary')) for dt in
+                   _DWSComment.objects.filter(author=user, created_at__date__range=[start, end]).values_list('created_at', flat=True))
+        # 分享每日总结：以私聊卡片消息为凭据（分享即向对方发送 work_summary_card）
+        _bump_each((dt, ('summary_share', 'work_summary')) for dt in
+                   Message.objects.filter(sender=user, message_type='work_summary_card',
+                                          is_deleted=False, timestamp__date__range=[start, end])
+                   .values_list('timestamp', flat=True))
         _bump(SubsidyApplication.objects.filter(applicant=user, created_at__date__range=[start, end]).values_list('created_at', flat=True), 'invoices')
         _bump(SubsidyWithdrawal.objects.filter(user=user, requested_at__date__range=[start, end]).values_list('requested_at', flat=True), 'withdrawals')
         _bump(Task.objects.filter(Q(assignee=user) | Q(creator=user), status='done', updated_at__date__range=[start, end]).values_list('updated_at', flat=True), 'tasks')
@@ -6707,7 +7544,15 @@ class WorkCalendarViewSet(viewsets.ViewSet):
         # 网盘/协作文档操作 + 组织架构操作（按操作者归属）
         _bump(FileOperationLog.objects.filter(user=user, created_at__date__range=[start, end]).values_list('created_at', flat=True), 'cloud')
         _bump(OrgChangeLog.objects.filter(operator=user, created_at__date__range=[start, end]).values_list('created_at', flat=True), 'org')
-        _bump(AnnouncementOperation.objects.filter(user=user, created_at__date__range=[start, end]).values_list('created_at', flat=True), 'announcement')
+        # 公告：发布（含存草稿/编辑，属内容产出）/ 评论 / 点赞
+        _bump_each((dt, ('announce_pub', 'announcement')) for dt in
+                   AnnouncementOperation.objects.filter(user=user, created_at__date__range=[start, end])
+                   .exclude(action='comment').values_list('created_at', flat=True))
+        _bump_each((dt, ('announce_cmt', 'announcement')) for dt in
+                   AnnouncementOperation.objects.filter(user=user, action='comment', created_at__date__range=[start, end])
+                   .values_list('created_at', flat=True))
+        _bump_each((dt, ('announce_like', 'announcement')) for dt in
+                   _AnnLike.objects.filter(user=user, created_at__date__range=[start, end]).values_list('created_at', flat=True))
         for r in AttendanceRecord.objects.filter(user=user, date__range=[start, end]).order_by('date', 'clock_time'):
             ds = r.date.strftime('%Y-%m-%d')
             t = timezone.localtime(r.clock_time).strftime('%H:%M')
@@ -6788,22 +7633,56 @@ class WorkCalendarViewSet(viewsets.ViewSet):
             add('work_summary', 'fas fa-comment-dots',
                 f'评论每日总结：{cm.summary.user.real_name or cm.summary.user.username} · {cm.summary.summary_date}',
                 fmt(cm.created_at), f'/oa/work-summary/?id={cm.summary_id}')
+        # 分享每日总结（私聊卡片分享给他人），接收人由私聊房间成员反查
+        from chat.models import Message as _Message
+        for msg in _Message.objects.filter(sender=user, message_type='work_summary_card',
+                                           is_deleted=False, timestamp__date=d).order_by('timestamp'):
+            try:
+                card = json.loads(msg.content or '{}')
+            except (ValueError, TypeError):
+                card = {}
+            sid = card.get('summary_id')
+            receiver = ''
+            try:
+                for rm in msg.chat_room.members.all():
+                    if rm.id != user.id:
+                        receiver = rm.real_name or rm.username
+                        break
+            except Exception:
+                receiver = ''
+            add('work_summary', 'fas fa-share-alt',
+                f'分享每日总结{("给 " + receiver) if receiver else ""}：{card.get("summary_date", "")}',
+                fmt(msg.timestamp), f'/oa/work-summary/?id={sid}' if sid else '/oa/work-summary/')
         # 集团公告操作：谁操作记谁（发布/存草稿/编辑/删除/评论）；公告已删除时跳公告列表
         for op in AnnouncementOperation.objects.filter(user=user, created_at__date=d).order_by('created_at'):
             label = dict(AnnouncementOperation.ACTION_CHOICES).get(op.action, op.action)
             title = f'公告{label}：{op.title or "未命名公告"}'
             ann_url = f'/oa/announcements/?id={op.announcement_id}' if op.announcement_id else '/oa/announcements/'
             add('announcement', 'fas fa-bullhorn', title, fmt(op.created_at), ann_url)
+        # 集团公告点赞：谁点赞记谁，直达公告详情
+        from .models import AnnouncementLike as _AnnLike
+        for lk in _AnnLike.objects.filter(user=user, created_at__date=d).select_related('announcement__author').order_by('created_at'):
+            ann = lk.announcement
+            title = f'点赞公告：{ann.title}' if ann else '点赞公告'
+            add('announcement', 'fas fa-thumbs-up', title, fmt(lk.created_at),
+                f'/oa/announcements/?id={lk.announcement_id}' if lk.announcement_id else '/oa/announcements/')
         events.sort(key=lambda e: e['time'], reverse=True)
         return events
 
     @action(detail=False, methods=['get'])
     def stats(self, request):
-        """时间线统计：某时间范围内按日/月聚合的处理量（审批/核验发票/支付提现/任务 + 网盘/组织操作）"""
-        from datetime import date as dt_date, timedelta
-        from .models import ApprovalAssignee, SubsidyApplication, SubsidyWithdrawal
+        """时间线统计：某时间范围内按日/月聚合的处理量
+        （审批/核验发票/支付提现/任务/网盘/文档/组织/总结/公告/打卡，覆盖工作日历全部行为维度）"""
+        from datetime import date as dt_date, datetime, time, timedelta
+        from .models import (
+            ApprovalAssignee, SubsidyApplication, SubsidyWithdrawal, AttendanceRecord,
+            DailyWorkSummary, AnnouncementOperation,
+            DailyWorkSummaryLike as _DWSLike, DailyWorkSummaryComment as _DWSComment,
+            AnnouncementLike as _AnnLike,
+        )
         from tasks.models import Task
-        from cloud.models import FileOperationLog
+        from chat.models import Message
+        from cloud.models import FileOperationLog, CloudFile
         from org.models import OrgChangeLog
         target = self._resolve_target_user(request)
         now_date = timezone.localdate()
@@ -6844,7 +7723,10 @@ class WorkCalendarViewSet(viewsets.ViewSet):
             return [0] * len(buckets)
 
         approvals, invoices, withdrawals = _arr(), _arr(), _arr()
-        tasks, cloud, org = _arr(), _arr(), _arr()
+        tasks, cloud, org, docs = _arr(), _arr(), _arr(), _arr()
+        attendance = _arr()
+        summary_pub, summary_cmt, summary_like, summary_share = _arr(), _arr(), _arr(), _arr()
+        announce_pub, announce_cmt, announce_like = _arr(), _arr(), _arr()
 
         def _count(qs, arr):
             for v in qs:
@@ -6868,15 +7750,58 @@ class WorkCalendarViewSet(viewsets.ViewSet):
         ).values_list('updated_at', flat=True), tasks)
         _count(FileOperationLog.objects.filter(
             user=target, created_at__date__gte=start, created_at__date__lte=end,
-        ).values_list('created_at', flat=True), cloud)
+        ).exclude(operation='edit_save').values_list('created_at', flat=True), cloud)
+        # 协作文档编辑 / 新建文档
+        _count(FileOperationLog.objects.filter(
+            user=target, operation='edit_save',
+            created_at__date__gte=start, created_at__date__lte=end,
+        ).values_list('created_at', flat=True), docs)
+        _count(CloudFile.objects.filter(
+            owner=target, is_document=True,
+            created_at__date__gte=start, created_at__date__lte=end,
+        ).values_list('created_at', flat=True), docs)
         _count(OrgChangeLog.objects.filter(
             operator=target, created_at__date__gte=start, created_at__date__lte=end,
         ).values_list('created_at', flat=True), org)
+        # 打卡
+        _count(AttendanceRecord.objects.filter(
+            user=target, date__gte=start, date__lte=end,
+        ).values_list('clock_time', flat=True), attendance)
+        # 每日总结：创建（按总结日期）/ 评论 / 点赞 / 分享（私聊卡片）
+        _count((datetime.combine(sd, time.min) for sd in DailyWorkSummary.objects.filter(
+            user=target, summary_date__gte=start, summary_date__lte=end,
+        ).values_list('summary_date', flat=True)), summary_pub)
+        _count(_DWSComment.objects.filter(
+            author=target, created_at__date__gte=start, created_at__date__lte=end,
+        ).values_list('created_at', flat=True), summary_cmt)
+        _count(_DWSLike.objects.filter(
+            user=target, created_at__date__gte=start, created_at__date__lte=end,
+        ).values_list('created_at', flat=True), summary_like)
+        _count(Message.objects.filter(
+            sender=target, message_type='work_summary_card', is_deleted=False,
+            timestamp__date__gte=start, timestamp__date__lte=end,
+        ).values_list('timestamp', flat=True), summary_share)
+        # 集团公告：发布（含草稿/编辑，非评论）/ 评论 / 点赞
+        _count(AnnouncementOperation.objects.filter(
+            user=target, created_at__date__gte=start, created_at__date__lte=end,
+        ).exclude(action='comment').values_list('created_at', flat=True), announce_pub)
+        _count(AnnouncementOperation.objects.filter(
+            user=target, action='comment',
+            created_at__date__gte=start, created_at__date__lte=end,
+        ).values_list('created_at', flat=True), announce_cmt)
+        _count(_AnnLike.objects.filter(
+            user=target, created_at__date__gte=start, created_at__date__lte=end,
+        ).values_list('created_at', flat=True), announce_like)
 
         return Response({'encrypt': True, 'data': encrypt_data({
             'start': start.isoformat(), 'end': end.isoformat(),
             'labels': labels, 'approvals': approvals, 'invoices': invoices,
             'withdrawals': withdrawals, 'tasks': tasks, 'cloud': cloud, 'org': org,
+            'docs': docs, 'attendance': attendance,
+            'summary_pub': summary_pub, 'summary_cmt': summary_cmt,
+            'summary_like': summary_like, 'summary_share': summary_share,
+            'announce_pub': announce_pub, 'announce_cmt': announce_cmt,
+            'announce_like': announce_like,
             'target_user': self._target_info(target),
         })})
 
@@ -7017,17 +7942,23 @@ class WorkCalendarViewSet(viewsets.ViewSet):
                 'position': u.position or '',
             }
 
-        act = {uid: {'chat': 0, 'approval': 0, 'attendance': 0, 'summary': 0,
-                     'task': 0, 'cloud': 0, 'doc': 0, 'announcement': 0,
-                     'summary_pub': 0, 'summary_like': 0, 'summary_cmt': 0,
-                     'announce_pub': 0, 'announce_cmt': 0} for uid in user_ids}
+        act = {uid: {'chat': 0, 'approval': 0, 'attendance': 0,
+                     'task': 0, 'cloud': 0, 'doc': 0,
+                     'summary_pub': 0, 'summary_like': 0, 'summary_cmt': 0, 'summary_share': 0,
+                     'announce_pub': 0, 'announce_cmt': 0, 'announce_like': 0} for uid in user_ids}
 
         def _add(qs, key):
             for uid in qs:
                 if uid in act:
                     act[uid][key] += 1
 
+        # 私聊消息：分享工作总结的卡片消息单独计入「分享总结」，其余计入「聊天」
+        share_msg_qs = Message.objects.filter(
+            sender_id__in=user_ids, message_type='work_summary_card',
+            timestamp__date__range=[start, end], is_deleted=False)
+        _add(share_msg_qs.values_list('sender_id', flat=True), 'summary_share')
         _add(Message.objects.filter(sender_id__in=user_ids, timestamp__date__range=[start, end], is_deleted=False)
+             .exclude(message_type='work_summary_card')
              .values_list('sender_id', flat=True), 'chat')
         _add(ApprovalRequest.objects.filter(applicant_id__in=user_ids, created_at__date__range=[start, end])
              .values_list('applicant_id', flat=True), 'approval')
@@ -7060,6 +7991,10 @@ class WorkCalendarViewSet(viewsets.ViewSet):
         _add(AnnouncementOperation.objects.filter(user_id__in=user_ids, action='comment',
                                                   created_at__date__range=[start, end])
              .values_list('user_id', flat=True), 'announce_cmt')
+        # —— 集团公告点赞 ——
+        from .models import AnnouncementLike as _AnnLike
+        _add(_AnnLike.objects.filter(user_id__in=user_ids, created_at__date__range=[start, end])
+             .values_list('user_id', flat=True), 'announce_like')
 
         # —— 两两互动边：每次互动生成一条线段（含类型/时间/标题），逐条显示、点击可看该次互动 ——
         from django.db.models import Max as MaxAgg
@@ -7166,6 +8101,23 @@ class WorkCalendarViewSet(viewsets.ViewSet):
                 _push_edge(lk.user_id, au, 'summary_like',
                            timezone.localtime(lk.created_at).isoformat(),
                            f'点赞总结：{lk.summary.summary_date}')
+        # 分享总结：分享人 → 接收人（私聊卡片消息反查房间另一名成员）
+        for msg in share_msg_qs.select_related('chat_room').prefetch_related('chat_room__members'):
+            peers = [u for u in msg.chat_room.members.all() if u.id != msg.sender_id]
+            for peer in peers[:1]:
+                if peer.id in id_set:
+                    _push_edge(msg.sender_id, peer.id, 'summary_share',
+                               timezone.localtime(msg.timestamp).isoformat(), '分享每日工作总结')
+        # 公告点赞：点赞人 → 公告发布人（每次点赞一条线段）
+        for alk in _AnnLike.objects.filter(
+                user_id__in=user_ids, created_at__date__range=[start, end],
+        ).select_related('announcement__author').only(
+                'user_id', 'created_at', 'announcement__author_id', 'announcement__title'):
+            au = alk.announcement.author_id if alk.announcement else None
+            if au in id_set and alk.user_id != au:
+                _push_edge(alk.user_id, au, 'announce_like',
+                           timezone.localtime(alk.created_at).isoformat(),
+                           f'点赞公告：{alk.announcement.title if alk.announcement else ""}')
 
         # —— 组织架构树：根=当前企业/集团名，部门按类型着色（公司/子公司类型区别于普通部门，不单独列出） ——
         depts = list(OrgDept.objects.filter(tenant_id__in=tenant_ids))
@@ -7726,7 +8678,7 @@ class AnnouncementViewSet(viewsets.ViewSet):
         qs = Announcement.objects.filter(tenant=tenant).select_related('author').order_by('-is_published', '-published_at', '-created_at')
         results = [a for a in qs if self._visible_to(a, request.user)]
         return Response({'encrypt': True, 'data': encrypt_data({
-            'results': AnnouncementSerializer(results, many=True).data,
+            'results': AnnouncementSerializer(results, many=True, context={'request': request}).data,
             'can_create': request.user.user_type in ('super_admin', 'admin'),
         })})
 
@@ -7734,13 +8686,20 @@ class AnnouncementViewSet(viewsets.ViewSet):
         """记录公告操作（供工作日历汇总）"""
         try:
             from .models import AnnouncementOperation
+            # 外键必须用 tenant_id 传主键；用 tenant=<整数> 会被 Django 拒绝（须传实例）
+            tenant_id = a.tenant_id if (a and a.tenant_id) else None
+            if not tenant_id:
+                t = self._tenant(request)
+                tenant_id = t.id if t else None
+            if not tenant_id:
+                logger.warning(f'公告操作留痕跳过：无法确定企业(action={action})')
+                return
             AnnouncementOperation.objects.create(
-                tenant=a.tenant_id if a and a.tenant_id else self._tenant(request).id,
-                user=request.user, announcement=a,
-                action=action, title=(a.title if a else (request.data.get('title') or '')[:200]),
+                tenant_id=tenant_id, user=request.user, announcement=a,
+                action=action, title=(a.title if a else (request.data.get('title') or ''))[:200],
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f'公告操作留痕写入失败(action={action}): {e}')
 
     def retrieve(self, request, pk=None):
         from .serializers import AnnouncementSerializer
@@ -7761,7 +8720,7 @@ class AnnouncementViewSet(viewsets.ViewSet):
             a.save(update_fields=['viewed_by', 'view_count'])
         except Exception:
             pass
-        return Response({'encrypt': True, 'data': encrypt_data(AnnouncementSerializer(a).data)})
+        return Response({'encrypt': True, 'data': encrypt_data(AnnouncementSerializer(a, context={'request': request}).data)})
 
     def create(self, request):
         from .serializers import AnnouncementSerializer
@@ -7802,7 +8761,7 @@ class AnnouncementViewSet(viewsets.ViewSet):
             a.enable_comments = bool(request.data.get('enable_comments'))
         a.save()
         self._record_operation(request, a, 'edit' if a.is_published else 'draft')
-        return Response({'encrypt': True, 'data': encrypt_data(AnnouncementSerializer(a).data)})
+        return Response({'encrypt': True, 'data': encrypt_data(AnnouncementSerializer(a, context={'request': request}).data)})
 
     def destroy(self, request, pk=None):
         try:
@@ -7919,6 +8878,48 @@ class AnnouncementViewSet(viewsets.ViewSet):
             except Exception as e:
                 logger.warning(f'公告评论通知失败: {e}')
         return Response({'encrypt': True, 'data': encrypt_data(AnnouncementCommentSerializer(c).data)}, status=201)
+
+    @action(detail=True, methods=['post', 'delete'])
+    def like(self, request, pk=None):
+        """点赞/取消点赞集团公告
+        POST/DELETE /api/oa/announcements/{pk}/like/
+        点赞行为计入工作日历「成员关系与活跃度」的「点赞公告」维度。
+        """
+        from .models import AnnouncementLike
+        try:
+            a = Announcement.objects.select_related('author').get(id=pk)
+        except Announcement.DoesNotExist:
+            return Response({'error': '公告不存在'}, status=404)
+        if not a.is_published:
+            return Response({'error': '公告未发布，暂不可点赞'}, status=400)
+        if not self._visible_to(a, request.user):
+            return Response({'error': '无权对该公告点赞'}, status=403)
+        newly = False
+        existed = AnnouncementLike.objects.filter(announcement=a, user=request.user).exists()
+        if request.method == 'POST':
+            if not existed:
+                AnnouncementLike.objects.create(announcement=a, user=request.user)
+                newly = True
+            liked = True
+        else:
+            if existed:
+                AnnouncementLike.objects.filter(announcement=a, user=request.user).delete()
+            liked = False
+        # 首次点赞实时通知公告发布人
+        if newly and a.author_id and a.author_id != request.user.id and getattr(a.author, 'is_active', True):
+            try:
+                send_work_notification(
+                    user_id=a.author_id, title='集团公告',
+                    content=f'{request.user.real_name or request.user.username} 点赞了您的公告：“{a.title}”',
+                    notification_type='announcement',
+                    related_url=f'/oa/announcements/?id={a.id}',
+                    extra_data={'announcement_id': a.id, 'title': a.title,
+                                'actor': request.user.id, 'kind': 'like'})
+            except Exception as e:
+                logger.warning(f'公告点赞通知失败: {e}')
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'liked': liked, 'like_count': a.likes.count(),
+        })})
 
 
 class WorkNotificationViewSet(viewsets.ViewSet):

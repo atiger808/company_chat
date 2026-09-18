@@ -18,6 +18,7 @@ urlpatterns = [
     path('announcements/<int:pk>/publish/', AnnouncementViewSet.as_view({'post': 'publish'}), name='announcement-publish'),
     path('announcements/<int:pk>/comments/', AnnouncementViewSet.as_view({'get': 'comments'}), name='announcement-comments'),
     path('announcements/<int:pk>/add-comment/', AnnouncementViewSet.as_view({'post': 'add_comment'}), name='announcement-add-comment'),
+    path('announcements/<int:pk>/like/', AnnouncementViewSet.as_view({'post': 'like', 'delete': 'like'}), name='announcement-like'),
 
     # 考勤打卡
     path('attendance/clock-in/', AttendanceViewSet.as_view({'post': 'clock_in'}), name='attendance-clock-in'),
@@ -68,6 +69,10 @@ urlpatterns = [
     path('approval/search-cc-users/', ApprovalViewSet.as_view({'get': 'search_cc_users'}), name='approval-search-cc-users'),
     path('approval/search-cc-departments/', ApprovalViewSet.as_view({'get': 'search_cc_departments'}), name='approval-search-cc-departments'),
     path('approval/my-pending/', ApprovalViewSet.as_view({'get': 'my_pending'}), name='approval-my-pending'),
+    path('attendance/attendance-geo/', AttendanceViewSet.as_view({'get': 'attendance_geo'}), name='attendance-geo'),
+    path('attendance/geo-convert/', AttendanceViewSet.as_view({'get': 'geo_convert'}), name='attendance-geo-convert'),
+    path('approval/lifecycle-config/', ApprovalViewSet.as_view({'get': 'lifecycle_config', 'post': 'lifecycle_config'}), name='approval-lifecycle-config'),
+    path('approval/<int:pk>/mention-candidates/', ApprovalViewSet.as_view({'get': 'mention_candidates'}), name='approval-mention-candidates'),
     path('approval/draft/', ApprovalViewSet.as_view({'post': 'draft'}), name='approval-draft'),
     path('approval/drafts/', ApprovalViewSet.as_view({'get': 'drafts'}), name='approval-drafts'),
 
@@ -87,6 +92,11 @@ urlpatterns = [
     path('approval/<int:pk>/send-private/', ApprovalViewSet.as_view({'post': 'send_private'}), name='approval-send_private'),
     path('approval/<int:pk>/upload-receipt/', ApprovalViewSet.as_view({'post': 'upload_receipt'}), name='approval-upload-receipt'),
     path('approval/<int:pk>/delete-receipt/', ApprovalViewSet.as_view({'post': 'delete_receipt'}), name='approval-delete-receipt'),
+    # 归档 / 审计复盘
+    path('approval/archive-batch/', ApprovalViewSet.as_view({'post': 'archive_batch'}), name='approval-archive-batch'),
+    path('approval/<int:pk>/archive/', ApprovalViewSet.as_view({'post': 'archive'}), name='approval-archive'),
+    path('approval/<int:pk>/unarchive/', ApprovalViewSet.as_view({'post': 'unarchive'}), name='approval-unarchive'),
+    path('approval/report-audit/', ApprovalReportViewSet.as_view({'get': 'audit_summary'}), name='approval-report-audit'),
     path('approval/custom-payment-methods/', ApprovalViewSet.as_view({'get': 'custom_payment_methods', 'post': 'custom_payment_methods'}), name='approval-custom-payment-methods'),
     path('approval/custom-payment-method/<int:pk>/', ApprovalViewSet.as_view({'delete': 'custom_payment_method'}), name='approval-custom-payment-method'),
 

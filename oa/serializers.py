@@ -183,6 +183,7 @@ class ApprovalRequestSerializer(serializers.ModelSerializer):
             'purchase_items', 'expense_items', 'leave_type', 'trip_data',
             'payment_method',
             'receipts', 'receipt_deadline',
+            'is_archived', 'archived_at', 'archive_note',
             'created_at', 'updated_at', 'logs', 'approval_nodes', 'cc_users',
         ]
         read_only_fields = [
@@ -391,6 +392,7 @@ class ApprovalListSerializer(serializers.ModelSerializer):
     approval_type_icon = serializers.SerializerMethodField()
     approval_type_color = serializers.SerializerMethodField()
     status_display = serializers.SerializerMethodField()
+    archived_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = ApprovalRequest
@@ -401,7 +403,14 @@ class ApprovalListSerializer(serializers.ModelSerializer):
             'approval_type_icon', 'approval_type_color',
             'title', 'status', 'status_display',
             'amount', 'created_at', 'updated_at',
+            'is_archived', 'archived_at', 'archived_by_name', 'archive_note',
         ]
+
+    def get_archived_by_name(self, obj):
+        u = getattr(obj, 'archived_by', None)
+        if not u:
+            return ''
+        return u.real_name or u.username
 
     def get_applicant_name(self, obj):
         return obj.applicant.real_name or obj.applicant.username
@@ -599,7 +608,7 @@ class ApprovalDeptConfigSerializer(serializers.ModelSerializer):
             'threshold_enabled', 'threshold_field', 'threshold_field_display',
             'threshold_value', 'threshold_department', 'threshold_department_name',
             'require_signature',
-            'receipt_return_hours', 'enable_receipt_return',
+            'receipt_return_hours', 'enable_receipt_return', 'receipt_max_count', 'invoice_max_count',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['tenant', 'created_at', 'updated_at']
@@ -732,6 +741,7 @@ class AttendanceConfigSerializer(serializers.ModelSerializer):
     sub_tenant_name = serializers.SerializerMethodField()
     department_name = serializers.SerializerMethodField()
     department_path = serializers.SerializerMethodField()
+    location_ranges_map = serializers.SerializerMethodField()
 
     class Meta:
         model = AttendanceConfig
@@ -742,9 +752,26 @@ class AttendanceConfigSerializer(serializers.ModelSerializer):
             'clock_out_enabled', 'clock_out_time',
             'makeup_allowance', 'clock_out_limit',
             'shift_type',
+            'location_required', 'location_config_visible', 'location_ranges', 'location_ranges_map',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['tenant', 'created_at', 'updated_at']
+
+    def get_location_ranges_map(self, obj):
+        """范围出参：附 BD09 坐标供百度地图直接画圆（库里存 WGS84）"""
+        from utils.coord_transform import wgs84_to_bd09
+        out = []
+        for r in (obj.location_ranges or []):
+            if not isinstance(r, dict):
+                continue
+            item = dict(r)
+            try:
+                lng, lat = wgs84_to_bd09(float(r.get('lng')), float(r.get('lat')))
+                item['bd09_lat'], item['bd09_lng'] = round(lat, 7), round(lng, 7)
+            except (TypeError, ValueError):
+                item['bd09_lat'] = item['bd09_lng'] = None
+            out.append(item)
+        return out
 
     def get_sub_tenant_name(self, obj):
         if obj.sub_tenant:
@@ -767,6 +794,7 @@ class UserAttendanceConfigSerializer(serializers.ModelSerializer):
     department_name = serializers.SerializerMethodField()
     position = serializers.SerializerMethodField()
     shift_type_display = serializers.SerializerMethodField()
+    location_ranges_map = serializers.SerializerMethodField()
 
     class Meta:
         model = UserAttendanceConfig
@@ -776,9 +804,25 @@ class UserAttendanceConfigSerializer(serializers.ModelSerializer):
             'clock_in_enabled', 'clock_in_time',
             'clock_out_enabled', 'clock_out_time',
             'makeup_allowance', 'clock_out_limit',
+            'location_ranges', 'location_ranges_map',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['user', 'created_at', 'updated_at']
+
+    def get_location_ranges_map(self, obj):
+        from utils.coord_transform import wgs84_to_bd09
+        out = []
+        for r in (obj.location_ranges or []):
+            if not isinstance(r, dict):
+                continue
+            item = dict(r)
+            try:
+                lng, lat = wgs84_to_bd09(float(r.get('lng')), float(r.get('lat')))
+                item['bd09_lat'], item['bd09_lng'] = round(lat, 7), round(lng, 7)
+            except (TypeError, ValueError):
+                item['bd09_lat'] = item['bd09_lng'] = None
+            out.append(item)
+        return out
 
     def get_user_name(self, obj):
         return obj.user.real_name or obj.user.username
@@ -1104,6 +1148,8 @@ class AnnouncementSerializer(serializers.ModelSerializer):
     author_avatar = serializers.SerializerMethodField()
     comment_count = serializers.SerializerMethodField()
     scope_label = serializers.SerializerMethodField()
+    like_count = serializers.SerializerMethodField()
+    liked_by_me = serializers.SerializerMethodField()
 
     class Meta:
         model = Announcement
@@ -1112,6 +1158,7 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             'scope_type', 'scope_label', 'scope_sub_tenants', 'scope_departments', 'scope_users',
             'enable_comments', 'comment_mode', 'is_published', 'published_at',
             'comment_count', 'view_count', 'created_at', 'updated_at',
+            'like_count', 'liked_by_me',
         ]
 
     def get_author_name(self, obj):
@@ -1122,6 +1169,16 @@ class AnnouncementSerializer(serializers.ModelSerializer):
 
     def get_comment_count(self, obj):
         return obj.comments.count()
+
+    def get_like_count(self, obj):
+        return obj.likes.count()
+
+    def get_liked_by_me(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if not user or not getattr(user, 'is_authenticated', False):
+            return False
+        return obj.likes.filter(user_id=user.id).exists()
 
     def get_scope_label(self, obj):
         return dict(Announcement.SCOPE_TYPE_CHOICES).get(obj.scope_type or 'all', '集团全员')

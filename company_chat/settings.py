@@ -249,6 +249,17 @@ CELERY_RESULT_BACKEND = f'{CELERY_REDIS_LOCATION}'
 CELERY_TIMEZONE = "Asia/Shanghai"
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
+# 定时任务（DatabaseScheduler 会把这里的条目合并进 beat 计划，无需在库里手工建 PeriodicTask）
+from celery.schedules import crontab as _crontab  # noqa: E402
+
+CELERY_BEAT_SCHEDULE = {
+    # 每日 03:17 执行审批生命周期治理：已通过超期自动归档、撤回/草稿超期前通知并删除
+    'approval-lifecycle-daily': {
+        'task': 'oa.tasks.approval_lifecycle_task',
+        'schedule': _crontab(minute=17, hour=3),
+    },
+}
+
 # 添加这些关键配置
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
@@ -415,7 +426,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20260914-8bfeb2c'
+STATIC_VERSION = '20260917-0d665bb'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -570,6 +581,10 @@ API_MODEL_MAP = {
     "/api/oa/approval/search-cc-users/": "搜索抄送人",
     "/api/oa/approval/search-cc-departments/": "搜索抄送部门",
     "/api/oa/approval/my-pending/": "我的待审批",
+    "/api/oa/approval/lifecycle-config/": "审批生命周期配置",
+    "/api/oa/approval/<int:pk>/mention-candidates/": "审批可提及成员",
+    "/api/oa/attendance/attendance-geo/": "我的考勤打卡范围",
+    "/api/oa/attendance/geo-convert/": "考勤坐标换算",
     "/api/oa/approval/draft/": "审批草稿",
     "/api/oa/approval/drafts/": "审批草稿列表",
     "/api/oa/approval/<int:pk>/": "审批详情",
@@ -594,6 +609,7 @@ API_MODEL_MAP = {
     "/api/oa/announcements/<int:pk>/publish/": "集团公告发布",
     "/api/oa/announcements/<int:pk>/comments/": "集团公告评论列表",
     "/api/oa/announcements/<int:pk>/add-comment/": "集团公告添加评论",
+    "/api/oa/announcements/<int:pk>/like/": "集团公告点赞/取消点赞",
     "/api/oa/material/items/": "物资物品库",
     "/api/oa/material/item-search/": "物资物品联想",
     "/api/oa/material/items/<int:pk>/": "物资物品编辑/删除",
@@ -665,6 +681,10 @@ API_MODEL_MAP = {
     "/api/oa/approval/report-business/": "OA审批-业务统计分析",
     "/api/oa/approval/report-export/": "OA审批-报表导出",
     "/api/oa/approval/report-pdf/": "OA审批-报表导出PDF(整页内容)",
+    "/api/oa/approval/report-audit/": "OA审批-审计复盘统计",
+    "/api/oa/approval/archive-batch/": "OA审批-批量归档",
+    "/api/oa/approval/<int:pk>/archive/": "OA审批-归档",
+    "/api/oa/approval/<int:pk>/unarchive/": "OA审批-取消归档",
     "/api/oa/subsidy/report-stats/": "普惠补贴-报表统计",
     "/api/oa/subsidy/report-export/": "普惠补贴-报表导出",
     "/api/oa/subsidy/report-pdf/": "普惠补贴-报表导出PDF(整页内容)",
@@ -846,6 +866,13 @@ CHANNELS_ENABLED = True
 
 # 允许同源 iframe 嵌套（管理控制台内嵌 OA 页面）
 X_FRAME_OPTIONS = 'SAMEORIGIN'
+
+# Referer 策略：Django 默认是 same-origin，会导致浏览器**跨域请求时不发送 Referer 头**。
+# 百度地图 JS API 的浏览器端 AK 是靠 Referer 校验域名的，收不到 Referer 就会一律报
+# 「Referer校验失败」，此时白名单里写什么都没用（这正是考勤范围地图一直报错的原因）。
+# 改成浏览器默认的 strict-origin-when-cross-origin：跨域时只发送「源」不含路径/参数，
+# 既能让百度校验通过，也不会把具体页面地址泄露给第三方。
+SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
 
 # CORS_ALLOW_CREDENTIALS = True
 
@@ -1195,6 +1222,16 @@ TURN_REALM = config('TURN_REALM')
 
 # 百度地图key
 BAIDU_MAP_SERVER_AK = config('BAIDU_MAP_SERVER_AK')
+# 百度地图「浏览器端」AK：用于考勤打卡范围的地图圈选（在地图上点选圆心）。
+# 与服务端 AK 是两个不同的 key（浏览器端 AK 需在百度控制台把 referer 白名单配成你的域名）。
+# 未配置时考勤范围编辑器自动降级为「手填经纬度 + 半径」，功能仍可用，只是没有地图底图。
+BAIDU_MAP_JS_AK = config('BAIDU_MAP_JS_AK', default='')
+
+# 考勤配置里「显示考勤打卡范围配置」（页面元素 #attGeoVisibleRow）这个开关行是否暴露出来。
+# 默认 False：该开关行整体隐藏——页面上就没有任何入口去开启/隐藏「考勤打卡范围配置」，
+#   范围的显隐完全跟随数据库里的既有值（location_config_visible），不会再被误改。
+# 需要让超级管理员在页面上临时开启/隐藏时，在 .env 里配置 ATTENDANCE_GEO_VISIBLE_SWITCH=True。
+ATTENDANCE_GEO_VISIBLE_SWITCH = config('ATTENDANCE_GEO_VISIBLE_SWITCH', default=False, cast=bool)
 
 # 百度OCR（票据识别）
 BAIDU_OCR_API_KEY = config('BAIDU_OCR_API_KEY', default='')

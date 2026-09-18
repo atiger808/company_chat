@@ -5,8 +5,16 @@
 (function () {
     'use strict';
     var OA = '/api/oa';
-    var state = { tab: 'overview', start: '', end: '', loading: false, userId: null, userName: '' };
+    var state = { tab: 'overview', start: '', end: '', loading: false, userId: null, userName: '',
+                  period: 'month', auditArchived: '' };
     var charts = {};
+    // 各标签页对应的后端接口段与导出名
+    var TAB_META = {
+        overview: { seg: 'report-overview', title: 'OA审批-流程效率分析' },
+        business: { seg: 'report-business', title: 'OA审批-业务统计分析' },
+        audit: { seg: 'report-audit', title: 'OA审批-审计复盘' }
+    };
+    function tabMeta() { return TAB_META[state.tab] || TAB_META.overview; }
 
     function authHeaders() {
         try { return TokenManager.getHeaders(); } catch (e) { return {}; }
@@ -108,6 +116,17 @@
             + '    <div class="ar-tabs">'
             + '      <button class="ar-tab active" data-tab="overview">流程效率分析</button>'
             + '      <button class="ar-tab" data-tab="business">业务统计分析</button>'
+            + '      <button class="ar-tab" data-tab="audit">审计复盘</button>'
+            + '      <select id="arPeriod" class="ar-btn" style="display:none;padding:5px 8px;" onchange="ApprovalReport.setPeriod(this.value)">'
+            + '        <option value="month">按月度汇总</option>'
+            + '        <option value="quarter">按季度汇总</option>'
+            + '        <option value="year">按年度汇总</option>'
+            + '      </select>'
+            + '      <select id="arAuditArchived" class="ar-btn" style="display:none;padding:5px 8px;" onchange="ApprovalReport.setAuditArchived(this.value)">'
+            + '        <option value="">全部（含已归档）</option>'
+            + '        <option value="1">仅已归档</option>'
+            + '        <option value="0">仅未归档</option>'
+            + '      </select>'
             + '      <span style="flex:1;"></span>'
             + '      <button class="ar-btn" id="arExportXlsx"><i class="fas fa-file-excel" style="color:#16a085;"></i> 导出Excel</button>'
             + '      <button class="ar-btn" id="arExportPdf"><i class="fas fa-file-pdf" style="color:#f56c6c;"></i> 导出PDF</button>'
@@ -125,6 +144,7 @@
             b.addEventListener('click', function () {
                 state.tab = b.getAttribute('data-tab');
                 ov.querySelectorAll('.ar-tab').forEach(function (x) { x.classList.toggle('active', x === b); });
+                syncAuditControls();
                 load();
             });
         });
@@ -200,6 +220,15 @@
         window.addEventListener('resize', function () {
             Object.keys(charts).forEach(function (k) { if (charts[k] && charts[k].resize) charts[k].resize(); });
         });
+    }
+
+    // 审计标签页专属控件（汇总粒度 / 归档筛选）显隐
+    function syncAuditControls() {
+        var on = state.tab === 'audit';
+        var p = document.getElementById('arPeriod');
+        if (p) { p.style.display = on ? '' : 'none'; p.value = state.period || 'month'; }
+        var a = document.getElementById('arAuditArchived');
+        if (a) { a.style.display = on ? '' : 'none'; a.value = state.auditArchived || ''; }
     }
 
     function card(v, l) { return '<div class="ar-card"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
@@ -302,13 +331,14 @@
     }
     function reportSubtitle() {
         return '统计区间：' + (state.start || '-') + ' ~ ' + (state.end || '-')
+            + (state.tab === 'audit' ? ('　汇总粒度：' + ({ month: '月度', quarter: '季度', year: '年度' }[state.period] || '月度')) : '')
             + (state.userId ? ('　筛选用户：' + (state.userName || state.userId)) : '');
     }
     // 打印当前模态框内容（图表以图片、表格以表格输出）
     function printReport() {
         var blocks = collectBlocks();
         if (!blocks.length) { toast('暂无可打印的内容', true); return; }
-        var title = (state.tab === 'business' ? 'OA审批-业务统计分析' : 'OA审批-流程效率分析');
+        var title = tabMeta().title;
         var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             + '<title>' + esc(title) + '</title><style>'
             + 'body{font-family:"Microsoft YaHei",sans-serif;padding:20px 20px 76px;margin:0;color:#333;}'
@@ -484,6 +514,70 @@
         });
     }
 
+    // 审计复盘：期间汇总 + 月度/季度/年度构成 + 审批类型构成 + 审计台账
+    function renderAudit(d) {
+        var s = d.summary || {};
+        var unit = '笔';
+        var h = '<div class="ar-cards">'
+            + card(s.total || 0, '审批总数')
+            + card(fmtMoney(s.amount_total), '金额合计')
+            + card(s.approved || 0, '已通过')
+            + card(s.rejected || 0, '已驳回')
+            + card(fmtMoney(s.approved_amount), '已通过金额')
+            + card((s.reject_rate || 0) + '%', '驳回率')
+            + card(s.archived_count || 0, '已归档')
+            + card(s.unarchived_count || 0, '未归档')
+            + '</div>';
+        h += '<div class="ar-sec"><i class="fas fa-calendar-alt" style="color:#409eff;"></i> '
+            + esc((d.period_label || '月度') + '构成（' + (d.range && d.range.start ? d.range.start : '') + ' ~ ' + (d.range && d.range.end ? d.range.end : '') + '）')
+            + '</div>';
+        if ((d.periods || []).length) {
+            h += '<table class="ar-table"><thead><tr>'
+                + '<th>周期</th><th>笔数</th><th>金额</th><th>已通过</th><th>已驳回</th><th>已归档</th>'
+                + '</tr></thead><tbody>'
+                + d.periods.map(function (p) {
+                    return '<tr><td>' + esc(p.label) + '</td><td>' + p.total + '</td><td>' + fmtMoney(p.amount) + '</td>'
+                        + '<td>' + p.approved + '</td><td>' + p.rejected + '</td><td>' + p.archived + '</td></tr>';
+                }).join('') + '</tbody></table>';
+        } else {
+            h += '<div style="font-size:13px;color:#909399;padding:6px 0;">该区间暂无数据</div>';
+        }
+        if ((d.types || []).length) {
+            h += '<div class="ar-sec"><i class="fas fa-layer-group" style="color:#67c23a;"></i> 审批类型构成</div>';
+            h += '<table class="ar-table"><thead><tr>'
+                + '<th>审批类型</th><th>笔数</th><th>金额</th><th>已通过</th><th>已驳回</th><th>已归档</th>'
+                + '</tr></thead><tbody>'
+                + d.types.map(function (t) {
+                    return '<tr><td>' + esc(t.name) + '</td><td>' + t.total + '</td><td>' + fmtMoney(t.amount) + '</td>'
+                        + '<td>' + t.approved + '</td><td>' + t.rejected + '</td><td>' + t.archived + '</td></tr>';
+                }).join('') + '</tbody></table>';
+        }
+        var led = d.ledger || [];
+        h += '<div class="ar-sec"><i class="fas fa-clipboard-list" style="color:#e6a23c;"></i> 审计台账明细（共 '
+            + (d.summary ? d.summary.total : 0) + ' 条' + (d.ledger_truncated ? '，仅显示最近 ' + led.length + ' 条' : '') + '）</div>';
+        if (led.length) {
+            h += '<table class="ar-table"><thead><tr>'
+                + '<th>审批ID</th><th>审批类型</th><th>审批标题</th><th>申请人</th><th>所属部门</th><th>金额</th>'
+                + '<th>状态</th><th>提交时间</th><th>结束时间</th><th>耗时</th><th>归档</th>'
+                + '</tr></thead><tbody>'
+                + led.map(function (x) {
+                    var dur = (x.minutes === null || x.minutes === undefined) ? '—' : fmtMin(x.minutes);
+                    var archTag = x.is_archived
+                        ? '<span style="color:#e6a23c;" title="归档时间：' + esc(x.archived_at || '-') + '">已归档</span>'
+                        : '<span style="color:#909399;">未归档</span>';
+                    return '<tr><td>' + x.id + '</td><td>' + esc(x.type_name) + '</td>'
+                        + '<td style="max-width:220px;word-break:break-all;">' + esc(x.title) + '</td>'
+                        + '<td>' + esc(x.applicant) + '</td><td>' + esc(x.department || '-') + '</td>'
+                        + '<td>' + fmtMoney(x.amount) + '</td><td>' + esc(x.status_label) + '</td>'
+                        + '<td>' + esc(x.created_at || '-') + '</td><td>' + esc(x.finished_at || '-') + '</td>'
+                        + '<td>' + dur + '</td><td>' + archTag + '</td></tr>';
+                }).join('') + '</tbody></table>';
+        } else {
+            h += '<div style="font-size:13px;color:#909399;padding:6px 0;">该区间暂无审批记录</div>';
+        }
+        document.getElementById('arContent').innerHTML = h;
+    }
+
     async function load() {
         if (state.loading) return;
         state.loading = true;
@@ -491,10 +585,16 @@
         content.innerHTML = '<div style="padding:40px;text-align:center;color:#909399;"><i class="fas fa-spinner fa-spin"></i> 加载中…</div>';
         try {
             await ensureEcharts();
-            var kind = state.tab === 'business' ? 'business' : 'overview';
-            var seg = kind === 'business' ? 'report-business' : 'report-overview';
-            var d = await getJSON(OA + '/approval/' + seg + '/?start=' + encodeURIComponent(state.start) + '&end=' + encodeURIComponent(state.end) + userParam());
-            if (state.tab === 'business') renderBusiness(d); else renderOverview(d);
+            var seg = tabMeta().seg;
+            var url = OA + '/approval/' + seg + '/?start=' + encodeURIComponent(state.start) + '&end=' + encodeURIComponent(state.end) + userParam();
+            if (state.tab === 'audit') {
+                url += '&period=' + encodeURIComponent(state.period || 'month')
+                    + (state.auditArchived ? ('&archived=' + encodeURIComponent(state.auditArchived)) : '');
+            }
+            var d = await getJSON(url);
+            if (state.tab === 'audit') renderAudit(d);
+            else if (state.tab === 'business') renderBusiness(d);
+            else renderOverview(d);
         } catch (e) {
             content.innerHTML = '<div style="padding:40px;text-align:center;color:#f56c6c;">' + esc(e.message || '加载失败') + '</div>';
             toast(e.message || '加载失败', true);
@@ -529,10 +629,9 @@
     }
     async function doExport(format, dest) {
         dest = dest || 'local';
-        var kind = state.tab === 'business' ? 'business' : 'overview';
-        var base = kind === 'business' ? 'OA审批-业务统计分析' : 'OA审批-流程效率分析';
+        var base = tabMeta().title;
         var name = exportFileName(base, format === 'pdf' ? 'pdf' : 'xlsx');
-        var seg = kind === 'business' ? 'report-business' : 'report-overview';
+        var seg = tabMeta().seg;
         try {
             var blob;
             if (format === 'pdf') {
@@ -552,6 +651,10 @@
             } else {
                 var url = OA + '/approval/' + seg + '/?export_format=' + format
                     + '&start=' + encodeURIComponent(state.start) + '&end=' + encodeURIComponent(state.end) + userParam();
+                if (state.tab === 'audit') {
+                    url += '&period=' + encodeURIComponent(state.period || 'month')
+                        + (state.auditArchived ? ('&archived=' + encodeURIComponent(state.auditArchived)) : '');
+                }
                 var r = await fetch(url, { headers: authHeaders() });
                 if (!r.ok) {
                     var e = await r.json().catch(function () { return {}; });
@@ -579,13 +682,19 @@
     }
 
     window.ApprovalReport = {
-        open: function () {
+        open: function (tab) {
             buildModal();
+            if (tab && TAB_META[tab]) state.tab = tab;
+            var ov = document.getElementById('approvalReportModal');
+            ov.querySelectorAll('.ar-tab').forEach(function (x) {
+                x.classList.toggle('active', x.getAttribute('data-tab') === state.tab);
+            });
+            syncAuditControls();
             if (!state.start || !state.end) initRange();
             document.getElementById('arStart').value = state.start;
             document.getElementById('arEnd').value = state.end;
             renderUserChip();
-            document.getElementById('approvalReportModal').style.display = 'flex';
+            ov.style.display = 'flex';
             load();
         },
         clearUser: function () {
@@ -594,6 +703,8 @@
             renderUserChip();
             load();
         },
+        setPeriod: function (v) { state.period = v || 'month'; load(); },
+        setAuditArchived: function (v) { state.auditArchived = v || ''; load(); },
         close: function () {
             var m = document.getElementById('approvalReportModal');
             if (m) m.style.display = 'none';

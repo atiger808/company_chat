@@ -102,6 +102,38 @@ def invoice_field_key(approval_type, schema=None):
     return None
 
 
+def is_image_or_pdf_head(head):
+    """按文件头（魔数）判断是否图片/PDF：PDF=%PDF、JPEG=FFD8、PNG=89504E47、
+    GIF=GIF8、WEBP=RIFF....WEBP、BMP=BM。取不到头部时不拦（交给扩展名判断）。"""
+    if not head:
+        return True
+    if head[:4] == b'%PDF':
+        return True
+    if head[:2] == b'\xff\xd8':
+        return True
+    if head[:4] == b'\x89PNG':
+        return True
+    if head[:4] in (b'GIF8',):
+        return True
+    if head[:2] == b'BM':
+        return True
+    if head[:4] == b'RIFF' and head[8:12] == b'WEBP':
+        return True
+    return False
+
+
+def invoice_field_keys(approval_type, schema=None):
+    """该审批所有「发票」字段的 key 列表（一个类型可能配了多个发票字段）。
+    数量上限校验要按每个发票字段分别统计，故这里返回全部而不是只返回第一个。"""
+    if approval_type in ('expense', 'purchase'):
+        return ['invoices']
+    keys = []
+    for f in (schema or []):
+        if isinstance(f, dict) and f.get('type') == 'invoice' and f.get('key'):
+            keys.append(f['key'])
+    return keys
+
+
 def resolve_approval_type(code, tenant):
     """按 (tenant, code) 优先、全局 (None, code) 兜底解析审批类型。
 
