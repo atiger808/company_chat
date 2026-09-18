@@ -9,6 +9,13 @@ from .models import (
 from .type_utils import resolve_approval_type
 
 
+def _display_name(user):
+    """用户显示名（真实姓名优先，其次登录名）；用于「最后操作人」等出参"""
+    if not user:
+        return ''
+    return user.real_name or user.username
+
+
 class AttendanceRecordSerializer(serializers.ModelSerializer):
     user_name = serializers.SerializerMethodField()
     clock_type_display = serializers.SerializerMethodField()
@@ -591,6 +598,7 @@ class ApprovalDeptConfigSerializer(serializers.ModelSerializer):
     threshold_field_display = serializers.SerializerMethodField()
     sub_tenant_name = serializers.SerializerMethodField()
     scope_department_name = serializers.SerializerMethodField()
+    updated_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = ApprovalDeptConfig
@@ -609,9 +617,13 @@ class ApprovalDeptConfigSerializer(serializers.ModelSerializer):
             'threshold_value', 'threshold_department', 'threshold_department_name',
             'require_signature',
             'receipt_return_hours', 'enable_receipt_return', 'receipt_max_count', 'invoice_max_count',
+            'updated_by', 'updated_by_name',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['tenant', 'created_at', 'updated_at']
+        read_only_fields = ['tenant', 'updated_by', 'created_at', 'updated_at']
+
+    def get_updated_by_name(self, obj):
+        return _display_name(getattr(obj, 'updated_by', None))
 
     def get_department_name(self, obj):
         return obj.department.name if obj.department else ''
@@ -742,6 +754,7 @@ class AttendanceConfigSerializer(serializers.ModelSerializer):
     department_name = serializers.SerializerMethodField()
     department_path = serializers.SerializerMethodField()
     location_ranges_map = serializers.SerializerMethodField()
+    updated_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = AttendanceConfig
@@ -753,9 +766,13 @@ class AttendanceConfigSerializer(serializers.ModelSerializer):
             'makeup_allowance', 'clock_out_limit',
             'shift_type',
             'location_required', 'location_config_visible', 'location_ranges', 'location_ranges_map',
+            'updated_by', 'updated_by_name',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['tenant', 'created_at', 'updated_at']
+        read_only_fields = ['tenant', 'updated_by', 'created_at', 'updated_at']
+
+    def get_updated_by_name(self, obj):
+        return _display_name(getattr(obj, 'updated_by', None))
 
     def get_location_ranges_map(self, obj):
         """范围出参：附 BD09 坐标供百度地图直接画圆（库里存 WGS84）"""
@@ -795,6 +812,7 @@ class UserAttendanceConfigSerializer(serializers.ModelSerializer):
     position = serializers.SerializerMethodField()
     shift_type_display = serializers.SerializerMethodField()
     location_ranges_map = serializers.SerializerMethodField()
+    updated_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = UserAttendanceConfig
@@ -805,9 +823,13 @@ class UserAttendanceConfigSerializer(serializers.ModelSerializer):
             'clock_out_enabled', 'clock_out_time',
             'makeup_allowance', 'clock_out_limit',
             'location_ranges', 'location_ranges_map',
+            'updated_by', 'updated_by_name',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['user', 'created_at', 'updated_at']
+        read_only_fields = ['user', 'updated_by', 'created_at', 'updated_at']
+
+    def get_updated_by_name(self, obj):
+        return _display_name(getattr(obj, 'updated_by', None))
 
     def get_location_ranges_map(self, obj):
         from utils.coord_transform import wgs84_to_bd09

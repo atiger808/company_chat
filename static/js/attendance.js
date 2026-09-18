@@ -1631,6 +1631,7 @@ class AttendanceApp {
         document.getElementById('attendanceConfigFooter').style.display = 'flex';
         document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
         document.getElementById('attendanceConfigEmpty').style.display = 'none';
+        this._renderConfigMeta(null);
         this._toggleClockIn();
         this._toggleClockOut();
         if (type === 'user') {
@@ -1642,6 +1643,19 @@ class AttendanceApp {
             this._renderAttUserTag();
         }
         this._loadConfigForType(type);
+    }
+
+    // 配置模态框底部：展示该配置的最后更新时间和操作人（新建/未保存时隐藏）
+    _renderConfigMeta(cfg) {
+        var el = document.getElementById('attConfigMeta');
+        if (!el) return;
+        if (!cfg) { el.style.display = 'none'; el.innerHTML = ''; return; }
+        var time = (typeof Utils !== 'undefined' && Utils.formatDateTime)
+            ? Utils.formatDateTime(cfg.updated_at) : (cfg.updated_at || '-');
+        var who = cfg.updated_by_name || '—';
+        el.innerHTML = '<i class="fas fa-history"></i>最后更新：' + this._escape(time)
+            + '<span class="config-meta-sep">|</span>操作人：' + this._escape(who);
+        el.style.display = 'block';
     }
 
     async _loadConfigForType(type) {
@@ -1707,10 +1721,12 @@ class AttendanceApp {
                     this._setGeoSwitch(cfg.location_required === true);
                     this._setGeoVisible(cfg.location_config_visible === true);
                 }
+                this._renderConfigMeta(cfg);
             } else {
                 // 该层级还没有配置：范围清空（留空即沿用上一层）
                 this._setGeoRanges([]);
                 if (type === 'global') this._setGeoSwitch(false);
+                this._renderConfigMeta(null);
             }
             this._syncGeoSwitchVisibility(type);
             this._loadAttConfigList();
@@ -2586,6 +2602,7 @@ class AttendanceApp {
     closeConfigModal() {
         // 先退出两种全屏，避免关闭后残留 fixed 遮罩挡住页面
         this._exitGeoFullscreen();
+        this._renderConfigMeta(null);
         var modal = document.getElementById('attendanceConfigModal');
         if (modal) {
             var mc = modal.querySelector('.modal-content');
@@ -2832,6 +2849,7 @@ class AttendanceApp {
             if (!cfg) return;
             this._configEditKey = configId;
             this._configDeleteId = configId;
+            this._renderConfigMeta(cfg);
             // 根据配置类型激活对应类型卡片
             var cardType = 'global';
             if (cfg.sub_tenant && !cfg.department) cardType = 'sub_tenant';
@@ -2906,6 +2924,7 @@ class AttendanceApp {
         document.getElementById('attendanceConfigFooter').style.display = 'flex';
         document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
         document.getElementById('attendanceConfigEmpty').style.display = 'none';
+        this._renderConfigMeta(null);
         document.getElementById('attConfigSubTenantSelect').value = val;
         document.getElementById('attendanceClockInEnabled').checked = true;
         document.getElementById('attendanceClockInTime').value = '09:00';
@@ -2936,6 +2955,7 @@ class AttendanceApp {
         document.getElementById('attendanceConfigFooter').style.display = 'flex';
         document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
         document.getElementById('attendanceConfigEmpty').style.display = 'none';
+        this._renderConfigMeta(null);
         document.getElementById('attendanceConfigDept').value = val;
         document.getElementById('attendanceClockInEnabled').checked = true;
         document.getElementById('attendanceClockInTime').value = '09:00';
@@ -3075,6 +3095,7 @@ class AttendanceApp {
             document.getElementById('attendanceConfigFooter').style.display = 'none';
             document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
             document.getElementById('attendanceConfigEmpty').style.display = 'block';
+            this._renderConfigMeta(null);
             await this._loadAttConfigList();
         } catch (e) {
             this.showAlert('删除失败', e.message || '请重试');

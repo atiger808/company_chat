@@ -33,14 +33,14 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
 
 @admin.register(AttendanceConfig)
 class AttendanceConfigAdmin(admin.ModelAdmin):
-    list_display = ['id', 'tenant', 'sub_tenant', 'department', 'shift_type', 'location_required', 'makeup_allowance', 'clock_out_limit', 'clock_in_enabled', 'clock_in_time', 'clock_out_enabled', 'clock_out_time', 'updated_at', 'created_at']
+    list_display = ['id', 'tenant', 'sub_tenant', 'department', 'shift_type', 'location_required', 'updated_by', 'makeup_allowance', 'clock_out_limit', 'clock_in_enabled', 'clock_in_time', 'clock_out_enabled', 'clock_out_time', 'updated_at', 'created_at']
     list_filter = ['clock_in_enabled', 'clock_out_enabled', 'shift_type']
     search_fields = ['id', 'tenant__name', 'sub_tenant__name', 'department__name']
     list_per_page = 20
 
 @admin.register(UserAttendanceConfig)
 class UserAttendanceConfigAdmin(admin.ModelAdmin):
-    list_display = ['id', 'user', 'shift_type', 'makeup_allowance', 'clock_out_limit', 'clock_in_enabled', 'clock_in_time', 'clock_out_enabled', 'clock_out_time', 'updated_at', 'created_at']
+    list_display = ['id', 'user', 'shift_type', 'makeup_allowance', 'clock_out_limit', 'clock_in_enabled', 'clock_in_time', 'clock_out_enabled', 'clock_out_time', 'updated_by', 'updated_at', 'created_at']
     list_filter = ['clock_in_enabled', 'clock_out_enabled', 'shift_type']
     search_fields = ['id', 'user__username', 'user__real_name']
     list_per_page = 20
@@ -96,7 +96,7 @@ class ApprovalCarbonCopyAdmin(admin.ModelAdmin):
 @admin.register(ApprovalDeptConfig)
 class ApprovalDeptConfigAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'sub_tenant', 'approval_type', 'invoice_max_count', 'receipt_max_count', 'enable_receipt_return', 'require_signature', 'final_approver',
-                    'threshold_enabled', 'threshold_field', 'department', 'updated_at', 'created_at']
+                    'threshold_enabled', 'updated_by', 'department', 'updated_at', 'created_at']
     list_filter = ['approval_type', 'enable_receipt_return', 'require_signature', 'threshold_enabled', 'threshold_field']
     search_fields = ['tenant__name', 'department__name']
     list_per_page = 20

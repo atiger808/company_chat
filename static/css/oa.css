@@ -58,7 +58,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
   .modal-footer { padding: 12px 14px; gap: 6px; }
   .modal-footer .btn { font-size: 12px; padding: 6px 10px; gap: 4px; }
   .modal-footer .btn i { font-size: 12px; }
+  .config-meta-info { padding: 0 14px 8px; font-size: 11px; }
 }
+/* 配置模态框底部的「更新时间 + 操作人」（考勤配置 / 审批类型配置共用） */
+.config-meta-info { padding: 0 20px 8px; font-size: 12px; line-height: 1.6; color: var(--text-light, #909399); text-align: right; }
+.config-meta-info i { margin-right: 4px; }
+.config-meta-info .config-meta-sep { margin: 0 8px; color: var(--border-color, #dcdfe6); }
 
 /* 表单 */
 .form-group { margin-bottom: 16px; }

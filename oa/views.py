@@ -1219,6 +1219,8 @@ class AttendanceViewSet(viewsets.ViewSet):
             'makeup_allowance': makeup_allowance,
             'clock_out_limit': clock_out_limit,
             'shift_type': shift_type,
+            # 记录最后操作人（前端在配置模态框底部展示「更新时间 + 操作人」）
+            'updated_by': request.user,
         }
         # 考勤打卡范围：仅超级管理员可写；且只在请求里带了该字段时才改动，
         # 避免其他角色（前端已隐藏该块、不带此字段）保存部门配置时把已有范围清空。
@@ -1473,6 +1475,7 @@ class AttendanceViewSet(viewsets.ViewSet):
             'clock_out_time': clock_out_time,
             'makeup_allowance': makeup_allowance,
             'clock_out_limit': clock_out_limit,
+            'updated_by': request.user,
         }
         _defaults.update(_udefaults)
         config, created = UserAttendanceConfig.objects.update_or_create(
@@ -5522,6 +5525,8 @@ class ApprovalViewSet(viewsets.ViewSet):
                 defaults['invoice_max_count'] = max(0, int(request.data.get('invoice_max_count') or 0))
             except (ValueError, TypeError):
                 pass
+        # 记录最后操作人（前端在配置模态框底部展示「更新时间 + 操作人」）
+        defaults['updated_by'] = request.user
 
         # 配置查找键：公司/虚拟组织级部门适用范围 > 子公司 > 集团默认
         lookup_kwargs = {'tenant': config_tenant, 'approval_type': approval_type}

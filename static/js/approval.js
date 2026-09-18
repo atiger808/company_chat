@@ -4251,6 +4251,7 @@ class ApprovalApp {
         });
         document.getElementById('configForm').style.display = 'none';
         document.getElementById('configDeleteBtn').style.display = 'none';
+        this._renderConfigMeta(null);
         // 配置模态框左右拖动分隔条
         this._initSplitter('configSplitter', 'configManageLayout', 'configSidebar');
         // Load sub-tenant selector for group enterprises
@@ -4365,6 +4366,19 @@ class ApprovalApp {
         this._renderConfigList();
     }
 
+    // 配置模态框底部：展示该配置的最后更新时间和操作人（新建/未保存时隐藏）
+    _renderConfigMeta(cfg) {
+        var el = document.getElementById('configMeta');
+        if (!el) return;
+        if (!cfg) { el.style.display = 'none'; el.innerHTML = ''; return; }
+        var time = (typeof Utils !== 'undefined' && Utils.formatDateTime)
+            ? Utils.formatDateTime(cfg.updated_at) : (cfg.updated_at || '-');
+        var who = cfg.updated_by_name || '—';
+        el.innerHTML = '<i class="fas fa-history"></i>最后更新：' + this._escape(time)
+            + '<span class="config-meta-sep">|</span>操作人：' + this._escape(who);
+        el.style.display = 'block';
+    }
+
     async _loadConfig() {
         var type = document.getElementById('configApprovalType').value;
         var form = document.getElementById('configForm');
@@ -4372,6 +4386,7 @@ class ApprovalApp {
         if (!type) {
             form.style.display = 'none';
             if (delBtn) delBtn.style.display = 'none';
+            this._renderConfigMeta(null);
             return;
         }
         form.style.display = 'block';
@@ -4405,6 +4420,7 @@ class ApprovalApp {
                 }
             }
             this._configDeleteId = cfg ? cfg.id : null;
+            this._renderConfigMeta(cfg);
             // 点选审批类型时按配置实际适用范围回填范围下拉（空=集团默认 / 公司级部门ID）；切换适用范围时不覆盖用户选择
             if (cfg && this._loadByType) {
                 var scopeSel2 = document.getElementById('configScopeSelect');
@@ -4876,6 +4892,7 @@ class ApprovalApp {
             document.getElementById('configForm').style.display = 'none';
             document.getElementById('configDeleteBtn').style.display = 'none';
             document.getElementById('configApprovalType').value = '';
+            this._renderConfigMeta(null);
             await this._renderConfigList();
         } catch (e) {
             this.showAlert('删除失败', e.message || '请重试');

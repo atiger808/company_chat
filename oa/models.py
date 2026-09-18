@@ -520,6 +520,13 @@ class ApprovalDeptConfig(models.Model):
     # 审批发票上传数量上限（报销/采购/自定义类型的发票字段）：0 表示沿用「票据回传数量上限」
     invoice_max_count = models.IntegerField(default=0, verbose_name='审批发票数量上限',
                                            help_text='新建/编辑审批时每个发票字段最多上传的发票数量；0 表示与「票据回传数量上限」一致')
+    # 最后操作人：记录是谁保存了这条配置（前端在配置模态框底部展示）
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='updated_approval_dept_configs',
+        verbose_name='最后操作人'
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
@@ -769,6 +776,13 @@ class AttendanceConfig(models.Model):
     # 考勤打卡范围：多个圆形区域（公司多个办公地点），每项 {name, lat, lng, radius}，
     # 经纬度按 WGS84 存储（与浏览器定位/打卡记录一致），前端展示时再转 BD09
     location_ranges = models.JSONField(default=list, blank=True, verbose_name='考勤打卡范围')
+    # 最后操作人：记录是谁保存了这条配置（前端在配置模态框底部展示）
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='updated_attendance_configs',
+        verbose_name='最后操作人'
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
@@ -802,6 +816,13 @@ class UserAttendanceConfig(models.Model):
     clock_out_limit = models.PositiveIntegerField(default=3, verbose_name='下班卡最多打卡次数(至少1)')
     # 个人考勤打卡范围（优先级最高）：为空表示沿用部门/子公司/集团的配置
     location_ranges = models.JSONField(default=list, blank=True, verbose_name='考勤打卡范围')
+    # 最后操作人：记录是谁保存了这条个人配置
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='updated_user_attendance_configs',
+        verbose_name='最后操作人'
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
