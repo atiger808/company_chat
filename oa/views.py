@@ -26,6 +26,7 @@ from .models import (
     MaterialStockInItem, MaterialStockLog, DocumentSequence,
     WatermarkConfig, DEFAULT_WATERMARK_PAGES, PrintLog, DailyWorkSummary,
     Announcement, AnnouncementComment, FinanceSpecialist,
+    NotificationPopupConfig,
 )
 from .type_utils import (
     ensure_builtin_types, resolve_approval_type,
@@ -5873,7 +5874,9 @@ class MaterialViewSet(viewsets.ViewSet):
             for i in r.items.all():
                 q = float(i.quantity)
                 total_quantity += q
-                total_remain += q - float(i.requisitioned_quantity) - _if.get(i.item_name, 0)
+                # 在途占用来自领用单明细数量（Decimal），必须转 float 再与 float 相减，
+                # 否则 float - Decimal 会抛 TypeError（/api/oa/material/requirement-search/ 500）
+                total_remain += q - float(i.requisitioned_quantity) - float(_if.get(i.item_name, 0) or 0)
                 total_receive += q - float(i.received_quantity)
                 if i.item_name and i.item_name not in _names:
                     _names.append(i.item_name)
@@ -8977,6 +8980,61 @@ class WorkNotificationViewSet(viewsets.ViewSet):
         """标记所有通知为已读"""
         WorkNotification.objects.filter(recipient=request.user, is_read=False).update(is_read=True)
         return Response({'message': 'ok'})
+
+    # ==================== 通知弹窗配置（页面右上角弹窗） ====================
+    # 默认只对「集团公告」开启：公告偏官方，需要让成员及时看到；其它类型默认关闭。
+    # 仅超级管理员可在管理控制台改，配置归属企业（子企业无配置时回溯集团）。
+
+    def _popup_config_tenant(self, request):
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        return tenant
+
+    def _get_popup_config(self, tenant):
+        """取该企业（或其集团）的弹窗配置；不存在返回 None，调用方用默认值"""
+        if not tenant:
+            return None
+        cfg = NotificationPopupConfig.objects.filter(tenant=tenant).first()
+        if cfg is None and tenant.parent_id:
+            cfg = NotificationPopupConfig.objects.filter(tenant_id=tenant.parent_id).first()
+        return cfg
+
+    @staticmethod
+    def _popup_payload(cfg):
+        """出参：所有类型都给出布尔开关（未配置过的企业 → 默认只开「集团公告」），
+        另附类型清单与时长，供前端弹窗与管理控制台配置界面共用。"""
+        raw = dict(cfg.enabled_types or {}) if cfg else {'announcement': True}
+        types = [{'key': k, 'label': v} for k, v in WorkNotification.NOTIFICATION_TYPES]
+        return {
+            'enabled_types': {t['key']: bool(raw.get(t['key'])) for t in types},
+            'duration_seconds': max(3, int(cfg.duration_seconds)) if cfg else 10,
+            'types': types,
+        }
+
+    @action(detail=False, methods=['get'])
+    def popup_config(self, request):
+        """通知弹窗配置（所有登录用户可读：前端据此决定哪些类型弹窗、弹多久）"""
+        cfg = self._get_popup_config(self._popup_config_tenant(request))
+        return Response(self._popup_payload(cfg))
+
+    @action(detail=False, methods=['post'])
+    def save_popup_config(self, request):
+        """保存通知弹窗配置（仅超级管理员）"""
+        if getattr(request.user, 'user_type', '') != 'super_admin':
+            return Response({'error': '仅超级管理员可配置'}, status=403)
+        tenant = self._popup_config_tenant(request)
+        if not tenant:
+            return Response({'error': '未找到所属企业，无法配置通知弹窗'}, status=400)
+        cfg, _ = NotificationPopupConfig.objects.get_or_create(tenant=tenant)
+        enabled = request.data.get('enabled_types')
+        if isinstance(enabled, dict):
+            cfg.enabled_types = {k: bool(enabled.get(k)) for k, _ in WorkNotification.NOTIFICATION_TYPES}
+        if 'duration_seconds' in request.data:
+            try:
+                cfg.duration_seconds = max(3, min(120, int(request.data.get('duration_seconds'))))
+            except (ValueError, TypeError):
+                pass
+        cfg.save()
+        return Response(self._popup_payload(cfg))
 
 
 def _parse_ocr_raw(raw):

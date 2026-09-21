@@ -26,7 +26,8 @@
                 return;
             }
             var script = document.createElement('script');
-            script.src = 'https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js';
+            // script.src = 'https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js';
+            script.src = '/static/js/dist/echarts.min.js';
             script.onload = callback;
             script.onerror = callback;
             document.head.appendChild(script);

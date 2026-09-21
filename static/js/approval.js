@@ -2141,7 +2141,19 @@ class ApprovalApp {
         //    否则上一种类型残留的值（尤其金额）会跟着提交，导致「审批金额」与「表单金额」不一致。
         //    注意：程序化设置类型（打开弹窗自动选中、编辑/驳回续审回填）不带 userSwitch，不会清空。
         if (opts && opts.userSwitch && prev !== type) {
+            // 所属部门 / 审批标题 / 审批内容 是跨审批类型共用的字段（部门在打开弹窗、重新编辑时
+            // 已按主部门带出默认值；标题与内容是用户手填的），切换类型只应清空该类型专属的内容，
+            // 这三个字段要原样保留，避免用户重新填一遍。
+            var kept = {};
+            ['newDepartmentSelect', 'newApprovalTitle', 'newApprovalContent'].forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el && el.value) kept[id] = el.value;
+            });
             this._resetApprovalForm();
+            Object.keys(kept).forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) el.value = kept[id];
+            });
         }
         this.onTypeChange();
         this._onDeptOrTypeChange();

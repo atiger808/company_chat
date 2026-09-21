@@ -37,7 +37,8 @@
         return new Promise(function (resolve, reject) {
             if (window.echarts) return resolve(window.echarts);
             var s = document.createElement('script');
-            s.src = 'https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js';
+            // s.src = 'https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js';
+            s.src = '/static/js/dist/echarts.min.js';
             s.onload = function () { resolve(window.echarts); };
             s.onerror = function () { reject(new Error('图表库加载失败，请检查网络')); };
             document.head.appendChild(s);

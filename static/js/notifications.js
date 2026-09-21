@@ -11,6 +11,12 @@
     let pollTimer = null;
     let initialized = false;
 
+    // 右上角弹窗（集团公告等）：{notification_type: bool} + 停留时长，来自后端配置接口
+    let popupCfg = { enabled_types: { announcement: true }, duration_seconds: 10 };
+    let popupCfgLoaded = false;
+    const POPUP_MAX = 4;              // 同时最多显示几个弹窗，超出时先挤掉最旧的
+    const POPUP_RECENT_MS = 24 * 3600 * 1000;   // 打开页面时只补弹「24 小时内」的未读通知
+
     // 样式注入
     function injectStyles() {
         var css = '.notif-bell-wrap { position:relative; display:inline-flex; align-items:center; cursor:pointer; padding:6px 8px; border-radius:6px; transition:background 0.2s; color:var(--text-secondary,#606266); }';
@@ -176,6 +182,174 @@
     function escapeHtml(text) {
         if (!text) return '';
         return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // ==================== 右上角通知弹窗（集团公告等） ====================
+    // 目的：集团发布的公告偏官方，需要成员及时看到，所以在页面右上角弹一张卡片，
+    // 默认停留 10 秒，可点击跳转到对应页面、也可手动关闭。哪些类型弹窗由
+    // 「管理控制台 → 通知弹窗」（仅超管可改）配置，默认只开「集团公告」。
+
+    function injectPopupStyles() {
+        var css = '#notifPopupStack{position:fixed;top:64px;right:16px;z-index:10000;display:flex;flex-direction:column;gap:10px;width:340px;max-width:calc(100vw - 24px);pointer-events:none;}';
+        css += '.notif-popup{pointer-events:auto;position:relative;background:#fff;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,0.18);border-left:4px solid #409eff;padding:12px 32px 14px 14px;cursor:pointer;overflow:hidden;animation:notifPopIn .22s ease-out;}';
+        css += '.notif-popup.leaving{opacity:0;transform:translateX(20px);transition:opacity .2s,transform .2s;}';
+        css += '@keyframes notifPopIn{from{opacity:0;transform:translateX(28px);}to{opacity:1;transform:translateX(0);}}';
+        css += '.notif-popup-head{display:flex;align-items:center;gap:7px;margin-bottom:4px;}';
+        css += '.notif-popup-kind{font-size:11px;padding:1px 7px;border-radius:9px;color:#fff;flex-shrink:0;}';
+        css += '.notif-popup-title{font-size:14px;font-weight:600;color:var(--text-primary,#303133);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}';
+        css += '.notif-popup-content{font-size:12px;line-height:1.5;color:var(--text-secondary,#606266);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;}';
+        css += '.notif-popup-hint{font-size:11px;color:var(--text-light,#909399);margin-top:6px;}';
+        css += '.notif-popup-close{position:absolute;top:4px;right:6px;background:none;border:none;font-size:18px;line-height:1;color:var(--text-light,#909399);cursor:pointer;padding:2px 4px;}';
+        css += '.notif-popup-close:hover{color:var(--text-primary,#303133);}';
+        css += '.notif-popup-bar{position:absolute;left:0;bottom:0;height:2px;width:100%;background:currentColor;opacity:.55;transform-origin:left center;}';
+        css += '[data-theme="dark"] .notif-popup{background:#1e1e1e;box-shadow:0 8px 28px rgba(0,0,0,0.5);}';
+        css += '[data-theme="dark"] .notif-popup-title{color:#e5eaf3;}';
+        css += '[data-theme="dark"] .notif-popup-content{color:#a8b0bd;}';
+        css += '[data-theme="dark"] .notif-popup-close:hover{color:#e5eaf3;}';
+        css += '@media (max-width: 768px){#notifPopupStack{top:56px;left:8px;right:8px;width:auto;max-width:none;}}';
+        var style = document.createElement('style');
+        style.textContent = css;
+        document.head.appendChild(style);
+    }
+
+    function anyPopupEnabled() {
+        var m = popupCfg.enabled_types || {};
+        for (var k in m) { if (m[k]) return true; }
+        return false;
+    }
+
+    function popupEnabledFor(type) {
+        return !!(popupCfg.enabled_types || {})[type];
+    }
+
+    function popupDurationMs() {
+        var d = parseInt(popupCfg.duration_seconds, 10);
+        if (!(d > 0)) d = 10;
+        return Math.max(3, Math.min(120, d)) * 1000;
+    }
+
+    async function fetchPopupConfig() {
+        try {
+            var d = await apiGet(OA_API_URL + '/notifications/popup-config/');
+            if (d && d.enabled_types) {
+                popupCfg = { enabled_types: d.enabled_types, duration_seconds: d.duration_seconds || 10 };
+            }
+        } catch (e) {
+            // 取不到配置时保持默认（只弹集团公告），不影响通知本身
+        }
+        popupCfgLoaded = true;
+        return popupCfg;
+    }
+
+    function popupStack() {
+        var s = document.getElementById('notifPopupStack');
+        if (!s) {
+            s = document.createElement('div');
+            s.id = 'notifPopupStack';
+            document.body.appendChild(s);
+        }
+        return s;
+    }
+
+    // 本次会话已弹过的通知 id（避免每次翻页都把同一条未读公告重复弹出来）
+    function popupShownSet() {
+        try {
+            var raw = sessionStorage.getItem('notif_popup_shown');
+            return raw ? JSON.parse(raw) : [];
+        } catch (e) { return []; }
+    }
+
+    function popupShownBefore(id) {
+        return popupShownSet().indexOf(id) !== -1;
+    }
+
+    function markPopupShown(id) {
+        try {
+            var list = popupShownSet();
+            if (list.indexOf(id) === -1) {
+                list.push(id);
+                // 只保留最近 100 条，避免无限增长
+                if (list.length > 100) list = list.slice(list.length - 100);
+                sessionStorage.setItem('notif_popup_shown', JSON.stringify(list));
+            }
+        } catch (e) {}
+    }
+
+    function dismissPopup(card) {
+        if (!card || card._closing) return;
+        card._closing = true;
+        if (card._timer) clearTimeout(card._timer);
+        card.classList.add('leaving');
+        setTimeout(function () { if (card.parentNode) card.parentNode.removeChild(card); }, 220);
+    }
+
+    // 弹出一张通知卡片：n 为通知对象（type/title/content/related_url/id/extra_data）
+    function showPopup(n) {
+        if (!n || !popupEnabledFor(n.type)) return;
+        var stack = popupStack();
+        var color = typeColor(n.type);
+        var label = (n.type === 'announcement') ? '集团公告' : '工作通知';
+        var url = notifJumpUrl(n);
+
+        var card = document.createElement('div');
+        card.className = 'notif-popup';
+        card.style.borderLeftColor = color;
+        card.style.color = color;
+        card.innerHTML = '<button class="notif-popup-close" title="关闭">&times;</button>'
+            + '<div class="notif-popup-head">'
+            + '<i class="' + typeIcon(n.type) + '" style="color:' + color + ';font-size:13px;"></i>'
+            + '<span class="notif-popup-kind" style="background:' + color + ';">' + escapeHtml(label) + '</span>'
+            + '<span class="notif-popup-title">' + escapeHtml(n.title || '') + '</span>'
+            + '</div>'
+            + '<div class="notif-popup-content">' + escapeHtml(n.content || '') + '</div>'
+            + (url ? '<div class="notif-popup-hint"><i class="fas fa-hand-pointer"></i> 点击查看详情</div>' : '')
+            + '<div class="notif-popup-bar"></div>';
+
+        var sec = popupDurationMs() / 1000;
+        var bar = card.querySelector('.notif-popup-bar');
+        requestAnimationFrame(function () {
+            if (bar) {
+                bar.style.transition = 'transform ' + sec + 's linear';
+                bar.style.transform = 'scaleX(0)';
+            }
+        });
+        card._timer = setTimeout(function () { dismissPopup(card); }, popupDurationMs());
+
+        card.querySelector('.notif-popup-close').addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            dismissPopup(card);
+        });
+        card.addEventListener('click', function () {
+            dismissPopup(card);
+            // 复用通知列表的跳转逻辑（标记已读 + 刷新未读数 + 跳转）
+            if (window.WorkNotif && WorkNotif.goDetail) WorkNotif.goDetail(n.id, url);
+        });
+
+        stack.appendChild(card);
+        // 同时弹太多会挡住页面：超出上限先挤掉最旧的
+        var cards = stack.querySelectorAll('.notif-popup');
+        for (var i = 0; i < cards.length - POPUP_MAX; i++) dismissPopup(cards[i]);
+    }
+
+    // 打开页面时补弹：最近 24 小时内的未读通知（取最新一条），每条每次会话只弹一次，
+    // 这样成员在公告发布时不在线，之后打开页面也能第一时间看到。
+    async function popupRecentUnread() {
+        if (!anyPopupEnabled()) return;
+        try {
+            var data = await apiGet(OA_API_URL + '/notifications/?page=1&page_size=10&read_filter=unread');
+            var rows = (data && data.results) || [];
+            var cutoff = Date.now() - POPUP_RECENT_MS;
+            for (var i = 0; i < rows.length; i++) {
+                var n = rows[i];
+                if (!popupEnabledFor(n.type)) continue;
+                var t = Date.parse(n.created_at || '');
+                if (isNaN(t) || t < cutoff) continue;
+                if (popupShownBefore(n.id)) continue;
+                markPopupShown(n.id);
+                showPopup(n);
+                break;   // 只补弹最新一条，避免一次涌入多个弹窗
+            }
+        } catch (e) { /* 静默：补弹失败不影响正常使用 */ }
     }
 
     // 通知跳转 URL：老数据 related_url 可能不带对象 id（如 /oa/approval/），
@@ -363,6 +537,7 @@
         if (initialized) return;
         initialized = true;
         injectStyles();
+        injectPopupStyles();
 
         var bellWrap = document.getElementById('notifBellWrap');
         if (!bellWrap) return;
@@ -383,6 +558,9 @@
 
         // 初始加载
         fetchUnreadCount();
+
+        // 通知弹窗配置（哪些类型弹窗 / 弹多久），拿到后补弹最近的未读通知
+        fetchPopupConfig().then(popupRecentUnread);
 
         // 轮询
         pollTimer = setInterval(fetchUnreadCount, 20000);
@@ -408,6 +586,8 @@
                     var data = JSON.parse(e.data);
                     if (data.type === 'work.notification' && data.event_type === 'new') {
                         fetchUnreadCount();
+                        // 右上角弹窗：仅对该类型已开启弹窗时才弹（默认只开「集团公告」）
+                        showPopup(data.notification);
                         if (Notification.permission === 'granted') {
                             new Notification(data.notification.title, { body: data.notification.content, icon: '/static/images/logo.png' });
                         }

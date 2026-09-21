@@ -705,6 +705,7 @@ API_MODEL_MAP = {
     "/api/oa/notifications/": "工作通知",
     "/api/oa/notifications/unread-count/": "通知未读数",
     "/api/oa/notifications/mark-all-read/": "通知全部已读",
+    "/api/oa/notifications/popup-config/": "通知弹窗配置",
     "/api/oa/notifications/<int:pk>/mark-read/": "标记通知已读",
 
     # ====== 组织架构 ======

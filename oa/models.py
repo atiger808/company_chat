@@ -366,6 +366,33 @@ class WorkNotification(models.Model):
         return f'{self.recipient} {self.title}'
 
 
+def _default_popup_enabled_types():
+    """通知弹窗默认开关：只对「集团公告」开启（公告偏官方，需让成员及时看到），其它类型默认关闭"""
+    return {'announcement': True}
+
+
+class NotificationPopupConfig(models.Model):
+    """工作通知弹窗配置（每企业一条，超管在管理控制台维护）
+
+    控制哪些类型的通知在页面右上角弹窗提示、弹窗停留多久。
+    默认只开「集团公告」；其它类型默认关闭，由超管按需打开。
+    """
+    tenant = models.OneToOneField('accounts.Tenant', on_delete=models.CASCADE,
+                                  related_name='notification_popup_config', verbose_name='所属企业')
+    # {notification_type: bool}：为 True 的类型收到新通知时弹窗
+    enabled_types = models.JSONField(default=_default_popup_enabled_types,
+                                     verbose_name='开启弹窗的通知类型')
+    duration_seconds = models.IntegerField(default=10, verbose_name='弹窗显示时长(秒)')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '通知弹窗配置'
+        verbose_name_plural = '通知弹窗配置'
+
+    def __str__(self):
+        return f'{self.tenant} 通知弹窗配置'
+
+
 class ApprovalCarbonCopy(models.Model):
     """审批抄送（支持抄送用户和部门）"""
     CC_TYPE_CHOICES = [

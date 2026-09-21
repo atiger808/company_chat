@@ -184,5 +184,7 @@ urlpatterns = [
     path('notifications/', WorkNotificationViewSet.as_view({'get': 'list'}), name='notification-list'),
     path('notifications/unread-count/', WorkNotificationViewSet.as_view({'get': 'unread_count'}), name='notification-unread-count'),
     path('notifications/mark-all-read/', WorkNotificationViewSet.as_view({'post': 'mark_all_read'}), name='notification-mark-all-read'),
+    # 通知弹窗配置（读：所有登录用户；写：仅超级管理员）
+    path('notifications/popup-config/', WorkNotificationViewSet.as_view({'get': 'popup_config', 'post': 'save_popup_config'}), name='notification-popup-config'),
     path('notifications/<int:pk>/mark-read/', WorkNotificationViewSet.as_view({'post': 'mark_read'}), name='notification-mark-read'),
 ]

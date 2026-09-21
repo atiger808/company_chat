@@ -2299,6 +2299,14 @@ class AdminConsole {
                     return;
                 }
 
+                // 通知弹窗：打开配置模态框，不切换标签
+                if (item.dataset.tab === 'notif-popup') {
+                    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                    item.classList.add('active');
+                    this.openNotifPopupConfig();
+                    return;
+                }
+
                 // 更新激活状态
                 document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
                 item.classList.add('active');
@@ -3115,6 +3123,61 @@ class AdminConsole {
                 WatermarkManager.init();
             }
             this.closeWatermarkConfig();
+        } catch (e) { this.showError ? this.showError('保存失败', e.message) : (alert && alert('保存失败：' + e.message)); }
+    }
+
+    // ==================== 通知弹窗设置（仅超级管理员） ====================
+    // 控制哪些类型的工作通知在页面右上角弹窗、弹多久；默认只开「集团公告」。
+    openNotifPopupConfig() {
+        document.getElementById('notifPopupConfigModal').style.display = 'flex';
+        setTimeout(function () { document.getElementById('notifPopupConfigModal').classList.add('show'); }, 10);
+        this.loadNotifPopupConfig();
+    }
+    closeNotifPopupConfig() {
+        var m = document.getElementById('notifPopupConfigModal');
+        if (m) { m.classList.remove('show'); setTimeout(function () { m.style.display = 'none'; }, 150); }
+    }
+    async loadNotifPopupConfig() {
+        try {
+            const resp = await fetch('/api/oa/notifications/popup-config/', {headers: TokenManager.getHeaders()});
+            if (!resp.ok) { this.showError && this.showError('加载失败', '无法获取通知弹窗配置'); return; }
+            const raw = await resp.json();
+            const d = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+            document.getElementById('npDuration').value = d.duration_seconds || 10;
+            this._renderNotifPopupToggles(d.types || [], d.enabled_types || {});
+        } catch (e) { console.warn('加载通知弹窗配置失败', e); }
+    }
+    _renderNotifPopupToggles(types, enabled) {
+        var wrap = document.getElementById('npTypeToggles');
+        if (!wrap) return;
+        if (!types.length) { wrap.innerHTML = '<div style="color:#909399;font-size:13px;">暂无可配置的通知类型</div>'; return; }
+        var self = this;
+        wrap.innerHTML = types.map(function (t) {
+            var on = enabled[t.key] === true;
+            var star = t.key === 'announcement' ? '<i class="fas fa-bullhorn" style="color:#7c4dff;"></i> ' : '';
+            return '<label style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:var(--bg-secondary,#f5f7fa);border-radius:6px;cursor:pointer;font-size:13px;">'
+                + '<input type="checkbox" class="np-type-cb" data-type="' + self._escape(t.key) + '" ' + (on ? 'checked' : '') + ' style="width:15px;height:15px;cursor:pointer;"> '
+                + star + self._escape(t.label)
+                + '</label>';
+        }).join('');
+    }
+    async saveNotifPopupConfig() {
+        var enabledTypes = {};
+        document.querySelectorAll('#npTypeToggles .np-type-cb').forEach(function (cb) {
+            enabledTypes[cb.getAttribute('data-type')] = cb.checked;
+        });
+        try {
+            const resp = await fetch('/api/oa/notifications/popup-config/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify({
+                    enabled_types: enabledTypes,
+                    duration_seconds: parseInt(document.getElementById('npDuration').value) || 10,
+                })
+            });
+            if (!resp.ok) { const e2 = await resp.json().catch(function(){return{};}); throw new Error(e2.error || '保存失败'); }
+            this.showToast ? this.showToast('通知弹窗配置已保存', false) : (alert && alert('通知弹窗配置已保存'));
+            this.closeNotifPopupConfig();
         } catch (e) { this.showError ? this.showError('保存失败', e.message) : (alert && alert('保存失败：' + e.message)); }
     }
 
