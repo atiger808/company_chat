@@ -935,6 +935,16 @@ class AdminConsole {
     _loadFilterDepartments(tenantId) {
         var sel = document.getElementById('filterDepartment');
         if (!sel) return;
+        // 部门隔离：普通管理员只能查看/管理本部门用户 → 部门筛选固定为本人所在部门
+        // （不提交 org_dept_id，由后端按部门收窄，避免旧版部门用户被部门树过滤掉）
+        if (!this.isSuperAdmin) {
+            var own = (this.currentUser && this.currentUser.department_info) || null;
+            sel.innerHTML = '<option value="">本部门（' + this._escAttr((own && own.name) || '未分配') + '）</option>';
+            sel.value = '';
+            sel.disabled = true;
+            return;
+        }
+        sel.disabled = false;
         sel.innerHTML = '<option value="">全部部门</option>';
         if (!tenantId) return;
         fetch('/api/org/departments/?tenant_id=' + tenantId, { headers: TokenManager.getHeaders() }).then(function(resp) {
@@ -2307,6 +2317,22 @@ class AdminConsole {
                     return;
                 }
 
+                // 公告设置：打开配置模态框，不切换标签
+                if (item.dataset.tab === 'announcement-config') {
+                    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                    item.classList.add('active');
+                    this.openAnnouncementConfig();
+                    return;
+                }
+
+                // 报表权限：打开配置模态框，不切换标签
+                if (item.dataset.tab === 'report-access') {
+                    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                    item.classList.add('active');
+                    this.openReportAccessConfig();
+                    return;
+                }
+
                 // 更新激活状态
                 document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
                 item.classList.add('active');
@@ -3178,6 +3204,193 @@ class AdminConsole {
             if (!resp.ok) { const e2 = await resp.json().catch(function(){return{};}); throw new Error(e2.error || '保存失败'); }
             this.showToast ? this.showToast('通知弹窗配置已保存', false) : (alert && alert('通知弹窗配置已保存'));
             this.closeNotifPopupConfig();
+        } catch (e) { this.showError ? this.showError('保存失败', e.message) : (alert && alert('保存失败：' + e.message)); }
+    }
+
+    // ==================== 配置里的「用户多选」通用片段 ====================
+    // 集团公告的发布权限、报表与数据分析的查看权限都要「搜索企业成员 + 已选标签」，
+    // 这里共用一套渲染与本地过滤，避免两处重复实现。
+    _normalizeUser(u) {
+        return {
+            id: u.id,
+            real_name: u.real_name || u.name || u.username || ('#' + u.id),
+            username: u.username || '',
+            avatar_url: u.avatar_url || u.avatar || '/static/images/default-avatar.png',
+            position: u.position || '',
+            department: (u.department_info && u.department_info.name) || u.department || '',
+        };
+    }
+    async _ensureCfgUserCandidates() {
+        if (this._cfgUserCandidates) return this._cfgUserCandidates;
+        this._cfgUserCandidates = [];
+        try {
+            const resp = await fetch(API_ADMIN_URL + '/admin/users/?page=1&page_size=200', {headers: TokenManager.getHeaders()});
+            if (resp.ok) {
+                const data = await resp.json();
+                this._cfgUserCandidates = (data.results || []).map(u => this._normalizeUser(u));
+            }
+        } catch (e) { console.warn('加载成员候选失败', e); }
+        return this._cfgUserCandidates;
+    }
+    _cfgFilterUsers(kw) {
+        const list = this._cfgUserCandidates || [];
+        const k = (kw || '').trim().toLowerCase();
+        const hit = k ? list.filter(u => (u.real_name + ' ' + u.username + ' ' + u.position + ' ' + u.department).toLowerCase().indexOf(k) >= 0) : list;
+        return hit.slice(0, 60);
+    }
+    _cfgCandidateRowsHtml(list, onclickName) {
+        if (!list.length) return '<div style="padding:10px;color:#909399;font-size:13px;text-align:center;">未找到匹配的成员</div>';
+        const self = this;
+        return list.map(u => '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;cursor:pointer;border-bottom:1px solid #f0f0f0;" '
+            + 'onclick="adminConsole.' + onclickName + '(' + u.id + ')">'
+            + '<img src="' + u.avatar_url + '" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0;">'
+            + '<span style="flex:1;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + self._escAttr(u.real_name)
+            + (u.username ? '<span style="color:#909399;">（' + self._escAttr(u.username) + '）</span>' : '') + '</span>'
+            + (u.department ? '<span style="font-size:11px;color:#909399;flex-shrink:0;">' + self._escAttr(u.position ? u.position + ' · ' : '') + self._escAttr(u.department) + '</span>' : '')
+            + '</div>').join('');
+    }
+    _cfgUserTagsHtml(list, removeName) {
+        if (!list.length) return '<span style="font-size:12px;color:#c0c4cc;">未选择成员</span>';
+        const self = this;
+        return list.map(u => '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 8px;background:#ecf5ff;border-radius:14px;font-size:12px;margin:2px;">'
+            + '<img src="' + u.avatar_url + '" style="width:18px;height:18px;border-radius:50%;object-fit:cover;">'
+            + '<span>' + self._escAttr(u.real_name) + '</span>'
+            + '<i class="fas fa-times" style="cursor:pointer;color:#909399;font-size:11px;" onclick="adminConsole.' + removeName + '(' + u.id + ')"></i>'
+            + '</span>').join('');
+    }
+
+    // ==================== 集团公告设置（发布权限 + 自动归档期限） ====================
+    openAnnouncementConfig() {
+        document.getElementById('announcementConfigModal').style.display = 'flex';
+        setTimeout(function () { document.getElementById('announcementConfigModal').classList.add('show'); }, 10);
+        this.loadAnnouncementConfig();
+    }
+    closeAnnouncementConfig() {
+        var m = document.getElementById('announcementConfigModal');
+        if (m) { m.classList.remove('show'); setTimeout(function () { m.style.display = 'none'; }, 150); }
+    }
+    async loadAnnouncementConfig() {
+        try {
+            await this._ensureCfgUserCandidates();
+            const resp = await fetch('/api/system/announcement-config/', {headers: TokenManager.getHeaders()});
+            if (!resp.ok) { this.showError && this.showError('加载失败', '无法获取公告配置'); return; }
+            const raw = await resp.json();
+            const d = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+            document.getElementById('annArchiveDays').value = d.archive_days || 1;
+            document.getElementById('annArchiveDays').min = d.min_archive_days || 1;
+            document.getElementById('annArchiveDays').max = d.max_archive_days || 365;
+            this._annPublishers = (d.publishers || []).map(u => this._normalizeUser(u));
+            this._renderAnnPublisherTags();
+            const res = document.getElementById('annPublisherRes');
+            if (res) res.style.display = 'none';
+        } catch (e) { console.warn('加载公告配置失败', e); }
+    }
+    _renderAnnPublisherTags() {
+        const wrap = document.getElementById('annPublisherTags');
+        if (wrap) wrap.innerHTML = this._cfgUserTagsHtml(this._annPublishers || [], '_removeAnnPublisher');
+    }
+    _onAnnPublisherSearch(kw) {
+        const res = document.getElementById('annPublisherRes');
+        if (!res) return;
+        const selected = new Set((this._annPublishers || []).map(u => String(u.id)));
+        const rows = this._cfgFilterUsers(kw).filter(u => !selected.has(String(u.id)));
+        res.innerHTML = this._cfgCandidateRowsHtml(rows, '_pickAnnPublisher');
+        res.style.display = 'block';
+    }
+    _pickAnnPublisher(id) {
+        const u = (this._cfgUserCandidates || []).find(x => String(x.id) === String(id));
+        if (!u) return;
+        this._annPublishers = this._annPublishers || [];
+        if (!this._annPublishers.some(x => String(x.id) === String(id))) this._annPublishers.push(u);
+        this._renderAnnPublisherTags();
+        document.getElementById('annPublisherRes').style.display = 'none';
+        document.getElementById('annPublisherSearch').value = '';
+    }
+    _removeAnnPublisher(id) {
+        this._annPublishers = (this._annPublishers || []).filter(x => String(x.id) !== String(id));
+        this._renderAnnPublisherTags();
+    }
+    async saveAnnouncementConfig() {
+        const days = parseInt(document.getElementById('annArchiveDays').value, 10);
+        try {
+            const resp = await fetch('/api/system/announcement-config/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify({
+                    publisher_ids: (this._annPublishers || []).map(u => u.id),
+                    archive_days: isNaN(days) ? 1 : days,
+                })
+            });
+            if (!resp.ok) { const b = await resp.json().catch(() => ({})); throw new Error(b.error || '保存失败'); }
+            this.showToast ? this.showToast('公告配置已保存', false) : (alert && alert('公告配置已保存'));
+            this.closeAnnouncementConfig();
+        } catch (e) { this.showError ? this.showError('保存失败', e.message) : (alert && alert('保存失败：' + e.message)); }
+    }
+
+    // ==================== 报表与数据分析配置（OA审批 / 普惠补贴） ====================
+    openReportAccessConfig() {
+        document.getElementById('reportAccessConfigModal').style.display = 'flex';
+        setTimeout(function () { document.getElementById('reportAccessConfigModal').classList.add('show'); }, 10);
+        this.loadReportAccessConfig();
+    }
+    closeReportAccessConfig() {
+        var m = document.getElementById('reportAccessConfigModal');
+        if (m) { m.classList.remove('show'); setTimeout(function () { m.style.display = 'none'; }, 150); }
+    }
+    async loadReportAccessConfig() {
+        try {
+            await this._ensureCfgUserCandidates();
+            const resp = await fetch('/api/system/report-access-config/', {headers: TokenManager.getHeaders()});
+            if (!resp.ok) { this.showError && this.showError('加载失败', '无法获取报表配置'); return; }
+            const raw = await resp.json();
+            const d = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+            document.getElementById('raOaEnabled').checked = !!d.oa_enabled;
+            document.getElementById('raSubsidyEnabled').checked = !!d.subsidy_enabled;
+            this._reportUsers = (d.users || []).map(u => this._normalizeUser(u));
+            this._renderReportUserTags();
+            const res = document.getElementById('raUserRes');
+            if (res) res.style.display = 'none';
+        } catch (e) { console.warn('加载报表配置失败', e); }
+    }
+    _renderReportUserTags() {
+        const wrap = document.getElementById('raUserTags');
+        if (wrap) wrap.innerHTML = this._cfgUserTagsHtml(this._reportUsers || [], '_removeReportUser');
+    }
+    _onReportUserSearch(kw) {
+        const res = document.getElementById('raUserRes');
+        if (!res) return;
+        const selected = new Set((this._reportUsers || []).map(u => String(u.id)));
+        const rows = this._cfgFilterUsers(kw).filter(u => !selected.has(String(u.id)));
+        res.innerHTML = this._cfgCandidateRowsHtml(rows, '_pickReportUser');
+        res.style.display = 'block';
+    }
+    _pickReportUser(id) {
+        const u = (this._cfgUserCandidates || []).find(x => String(x.id) === String(id));
+        if (!u) return;
+        this._reportUsers = this._reportUsers || [];
+        if (!this._reportUsers.some(x => String(x.id) === String(id))) this._reportUsers.push(u);
+        this._renderReportUserTags();
+        document.getElementById('raUserRes').style.display = 'none';
+        document.getElementById('raUserSearch').value = '';
+    }
+    _removeReportUser(id) {
+        this._reportUsers = (this._reportUsers || []).filter(x => String(x.id) !== String(id));
+        this._renderReportUserTags();
+    }
+    async saveReportAccessConfig() {
+        try {
+            const resp = await fetch('/api/system/report-access-config/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify({
+                    oa_enabled: document.getElementById('raOaEnabled').checked,
+                    subsidy_enabled: document.getElementById('raSubsidyEnabled').checked,
+                    user_ids: (this._reportUsers || []).map(u => u.id),
+                })
+            });
+            if (!resp.ok) { const b = await resp.json().catch(() => ({})); throw new Error(b.error || '保存失败'); }
+            this.showToast ? this.showToast('报表配置已保存', false) : (alert && alert('报表配置已保存'));
+            this.closeReportAccessConfig();
         } catch (e) { this.showError ? this.showError('保存失败', e.message) : (alert && alert('保存失败：' + e.message)); }
     }
 

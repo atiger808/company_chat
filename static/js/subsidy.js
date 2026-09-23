@@ -38,6 +38,7 @@ class SubsidyApp {
             WatermarkManager.applyPrintPermission();
         }
         this._loadAccount();
+        this._loadReportAccess();
         this._loadPaymentInfo();
         this.loadMy(1);
         this.loadPayments();
@@ -70,6 +71,18 @@ class SubsidyApp {
         } catch (e) { /* ignore */ }
     }
 
+    // 「报表与数据分析」入口显隐：默认隐藏；管理控制台开启并授权当前用户后才显示
+    async _loadReportAccess() {
+        try {
+            const resp = await fetch('/api/oa/report-access/', {headers: TokenManager.getHeaders()});
+            if (resp.ok) {
+                const d = await resp.json();
+                this._canViewReport = !!(d && d.subsidy);
+            }
+        } catch (e) { /* 取不到则保持隐藏 */ }
+        this._updateRoleNav();
+    }
+
     // 财务服务下拉菜单项显隐（财务核验/财务支付按角色）
     _updateRoleNav() {
         const ut = localStorage.getItem('user_type');
@@ -79,8 +92,9 @@ class SubsidyApp {
         const pi = document.getElementById('subsidyPayNavItem');
         if (vi) vi.style.display = canVerify ? 'flex' : 'none';
         if (pi) pi.style.display = canPay ? 'flex' : 'none';
+        // 报表与数据分析入口：默认隐藏，由管理控制台开启并授权当前用户后才显示
         const ri = document.getElementById('subsidyReportNavItem');
-        if (ri) ri.style.display = (ut === 'super_admin' || this._isVerifier || this._isPaymentStaff) ? 'flex' : 'none';
+        if (ri) ri.style.display = this._canViewReport ? 'flex' : 'none';
         this._updateFinanceMenuVisibility();
     }
 

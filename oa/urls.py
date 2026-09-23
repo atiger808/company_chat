@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import AttendanceViewSet, ApprovalViewSet, ApprovalTypeViewSet, WorkNotificationViewSet, SubsidyViewSet, WorkCalendarViewSet, MaterialViewSet, DailyWorkSummaryViewSet, AnnouncementViewSet
+from .views import AttendanceViewSet, ApprovalViewSet, ApprovalTypeViewSet, WorkNotificationViewSet, SubsidyViewSet, WorkCalendarViewSet, MaterialViewSet, DailyWorkSummaryViewSet, AnnouncementViewSet, ReportAccessConfigViewSet
 from .reports import ApprovalReportViewSet, SubsidyReportViewSet
 
 urlpatterns = [
@@ -11,6 +11,8 @@ urlpatterns = [
     path('subsidy/report-stats/', SubsidyReportViewSet.as_view({'get': 'stats'}), name='subsidy-report-stats'),
     path('subsidy/report-export/', SubsidyReportViewSet.as_view({'get': 'export'}), name='subsidy-report-export'),
     path('subsidy/report-pdf/', SubsidyReportViewSet.as_view({'post': 'pdf_export'}), name='subsidy-report-pdf'),
+    # 当前用户能否查看报表（供 OA审批页 / 补贴三页显隐入口）
+    path('report-access/', ReportAccessConfigViewSet.as_view({'get': 'my_access'}), name='report-access'),
 
     # 集团公告
     path('announcements/', AnnouncementViewSet.as_view({'get': 'list', 'post': 'create'}), name='announcement-list'),

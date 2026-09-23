@@ -258,6 +258,11 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'oa.tasks.approval_lifecycle_task',
         'schedule': _crontab(minute=17, hour=3),
     },
+    # 每日 03:41 执行集团公告自动归档：发布满期限（默认 1 天）的公告标记归档，之后不可编辑/删除
+    'announcement-archive-daily': {
+        'task': 'oa.tasks.announcement_archive_task',
+        'schedule': _crontab(minute=41, hour=3),
+    },
 }
 
 # 添加这些关键配置
@@ -426,7 +431,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20260921-385f431'
+STATIC_VERSION = '20260923-80a405d'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -707,6 +712,9 @@ API_MODEL_MAP = {
     "/api/oa/notifications/mark-all-read/": "通知全部已读",
     "/api/oa/notifications/popup-config/": "通知弹窗配置",
     "/api/oa/notifications/<int:pk>/mark-read/": "标记通知已读",
+    "/api/system/announcement-config/": "集团公告配置",
+    "/api/system/report-access-config/": "报表与数据分析配置",
+    "/api/oa/report-access/": "我的报表权限",
 
     # ====== 组织架构 ======
     "/api/org/tenants/": "企业管理",

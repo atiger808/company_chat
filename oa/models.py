@@ -724,9 +724,15 @@ class ApprovalNode(models.Model):
 
     def __str__(self):
         if self.node_type == 'user' and self.user:
+            if self.request:
+                return f'用户:{self.user.username} 审批id:{self.request.id} 审批标题:{self.request.title}'
             return f'用户:{self.user.username}'
         if self.node_type == 'department' and self.department:
+            if self.request:
+                return f'部门:{self.department.name} 审批id:{self.request.id} 审批标题:{self.request.title}'
             return f'部门:{self.department.name}'
+        if self.request:
+            return f'节点:{self.id} 审批id:{self.request.id} 审批标题:{self.request.title}'
         return f'节点:{self.id}'
 
 
@@ -1712,6 +1718,10 @@ class Announcement(models.Model):
     # 发布状态
     is_published = models.BooleanField(default=False, verbose_name='是否已发布')
     published_at = models.DateTimeField(null=True, blank=True, verbose_name='发布时间')
+    # 自动归档：发布满 AnnouncementConfig.archive_days 天后归档；归档后任何人（含发布人与超管）
+    # 都不可编辑/删除。每日定时任务写入，编辑/删除时另按「发布时刻 + 期限」动态兜底判定。
+    is_archived = models.BooleanField(default=False, db_index=True, verbose_name='是否已归档')
+    archived_at = models.DateTimeField(null=True, blank=True, verbose_name='归档时间')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
@@ -1800,6 +1810,91 @@ class AnnouncementOperation(models.Model):
 
     def __str__(self):
         return f'{self.get_action_display()}：{self.title or ""}'
+
+
+class AnnouncementConfig(models.Model):
+    """集团公告配置（每企业一条，超管在管理控制台维护）
+
+    - publisher_ids：除超级管理员外，额外授权可发布集团公告的用户（未授权者不可发布）
+    - archive_days：公告发布满 N 天后自动归档；归档后任何人（含发布人与超管）都不可编辑/删除
+    """
+    DEFAULT_ARCHIVE_DAYS = 1
+    MIN_ARCHIVE_DAYS, MAX_ARCHIVE_DAYS = 1, 365
+
+    tenant = models.OneToOneField('accounts.Tenant', on_delete=models.CASCADE,
+                                  related_name='announcement_config', verbose_name='所属企业')
+    publisher_ids = models.JSONField(default=list, blank=True, verbose_name='可发布公告的用户ID列表')
+    archive_days = models.PositiveIntegerField(default=DEFAULT_ARCHIVE_DAYS,
+                                               verbose_name='公告自动归档期限(天)')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '集团公告配置'
+        verbose_name_plural = '集团公告配置'
+
+    def __str__(self):
+        return f'{self.tenant} 集团公告配置'
+
+    @classmethod
+    def get_config(cls, tenant):
+        """取该企业配置；未配置时返回一份带默认值的未保存实例（保证开箱即用）"""
+        if tenant is not None:
+            cfg = cls.objects.filter(tenant=tenant).first()
+            if cfg:
+                return cfg
+        return cls(tenant=tenant, archive_days=cls.DEFAULT_ARCHIVE_DAYS)
+
+    def can_publish(self, user):
+        """是否可发布公告：超级管理员，或被超管授权的用户"""
+        if getattr(user, 'user_type', '') == 'super_admin':
+            return True
+        try:
+            return int(user.id) in set(int(x) for x in (self.publisher_ids or []))
+        except (TypeError, ValueError):
+            return False
+
+
+class ReportAccessConfig(models.Model):
+    """报表与数据分析配置（每企业一条，超管在管理控制台维护）
+
+    OA审批页 / 普惠补贴页（含财务核验、财务支付）的「报表与数据分析」默认隐藏；
+    开启后仅超级管理员与授权的用户可见可用（前后端双重校验）。
+    """
+    tenant = models.OneToOneField('accounts.Tenant', on_delete=models.CASCADE,
+                                  related_name='report_access_config', verbose_name='所属企业')
+    oa_enabled = models.BooleanField(default=False, verbose_name='启用OA审批报表')
+    subsidy_enabled = models.BooleanField(default=False, verbose_name='启用普惠补贴报表')
+    user_ids = models.JSONField(default=list, blank=True, verbose_name='可查看报表的用户ID列表')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '报表与数据分析配置'
+        verbose_name_plural = '报表与数据分析配置'
+
+    def __str__(self):
+        return f'{self.tenant} 报表与数据分析配置'
+
+    @classmethod
+    def get_config(cls, tenant):
+        """取该企业配置；未配置时返回一份带默认值的未保存实例（默认全部关闭）"""
+        if tenant is not None:
+            cfg = cls.objects.filter(tenant=tenant).first()
+            if cfg:
+                return cfg
+        return cls(tenant=tenant)
+
+    def can_view(self, user, kind):
+        """kind='oa' | 'subsidy'；超级管理员始终可见，其余需「该模块已开启 + 在授权名单内」"""
+        if getattr(user, 'user_type', '') == 'super_admin':
+            return True
+        if kind == 'oa' and not self.oa_enabled:
+            return False
+        if kind == 'subsidy' and not self.subsidy_enabled:
+            return False
+        try:
+            return int(user.id) in set(int(x) for x in (self.user_ids or []))
+        except (TypeError, ValueError):
+            return False
 
 
 # 默认所有页面开启水印（首次创建时播种）

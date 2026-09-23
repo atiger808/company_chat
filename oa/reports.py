@@ -285,10 +285,12 @@ class _AdminReportBase(viewsets.ViewSet):
 
 
 class ApprovalReportViewSet(_AdminReportBase):
-    """OA 审批报表与数据分析（仅超级管理员）"""
+    """OA 审批报表与数据分析（超级管理员，或管理控制台开启并授权的用户）"""
 
     def _require_admin(self, request):
-        return getattr(request.user, 'user_type', '') == 'super_admin'
+        from .models import ReportAccessConfig
+        cfg = ReportAccessConfig.get_config(self._tenant(request))
+        return cfg.can_view(request.user, 'oa')
 
     def _base_qs(self, request, start_dt, end_dt):
         ids = self._tenant_ids(request)
@@ -507,7 +509,7 @@ class ApprovalReportViewSet(_AdminReportBase):
     def overview(self, request):
         """流程效率分析：审批时长、节点耗时、驳回率、超时率、积压量、类型分布、趋势"""
         if not self._require_admin(request):
-            return Response({'error': '仅超级管理员可查看'}, status=403)
+            return Response({'error': '报表与数据分析未开启或您未被授权查看，请联系超级管理员'}, status=403)
         if (request.query_params.get('export_format') or '').strip().lower() in ('xlsx', 'pdf'):
             return self._export_file(request, 'overview', request.query_params.get('export_format').strip().lower())
         return Response({'encrypt': True, 'data': encrypt_data(self._overview_data(request))})
@@ -516,7 +518,7 @@ class ApprovalReportViewSet(_AdminReportBase):
     def business(self, request):
         """业务统计分析（带 format=xlsx/pdf 时直接导出该报表）"""
         if not self._require_admin(request):
-            return Response({'error': '仅超级管理员可查看'}, status=403)
+            return Response({'error': '报表与数据分析未开启或您未被授权查看，请联系超级管理员'}, status=403)
         if (request.query_params.get('export_format') or '').strip().lower() in ('xlsx', 'pdf'):
             return self._export_file(request, 'business', request.query_params.get('export_format').strip().lower())
         return Response({'encrypt': True, 'data': encrypt_data(self._business_data(request))})
@@ -525,7 +527,7 @@ class ApprovalReportViewSet(_AdminReportBase):
     def pdf_export(self, request):
         """按模态框内容（统计卡 + 表格 + 图表图片）生成完整 PDF：POST {title,subtitle,filename,blocks}"""
         if not self._require_admin(request):
-            return Response({'error': '仅超级管理员可导出'}, status=403)
+            return Response({'error': '报表与数据分析未开启或您未被授权导出，请联系超级管理员'}, status=403)
         title = (request.data.get('title') or 'OA审批-报表与数据分析').strip()
         subtitle = (request.data.get('subtitle') or '').strip()
         blocks = request.data.get('blocks') or []
@@ -541,7 +543,7 @@ class ApprovalReportViewSet(_AdminReportBase):
     def export(self, request):
         """导出报表（兼容入口）：kind=overview(流程效率)/business(业务统计)，export_format=xlsx(默认)/pdf"""
         if not self._require_admin(request):
-            return Response({'error': '仅超级管理员可导出'}, status=403)
+            return Response({'error': '报表与数据分析未开启或您未被授权导出，请联系超级管理员'}, status=403)
         kind = (request.query_params.get('kind') or 'overview').strip()
         fmt = (request.query_params.get('export_format') or 'xlsx').strip().lower()
         return self._export_file(request, kind, fmt)
@@ -808,19 +810,12 @@ class ApprovalReportViewSet(_AdminReportBase):
 
 
 class SubsidyReportViewSet(_AdminReportBase):
-    """普惠补贴报表与数据分析（超管 / 财务核验人员 / 财务支付人员）"""
+    """普惠补贴报表与数据分析（超级管理员，或管理控制台开启并授权的用户）"""
 
     def _can_view(self, request):
-        u = request.user
-        if getattr(u, 'user_type', '') == 'super_admin':
-            return True
-        try:
-            from .views import SubsidyViewSet
-            sv = SubsidyViewSet()
-            tenant = self._tenant(request)
-            return sv._is_verifier(u, tenant) or sv._is_payment_staff(u, tenant)
-        except Exception:
-            return False
+        from .models import ReportAccessConfig
+        cfg = ReportAccessConfig.get_config(self._tenant(request))
+        return cfg.can_view(request.user, 'subsidy')
 
     def _base_qs(self, request, start_dt, end_dt):
         ids = self._tenant_ids(request)

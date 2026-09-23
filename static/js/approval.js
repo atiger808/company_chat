@@ -189,6 +189,10 @@ class ApprovalApp {
         } catch (e) {
             console.warn('获取当前用户失败，使用本地 user_type:', isAdmin ? '管理员' : '非管理员');
         }
+        // 「报表与数据分析」入口：默认隐藏，由管理控制台开启并授权后可见（后端接口另有一道校验）
+        try {
+            await this._applyReportAccess();
+        } catch (e) { /* ignore */ }
         this._ccTab = 'users';
         // 从工作通知跳转：自动打开对应审批详情模态框
         try {
@@ -208,6 +212,23 @@ class ApprovalApp {
             if (cu.user_type === 'admin' || cu.user_type === 'super_admin') return true;
         } catch (e) {}
         return false;
+    }
+
+    // 「报表与数据分析」入口显隐：默认隐藏；管理控制台开启并授权当前用户后才显示
+    async _applyReportAccess() {
+        var nav = document.getElementById('approvalReportNavItem');
+        if (!nav) return;
+        var divider = document.getElementById('reportSvcDivider');
+        var ok = false;
+        try {
+            var resp = await fetch(OA_API_URL + '/report-access/', {headers: TokenManager.getHeaders()});
+            if (resp.ok) {
+                var d = await resp.json();
+                ok = !!(d && d.oa);
+            }
+        } catch (e) { /* 取不到则保持隐藏 */ }
+        nav.style.display = ok ? '' : 'none';
+        if (divider) divider.style.display = ok ? '' : 'none';
     }
 
     _applyAdminButtons(isAdmin) {

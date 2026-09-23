@@ -1179,6 +1179,7 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             'id', 'title', 'content', 'author', 'author_name', 'author_avatar',
             'scope_type', 'scope_label', 'scope_sub_tenants', 'scope_departments', 'scope_users',
             'enable_comments', 'comment_mode', 'is_published', 'published_at',
+            'is_archived', 'archived_at',
             'comment_count', 'view_count', 'created_at', 'updated_at',
             'like_count', 'liked_by_me',
         ]

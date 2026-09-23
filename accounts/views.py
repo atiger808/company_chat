@@ -24,7 +24,8 @@ from django.utils import timezone
 from django.contrib.auth import logout
 from django.db.models import Q
 from django.conf import settings
-from .models import CustomUser, Department, ConsultationRequest, LoginLog, OperationLog
+from .models import (CustomUser, Department, ConsultationRequest, LoginLog, OperationLog,
+                     TenantMembership)
 from chat.models import ChatRoom
 from loguru import logger
 
@@ -313,15 +314,67 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             return AdminProfileUpdateSerializer
         return UserDetailSerializer
 
+    # ==================== 多租户 / 部门隔离 ====================
+    @staticmethod
+    def _is_super(user):
+        """超级管理员判定：Django 超管 或 user_type=super_admin（与前端 isSuperAdmin 口径一致）"""
+        return bool(getattr(user, 'is_superuser', False)) or getattr(user, 'user_type', '') == 'super_admin'
+
+    def _managed_department_ids(self, user):
+        """普通管理员可管理的部门：本人所在的部门（组织架构部门优先，兼容旧版部门字段）"""
+        ids = set()
+        try:
+            from org.models import UserDepartment
+            ids |= set(UserDepartment.objects.filter(user=user)
+                       .values_list('department_id', flat=True))
+        except Exception as e:
+            logger.warning(f'解析管理员所属部门失败: {e}')
+        if getattr(user, 'department_id', None):
+            ids.add(user.department_id)
+        return ids
+
+    def _own_department_id(self, user):
+        """本人所在部门 id（组织架构主部门优先，其次旧版部门字段）"""
+        try:
+            from org.models import UserDepartment
+            primary = UserDepartment.objects.filter(user=user, is_primary=True).first()
+            if primary:
+                return primary.department_id
+        except Exception:
+            pass
+        return getattr(user, 'department_id', None)
+
+    def _apply_department_scope(self, queryset, user):
+        """部门隔离：普通管理员只能查看/管理本部门用户。
+
+        部门归属以组织架构成员关系（org.UserDepartment）为准，兼容旧版 department 外键；
+        未分配部门的管理员只能管理同样未分配部门的用户，避免越权到其它部门。
+        """
+        dept_ids = self._managed_department_ids(user)
+        if dept_ids:
+            return queryset.filter(
+                Q(department_id__in=dept_ids) | Q(department_relations__department_id__in=dept_ids)
+            )
+        return queryset.filter(department__isnull=True, department_relations__isnull=True)
+
+    def _scoped_user_ids(self, user_ids):
+        """从给定用户 id 中筛出当前管理员可管理的那部分（批量操作前收窄范围）"""
+        ids = [i for i in (user_ids or [])]
+        if not ids or self._is_super(self.request.user):
+            return ids
+        scoped = self._apply_department_scope(CustomUser.objects.filter(id__in=ids), self.request.user)
+        return list(scoped.values_list('id', flat=True))
+
     def get_queryset(self):
         """
-        🔧 权限过滤：普通管理员只能看到同部门用户
+        🔧 权限过滤：多租户 + 部门隔离
+        - 超级管理员：全部用户（仍受页面上的企业/部门/类型筛选影响）
+        - 普通管理员：仅本企业 + 本部门用户（部门归属取组织架构成员关系，兼容旧版部门字段）
         """
         queryset = super().get_queryset()
         user = self.request.user
 
-        # 🔧 普通管理员只能看到同部门的普通用户
-        if not user.is_superuser:
+        if not self._is_super(user):
             queryset = queryset.filter(
                 user_type__in=['user', 'normal', 'admin']
             )
@@ -336,21 +389,8 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                     tenant_memberships__tenant=active_tenant,
                     tenant_memberships__is_active=True
                 )
-            # 无部门的管理员只能管理无部门的普通用户
-            # if user.department:
-            #     queryset = queryset.filter(
-            #         department=user.department,
-            #         user_type__in=['user', 'normal', 'admin']  # 只能看到普通用户
-            #     )
-            # else:
-            #     # 无部门的管理员只能管理无部门的普通用户
-            #     queryset = queryset.filter(
-            #         department__isnull=True,
-            #         user_type__in=['user', 'normal', 'admin']
-            #     )
-        # else:
-        # 超级管理员排除自己
-        # queryset = queryset.exclude(id=user.id)
+            # 部门隔离：只能查看/管理本部门用户
+            queryset = self._apply_department_scope(queryset, user)
 
         # 支持搜索
         search = self.request.query_params.get('search', '')
@@ -399,17 +439,14 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         user = request.user
 
         # 🔧 普通管理员不能创建超级管理员或管理员
-        if not user.is_superuser:
+        if not self._is_super(user):
             request_data = request.data.copy()
 
             # 强制设置为普通用户
             request_data['user_type'] = 'normal'
 
-            # 强制设置为当前管理员的部门
-            if user.department:
-                request_data['department'] = user.department.id
-            else:
-                request_data['department'] = None
+            # 部门隔离：普通管理员只能在本人所在部门下创建用户（无部门则创建为无部门用户）
+            request_data['department'] = self._own_department_id(user)
 
             # 更新请求数据
             request._full_data = request_data
@@ -418,8 +455,37 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
 
+        # 普通管理员新建的用户归属于本人所在企业与部门：补上企业成员关系与组织架构部门关系，
+        # 否则该用户既不在自己的（按企业+部门收窄的）可见范围内，也不会出现在组织架构里
+        if not self._is_super(user):
+            self._link_created_user(serializer.instance, user)
+
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def _link_created_user(self, created, actor):
+        """把普通管理员新建的用户落到本人所在企业 + 部门（成员关系/组织架构关系）"""
+        if created is None:
+            return
+        try:
+            active_tenant = actor.get_active_tenant()
+        except Exception:
+            active_tenant = None
+        if active_tenant:
+            try:
+                TenantMembership.objects.get_or_create(
+                    user=created, tenant=active_tenant,
+                    defaults={'role': 'member', 'is_active': True})
+            except Exception as e:
+                logger.warning(f'新建用户加入企业失败: {e}')
+        dept_id = self._own_department_id(actor)
+        if dept_id:
+            try:
+                from org.models import UserDepartment
+                UserDepartment.objects.get_or_create(
+                    user=created, department_id=dept_id, defaults={'is_primary': True})
+            except Exception as e:
+                logger.warning(f'新建用户加入部门失败: {e}')
 
     def update(self, request, *args, **kwargs):
         """
@@ -430,7 +496,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
 
         # 🔧 普通管理员不能修改用户类型和部门
-        if not user.is_superuser:
+        if not self._is_super(user):
             request_data = request.data.copy()
 
             # 移除用户类型和部门字段（防止被修改）
@@ -462,7 +528,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         target_user = self.get_object()
 
         # 🔧 普通管理员不能重置超级管理员或管理员的密码
-        if not user.is_superuser and target_user.user_type != 'normal':
+        if not self._is_super(user) and target_user.user_type != 'normal':
             return Response(
                 {'error': '普通管理员只能重置普通用户的密码'},
                 status=status.HTTP_403_FORBIDDEN
@@ -496,7 +562,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         target_user = self.get_object()
 
         # 🔧 普通管理员不能操作超级管理员或管理员
-        if not user.is_superuser and target_user.user_type != 'normal':
+        if not self._is_super(user) and target_user.user_type != 'normal':
             return Response(
                 {'error': '普通管理员只能操作普通用户'},
                 status=status.HTTP_403_FORBIDDEN
@@ -542,7 +608,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         actor = request.user
 
         # 权限：普通管理员只能为普通用户交接
-        if not actor.is_superuser and from_user.user_type != 'normal':
+        if not self._is_super(actor) and from_user.user_type != 'normal':
             return Response({'error': '普通管理员只能为普通用户办理离职交接'},
                             status=status.HTTP_403_FORBIDDEN)
 
@@ -558,7 +624,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         except CustomUser.DoesNotExist:
             return Response({'error': '接替者不存在或已禁用'}, status=status.HTTP_400_BAD_REQUEST)
         # 非超管管理员仅能在同一企业内交接
-        if not actor.is_superuser:
+        if not self._is_super(actor):
             from_tenant = from_user.get_active_tenant()
             to_tenant = to_user.get_active_tenant()
             if not from_tenant or from_tenant.id != (to_tenant.id if to_tenant else None):
@@ -627,7 +693,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             )
 
         # 🔧 普通管理员只能批量删除普通用户
-        if not user.is_superuser:
+        if not self._is_super(user):
             # 检查是否有非普通用户
             non_user_users = CustomUser.objects.filter(
                 id__in=user_ids,
@@ -639,21 +705,23 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-            # 确保只能删除同部门用户
-            if user.department:
-                allowed_ids = CustomUser.objects.filter(
-                    id__in=user_ids,
-                    department=user.department
-                ).values_list('id', flat=True)
-                user_ids = list(allowed_ids)
+            # 部门隔离：只能删除本部门用户（组织架构成员关系优先，兼容旧版部门字段）
+            user_ids = self._scoped_user_ids(user_ids)
+            if not user_ids:
+                return Response(
+                    {'error': '只能删除本部门的用户'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
-        deleted_count, _ = CustomUser.objects.filter(id__in=user_ids).delete()
+        # 计数按「实际删除的用户数」返回：Django delete() 的返回值含级联删除行，会虚高
+        target_count = len(set(user_ids))
+        CustomUser.objects.filter(id__in=user_ids).delete()
 
-        logger.info(f'{user} 批量删除了 {deleted_count} 个用户')
+        logger.info(f'{user} 批量删除了 {target_count} 个用户')
 
         return Response({
-            'message': f'成功删除 {deleted_count} 个用户',
-            'deleted_count': deleted_count
+            'message': f'成功删除 {target_count} 个用户',
+            'deleted_count': target_count
         })
 
     def destroy(self, request, *args, **kwargs):
@@ -664,7 +732,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
 
         # 🔧 普通管理员不能删除超级管理员或管理员
-        if not user.is_superuser and instance.user_type != 'normal':
+        if not self._is_super(user) and instance.user_type != 'normal':
             return Response(
                 {'error': '普通管理员只能删除普通用户'},
                 status=status.HTTP_403_FORBIDDEN
@@ -681,14 +749,14 @@ class UserAdminViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'])
     def friends(self, request, pk=None):
-        """获取用户的好友列表"""
+        """获取用户的好友列表（部门隔离：普通管理员只能查看本部门用户）"""
         logger.info(f'{request.user} 好友列表 pk: {pk}')
 
         try:
-            user = CustomUser.objects.get(id=pk)
+            user = self.get_queryset().get(id=pk)
         except CustomUser.DoesNotExist:
             return Response(
-                {'error': '用户不存在'},
+                {'error': '用户不存在或无权查看'},
                 status=status.HTTP_404_NOT_FOUND
             )
 

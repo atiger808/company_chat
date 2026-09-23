@@ -23,15 +23,21 @@ class AnnouncementApp {
                 localStorage.setItem('user_id', me.id || '');
             }
         } catch (e) {}
-        var canCreate = me ? (me.user_type === 'super_admin' || me.user_type === 'admin') : (localStorage.getItem('user_type') === 'super_admin' || localStorage.getItem('user_type') === 'admin');
-        var createBtn = document.getElementById('annCreateBtn');
-        if (createBtn) createBtn.style.display = canCreate ? 'inline-flex' : 'none';
+        // 是否可发布由后端配置决定（超级管理员 + 超管授权的用户），先按未授权隐藏，
+        // 列表接口返回 can_create 后再显示
+        this._applyCreateBtn();
         this._loadScopes();
         this._loadList();
         // 从通知跳转：?id=xxx 打开详情
         var qp = new URLSearchParams(window.location.search);
         var aid = qp.get('id');
         if (aid) setTimeout(function () { annApp.openDetail(parseInt(aid, 10)); }, 300);
+    }
+
+    // 发布按钮显隐：仅「超级管理员 + 超管在管理控制台授权的用户」可发布（后端接口另有校验）
+    _applyCreateBtn() {
+        var createBtn = document.getElementById('annCreateBtn');
+        if (createBtn) createBtn.style.display = this._canCreate ? 'inline-flex' : 'none';
     }
 
     _escape(text) {
@@ -63,6 +69,8 @@ class AnnouncementApp {
         try {
             var d = await this.apiGet(ANN_API + '/');
             this._canCreate = !!d.can_create;
+            this._archiveDays = d.archive_days || 1;
+            this._applyCreateBtn();
             // 子公司与部门：从现有接口获取
             try {
                 var cfg = await this.apiGet('/api/oa/approval/dept-configs/');
@@ -124,6 +132,11 @@ class AnnouncementApp {
         try {
             var d = await this.apiGet(ANN_API + '/');
             this._list = d.results || [];
+            if (typeof d.can_create !== 'undefined') {
+                this._canCreate = !!d.can_create;
+                this._applyCreateBtn();
+            }
+            if (d.archive_days) this._archiveDays = d.archive_days;
             this._renderList();
         } catch (e) {
             listEl.innerHTML = '<div class="ann-empty">加载失败：' + this._escape(e.message || '') + '</div>';
@@ -203,20 +216,31 @@ class AnnouncementApp {
             var pub = a.is_published
                 ? '<span class="ann-badge" style="background:#67c23a;">已发布</span>'
                 : '<span class="ann-badge" style="background:#e6a23c;">草稿</span>';
+            // 已归档：任何人（含发布人与超管）都不可编辑/删除，只保留查看
+            var archTag = a.is_archived
+                ? '<span class="ann-badge" style="background:#909399;"><i class="fas fa-box-archive"></i> 已归档</span>'
+                : '';
             var scopeTag = '<span class="ann-badge" style="background:#7c4dff;">' + self._escape(a.scope_label || '集团全员') + '</span>';
             var contentText = (a.content || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
             var actions = '';
-            if (isAuthor) {
+            if (isAuthor && !a.is_archived) {
                 actions = '<span style="margin-left:auto;display:flex;gap:6px;">'
                     + '<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();annApp.openEditor(' + a.id + ')"><i class="fas fa-edit"></i> 编辑</button>'
                     + (!a.is_published ? '<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();annApp.publish(' + a.id + ')"><i class="fas fa-paper-plane"></i> 发布</button>' : '')
                     + '<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();annApp.del(' + a.id + ')"><i class="fas fa-trash"></i></button>'
                     + '</span>';
+            } else if (a.is_archived) {
+                // actions = '<span style="margin-left:auto;font-size:12px;color:#909399;">'
+                //     + (parseInt(self._archiveDays, 10) > 0 ? '发布满 ' + parseInt(self._archiveDays, 10) + ' 天已自动归档' : '已归档')
+                //     + '</span>';
+                actions = '<span style="margin-left:auto;font-size:12px;color:#909399;">'
+                    + (parseInt(self._archiveDays, 10) > 0 ? '' : '')
+                    + '</span>';
             }
             var time = a.is_published ? (a.published_at || a.updated_at || '') : (a.updated_at || '');
             time = String(time).replace('T', ' ').slice(0, 16);
             return '<div class="ann-card" onclick="annApp.openDetail(' + a.id + ')">'
-                + '<div class="ann-head">' + pub + scopeTag
+                + '<div class="ann-head">' + pub + archTag + scopeTag
                 + '<div class="ann-title">' + self._escape(a.title) + '</div>'
                 + actions + '</div>'
                 + '<div class="ann-meta">'
@@ -250,6 +274,10 @@ class AnnouncementApp {
         if (id) {
             try {
                 var a = await this.apiGet(ANN_API + '/' + id + '/');
+                if (a.is_archived) {
+                    this.showAlert('提示', '该公告已自动归档，任何人均不可编辑');
+                    return;
+                }
                 document.getElementById('annTitle').value = a.title || '';
                 document.getElementById('rteEditor').innerHTML = a.content || '';
                 document.getElementById('annEnableComments').checked = !!a.enable_comments;
@@ -540,15 +568,19 @@ class AnnouncementApp {
             var self = this;
             var isAuthor = parseInt(localStorage.getItem('user_id'), 10) === a.author;
             var pub = a.is_published ? '<span class="ann-badge" style="background:#67c23a;">已发布</span>' : '<span class="ann-badge" style="background:#e6a23c;">草稿</span>';
-            var actions = isAuthor
+            var archTag = a.is_archived
+                ? '<span class="ann-badge" style="background:#909399;"><i class="fas fa-box-archive"></i> 已归档</span>'
+                : '';
+            // 已归档：不显示编辑/发布/删除
+            var actions = (isAuthor && !a.is_archived)
                 ? '<span style="display:flex;gap:6px;">'
                     + '<button class="btn btn-sm btn-secondary" onclick="annApp.closeDetail();annApp.openEditor(' + a.id + ')"><i class="fas fa-edit"></i> 编辑</button>'
                     + (!a.is_published ? '<button class="btn btn-sm btn-primary" onclick="annApp.publish(' + a.id + ')"><i class="fas fa-paper-plane"></i> 发布</button>' : '')
                     + '<button class="btn btn-sm btn-danger" onclick="annApp.del(' + a.id + ')"><i class="fas fa-trash"></i> 删除</button>'
                     + '</span>'
-                : '';
+                : (a.is_archived ? '<span style="font-size:12px;color:#909399;"></span>' : '');
             var time = String(a.published_at || a.updated_at || '').replace('T', ' ').slice(0, 16);
-            body.innerHTML = '<div style="display:flex;align-items:center;gap:8px;justify-content: space-between;"><div style="display:flex;align-items:center;gap:6px;">' + pub + '<span class="ann-badge" style="background:#7c4dff;">' + this._escape(a.scope_label || '集团全员') + '</span></div>' + actions + '</div>'
+            body.innerHTML = '<div style="display:flex;align-items:center;gap:8px;justify-content: space-between;"><div style="display:flex;align-items:center;gap:6px;">' + pub + archTag + '<span class="ann-badge" style="background:#7c4dff;">' + this._escape(a.scope_label || '集团全员') + '</span></div>' + actions + '</div>'
                 + '<div class="ann-detail-title">' + this._escape(a.title) + '</div>'
                 + '<div class="ann-detail-meta">'
                 + '<span><img src="' + this._escape(a.author_avatar || '/static/images/default-avatar.png') + '" style="width:22px;height:22px;border-radius:50%;vertical-align:middle;margin-right:4px;">' + this._escape(a.author_name) + '</span>'

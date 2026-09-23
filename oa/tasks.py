@@ -678,3 +678,32 @@ def approval_lifecycle_task(self):
     except Exception as e:
         logger.warning(f'审批生命周期治理任务异常: {e}')
         return {'error': str(e)}
+
+
+@app.task(bind=True)
+def announcement_archive_task(self):
+    """每日定时：把发布满「公告自动归档期限」的集团公告标记为已归档。
+
+    归档后任何人（含发布人与超级管理员）都不可编辑/删除；前端展示「已归档」且隐藏操作按钮。
+    未配置的企业用默认期限 1 天。接口侧另有「发布时刻 + 期限」的动态兜底判定，
+    因此即使本任务当天未跑，超期公告也无法被改动。
+    """
+    from .models import Announcement, AnnouncementConfig
+    try:
+        total = 0
+        cfg_map = {c.tenant_id: c for c in AnnouncementConfig.objects.all()}
+        tenant_ids = set(Announcement.objects.exclude(tenant__isnull=True)
+                         .values_list('tenant_id', flat=True).distinct())
+        for tid in tenant_ids:
+            cfg = cfg_map.get(tid) or AnnouncementConfig(tenant_id=tid)
+            days = int(cfg.archive_days or AnnouncementConfig.DEFAULT_ARCHIVE_DAYS)
+            cutoff = timezone.now() - timedelta(days=days)
+            total += Announcement.objects.filter(
+                tenant_id=tid, is_published=True, is_archived=False,
+                published_at__isnull=False, published_at__lte=cutoff,
+            ).update(is_archived=True, archived_at=timezone.now())
+        logger.info(f'集团公告自动归档完成：归档 {total} 条')
+        return {'archived': total}
+    except Exception as e:
+        logger.warning(f'集团公告自动归档任务异常: {e}')
+        return {'error': str(e)}

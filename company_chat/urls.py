@@ -21,7 +21,8 @@ from django.views.generic import TemplateView
 from django.conf import settings
 from django.conf.urls.static import static
 from .views import service_worker_view, admin_console_view
-from oa.views import WatermarkViewSet, PrintLogViewSet
+from oa.views import (WatermarkViewSet, PrintLogViewSet,
+                      AnnouncementConfigViewSet, ReportAccessConfigViewSet)
 import sys
 
 
@@ -86,6 +87,10 @@ urlpatterns = [
     path('api/system/watermark-config/', WatermarkViewSet.as_view({'get': 'config', 'post': 'save_config'}), name='watermark-config'),
     # 打印操作留痕
     path('api/system/print-log/', PrintLogViewSet.as_view({'post': 'create'}), name='print-log'),
+    # 集团公告配置（可发布公告的用户 + 自动归档期限；管理控制台维护，仅超管）
+    path('api/system/announcement-config/', AnnouncementConfigViewSet.as_view({'get': 'config', 'post': 'save_config'}), name='announcement-config'),
+    # 报表与数据分析配置（OA审批 / 普惠补贴的报表开关与授权用户；管理控制台维护，仅超管）
+    path('api/system/report-access-config/', ReportAccessConfigViewSet.as_view({'get': 'config', 'post': 'save_config'}), name='report-access-config'),
     path('api/org/', include('org.urls')),
     path('org/', TemplateView.as_view(template_name='org/org.html'), name='org'),
 

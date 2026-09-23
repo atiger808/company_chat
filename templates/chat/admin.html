@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理控制台 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260921-385f431">
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260921-385f431">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20260923-80a405d">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260923-80a405d">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260820-d0b2c3e">
     <!-- 🔧 新增：Chart.js 用于图表展示 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>-->
-    <script src="/static/js/dist/chart.min.js?v=20260921-385f431"></script>
+    <script src="/static/js/dist/chart.min.js?v=20260923-80a405d"></script>
     <!-- 🔧 关键修复2: 添加 Chart.js 加载失败的回退方案 -->
     <script>
         // 检查 Chart.js 是否加载成功
@@ -110,6 +110,16 @@
                 <i class="fas fa-bell"></i> 通知弹窗
             </a>
 
+            <!-- 公告设置：仅超级管理员可见（发布权限 + 自动归档期限） -->
+            <a href="#" class="nav-item super-admin-only" data-tab="announcement-config" id="annConfigNavItem" style="display:none">
+                <i class="fas fa-bullhorn"></i> 公告设置
+            </a>
+
+            <!-- 报表权限：仅超级管理员可见（OA审批 / 普惠补贴的报表开关与授权） -->
+            <a href="#" class="nav-item super-admin-only" data-tab="report-access" id="reportAccessNavItem" style="display:none">
+                <i class="fas fa-chart-line"></i> 报表权限
+            </a>
+
             <!-- 登录日志：仅超级管理员可见 -->
             <a href="#" class="nav-item super-admin-only" data-tab="login-logs" style="display: none">
                 <i class="fas fa-sign-in-alt"></i> 登录日志
@@ -179,7 +189,7 @@
                 </div>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="adminConsole.toggleUserDropdown(event)">
                     <span id="adminUsername" class="btn-text"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260921-385f431" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260923-80a405d" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu show" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item"
@@ -1102,18 +1112,18 @@
         <div class="spinner"></div>
     </div>
 </div>
-<script src="/static/js/dist/spark-md5.min.js?v=20260921-385f431"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260921-385f431"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260921-385f431"></script>
-<script src="/static/js/encrypts.js?v=20260921-385f431"></script>
-<script src="/static/js/utils.js?v=20260921-385f431"></script>
-<script src="/static/js/api.js?v=20260921-385f431"></script>
-<script src="/static/js/admin.js?v=20260921-385f431"></script>
-<script src="/static/js/admin_chat_rooms.js?v=20260921-385f431"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20260923-80a405d"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20260923-80a405d"></script>
+<script src="/static/js/dist/sm4.min.js?v=20260923-80a405d"></script>
+<script src="/static/js/encrypts.js?v=20260923-80a405d"></script>
+<script src="/static/js/utils.js?v=20260923-80a405d"></script>
+<script src="/static/js/api.js?v=20260923-80a405d"></script>
+<script src="/static/js/admin.js?v=20260923-80a405d"></script>
+<script src="/static/js/admin_chat_rooms.js?v=20260923-80a405d"></script>
 <!-- 🔧 新增：数据统计和系统设置 JS -->
-<script src="/static/js/admin_statistics.js?v=20260921-385f431"></script>
-<script src="/static/js/admin_settings.js?v=20260921-385f431"></script>
-<script src="/static/js/notifications.js?v=20260921-385f431"></script>
+<script src="/static/js/admin_statistics.js?v=20260923-80a405d"></script>
+<script src="/static/js/admin_settings.js?v=20260923-80a405d"></script>
+<script src="/static/js/notifications.js?v=20260923-80a405d"></script>
 
 
 <script>
@@ -1322,7 +1332,94 @@
     </div>
 </div>
 
-<script src="/static/js/watermark.js?v=20260921-385f431"></script>
+<!-- 集团公告设置模态框（仅超级管理员）：发布权限 + 自动归档期限 -->
+<div id="announcementConfigModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:660px;">
+        <div class="modal-header">
+            <h3><i class="fas fa-bullhorn" style="color:#7c4dff;"></i> 集团公告设置</h3>
+            <button class="close-btn" onclick="adminConsole.closeAnnouncementConfig()">&times;</button>
+        </div>
+        <div class="modal-body" style="max-height:72vh;overflow-y:auto;">
+            <div style="padding:10px 12px;background:#f3e8ff;border:1px solid #ddd0f5;border-radius:8px;color:#7c4dff;font-size:12px;margin-bottom:14px;">
+                <i class="fas fa-info-circle"></i>
+                可发布集团公告的用户为<b>超级管理员</b>与下面授权的成员；
+                公告发布满设定的期限后<b>自动归档</b>，归档后<b>任何人（含发布人与超级管理员）都不可编辑或删除</b>，只能查看。
+            </div>
+            <div class="form-group">
+                <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">
+                    <i class="fas fa-hourglass-half" style="color:#e6a23c;"></i> 公告自动归档期限
+                </label>
+                <input type="number" id="annArchiveDays" class="form-input" value="1" min="1" max="365" style="max-width:160px;">
+                <div style="font-size:12px;color:#909399;margin-top:4px;">单位：天（发布满 N 天后归档）。默认 1 天，可填 1~365 天。</div>
+            </div>
+            <div style="border-top:1px solid var(--border-color,#ebeef5);padding-top:12px;margin-top:6px;">
+                <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">
+                    <i class="fas fa-user-shield" style="color:#409eff;"></i> 可发布公告的成员（超级管理员始终可发布）
+                </label>
+                <div style="position:relative;">
+                    <input type="text" id="annPublisherSearch" class="form-input" autocomplete="off"
+                           placeholder="输入姓名 / 账号 / 职位 / 部门搜索..." style="width:100%;"
+                           oninput="adminConsole._onAnnPublisherSearch(this.value)">
+                </div>
+                <div id="annPublisherRes" style="display:none;margin-top:6px;background:#fff;border:1px solid #dcdfe6;border-radius:8px;max-height:200px;overflow-y:auto;"></div>
+                <div id="annPublisherTags" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <span style="flex:1;"></span>
+            <button class="btn btn-secondary" onclick="adminConsole.closeAnnouncementConfig()">取消</button>
+            <button class="btn btn-primary" onclick="adminConsole.saveAnnouncementConfig()"><i class="fas fa-save"></i> 保存配置</button>
+        </div>
+    </div>
+</div>
+
+<!-- 报表与数据分析配置模态框（仅超级管理员） -->
+<div id="reportAccessConfigModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:660px;">
+        <div class="modal-header">
+            <h3><i class="fas fa-chart-line" style="color:#9b59b6;"></i> 报表与数据分析设置</h3>
+            <button class="close-btn" onclick="adminConsole.closeReportAccessConfig()">&times;</button>
+        </div>
+        <div class="modal-body" style="max-height:72vh;overflow-y:auto;">
+            <div style="padding:10px 12px;background:#ecf5ff;border:1px solid #b3d8ff;border-radius:8px;color:#3a7bd5;font-size:12px;margin-bottom:14px;">
+                <i class="fas fa-info-circle"></i>
+                OA审批页与普惠补贴页（含财务核验页、财务支付页）的「<b>报表与数据分析</b>」入口<b>默认隐藏</b>；
+                勾选开启后，仅<b>超级管理员</b>与下面授权的成员可见可用。
+            </div>
+            <div class="form-group">
+                <label class="switch-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="raOaEnabled" style="width:16px;height:16px;cursor:pointer;">
+                    <span><i class="fas fa-check-double" style="color:#409eff;"></i> 启用「OA审批」页面的报表与数据分析</span>
+                </label>
+            </div>
+            <div class="form-group">
+                <label class="switch-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="raSubsidyEnabled" style="width:16px;height:16px;cursor:pointer;">
+                    <span><i class="fas fa-hand-holding-usd" style="color:#16a085;"></i> 启用「普惠补贴」页面的报表与数据分析（含财务核验、财务支付）</span>
+                </label>
+            </div>
+            <div style="border-top:1px solid var(--border-color,#ebeef5);padding-top:12px;margin-top:6px;">
+                <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">
+                    <i class="fas fa-user-shield" style="color:#409eff;"></i> 可查看/使用报表的成员（超级管理员始终可见）
+                </label>
+                <div style="position:relative;">
+                    <input type="text" id="raUserSearch" class="form-input" autocomplete="off"
+                           placeholder="输入姓名 / 账号 / 职位 / 部门搜索..." style="width:100%;"
+                           oninput="adminConsole._onReportUserSearch(this.value)">
+                </div>
+                <div id="raUserRes" style="display:none;margin-top:6px;background:#fff;border:1px solid #dcdfe6;border-radius:8px;max-height:200px;overflow-y:auto;"></div>
+                <div id="raUserTags" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <span style="flex:1;"></span>
+            <button class="btn btn-secondary" onclick="adminConsole.closeReportAccessConfig()">取消</button>
+            <button class="btn btn-primary" onclick="adminConsole.saveReportAccessConfig()"><i class="fas fa-save"></i> 保存配置</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/watermark.js?v=20260923-80a405d"></script>
 <script>WatermarkManager.init();</script>
 </body>
 </html>

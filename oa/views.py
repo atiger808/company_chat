@@ -26,7 +26,7 @@ from .models import (
     MaterialStockInItem, MaterialStockLog, DocumentSequence,
     WatermarkConfig, DEFAULT_WATERMARK_PAGES, PrintLog, DailyWorkSummary,
     Announcement, AnnouncementComment, FinanceSpecialist,
-    NotificationPopupConfig,
+    NotificationPopupConfig, AnnouncementConfig, ReportAccessConfig,
 )
 from .type_utils import (
     ensure_builtin_types, resolve_approval_type,
@@ -6472,6 +6472,169 @@ class WatermarkViewSet(viewsets.ViewSet):
         return Response({'encrypt': True, 'data': encrypt_data(self._config_data(cfg))})
 
 
+class AnnouncementConfigViewSet(viewsets.ViewSet):
+    """集团公告配置（仅超级管理员）：可发布公告的用户 + 公告自动归档期限"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _tenant(self, request):
+        return getattr(request, 'tenant', None) or request.user.get_active_tenant()
+
+    @staticmethod
+    def _config_data(cfg):
+        return {
+            'publisher_ids': [int(x) for x in (cfg.publisher_ids or [])],
+            'archive_days': int(cfg.archive_days or AnnouncementConfig.DEFAULT_ARCHIVE_DAYS),
+            'min_archive_days': AnnouncementConfig.MIN_ARCHIVE_DAYS,
+            'max_archive_days': AnnouncementConfig.MAX_ARCHIVE_DAYS,
+        }
+
+    @staticmethod
+    def _publisher_details(ids):
+        """授权发布人出参（含姓名/头像/部门），便于管理控制台直接渲染标签"""
+        from accounts.models import CustomUser
+        if not ids:
+            return []
+        out = []
+        for u in CustomUser.objects.filter(id__in=ids).select_related('department'):
+            out.append({
+                'id': u.id,
+                'name': u.real_name or u.username,
+                'username': u.username,
+                'avatar': u.get_avatar_url() if hasattr(u, 'get_avatar_url') else '',
+                'department': u.department.name if u.department else '',
+                'position': u.position or '',
+                'is_active': u.is_active,
+            })
+        return out
+
+    def config(self, request):
+        """读取集团公告配置（仅超级管理员）"""
+        if getattr(request.user, 'user_type', '') != 'super_admin':
+            return Response({'error': '仅超级管理员可查看'}, status=403)
+        cfg = AnnouncementConfig.get_config(self._tenant(request))
+        data = self._config_data(cfg)
+        data['publishers'] = self._publisher_details(data['publisher_ids'])
+        return Response({'encrypt': True, 'data': encrypt_data(data)})
+
+    def save_config(self, request):
+        """保存集团公告配置（仅超级管理员）"""
+        if getattr(request.user, 'user_type', '') != 'super_admin':
+            return Response({'error': '仅超级管理员可配置'}, status=403)
+        tenant = self._tenant(request)
+        if not tenant:
+            return Response({'error': '未找到所属企业，无法配置'}, status=400)
+        cfg, _ = AnnouncementConfig.objects.get_or_create(tenant=tenant)
+        if 'publisher_ids' in request.data and isinstance(request.data.get('publisher_ids'), list):
+            raw = request.data.get('publisher_ids') or []
+            ids = []
+            for x in raw:
+                try:
+                    ids.append(int(x))
+                except (TypeError, ValueError):
+                    continue
+            # 只保留本企业有效成员，避免配置里混入其它企业/已删除用户
+            from accounts.models import CustomUser
+            valid = set(CustomUser.objects.filter(
+                id__in=ids, is_active=True,
+                tenant_memberships__tenant=tenant, tenant_memberships__is_active=True
+            ).values_list('id', flat=True))
+            cfg.publisher_ids = sorted(valid)
+        if 'archive_days' in request.data:
+            try:
+                days = int(request.data.get('archive_days'))
+                cfg.archive_days = max(AnnouncementConfig.MIN_ARCHIVE_DAYS,
+                                       min(AnnouncementConfig.MAX_ARCHIVE_DAYS, days))
+            except (TypeError, ValueError):
+                pass
+        cfg.save()
+        data = self._config_data(cfg)
+        data['publishers'] = self._publisher_details(data['publisher_ids'])
+        return Response({'encrypt': True, 'data': encrypt_data(data)})
+
+
+class ReportAccessConfigViewSet(viewsets.ViewSet):
+    """报表与数据分析配置（仅超级管理员）：OA审批页 / 普惠补贴页的报表开关与授权用户
+
+    - config / save_config：管理控制台读写完整配置（仅超管）
+    - my_access：任意登录用户读「自己能否看报表」，供 OA审批页与补贴三页显隐入口
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _tenant(self, request):
+        return getattr(request, 'tenant', None) or request.user.get_active_tenant()
+
+    @staticmethod
+    def _config_data(cfg):
+        return {
+            'oa_enabled': bool(cfg.oa_enabled),
+            'subsidy_enabled': bool(cfg.subsidy_enabled),
+            'user_ids': [int(x) for x in (cfg.user_ids or [])],
+        }
+
+    @staticmethod
+    def _user_details(ids):
+        from accounts.models import CustomUser
+        if not ids:
+            return []
+        out = []
+        for u in CustomUser.objects.filter(id__in=ids).select_related('department'):
+            out.append({
+                'id': u.id,
+                'name': u.real_name or u.username,
+                'username': u.username,
+                'avatar': u.get_avatar_url() if hasattr(u, 'get_avatar_url') else '',
+                'department': u.department.name if u.department else '',
+                'position': u.position or '',
+            })
+        return out
+
+    def my_access(self, request):
+        """当前用户能否查看报表（供前端显隐入口；后端接口本身另有一道校验）"""
+        cfg = ReportAccessConfig.get_config(self._tenant(request))
+        return Response({
+            'oa': cfg.can_view(request.user, 'oa'),
+            'subsidy': cfg.can_view(request.user, 'subsidy'),
+            'is_super_admin': getattr(request.user, 'user_type', '') == 'super_admin',
+        })
+
+    def config(self, request):
+        if getattr(request.user, 'user_type', '') != 'super_admin':
+            return Response({'error': '仅超级管理员可查看'}, status=403)
+        cfg = ReportAccessConfig.get_config(self._tenant(request))
+        data = self._config_data(cfg)
+        data['users'] = self._user_details(data['user_ids'])
+        return Response({'encrypt': True, 'data': encrypt_data(data)})
+
+    def save_config(self, request):
+        if getattr(request.user, 'user_type', '') != 'super_admin':
+            return Response({'error': '仅超级管理员可配置'}, status=403)
+        tenant = self._tenant(request)
+        if not tenant:
+            return Response({'error': '未找到所属企业，无法配置'}, status=400)
+        cfg, _ = ReportAccessConfig.objects.get_or_create(tenant=tenant)
+        if 'oa_enabled' in request.data:
+            cfg.oa_enabled = bool(request.data.get('oa_enabled'))
+        if 'subsidy_enabled' in request.data:
+            cfg.subsidy_enabled = bool(request.data.get('subsidy_enabled'))
+        if 'user_ids' in request.data and isinstance(request.data.get('user_ids'), list):
+            ids = []
+            for x in request.data.get('user_ids') or []:
+                try:
+                    ids.append(int(x))
+                except (TypeError, ValueError):
+                    continue
+            from accounts.models import CustomUser
+            valid = set(CustomUser.objects.filter(
+                id__in=ids, is_active=True,
+                tenant_memberships__tenant=tenant, tenant_memberships__is_active=True
+            ).values_list('id', flat=True))
+            cfg.user_ids = sorted(valid)
+        cfg.save()
+        data = self._config_data(cfg)
+        data['users'] = self._user_details(data['user_ids'])
+        return Response({'encrypt': True, 'data': encrypt_data(data)})
+
+
 class PrintLogViewSet(viewsets.ViewSet):
     """打印操作留痕：记录用户打印了哪个页面的什么内容，供打印统计/打印权限分配使用"""
     permission_classes = [permissions.IsAuthenticated]
@@ -8619,6 +8782,45 @@ class AnnouncementViewSet(viewsets.ViewSet):
     def _tenant(self, request):
         return getattr(request, 'tenant', None) or request.user.get_active_tenant()
 
+    # ---------- 发布权限 / 自动归档 ----------
+    def _ann_config(self, request):
+        """当前企业的公告配置（未配置时返回默认实例：1 天归档、仅超管可发布）"""
+        return AnnouncementConfig.get_config(self._tenant(request))
+
+    def _can_publish(self, request):
+        """可发布公告：超级管理员，或管理控制台授权的用户"""
+        return self._ann_config(request).can_publish(request.user)
+
+    @staticmethod
+    def _archive_expired(a, cfg):
+        """是否已到自动归档期限（发布满 archive_days 天）。
+
+        归档后任何人（含发布人与超管）都不可编辑/删除。除每日定时任务写入归档标记外，
+        这里再按「发布时刻 + 期限」动态兜底判定，避免任务尚未执行时被改动。
+        """
+        if not a or not a.is_published or not a.published_at:
+            return False
+        from datetime import timedelta as _td
+        return timezone.now() >= a.published_at + _td(days=int(cfg.archive_days or AnnouncementConfig.DEFAULT_ARCHIVE_DAYS))
+
+    def _is_locked(self, a, cfg):
+        """是否锁定（已归档）：既有归档标记，或已到期未打标"""
+        return bool(a.is_archived) or self._archive_expired(a, cfg)
+
+    def _sweep_archived(self, tenant, cfg):
+        """把该企业已到期的公告补打归档标记（列表访问时顺带执行，保证标记与展示一致）"""
+        if not tenant:
+            return
+        from datetime import timedelta as _td
+        cutoff = timezone.now() - _td(days=int(cfg.archive_days or AnnouncementConfig.DEFAULT_ARCHIVE_DAYS))
+        try:
+            Announcement.objects.filter(
+                tenant=tenant, is_published=True, is_archived=False,
+                published_at__isnull=False, published_at__lte=cutoff,
+            ).update(is_archived=True, archived_at=timezone.now())
+        except Exception as e:
+            logger.warning(f'公告自动归档补打标记失败: {e}')
+
     def _visible_to(self, a, user):
         """公告对当前用户是否可见"""
         if a.author_id == user.id or user.user_type == 'super_admin':
@@ -8683,11 +8885,15 @@ class AnnouncementViewSet(viewsets.ViewSet):
     def list(self, request):
         from .serializers import AnnouncementSerializer
         tenant = self._tenant(request)
+        cfg = self._ann_config(request)
+        # 顺带把已到归档期限的公告打上归档标记，保证列表里的「已归档」状态是最新的
+        self._sweep_archived(tenant, cfg)
         qs = Announcement.objects.filter(tenant=tenant).select_related('author').order_by('-is_published', '-published_at', '-created_at')
         results = [a for a in qs if self._visible_to(a, request.user)]
         return Response({'encrypt': True, 'data': encrypt_data({
             'results': AnnouncementSerializer(results, many=True, context={'request': request}).data,
-            'can_create': request.user.user_type in ('super_admin', 'admin'),
+            'can_create': self._can_publish(request),
+            'archive_days': int(cfg.archive_days or AnnouncementConfig.DEFAULT_ARCHIVE_DAYS),
         })})
 
     def _record_operation(self, request, a, action):
@@ -8732,8 +8938,8 @@ class AnnouncementViewSet(viewsets.ViewSet):
 
     def create(self, request):
         from .serializers import AnnouncementSerializer
-        if request.user.user_type not in ('super_admin', 'admin'):
-            return Response({'error': '仅管理员/超级管理员可发布公告'}, status=403)
+        if not self._can_publish(request):
+            return Response({'error': '您没有发布集团公告的权限，请联系超级管理员开通'}, status=403)
         tenant = self._tenant(request)
         a = Announcement.objects.create(
             tenant=tenant,
@@ -8758,6 +8964,8 @@ class AnnouncementViewSet(viewsets.ViewSet):
             return Response({'error': '公告不存在'}, status=404)
         if a.author_id != request.user.id:
             return Response({'error': '仅发布人可编辑公告'}, status=403)
+        if self._is_locked(a, self._ann_config(request)):
+            return Response({'error': '该公告已自动归档，任何人（含发布人与超级管理员）都不可再编辑'}, status=403)
         if request.data.get('title') is not None:
             a.title = (request.data.get('title') or '').strip()[:200]
         if 'content' in request.data:
@@ -8778,6 +8986,8 @@ class AnnouncementViewSet(viewsets.ViewSet):
             return Response({'error': '公告不存在'}, status=404)
         if a.author_id != request.user.id:
             return Response({'error': '仅发布人可删除公告'}, status=403)
+        if self._is_locked(a, self._ann_config(request)):
+            return Response({'error': '该公告已自动归档，任何人（含发布人与超级管理员）都不可再删除'}, status=403)
         self._record_operation(request, a, 'delete')
         a.delete()
         return Response({'message': 'ok'})
@@ -8792,6 +9002,8 @@ class AnnouncementViewSet(viewsets.ViewSet):
             return Response({'error': '公告不存在'}, status=404)
         if a.author_id != request.user.id:
             return Response({'error': '仅发布人可发布公告'}, status=403)
+        if self._is_locked(a, self._ann_config(request)):
+            return Response({'error': '该公告已自动归档，不可再发布'}, status=403)
         if a.is_published and a.published_at:
             return Response({'message': '公告已发布', 'data': encrypt_data(AnnouncementSerializer(a).data)})
         a.is_published = True

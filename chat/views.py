@@ -79,6 +79,7 @@ class VersionView(APIView):
         if os.path.exists(update_msg_file):
             with open(update_msg_file, 'r', encoding='utf-8') as f:
                 update_message = '<br>'.join([i for i in f.readlines() if i.strip()])
+                build_time = str(datetime.fromtimestamp(os.path.getmtime(update_msg_file)))[:19]
 
         # 更新版本日志
         info = {

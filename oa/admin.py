@@ -17,7 +17,7 @@ from .models import (
     MaterialRequisition, MaterialRequisitionItem,
     MaterialStockIn, MaterialStockInItem, MaterialStockLog,
     DocumentSequence, WatermarkConfig, PrintLog,
-    NotificationPopupConfig,
+    NotificationPopupConfig, AnnouncementConfig, ReportAccessConfig,
     DailyWorkSummary, WorkSummaryRangeAnalysis,
     WorkSummaryConfig,
     FinanceSpecialist, Announcement, AnnouncementComment, AnnouncementOperation,
@@ -74,7 +74,7 @@ class ApprovalNodeAdmin(admin.ModelAdmin):
 
 @admin.register(ApprovalAssignee)
 class ApprovalAssigneeAdmin(admin.ModelAdmin):
-    list_display = ['id', 'node', 'user', 'status', 'operated_at']
+    list_display = ['id', 'node', 'user', 'status', 'comment', 'operated_at', 'created_at']
     list_filter = ['status']
     search_fields = ['user__username', 'user__real_name']
     list_per_page = 20
@@ -261,6 +261,21 @@ class WatermarkConfigAdmin(admin.ModelAdmin):
     list_per_page = 20
 
 
+@admin.register(AnnouncementConfig)
+class AnnouncementConfigAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'archive_days', 'publisher_ids', 'updated_at']
+    search_fields = ['id', 'tenant__name']
+    list_per_page = 20
+
+
+@admin.register(ReportAccessConfig)
+class ReportAccessConfigAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'oa_enabled', 'subsidy_enabled', 'user_ids', 'updated_at']
+    search_fields = ['id', 'tenant__name']
+    list_filter = ['oa_enabled', 'subsidy_enabled']
+    list_per_page = 20
+
+
 @admin.register(NotificationPopupConfig)
 class NotificationPopupConfigAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'enabled_types', 'duration_seconds', 'updated_at']
@@ -312,9 +327,9 @@ class FinanceSpecialistAdmin(admin.ModelAdmin):
 
 @admin.register(Announcement)
 class AnnouncementAdmin(admin.ModelAdmin):
-    list_display = ['id', 'tenant', 'author', 'title', 'scope_type', 'enable_comments', 'comment_mode', 'is_published', 'published_at', 'updated_at', 'created_at']
+    list_display = ['id', 'tenant', 'author', 'title', 'scope_type', 'enable_comments', 'comment_mode', 'is_published', 'published_at', 'is_archived', 'updated_at', 'created_at']
     search_fields = ['title', 'author__username', 'author__real_name', 'tenant__name']
-    list_filter = ['scope_type', 'enable_comments', 'comment_mode', 'is_published']
+    list_filter = ['scope_type', 'enable_comments', 'comment_mode', 'is_published', 'is_archived']
     list_per_page = 20
 
 
