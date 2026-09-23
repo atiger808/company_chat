@@ -5537,7 +5537,7 @@ class ChatClient {
                     <div class="forward-name">${this.escapeHtml(roomName)}</div>
                     <div class="forward-subtitle">${room.room_type === 'private' ? '私聊' : '群聊'}</div>
                 </div>
-                <div class="forward-checkbox">
+                <div class="forward-checkbox" onclick="chatClient.toggleForwardTarget(${room.id})">
                     <input type="checkbox" class="target-checkbox" data-room-id="${room.id}">
                 </div>
             </div>

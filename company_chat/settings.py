@@ -426,7 +426,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20260917-0d665bb'
+STATIC_VERSION = '20260921-385f431'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]

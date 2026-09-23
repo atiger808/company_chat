@@ -268,7 +268,8 @@ class WorkCalendarApp {
                         cloud: ['#e3f4ff', '#00a1ff'], org: ['#e7f5ea', '#2f9e44'], work_summary: ['#f3e8ff', '#7c4dff'],
                         announcement: ['#f3e8ff', '#7c4dff']
                     }[e.type] || ['#f0f2f5', '#909399'];
-                    return '<div class="wc-event" onclick="window.location.href=\'' + this._escape(e.url || '#') + '\'">'
+                    // return '<div class="wc-event" onclick="window.location.href=\'' + this._escape(e.url || '#') + '\'">'
+                    return '<div class="wc-event" onclick="window.open(\'' + this._escape(e.url || '#') + '\', \'_blank\')">'
                         + '<div class="wc-event-icon" style="background:' + iconBg[0] + ';color:' + iconBg[1] + ';"><i class="' + this._escape(e.icon || 'fas fa-circle') + '"></i></div>'
                         + '<div class="wc-event-time">' + this._escape(e.time || '') + '</div>'
                         + '<div class="wc-event-title">' + this._escape(e.title || '') + '</div>'

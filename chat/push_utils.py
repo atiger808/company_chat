@@ -44,6 +44,7 @@ def _send_via_relay(relay_url, sub, payload, ttl, urgent, endpoint_short):
 
 def send_push(sub, payload, ttl=0, urgent=False):
     """发送单条 Web Push，订阅失效（404/410）自动删除"""
+    # https://wns2-sg2p.notify.windows.com/w/?token=BQYAAABYYNcbKT
     if not settings.PUSH_ENABLED:
         return False
     endpoint_short = sub.endpoint[:60]
