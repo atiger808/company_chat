@@ -1393,10 +1393,16 @@ class AttendanceApp {
         if (selectedFields && selectedFields.length) params.push('fields=' + selectedFields.join(','));
         url += params.join('&');
         // Generate filename with current datetime
+
         var now = new Date();
         var dateStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
         var timeStr = String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
-        var filename = '考勤记录_' + dateStr + '_' + timeStr + '.csv';
+
+        var filename = '考勤记录_' + dateStr + '_' + timeStr + '.xlsx';
+        if (this.searchKeyword) {
+            filename = '考勤记录_' + this.searchKeyword +'_' + dateStr + '_' + timeStr + '.xlsx';
+        }
+
         if (target === 'cloud') {
             fetch(url, {
                 headers: { 'Authorization': 'Bearer ' + token }

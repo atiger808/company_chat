@@ -647,7 +647,7 @@ class AttendanceViewSet(viewsets.ViewSet):
             return Response({'error': str(e)}, status=500)
 
     @action(detail=False, methods=['get'])
-    def export(self, request):
+    def export_csv(self, request):
         from django.http import HttpResponse
         from urllib.parse import quote
         import csv
@@ -685,10 +685,10 @@ class AttendanceViewSet(viewsets.ViewSet):
         fields_param = request.query_params.get('fields', '').strip()
         field_map = {
             'user_name': lambda r: r.user.real_name or r.user.username,
-            'department_name': lambda r: r.user.department.name if r.user.department else '',
+            'department_name': lambda r: r.user.get_primary_department() if hasattr(r.user, 'get_primary_department')  else '',
             'date': lambda r: str(r.date),
             'clock_type_display': lambda r: r.get_clock_type_display(),
-            'clock_time': lambda r: r.clock_time.strftime('%Y-%m-%d %H:%M:%S') if r.clock_time else '',
+            'clock_time': lambda r: timezone.localtime(r.clock_time).strftime('%Y-%m-%d %H:%M:%S') if r.clock_time else '',
             'status': lambda r: {'normal': '正常', 'late': '迟到', 'early_leave': '早退'}.get(r.status, r.status),
             'location': lambda r: r.location or '',
             'device': lambda r: r.device or '',
@@ -720,6 +720,112 @@ class AttendanceViewSet(viewsets.ViewSet):
                 logger.error(f'导出行数据异常: {e}, record={r.id}')
                 continue
         return response
+
+    @action(detail=False, methods=['get'])
+    def export(self, request):
+        from django.http import FileResponse
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+            from openpyxl.utils import get_column_letter
+        except ImportError:
+            return Response({'error': '服务器缺少 openpyxl 依赖，请联系管理员安装'}, status=500)
+
+        user = request.user
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        if user.user_type == 'super_admin':
+            qs = AttendanceRecord.objects.select_related('user__department').all()
+            if tenant:
+                tenant_ids = [tenant.id]
+                try:
+                    sub_ids = list(tenant.sub_tenants.filter(is_active=True).values_list('id', flat=True))
+                    if sub_ids:
+                        tenant_ids.extend(sub_ids)
+                except Exception:
+                    pass
+                qs = qs.filter(tenant_id__in=tenant_ids)
+        else:
+            # 部门负责人：仅可见所管理部门的成员（含子部门）；普通用户：仅自己
+            managed_dept_ids = self._get_managed_department_ids(user)
+            if managed_dept_ids:
+                qs = AttendanceRecord.objects.select_related('user__department').filter(
+                    user__department_relations__department_id__in=managed_dept_ids
+                ).distinct()
+            else:
+                qs = AttendanceRecord.objects.select_related('user__department').filter(user=user)
+
+        # Filter by selected record IDs
+        record_ids_str = request.query_params.get('record_ids', '').strip()
+        if record_ids_str:
+            ids = [int(x) for x in record_ids_str.split(',') if x.strip().isdigit()]
+            if ids:
+                qs = qs.filter(id__in=ids)
+        items = qs.order_by('-clock_time')[:10000]
+        # Determine fields to export
+        fields_param = request.query_params.get('fields', '').strip()
+        field_map = {
+            'user_name': lambda r: r.user.real_name or r.user.username,
+            # 'department_name': lambda r: r.user.department.name if r.user.department else '',
+            'department_name': lambda r: r.user.get_primary_department().name if hasattr(r.user, 'get_primary_department') else r.user.department.name if r.user.department else '',
+            'date': lambda r: str(r.date),
+            'clock_type_display': lambda r: r.get_clock_type_display(),
+            'clock_time': lambda r: timezone.localtime(r.clock_time).strftime('%Y-%m-%d %H:%M:%S') if r.clock_time else '',
+            'status': lambda r: {'normal': '正常', 'late': '迟到', 'early_leave': '早退'}.get(r.status, r.status),
+            'location': lambda r: r.location or '',
+            'device': lambda r: r.device or '',
+        }
+        field_labels = {
+            'user_name': '用户', 'department_name': '部门', 'date': '日期',
+            'clock_type_display': '打卡类型', 'clock_time': '打卡时间', 'status': '状态',
+            'location': '位置', 'device': '设备',
+        }
+
+        if fields_param:
+            selected_fields = [f.strip() for f in fields_param.split(',') if f.strip() in field_map]
+        else:
+            selected_fields = list(field_map.keys())
+
+        try:
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = '考勤记录'
+            headers = [field_labels.get(f, f) for f in selected_fields]
+            header_fill = PatternFill('solid', fgColor='409EFF')
+            header_font = Font(color='FFFFFF', bold=True)
+            thin = Side(style='thin', color='D9D9D9')
+            border = Border(left=thin, right=thin, top=thin, bottom=thin)
+            ws.append(headers)
+            for col in range(1, len(headers) + 1):
+                cell = ws.cell(row=1, column=col)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+                cell.border = border
+            for app in items:
+                try:
+                    row = [field_map[f](app) for f in selected_fields]
+                except Exception:
+                    continue
+                ws.append(row)
+            for col, width in enumerate([22, 18, 20, 18, 16, 16, 14, 12, 14, 12, 14, 30, 12, 22, 22, 22, 18, 20, 20, 30], start=1):
+                ws.column_dimensions[get_column_letter(col)].width = width
+            from io import BytesIO
+            output = BytesIO()
+            wb.save(output)
+            output.seek(0)
+        except Exception as e:
+            logger.error(f'导出考勤记录失败: {e}')
+            return Response({'error': f'导出失败: {str(e)}'}, status=500)
+        now = timezone.localtime(timezone.now())
+        filename = '考勤记录_%s.xlsx' % now.strftime('%Y%m%d_%H%M')
+        return FileResponse(
+            output,
+            as_attachment=True,
+            filename=filename,
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+
+
 
     @action(detail=False, methods=['get'])
     def calendar_stats(self, request):

@@ -308,7 +308,13 @@ class SubsidyVerifyApp {
         const now = new Date();
         const d = String(now.getFullYear()) + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
         const t = String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
-        const filename = '普惠补贴申领_' + d + '_' + t + '.xlsx';
+
+        var filename = '普惠补贴申领_' + d + '_' + t + '.xlsx';
+        // var vSearch = document.getElementById('vSearch').value
+        // if (vSearch) {
+        //     filename = '普惠补贴申领_' + vSearch + '_' + d + '_' + t + '.xlsx';
+        // }
+
         this.showToast(target === 'cloud' ? '正在生成并保存到网盘，请稍候...' : '正在导出 Excel，请稍候...', false);
         try {
             const resp = await fetch(url, {headers: TokenManager.getHeaders()});
