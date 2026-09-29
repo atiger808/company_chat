@@ -39,7 +39,7 @@
     function fmtDate(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
     function initRange() {
         var end = new Date(), start = new Date();
-        start.setDate(end.getDate() - 29);
+        start.setMonth(end.getMonth() - 1);
         state.end = fmtDate(end); state.start = fmtDate(start);
     }
     function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }

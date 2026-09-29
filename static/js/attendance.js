@@ -1174,7 +1174,7 @@ class AttendanceApp {
 
     initRange() {
         var end = new Date(), start = new Date();
-        start.setDate(end.getDate() - 30);
+        start.setMonth(end.getMonth() - 1);
         this.state.end = this.fmtDate(end); this.state.start = this.fmtDate(start);
     }
 

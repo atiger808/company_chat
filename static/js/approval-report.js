@@ -50,7 +50,7 @@
     function initRange() {
         var end = new Date();
         var start = new Date();
-        start.setDate(end.getDate() - 29);
+        start.setMonth(end.getMonth() - 1);
         state.end = fmtDate(end);
         state.start = fmtDate(start);
     }
