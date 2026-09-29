@@ -99,5 +99,43 @@ async def health():
     return {'ok': True, 'relay_ready': bool(VAPID_PRIVATE_KEY)}
 
 
+def process_txt():
+    with open('VERSION_MESSAGE.txt', 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    line_number = []
+    index = 0
+    for line in lines:
+        s = line[:1]
+        if s and s.isdigit():
+            line_number.append(index)
+            # print(f'{index} {line}')
+        index += 1
+
+    new_lines = []
+    total_count = len(line_number)
+    for i in range(len(line_number) - 1):
+        start = line_number[i]
+        end = line_number[i + 1]
+        print(f'{start} {end}')
+        tmp = ''.join(lines[start:end])
+        s_t = tmp.index('.')
+        tmp = f'{total_count}{tmp[s_t:]}'
+        new_lines.append(tmp)
+        print(tmp)
+        total_count -= 1
+
+    tmp = ''.join(lines[line_number[-1]:])
+    s_t = tmp.index('.')
+    tmp = f'{total_count}{tmp[s_t:]}'
+    new_lines.append(tmp)
+    print(tmp)
+
+    print(len(line_number))
+
+    with open('VERSION_MESSAGE_NEW.txt', 'w', encoding='utf-8') as f:
+        f.writelines(new_lines)
+
+
 if __name__ == '__main__':
     uvicorn.run(app, host='0.0.0.0', port=8001)
+    # process_txt()

@@ -356,6 +356,9 @@
                         <option value="clock_in">上班打卡</option>
                         <option value="clock_out">下班打卡</option>
                     </select>
+                    <input type="date" id="vDateFrom" class="form-input" style="width:140px;" title="开始日期">
+                    <input type="date" id="vDateTo" class="form-input" style="width:140px;" title="结束日期">
+
                 </div>
                 <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
                     <button class="btn btn-secondary" onclick="attendanceApp.exportRecords()" style="display:none;"
@@ -820,7 +823,7 @@
 <script src="/static/js/utils.js?v=20260923-80a405d"></script>
 <script src="/static/js/api.js?v=20260923-80a405d"></script>
 <script src="/static/js/tenant.js?v=20260923-80a405d"></script>
-<script src="/static/js/attendance.js?v=20260923-80a405e"></script>
+<script src="/static/js/attendance.js?v=20260923-80a405h"></script>
 <script src="/static/js/notifications.js?v=20260923-80a405d"></script>
 
 <script>

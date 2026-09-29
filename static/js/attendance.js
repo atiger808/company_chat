@@ -16,6 +16,7 @@ class AttendanceApp {
         this._myGeoInsideName = '';
         this._myGeoFocusIndex = -1;   // 底部标识点选后锁定的打卡点，-1 表示自动框选全部
         this._myGeoFullscreenOn = false;
+        this.state = { start: '', end: '', loading: false, userId: null, userName: '' };
         // 「显示考勤打卡范围配置」开关行是否暴露：由 .env 的 ATTENDANCE_GEO_VISIBLE_SWITCH
         // 经 settings.py → 模板块 下发（默认 false，即该行整体隐藏）
         this._geoVisibleSwitchEnabled = !!(window.ATT_GEO_VISIBLE_SWITCH);
@@ -38,6 +39,32 @@ class AttendanceApp {
         if (window.WatermarkManager && WatermarkManager.applyPrintPermission) {
             WatermarkManager.applyPrintPermission();
         }
+
+
+        if (!this.state.start || !this.state.end) this.initRange();
+        document.getElementById('vDateFrom').value = this.state.start;
+        document.getElementById('vDateTo').value = this.state.end;
+
+        // 切换日期范围后自动刷新
+        document.getElementById('vDateFrom').addEventListener('change', (event) => {
+            // 1. 通过 event.target.value 获取 DOM 元素更改后的值
+            const newValue = event.target.value;
+            // 2. 更新 state
+            this.state.start = newValue;
+            // 3. 触发加载
+            this.loadRecords();
+        });
+
+        document.getElementById('vDateTo').addEventListener('change', (event) => {
+            // 1. 通过 event.target.value 获取 DOM 元素更改后的值
+            const newValue = event.target.value;
+            // 2. 更新 state
+            this.state.end = newValue;
+            // 3. 触发加载
+            this.loadRecords();
+        });
+
+
         this.updateClock();
         this._initTimer = setInterval(() => this.updateClock(), 1000);
         this._bindViewportRelayout();
@@ -656,6 +683,7 @@ class AttendanceApp {
         try {
             let url = OA_API_URL + '/attendance/?page=' + page + '&page_size=' + this.pageSize;
             if (this.searchKeyword) url += '&search=' + encodeURIComponent(this.searchKeyword);
+            if (this.state.start && this.state.end) url += '&start=' + encodeURIComponent(this.state.start) + '&end=' + encodeURIComponent(this.state.end)
             var tenantId = document.getElementById('attendanceFilterTenant') ? document.getElementById('attendanceFilterTenant').value : '';
             var deptId = document.getElementById('attendanceFilterDepartment') ? document.getElementById('attendanceFilterDepartment').value : '';
             var clockType = document.getElementById('attendanceFilterClockType') ? document.getElementById('attendanceFilterClockType').value : '';
@@ -726,6 +754,8 @@ class AttendanceApp {
             + '<option value="10" ' + (this.pageSize === 10 ? 'selected' : '') + '>10</option>'
             + '<option value="20" ' + (this.pageSize === 20 ? 'selected' : '') + '>20</option>'
             + '<option value="50" ' + (this.pageSize === 50 ? 'selected' : '') + '>50</option>'
+            + '<option value="100" ' + (this.pageSize === 100 ? 'selected' : '') + '>100</option>'
+            + '<option value="200" ' + (this.pageSize === 200 ? 'selected' : '') + '>200</option>'
             + '</select><span>条</span></div>'
             + '<div class="oa-pagination-btns">';
         html += '<button class="pagination-btn" onclick="attendanceApp.loadRecords(1)" ' + (p <= 1 ? 'disabled' : '') + ' title="首页"><i class="fas fa-angle-double-left"></i></button>';
@@ -1138,6 +1168,14 @@ class AttendanceApp {
         const el = document.getElementById('attendanceSearch');
         this.searchKeyword = el ? el.value.trim() : '';
         this.loadRecords(1);
+    }
+
+    fmtDate(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+
+    initRange() {
+        var end = new Date(), start = new Date();
+        start.setDate(end.getDate() - 30);
+        this.state.end = this.fmtDate(end); this.state.start = this.fmtDate(start);
     }
 
     _selectedRecordIds = null
@@ -1563,6 +1601,10 @@ class AttendanceApp {
         if (deptFilter) deptFilter.value = '';
         var clockTypeFilter = document.getElementById('attendanceFilterClockType');
         if (clockTypeFilter) clockTypeFilter.value = '';
+        this.initRange()
+        document.getElementById('vDateFrom').value = this.state.start;
+        document.getElementById('vDateTo').value = this.state.end;
+
         this.loadRecords(1);
     }
 

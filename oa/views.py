@@ -14,6 +14,7 @@ import os
 import json
 import uuid
 import requests
+from datetime import date as _date, datetime as _dt, time as _time, timedelta
 
 from .models import (
     AttendanceRecord, ApprovalRequest, ApprovalType, ApprovalLog,
@@ -202,6 +203,60 @@ class AttendanceViewSet(viewsets.ViewSet):
             ).exists()
         return False
 
+    def _tenant(self, request):
+        return getattr(request, 'tenant', None) or request.user.get_active_tenant()
+
+    def _tenant_ids(self, request):
+        tenant = self._tenant(request)
+        ids = []
+        if tenant:
+            ids.append(tenant.id)
+            try:
+                ids += [t.id for t in tenant.sub_tenants.filter(is_active=True)]
+            except Exception:
+                pass
+        return ids
+
+    @staticmethod
+    def _user_id(request):
+        """按用户筛选（可选）：报表支持搜索用户后查看该用户的数据"""
+        uid = (request.query_params.get('user_id') or '').strip()
+        try:
+            return int(uid) if uid else None
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _parse_range(request):
+        today = timezone.localdate()
+        qs = request.query_params
+        start_s = (qs.get('start') or '').strip()
+        end_s = (qs.get('end') or '').strip()
+        try:
+            start_d = _date.fromisoformat(start_s) if start_s else (today - timedelta(days=30))
+        except Exception:
+            start_d = today - timedelta(days=30)
+        try:
+            end_d = _date.fromisoformat(end_s) if end_s else today
+        except Exception:
+            end_d = today
+        if start_d > end_d:
+            start_d, end_d = end_d, start_d
+        tz = timezone.get_current_timezone()
+        start_dt = timezone.make_aware(_dt.combine(start_d, _time.min), tz)
+        end_dt = timezone.make_aware(_dt.combine(end_d, _time.max), tz)
+        return start_d, end_d, start_dt, end_dt
+
+    def _base_qs(self, request, start_dt, end_dt):
+        ids = self._tenant_ids(request)
+        qs = AttendanceRecord.objects.select_related('user__department').filter(clock_time__gte=start_dt, clock_time__lte=end_dt)
+        if ids:
+            qs = qs.filter(tenant_id__in=ids)
+        uid = self._user_id(request)
+        if uid:
+            qs = qs.filter(applicant_id=uid)
+        return qs
+
     def list(self, request):
         """打卡记录列表（分页+搜索，三级权限：超管/部门负责人/普通用户）"""
         user = request.user
@@ -212,9 +267,11 @@ class AttendanceViewSet(viewsets.ViewSet):
         status_filter = request.query_params.get('status', '').strip()
         clock_type = request.query_params.get('clock_type', '').strip()
 
+        start_d, end_d, start_dt, end_dt = self._parse_range(request)
+        qs = self._base_qs(request, start_dt, end_dt)
+
         if user.user_type == 'super_admin':
             # 超级管理员：可见全部成员（当前企业 + 子企业）
-            qs = AttendanceRecord.objects.select_related('user__department').all()
             if tenant:
                 tenant_ids = [tenant.id]
                 try:
@@ -228,12 +285,12 @@ class AttendanceViewSet(viewsets.ViewSet):
             # 部门负责人：仅可见所管理部门的成员（含子部门）
             managed_dept_ids = self._get_managed_department_ids(user)
             if managed_dept_ids:
-                qs = AttendanceRecord.objects.select_related('user__department').filter(
+                qs = qs.filter(
                     user__department_relations__department_id__in=managed_dept_ids
                 ).distinct()
             else:
                 # 普通用户：仅可见自己
-                qs = AttendanceRecord.objects.select_related('user__department').filter(user=user)
+                qs = qs.filter(user=user)
 
         filter_tenant_id = request.query_params.get('tenant_id', '').strip()
         if filter_tenant_id:
