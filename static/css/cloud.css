@@ -1040,7 +1040,8 @@ body {
     border-radius: 12px;
     max-width: 800px;
     width: 100%;
-    max-height: 90vh;
+    max-height: 85vh;
+    min-height: 85vh;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -1102,7 +1103,7 @@ body {
 .form-group input,
 .form-group select {
     width: 100%;
-    padding: 10px 32px;
+    padding: 10px 12px;
     border: 1px solid #dcdfe6;
     border-radius: 6px;
     font-size: 14px;
@@ -1181,7 +1182,7 @@ body {
 
 /* 🔧 文件夹树状结构样式 */
 .folder-tree {
-    max-height: 400px;
+    max-height: 600px;
     overflow-y: auto;
     padding: 10px;
 }
@@ -3165,7 +3166,7 @@ body {
     border: 1px solid #ddd;
     border-radius: 4px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    max-height: 200px;
+    max-height: 300px;
     overflow-y: auto;
     z-index: 1000;
     display: none;
