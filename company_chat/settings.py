@@ -455,6 +455,8 @@ API_MODEL_MAP = {
     "/api/auth/register/": "用户注册",
     "/api/auth/profile/": "个人资料",
     "/api/auth/change-password/": "修改密码",
+    "/api/auth/users/change-password/": "修改密码",
+    "/api/auth/users/change_password/": "修改密码",
     "/api/auth/upload-avatar/": "上传头像",
     "/api/auth/me/": "用户信息",
     "/api/auth/list/": "用户列表",

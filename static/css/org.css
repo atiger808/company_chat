@@ -1094,6 +1094,7 @@
   width: 90%;
   max-width: 800px;
   max-height: 88vh;
+  min-height: 60vh;
   display: flex;
   flex-direction: column;
   animation: slideUp 0.3s ease;

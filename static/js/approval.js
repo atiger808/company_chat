@@ -6473,7 +6473,7 @@ class ApprovalApp {
             m = document.createElement('div');
             m.id = 'matAvailPickerModal';
             m.style.cssText = 'position:fixed;inset:0;z-index:160000;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.45);padding:12px;';
-            m.innerHTML = '<div style="background:var(--bg-primary,#fff);color:var(--text-primary,#303133);border-radius:12px;width:100%;max-width:1000px;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 12px 48px rgba(0,0,0,.28);">'
+            m.innerHTML = '<div style="background:var(--bg-primary,#fff);color:var(--text-primary,#303133);border-radius:12px;width:100%;max-width:1000px;max-height:90vh;min-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 12px 48px rgba(0,0,0,.28);">'
                 + '<div class="modal-header"><h3><i class="fas fa-boxes" style="color:#16a085;"></i> ' + this._escape(opts.title || '选择可领用物资') + '</h3>'
                 + '<button class="close-btn" onclick="approvalApp.closeAvailPicker()">&times;</button></div>'
                 + '<div class="modal-body" style="overflow:auto;">'
