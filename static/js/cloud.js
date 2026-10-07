@@ -4485,7 +4485,7 @@ class CloudApp {
             const statusBadge = share.is_expired
                 ? '<span class="badge badge-danger">已过期</span>'
                 : '<span class="badge badge-success">有效</span>';
-
+            let shareName = share.file_info ? share.file_info.name : share.folder_info?.name || '未知';
             html += `
                 <div class="share-item">
                     <div class="share-icon">
@@ -4505,7 +4505,8 @@ class CloudApp {
                         </div>
                     </div>
                     <div class="share-actions">
-                        <button class="btn-action" onclick="cloudApp.copyShareUrl('${share.share_url}?提取码=${share.password}')" title="复制链接">
+                       
+                        <button class="btn-action" onclick="cloudApp.copyShareUrl(\`## 来自浙企钉分享 ## 【${shareName}】 ${share.share_url}?提取码=${share.password} 复制此链接，用浏览器打开\`)" title="复制分享链接">
                             <i class="fas fa-copy"></i>
                         </button>
                         <button class="btn-action" onclick="cloudApp.revokeShare('${share.id}')" title="取消分享">
@@ -5373,11 +5374,12 @@ class CloudApp {
 
             // 替换为：
             let shortUrl = share.share_url || `${baseUrl}/s/${share.share_code}/`;
+            let shareName = share.file_info ? share.file_info.name : share.folder_info?.name || '未知';
             if (share.password) shortUrl += `?pwd=${share.password}`; // 🔧 使用短参数避免二维码溢出
 
             // 🔧 根据分享方式显示不同内容
             if (shareMethod === 'link') {
-                document.getElementById('shareLinkInput').value = shortUrl;
+                document.getElementById('shareLinkInput').value = `## 来自浙企钉分享 ## 【${shareName}】 ${shortUrl} 复制此链接，用浏览器打开` ;
                 document.getElementById('shareLink').style.display = 'block';
                 document.getElementById('shareQrcode').style.display = 'none';
             } else {

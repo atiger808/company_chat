@@ -5,12 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>企业网盘 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/cloud.css?v=20260929-e1dea22">
+    <link rel="stylesheet" href="/static/css/cloud.css?v=20261007-6e94482">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260820-d0a1b2c">
     <!-- 🔧 添加二维码库 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>-->
-    <script src="/static/js/dist/qrcode.min.js?v=20260929-e1dea22"></script>
+    <script src="/static/js/dist/qrcode.min.js?v=20261007-6e94482"></script>
 </head>
 <body>
 <div class="cloud-layout">
@@ -147,7 +147,7 @@
                 </div>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="cloudApp.toggleUserDropdown(event)">
                     <span id="adminUsername"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20260929-e1dea22" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20261007-6e94482" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item"
@@ -586,15 +586,39 @@
                                 onchange="cloudApp.filterLogsByOperation(this.value)">
                             <option value="">全部操作</option>
                             <option value="create">创建</option>
+                            <option value="update">更新</option>
+                            <option value="restore">恢复</option>
                             <option value="upload">上传</option>
                             <option value="download">下载</option>
                             <option value="delete">删除</option>
+                            <option value="permanent_delete">永久删除</option>
+                            <option value="batch_delete">批量删除</option>
+                            <option value="empty_trash">清空回收站</option>
                             <option value="rename">重命名</option>
                             <option value="move">移动</option>
+                            <option value="batch_move">批量移动</option>
                             <option value="share">分享</option>
+                            <option value="unshare">取消分享</option>
+
+                            <option value="sync_to_cloud">同步到云</option>
+                            <option value="save_from_share">从分享保存</option>
+                            <option value="save_from_chat">从聊天保存</option>
+                            <option value="save_from_url">从审批保存</option>
+                            <option value="share_access">分享访问</option>
+
                             <option value="edit_save">编辑保存</option>
+                            <option value="editing">编辑中</option>
+                            <option value="viewing">查看中</option>
+                            <option value="closed">已关闭</option>
+
                             <option value="add_collaborator">添加协作者</option>
+                            <option value="update_collaborator">更新协作者</option>
+                            <option value="update_collaboration_status">更新协作状态</option>
                             <option value="remove_collaborator">移除协作者</option>
+                            <option value="remove_all_collaborators">移除所有协作者</option>
+                            <option value="version_download">版本下载</option>
+                            <option value="restore_version">恢复版本</option>
+
                             <option value="add_folder_member">添加共享文件夹成员</option>
                             <option value="remove_folder_member">移除共享文件夹成员</option>
                         </select>
@@ -1067,17 +1091,17 @@
 
 <!-- 脚本引入 -->
 <!--<script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>-->
-<script src="/static/js/dist/spark-md5.min.js?v=20260929-e1dea22"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20260929-e1dea22"></script>
-<script src="/static/js/dist/sm4.min.js?v=20260929-e1dea22"></script>
-<script src="/static/js/encrypts.js?v=20260929-e1dea22"></script>
-<script src="/static/js/utils.js?v=20260929-e1dea22"></script>
-<script src="/static/js/frontend_cloud_config.js?v=20260929-e1dea22"></script>
-<script src="/static/js/api.js?v=20260929-e1dea22"></script>
-<script src="/static/js/tenant.js?v=20260929-e1dea22"></script>
-<script src="/static/js/org.js?v=20260929-e1dea22"></script>
-<script src="/static/js/cloud.js?v=20260929-e1dea22"></script>
-<script src="/static/js/notifications.js?v=20260929-e1dea22"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20261007-6e94482"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20261007-6e94482"></script>
+<script src="/static/js/dist/sm4.min.js?v=20261007-6e94482"></script>
+<script src="/static/js/encrypts.js?v=20261007-6e94482"></script>
+<script src="/static/js/utils.js?v=20261007-6e94482"></script>
+<script src="/static/js/frontend_cloud_config.js?v=20261007-6e94482"></script>
+<script src="/static/js/api.js?v=20261007-6e94482"></script>
+<script src="/static/js/tenant.js?v=20261007-6e94482"></script>
+<script src="/static/js/org.js?v=20261007-6e94482"></script>
+<script src="/static/js/cloud.js?v=20261007-6e94484"></script>
+<script src="/static/js/notifications.js?v=20261007-6e94482"></script>
 
 <script>
     // 🔧 初始化侧边栏按钮显示状态
@@ -1182,7 +1206,7 @@
     }
 </script>
 
-<script src="/static/js/watermark.js?v=20260929-e1dea22"></script>
+<script src="/static/js/watermark.js?v=20261007-6e94482"></script>
 <script>WatermarkManager.init();</script>
 </body>
 </html>

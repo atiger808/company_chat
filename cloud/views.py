@@ -3216,6 +3216,18 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
         cloud_file.file.save(save_name, ContentFile(content))
         cloud_file.save()
         logger.info(f'用户 {request.user} 从URL保存文件 {file_name} 到网盘')
+
+        # 记录操作日志
+        FileOperationLog.objects.create(
+            user=request.user,
+            file=cloud_file,
+            operation='save_from_url',
+            description=f'从URL保存文件 {file_name} 到网盘 {safe_folder_name}',
+            ip_address=get_request_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            extra_data={'url': url, 'file_id': str(cloud_file.id)}
+        )
+
         return Response({
             'file_id': str(cloud_file.id),
             'url': cloud_file.file.url,
@@ -4167,6 +4179,18 @@ class FileShareViewSet(viewsets.ModelViewSet, UtilsTools):
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
 
+        # 记录操作日志
+        FileOperationLog.objects.create(
+            file=file_obj if file_id else None,
+            folder=folder_obj if folder_id else None,
+            user=request.user,
+            operation='share',
+            description=f'创建分享',
+            ip_address=get_request_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            extra_data={'file_id': str(file_id), 'folder_id': str(folder_id)}
+        )
+
         return Response({
             **serializer.data,
             'message': '分享创建成功'
@@ -4191,6 +4215,19 @@ class FileShareViewSet(viewsets.ModelViewSet, UtilsTools):
 
         share.is_active = False
         share.save()
+
+        # 记录操作日志
+        FileOperationLog.objects.create(
+            file=share.file,
+            folder=share.folder,
+            user=request.user,
+            operation='unshare',
+            description=f'取消分享',
+            ip_address=get_request_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            extra_data={'file_id': str(share.file.id) if share.file else None, 'folder_id': str(share.folder.id) if share.folder else None}
+        )
+
         return Response({'message': '已取消分享'})
 
     @action(detail=True, methods=['post'])
@@ -4198,6 +4235,7 @@ class FileShareViewSet(viewsets.ModelViewSet, UtilsTools):
         """保存网盘"""
         share = self.get_object()
         share.save()
+
         return Response({'message': '保存成功'})
 
     # cloud/views.py - FileShareViewSet.save_to_cloud 修复版
@@ -4241,7 +4279,7 @@ class FileShareViewSet(viewsets.ModelViewSet, UtilsTools):
                 original_name = share.file.name or share.file.original_name or 'unnamed'
 
                 # 🔧 修复 1: 生成新名称并截断（name 字段限制 20 字符）
-                new_name_suffix = ' (来自分享)'
+                new_name_suffix = ' （来自分享）'
                 max_name_length = 50 - len(new_name_suffix)
                 truncated_name = original_name[:max_name_length] if len(
                     original_name) > max_name_length else original_name
@@ -4270,6 +4308,17 @@ class FileShareViewSet(viewsets.ModelViewSet, UtilsTools):
                     description=safe_description
                 )
 
+                # 记录操作日志
+                FileOperationLog.objects.create(
+                    file=new_file,
+                    user=user,
+                    operation='save_from_share',
+                    description=f'保存分享文件 {share.file.name}',
+                    ip_address=get_request_ip(request),
+                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                    extra_data={'file_id': str(share.file.id)}
+                )
+
                 return Response({
                     'message': '保存成功',
                     'file_id': str(new_file.id),
@@ -4279,6 +4328,17 @@ class FileShareViewSet(viewsets.ModelViewSet, UtilsTools):
             elif share.folder:
                 # 🔧 文件夹保存逻辑（递归）
                 result = self._save_shared_folder_to_cloud(share, user)
+                # 记录操作日志
+                FileOperationLog.objects.create(
+                    folder=share.folder,
+                    user=user,
+                    operation='save_from_share',
+                    description=f'保存分享文件夹 {share.folder.name}',
+                    ip_address=get_request_ip(request),
+                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                    extra_data={'folder_id': str(share.folder.id)}
+                )
+
                 return Response(result)
 
         except Exception as e:
@@ -4320,7 +4380,7 @@ class FileShareViewSet(viewsets.ModelViewSet, UtilsTools):
         safe_folder_name = self._truncate_string(
             original_folder.name,
             max_length=20,
-            suffix=' (来自分享)'
+            suffix=' （来自分享）'
         )
 
         # 创建根文件夹
@@ -4486,6 +4546,7 @@ class FileShareViewSet(viewsets.ModelViewSet, UtilsTools):
 
             # 记录访问日志
             FileOperationLog.objects.create(
+                user=request.user,
                 file=share.file,
                 folder=share.folder,
                 operation='share_access',
@@ -4645,7 +4706,7 @@ class ShareAccessView(APIView):
                 'requires_password': share.share_type == 'password' and bool(share.password),
                 'file': share.file if share.file else None,
                 'folder': share.folder if share.folder else None,
-                'owner': share.owner,
+                'owner': {'username': share.owner.username, 'real_name': share.owner.real_name, 'avatar_url': share.owner.get_avatar_url()},
                 'created_at': share.created_at,
                 'expires_at': share.expires_at,
                 'max_downloads': share.max_downloads,
@@ -4702,6 +4763,20 @@ class ShareAccessView(APIView):
 
                 # 🔧 关键修复：密码正确，写入 Session 标记已验证
                 request.session[f'share_verified_{share_code}'] = True
+
+
+
+                # # 记录访问日志
+                FileOperationLog.objects.create(
+                    file=share.file,
+                    folder=share.folder,
+                    operation='share_access',
+                    description=f'访问分享链接：{share.share_code}',
+                    ip_address=get_request_ip(request),
+                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                    extra_data={'share_id': str(share.id)}
+                )
+
 
             # 🔧 关键修复：验证成功后，重定向到 GET 请求，由 GET 渲染详情页
             return redirect('cloud-share-access', share_code=share_code)

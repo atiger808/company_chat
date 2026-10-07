@@ -431,7 +431,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20260929-e1dea22'
+STATIC_VERSION = '20261007-6e94482'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -516,6 +516,8 @@ API_MODEL_MAP = {
     "/api/cloud/folders/": "文件夹管理",
     "/api/cloud/search-users/": "搜索用户",
     "/api/cloud/shares/": "文件分享",
+    "/api/cloud/shares/<uuid:pk>/save_to_cloud/": "从分享保存到网盘",
+    "/api/cloud/shares/<uuid:pk>/revoke/": "取消分享",
     "/api/cloud/comments/": "文件评论",
     "/api/cloud/dashboard/": "网盘统计",
     "/api/cloud/documents/": "文档编辑",

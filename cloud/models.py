@@ -578,18 +578,19 @@ class FileOperationLog(models.Model):
         ('preview', '预览'),
         ('share', '分享'),
         ('unshare', '取消分享'),
-        ('save_from_share', '从分享保存'),
         ('empty_trash', '清空回收站'),
 
         ('sync_to_cloud', '同步到云'),
         ('save_from_share', '从分享保存'),
         ('save_from_chat', '从聊天保存'),
+        ('save_from_url', '从审批保存'),
         ('share_access', '分享访问'),
 
         ('edit_save', '编辑保存'),
         ('editing', '编辑中'),
         ('viewing', '查看中'),
         ('closed', '已关闭'),
+
         ('add_collaborator', '添加协作者'),
         ('update_collaborator', '更新协作者'),
         ('update_collaboration_status', '更新协作状态'),

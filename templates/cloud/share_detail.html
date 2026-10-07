@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>文件分享 - 企业网盘</title>
     <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-blue.svg?v=20260305-1">
-    <link rel="stylesheet" href="/static/css/chat.css?v=20260929-e1dea22">
-    <link rel="stylesheet" href="/static/css/cloud.css?v=20260929-e1dea22">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20261007-6e94482">
+    <link rel="stylesheet" href="/static/css/cloud.css?v=20261007-6e94482">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         * {
@@ -350,6 +350,7 @@
                 <i class="fas {{ file.icon_class|default:'fa-file' }}"></i>
             </div>
             <div class="file-name">{{ file.name }}</div>
+            <input type="hidden" id="shareName" value="{{ file.name }}">
             <div class="file-meta">
                 <div class="file-meta-item">
                     <i class="fas fa-hdd"></i>
@@ -447,7 +448,7 @@
             <img src="{{ owner.avatar_url|default:'/static/images/default-avatar.png' }}" alt="{{ owner.username }}"
                  class="owner-avatar">
             <div class="owner-info-text">
-                <h4>{{ owner.username }}</h4>
+                <h4>{{ owner.real_name }}</h4> @{{ owner.username }}
                 <p>分享者</p>
             </div>
         </div>
@@ -473,8 +474,9 @@
     // 复制分享链接
     async function copyShareLink() {
         const input = document.getElementById('shareLinkInput');
+        let shareName = document.getElementById('shareName').value;
         try {
-            await navigator.clipboard.writeText(input.value);
+            await navigator.clipboard.writeText(`## 来自浙企钉分享 ## 【${shareName}】 ${input.value} 复制此链接，用浏览器打开`);
             showToast('复制成功', '分享链接已复制');
         } catch (error) {
             input.select();
@@ -525,7 +527,7 @@
 
         } catch (error) {
             console.error('保存失败:', error);
-            showToast('失败', error.message, 'error');
+            showToast('失败',  error.message, 'error');
         }
     }
 
@@ -548,7 +550,7 @@
         if (!token) {
             // 保存当前页面链接，登录后跳转到该页面
             localStorage.setItem('redirect_url', window.location.href);
-            showToast('请先登录', 'error');
+            showToast('提示', '请先登录', 'error');
             setTimeout(() => window.location.href = '/cloud/login/', 1500);
             return;
         }
@@ -568,7 +570,7 @@
             const data = await response.json();
 
             if (response.ok) {
-                showToast('保存成功！文件已添加到您的网盘', 'success');
+                showToast('成功', '保存成功！文件已添加到您的网盘', 'success');
                 btn.innerHTML = '<i class="fas fa-check"></i> 已保存';
                 btn.style.background = '#909399';
             } else {
@@ -576,7 +578,7 @@
             }
         } catch (error) {
             console.error(error);
-            showToast(error.message, 'error');
+            showToast('失败', error.message, 'error');
             btn.disabled = false;
             btn.innerHTML = originalText;
         }
