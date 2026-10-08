@@ -10650,6 +10650,7 @@ class ChatClient {
                     </div>
                     <div class="member-list" id="groupManageMembers">
                         <!-- 成员列表将动态生成 -->
+                        <span>正在加载中...</span>
                     </div>
                 </div>
 
@@ -10748,6 +10749,7 @@ class ChatClient {
                     </div>
                     <div class="member-list" id="groupManageMembers">
                         <!-- 成员列表将动态生成 -->
+                        <span>正在加载中...</span>
                     </div>
                 </div>
 
