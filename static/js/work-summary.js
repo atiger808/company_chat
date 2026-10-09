@@ -957,6 +957,7 @@ class WorkSummaryApp {
             this.renderMy(data.results || []);
             this._renderPagination(data, 'wsMyPagination', 'loadMy');
         } catch (e) {
+            console.error(e)
             wrap.innerHTML = '<div class="ws-empty">加载失败</div>';
         }
     }
@@ -1679,7 +1680,7 @@ class WorkSummaryApp {
         const list = document.getElementById('wsShareUserList');
         if (!list) return;
         try {
-            const data = await this.apiGet(WS_API + '/members/?search=' + encodeURIComponent(kw));
+            const data = await this.apiGet(WS_API + '/members/?search=' + encodeURIComponent(kw) + '&scope=share');
             this._shareUsers = (data.results || []).slice(0, 20);
             if (!kw || !this._shareUsers.length) { list.innerHTML = ''; list.classList.remove('show'); return; }
             const self = this;

@@ -858,11 +858,13 @@ class AdminConsole {
             this.showLoading();
             var tenantId = document.getElementById('filterTenant') ? document.getElementById('filterTenant').value : '';
             var deptId = document.getElementById('filterDepartment') ? document.getElementById('filterDepartment').value : '';
+            var statusVal = document.getElementById('filterStatus') ? document.getElementById('filterStatus').value : '';
             var searchVal = document.getElementById('userSearch') ? document.getElementById('userSearch').value.trim() : '';
 
             var url = API_ADMIN_URL + '/admin/users/?page=' + page + '&page_size=20';
             if (tenantId) url += '&tenant_id=' + tenantId;
             if (deptId) url += '&org_dept_id=' + deptId;
+            if (statusVal !== '') url += '&is_active=' + statusVal;
             if (searchVal) url += '&search=' + encodeURIComponent(searchVal);
 
             const response = await fetch(url, {
@@ -978,6 +980,10 @@ class AdminConsole {
     onFilterTenantChange() {
         var tenantId = document.getElementById('filterTenant') ? document.getElementById('filterTenant').value : '';
         this._loadFilterDepartments(tenantId);
+        this.loadUsers(1);
+    }
+
+    onFilterStatusChange() {
         this.loadUsers(1);
     }
 

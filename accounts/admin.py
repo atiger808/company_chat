@@ -13,7 +13,7 @@ class TenantAdmin(admin.ModelAdmin):
 class TenantMembershipAdmin(admin.ModelAdmin):
     list_display = ('id', 'user', 'tenant', 'role', 'is_active', 'is_default', 'joined_at')
     list_filter = ('role', 'is_active')
-    search_fields = ('user__username', 'tenant__name', 'employee_id')
+    search_fields = ('user__username', 'user__real_name', 'tenant__name', 'employee_id')
     list_per_page = 20
 
 @admin.register(CustomUser)

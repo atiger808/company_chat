@@ -430,6 +430,13 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 department_relations__department_id=org_dept_id
             )
 
+        # 按启用/禁用状态过滤（所有管理员可用）：is_active=1 仅启用，is_active=0 仅禁用
+        is_active = self.request.query_params.get('is_active', '')
+        if is_active in ('1', 'true'):
+            queryset = queryset.filter(is_active=True)
+        elif is_active in ('0', 'false'):
+            queryset = queryset.filter(is_active=False)
+
         return queryset.order_by('-date_joined').distinct()
 
     def create(self, request, *args, **kwargs):

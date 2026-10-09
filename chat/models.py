@@ -244,6 +244,7 @@ class Message(models.Model):
         ('approval_card', '审批卡片'),
         ('work_summary_card', '工作总结卡片'),
         ('collab_card', '协作邀请卡片'),
+        ('announcement', '群公告'),
     )
 
     chat_room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='messages', verbose_name='聊天室')
@@ -400,6 +401,73 @@ class UserOnlineStatus(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {'在线' if self.is_online else '离线'}"
+
+
+class ChatRoomUserState(models.Model):
+    """聊天室-用户个人状态（置顶 / 消息免打扰）
+
+    置顶与免打扰都是「个人偏好」，只应对操作者本人生效：
+    原先写在 ChatRoom.is_pinned / is_muted 上，导致一个人置顶/免打扰会把整个
+    聊天室对所有成员一起置顶/免打扰。现改为按「聊天室 + 用户」维度存储。
+    """
+    chat_room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE,
+                                  related_name='user_states', verbose_name='聊天室')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name='chat_room_states', verbose_name='用户')
+    is_pinned = models.BooleanField(default=False, verbose_name='是否置顶')
+    is_muted = models.BooleanField(default=False, verbose_name='是否免打扰')
+    is_group_admin = models.BooleanField(default=False, verbose_name='是否群管理员')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+    class Meta:
+        verbose_name = '聊天室个人状态'
+        verbose_name_plural = '聊天室个人状态'
+        unique_together = ('chat_room', 'user')
+        indexes = [
+            models.Index(fields=['user', 'chat_room']),
+        ]
+
+    def __str__(self):
+        return f'{self.user_id}@{self.chat_room_id} pinned={self.is_pinned} muted={self.is_muted}'
+
+
+class GroupAnnouncement(models.Model):
+    """群公告（每个群聊一条，参考微信群公告：群主/群管理员可发布与修改）
+
+    发布或修改后，会把该公告的已读回执全部清空——即所有成员（除发布人）重新
+    在群聊顶部看到未读入口，与微信「公告更新后重新提醒」的行为一致。
+    """
+    chat_room = models.OneToOneField(ChatRoom, on_delete=models.CASCADE,
+                                     related_name='group_announcement', verbose_name='聊天室')
+    content = models.TextField(verbose_name='公告内容')
+    publisher = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                                  null=True, blank=True,
+                                  related_name='published_group_announcements', verbose_name='发布人')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='发布时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '群公告'
+        verbose_name_plural = '群公告'
+
+    def __str__(self):
+        return f'群公告@{self.chat_room_id}'
+
+
+class GroupAnnouncementRead(models.Model):
+    """群公告已读回执（用于「未读显示入口、已读隐藏」）"""
+    announcement = models.ForeignKey(GroupAnnouncement, on_delete=models.CASCADE,
+                                     related_name='reads', verbose_name='群公告')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name='group_announcement_reads', verbose_name='用户')
+    read_at = models.DateTimeField(auto_now_add=True, verbose_name='阅读时间')
+
+    class Meta:
+        verbose_name = '群公告已读'
+        verbose_name_plural = '群公告已读'
+        unique_together = ('announcement', 'user')
+
+    def __str__(self):
+        return f'{self.user_id} read {self.announcement_id}'
 
 
 class ChatRoomDeleteStatus(models.Model):

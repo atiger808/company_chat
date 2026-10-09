@@ -431,7 +431,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20261007-6e94482'
+STATIC_VERSION = '20261009-10610c9'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -486,6 +486,9 @@ API_MODEL_MAP = {
     "/api/chat/rooms/<int:pk>/remove_member/": "移除群成员",
     "/api/chat/rooms/<int:pk>/pin_chat/": "置顶聊天",
     "/api/chat/rooms/<int:pk>/mute_chat/": "消息免打扰",
+    "/api/chat/rooms/<int:pk>/announcement/": "群公告",
+    "/api/chat/rooms/<int:pk>/announcement_read/": "群公告已读",
+    "/api/chat/rooms/<int:pk>/set_group_admin/": "群管理员设置",
     "/api/chat/rooms/search_chats/": "搜索聊天",
     "/api/chat/messages/": "消息管理",
     "/api/chat/messages/<int:pk>/soft_delete/": "删除消息",

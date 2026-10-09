@@ -2661,13 +2661,13 @@ input:checked + .slider:before {
     padding: 8px 0;
 }
 
-/* 添加成员区域 */
+/* 添加成员区域（宫格布局由 .gm-scope 统一控制，这里只保留外框） */
 #addMemberResults {
-    max-height: 200px;
+    max-height: 46vh;
     overflow-y: auto;
     border: 1px solid var(--border-color);
     border-radius: 8px;
-    padding: 8px 0;
+    padding: 8px 6px;
     margin-top: 8px;
 }
 
@@ -6137,6 +6137,275 @@ input:checked + .toggle-slider:before {
 }
 
 
+/* ==================== 群成员宫格（参考微信：每行 5 个） ==================== */
+/* 仅作用于带 .gm-scope 的容器（群成员列表 / 可添加成员列表），不影响好友选择等其它 .member-grid */
+.gm-scope {
+    max-height: 46vh;
+    overflow-y: auto;
+}
+
+.gm-scope .member-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px 4px;
+    padding: 8px 0;
+    max-height: none;
+    overflow: visible;
+}
+
+.gm-scope .member-grid-item {
+    padding: 8px 2px 6px;
+    border-radius: 10px;
+    background: transparent;
+    cursor: default;
+    min-width: 0;
+}
+
+.gm-scope .member-grid-item:hover {
+    background: var(--bg-secondary);
+    box-shadow: none;
+}
+
+.gm-scope .member-grid-avatar {
+    width: 46px;
+    height: 46px;
+    margin-bottom: 6px;
+    border-width: 1px;
+    cursor: pointer;
+    transition: transform .15s, border-color .15s;
+}
+
+.gm-scope .member-grid-avatar:hover {
+    transform: scale(1.06);
+    border-color: var(--primary-color);
+}
+
+.gm-scope .member-grid-name {
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 500;
+    max-width: 100%;
+    margin-bottom: 2px;
+}
+
+.gm-scope .member-grid-position {
+    font-size: 10px;
+    line-height: 14px;
+    color: #409eff;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 群主 / 管理员标签：改为名称下方的小徽标，避免与头像重叠 */
+.gm-scope .member-grid-tag {
+    position: static;
+    top: auto;
+    right: auto;
+    font-size: 10px;
+    line-height: 15px;
+    padding: 0 6px;
+    border-radius: 8px;
+    margin-top: 3px;
+    background: var(--primary-color);
+    color: #fff;
+}
+
+.gm-scope .member-grid-tag.admin {
+    background: #409eff;
+}
+
+/* 成员操作按钮：小号胶囊按钮，竖排居中，桌面端 / 移动端都适配 */
+.gm-scope .gm-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    margin-top: 5px;
+    width: 100%;
+}
+
+.gm-scope .gm-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    height: 19px;
+    padding: 0 7px;
+    max-width: 100%;
+    font-size: 10px;
+    line-height: 1;
+    font-weight: 400;
+    white-space: nowrap;
+    border: 1px solid #dcdfe6;
+    border-radius: 10px;
+    background: #fff;
+    color: #606266;
+    cursor: pointer;
+    transition: all .15s;
+}
+
+.gm-scope .gm-btn i {
+    font-size: 9px;
+}
+
+.gm-scope .gm-btn:hover {
+    border-color: #409eff;
+    color: #409eff;
+    background: #ecf5ff;
+}
+
+.gm-scope .gm-btn.is-admin {
+    border-color: #e6a23c;
+    color: #e6a23c;
+    background: #fdf6ec;
+}
+
+.gm-scope .gm-btn.primary {
+    border-color: #409eff;
+    color: #409eff;
+    background: #ecf5ff;
+}
+
+.gm-scope .gm-btn.danger:hover {
+    border-color: #f56c6c;
+    color: #f56c6c;
+    background: #fef0f0;
+}
+
+@media (max-width: 768px) {
+    .gm-scope {
+        max-height: 40vh;
+    }
+
+    .gm-scope .member-grid {
+        gap: 6px 2px;
+    }
+
+    .gm-scope .member-grid-item {
+        padding: 6px 1px 5px;
+    }
+
+    .gm-scope .member-grid-avatar {
+        width: 40px;
+        height: 40px;
+        margin-bottom: 4px;
+    }
+
+    .gm-scope .member-grid-name {
+        font-size: 11px;
+        line-height: 14px;
+    }
+
+    .gm-scope .member-grid-position {
+        font-size: 9px;
+        line-height: 12px;
+    }
+
+    .gm-scope .member-grid-tag {
+        font-size: 9px;
+        line-height: 14px;
+        padding: 0 5px;
+        margin-top: 2px;
+    }
+
+    .gm-scope .gm-actions {
+        gap: 3px;
+        margin-top: 4px;
+    }
+
+    /* 移动端：按钮收成图标小圆钮，隐藏文字，避免 5 列格子里字体显得过大 */
+    .gm-scope .gm-btn {
+        width: 20px;
+        height: 20px;
+        padding: 0;
+        border-radius: 50%;
+        font-size: 0;
+    }
+
+    .gm-scope .gm-btn i {
+        font-size: 9px;
+    }
+
+    .gm-scope .gm-btn-text {
+        display: none;
+    }
+}
+
+/* ==================== 消息加载失败的内联重试 ==================== */
+.history-load-failed {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 40px 20px;
+    color: var(--text-light, #909399);
+    text-align: center;
+}
+
+.history-load-failed i {
+    font-size: 26px;
+    color: #e6a23c;
+}
+
+.history-load-failed p {
+    margin: 0;
+    font-size: 13px;
+}
+
+.history-load-failed .btn {
+    margin-top: 4px;
+}
+
+/* ==================== 群公告消息气泡 ==================== */
+.ga-message {
+    min-width: 180px;
+    max-width: 100%;
+}
+
+.ga-message-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #e6a23c;
+    padding-bottom: 6px;
+    margin-bottom: 6px;
+    border-bottom: 1px dashed #f0d9a8;
+}
+
+.ga-message-body {
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.7;
+    font-size: 14px;
+    color: var(--text-primary, #303133);
+    max-height: 30vh;
+    overflow-y: auto;
+}
+
+.ga-message-more {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #409eff;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.ga-message-more:hover {
+    text-decoration: underline;
+}
+
+/* 会话列表 [群公告] 前缀：与 @ 提示同款红色 + 闪烁 */
+.announce-hint {
+    color: #ff4d4f;
+}
+
 /* 好友选择宫格样式 */
 .member-grid {
     display: grid;
@@ -8912,7 +9181,7 @@ body.pwa-mode .sidebar {
 
 /* 正文区（更新说明）：限高 + 自己滚动，不参与上面的按钮布局 */
 .update-body {
-    max-height: min(38vh, 220px);
+    max-height: min(38vh, 520px);
     overflow-y: auto;
 }
 

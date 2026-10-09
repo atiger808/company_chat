@@ -86,6 +86,14 @@ class UserSelector {
             if (!item) return;
             var uid = parseInt(item.getAttribute('data-uid'));
             if (!uid) return;
+            // 已禁用用户不可选择，给出提示
+            if (item.getAttribute('data-disabled') === '1') {
+                var du = self._results.filter(function(u) { return u.id === uid; })[0];
+                if (window.orgApp && window.orgApp._showToast) {
+                    window.orgApp._showToast('用户「' + ((du && (du.real_name || du.username)) || '') + '」已被禁用，无法选择', true);
+                }
+                return;
+            }
             if (isMulti) {
                 self._toggleUser(uid);
             } else {
@@ -152,9 +160,14 @@ class UserSelector {
                     : '<div class="us-avatar us-avatar-placeholder">' + (u.real_name || u.username || '?')[0].toUpperCase() + '</div>';
                 var checked = isMulti && self._selected.indexOf(u.id) !== -1;
                 var inTenant = u.in_tenant;
-                html += '<div class="user-selector-item' + (checked ? ' selected' : '') + '" data-uid="' + u.id + '">'
+                // 已禁用的用户不可选择（禁用/离职用户不应再被分配部门或加入群聊）
+                var disabled = u.is_active === false;
+                html += '<div class="user-selector-item' + (checked ? ' selected' : '') + (disabled ? ' us-disabled' : '')
+                    + '" data-uid="' + u.id + '" data-disabled="' + (disabled ? '1' : '0') + '"'
+                    + (disabled ? ' title="该用户已被禁用，无法选择"' : '') + '>'
                     + avatarHtml
-                    + '<div class="us-info"><div class="us-name">' + self._escape(u.real_name || u.username) + '</div>'
+                    + '<div class="us-info"><div class="us-name">' + self._escape(u.real_name || u.username)
+                    + (disabled ? ' <span class="tag-disabled">已禁用</span>' : '') + '</div>'
                     + '<div class="us-detail">' + self._escape(u.username || '') + (u.email ? ' · ' + self._escape(u.email) : '') + '</div></div>'
                     + '<div class="us-position">' + self._escape(u.position || '') + (inTenant ? '' : ' <span class="tag-outside">非企业成员</span>') + '</div>'
                     + (isMulti ? '<div class="us-checkbox"><i class="fas ' + (checked ? 'fa-check-circle' : 'fa-circle') + '"></i></div>' : '')
@@ -179,6 +192,14 @@ class UserSelector {
     }
 
     _toggleUser(uid) {
+        // 防御：已禁用的用户不允许被选中
+        var u = this._results.filter(function(x) { return x.id === uid; })[0];
+        if (u && u.is_active === false) {
+            if (window.orgApp && window.orgApp._showToast) {
+                window.orgApp._showToast('该用户已被禁用，无法选择', true);
+            }
+            return;
+        }
         var pos = this._selected.indexOf(uid);
         if (pos === -1) {
             this._selected.push(uid);

@@ -8,6 +8,9 @@ class AnnouncementApp {
         this._depts = [];
         this._users = [];
         this._scopeUsers = [];
+        this._rteRange = null;        // 富文本选区（点击工具栏后恢复用）
+        this._colorMode = 'fore';     // fore=字体颜色 / hilite=背景高亮
+        this._initRte();
         this._init();
     }
 
@@ -262,6 +265,8 @@ class AnnouncementApp {
         document.getElementById('annEditTitle').textContent = id ? '编辑公告' : '发布公告';
         document.getElementById('annTitle').value = '';
         document.getElementById('rteEditor').innerHTML = '';
+        this._rteRange = null;
+        this._resetRteToolbar();
         document.getElementById('annEnableComments').checked = true;
         document.getElementById('annCommentMode').value = 'public';
         document.querySelector('input[name="annScope"][value="all"]').checked = true;
@@ -441,20 +446,352 @@ class AnnouncementApp {
     }
 
     // ==================== 富文本 ====================
-    rte(cmd, val) {
-        document.getElementById('rteEditor').focus();
-        document.execCommand(cmd, false, val);
+    // 初始化：记录选区（点击工具栏/下拉框会丢失焦点，必须能恢复）、
+    // 让 execCommand 输出 CSS style（颜色/字体需要）、支持直接粘贴图片、粘贴 HTML 安全清理
+    _initRte() {
+        var ed = document.getElementById('rteEditor');
+        if (!ed) return;
+        var self = this;
+        try { document.execCommand('styleWithCSS', false, 'true'); } catch (e) {}
+
+        // 只记录发生在编辑器内部的选区；不要监听 blur，
+        // 否则点下拉框导致失焦时会用「已折叠的」选区覆盖掉 mousedown 时保存的正确选区
+        ['mouseup', 'keyup', 'input'].forEach(function (ev) {
+            ed.addEventListener(ev, function () {
+                self._saveSel();
+                if (ev === 'mouseup' || ev === 'keyup') self._syncToolbarState();
+            });
+        });
+        // 工具栏 mousedown 捕获阶段：在焦点移走之前先保存选区
+        var tb = document.getElementById('rteToolbar');
+        if (tb) {
+            tb.addEventListener('mousedown', function () { self._saveSel(); }, true);
+        }
+        ed.addEventListener('paste', function (e) { self._onRtePaste(e); });
+
+        // 点击取色面板以外区域 → 关闭面板
+        document.addEventListener('click', function (e) {
+            var panel = document.getElementById('rteColorPanel');
+            if (!panel || !panel.classList.contains('show')) return;
+            if (e.target.closest('#rteColorPanel') || e.target.closest('.rte-color-btn')) return;
+            panel.classList.remove('show');
+        });
+
+        this._buildColorGrid();
     }
+
+    _saveSel() {
+        try {
+            var sel = window.getSelection();
+            if (!sel || !sel.rangeCount) return;
+            var range = sel.getRangeAt(0);
+            var ed = document.getElementById('rteEditor');
+            if (!ed || !ed.contains(range.commonAncestorContainer)) return;
+            this._rteRange = range.cloneRange();
+        } catch (e) { /* 忽略：选区不可用时不做记录 */ }
+    }
+
+    // 重新聚焦编辑器并恢复上一次选区，返回编辑器元素
+    _focusRestore() {
+        var ed = document.getElementById('rteEditor');
+        if (!ed) return null;
+        ed.focus();
+        // 部分浏览器在编辑会话切换后会重置该标记，这里每次恢复焦点时都重新确保
+        // 颜色/字体走 CSS（而不是过时的 <font>）
+        try { document.execCommand('styleWithCSS', false, 'true'); } catch (e) {}
+        try {
+            var sel = window.getSelection();
+            if (this._rteRange && sel) {
+                sel.removeAllRanges();
+                sel.addRange(this._rteRange);
+            }
+        } catch (e) { /* 忽略 */ }
+        return ed;
+    }
+
+    _exec(cmd, val) {
+        try {
+            document.execCommand(cmd, false, val === undefined ? null : val);
+        } catch (e) {
+            console.warn('富文本命令失败:', cmd, e);
+        }
+    }
+
+    _afterRte() {
+        this._saveSel();
+        this._syncToolbarState();
+    }
+
+    // 工具栏状态回显：加粗/斜体等按钮高亮 + 段落格式下拉同步
+    _syncToolbarState() {
+        var tb = document.getElementById('rteToolbar');
+        if (!tb) return;
+        tb.querySelectorAll('button[data-cmd]').forEach(function (b) {
+            var on = false;
+            try { on = document.queryCommandState(b.getAttribute('data-cmd')); } catch (e) {}
+            b.classList.toggle('active', !!on);
+        });
+        var blockSel = document.getElementById('rteBlock');
+        if (blockSel) {
+            var blk = '';
+            try { blk = String(document.queryCommandValue('formatBlock') || '').toLowerCase(); } catch (e) {}
+            // 有的浏览器会返回 '<h2>' 这种带尖括号的值，统一去掉再匹配
+            blk = blk.replace(/[<>\s]/g, '');
+            var valid = ['p', 'h1', 'h2', 'h3', 'h4', 'blockquote', 'pre'];
+            blockSel.value = valid.indexOf(blk) >= 0 ? blk : '';
+        }
+    }
+
+    _resetRteToolbar() {
+        ['rteBlock', 'rteFont', 'rteSize'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+        var panel = document.getElementById('rteColorPanel');
+        if (panel) panel.classList.remove('show');
+        var tb = document.getElementById('rteToolbar');
+        if (tb) tb.querySelectorAll('button.active').forEach(function (b) { b.classList.remove('active'); });
+    }
+
+    rte(cmd, val) {
+        this._focusRestore();
+        if (cmd === 'formatBlock' && val) {
+            this._exec('formatBlock', '<' + String(val).toLowerCase() + '>');
+        } else {
+            this._exec(cmd, val);
+        }
+        this._afterRte();
+    }
+
+    // 段落格式：正文 / 标题 / 引用 / 代码块
+    rteBlock(val) {
+        if (!val) return;
+        this.rte('formatBlock', val);
+    }
+
+    // 字体：execCommand('fontName')（styleWithCSS 下输出 font-family）
+    rteFont(val) {
+        if (!val) return;
+        this.rte('fontName', val);
+    }
+
+    // 字号：execCommand('fontSize') 只支持 1~7，所以先落一个临时标记再换成精确 px。
+    // 🔧 关键修复：styleWithCSS=true 时 Chrome 会输出 <span style="font-size:xxx-large">，
+    //    原来只找 <font size=7> 就会一无所获、字号完全没变。
+    //    这里先临时关闭 styleWithCSS 让它输出 <font size=7>，替换完再恢复。
+    rteFontSize(px) {
+        px = parseInt(px, 10);
+        if (!px) return;
+        var ed = this._focusRestore();
+        if (!ed) return;
+        var sel = window.getSelection();
+        if (!sel || !sel.rangeCount) return;
+        var range = sel.getRangeAt(0);
+        if (!ed.contains(range.commonAncestorContainer)) return;
+        var snapshot = range.cloneRange();   // 兜底用：execCommand 没产出标记时按它包 span
+
+        try {
+            document.execCommand('styleWithCSS', false, 'false');
+            document.execCommand('fontSize', false, '7');
+        } catch (e) {
+            console.warn('字号命令执行失败:', e);
+        } finally {
+            try { document.execCommand('styleWithCSS', false, 'true'); } catch (e) {}
+        }
+
+        // 把临时标记替换成精确 px；若没找到任何标记则退化为「按选区包 span」
+        if (!this._applyExactFontSize(ed, px)) {
+            this._wrapRangeWithFontSize(snapshot, px);
+        }
+        this._afterRte();
+    }
+
+    // 把 <font size=7> / 关键词字号的 span 统一改为 <span style="font-size:Npx">
+    // 同时保留原有的颜色、字体等内联样式
+    _applyExactFontSize(ed, px) {
+        var targets = [];
+        Array.prototype.forEach.call(ed.querySelectorAll('font[size="7"], font[size="+7"], font[size="7.0"]'), function (n) {
+            targets.push(n);
+        });
+        Array.prototype.forEach.call(ed.querySelectorAll('span'), function (n) {
+            var v = String((n.style && n.style.fontSize) || '');
+            // 只处理非 px 的「关键词字号」（xxx-large 之类），我们自己写入的 px 不动
+            if (v && v.indexOf('px') < 0) targets.push(n);
+        });
+
+        targets.forEach(function (el) {
+            var keep = String(el.getAttribute('style') || '')
+                .replace(/font-size\s*:[^;]*;?/gi, '')
+                .replace(/;+$/, '').trim();
+            var parts = [];
+            if (keep) parts.push(keep);
+            var colorAttr = el.getAttribute('color');
+            if (colorAttr) parts.push('color:' + colorAttr);
+            var faceAttr = el.getAttribute('face');
+            if (faceAttr) parts.push('font-family:' + faceAttr);
+            parts.push('font-size:' + px + 'px');
+
+            var span = document.createElement('span');
+            span.setAttribute('style', parts.join(';'));
+            while (el.firstChild) span.appendChild(el.firstChild);
+            el.parentNode.replaceChild(span, el);
+        });
+        return targets.length > 0;
+    }
+
+    // 兜底：直接把选区（或折叠光标处）包一层带字号的 span
+    _wrapRangeWithFontSize(range, px) {
+        if (!range) return;
+        try {
+            var span = document.createElement('span');
+            span.setAttribute('style', 'font-size:' + px + 'px');
+            var sel = window.getSelection();
+            if (range.collapsed) {
+                range.insertNode(span);
+                var r = document.createRange();
+                r.setStart(span, 0);
+                r.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(r);
+            } else {
+                span.appendChild(range.extractContents());
+                range.insertNode(span);
+                var r2 = document.createRange();
+                r2.selectNodeContents(span);
+                sel.removeAllRanges();
+                sel.addRange(r2);
+            }
+        } catch (e) {
+            console.warn('字号兜底处理失败:', e);
+        }
+    }
+
+    // ==================== 颜色 / 高亮 ====================
+    _buildColorGrid() {
+        var grid = document.getElementById('rteColorGrid');
+        if (!grid) return;
+        var palette = ['#000000', '#434343', '#666666', '#999999', '#cccccc', '#ffffff',
+            '#e74c3c', '#f56c6c', '#e67e22', '#f0a020', '#f1c40f', '#67c23a',
+            '#2ecc71', '#1abc9c', '#409eff', '#3498db', '#7c4dff', '#9b59b6',
+            '#e91e63', '#8d6e63'];
+        var html = '<div class="rte-color-swatch rte-color-none" title="默认（清除颜色）" '
+            + 'onmousedown="event.preventDefault()" onclick="annApp.rteColor(\'\')">默认</div>';
+        html += palette.map(function (c) {
+            return '<div class="rte-color-swatch" style="background:' + c + '" title="' + c + '" '
+                + 'onmousedown="event.preventDefault()" onclick="annApp.rteColor(\'' + c + '\')"></div>';
+        }).join('');
+        grid.innerHTML = html;
+    }
+
+    toggleColorPanel(mode) {
+        var panel = document.getElementById('rteColorPanel');
+        if (!panel) return;
+        var same = panel.classList.contains('show') && this._colorPanelMode === mode;
+        this._colorMode = mode;
+        this._colorPanelMode = mode;
+        var title = document.getElementById('rteColorPanelTitle');
+        if (title) title.textContent = mode === 'hilite' ? '背景高亮' : '字体颜色';
+        panel.classList.toggle('show', !same);
+    }
+
+    // color 为空 → 清除（字色 inherit / 高亮 transparent）
+    rteColor(color) {
+        var mode = this._colorMode === 'hilite' ? 'hilite' : 'fore';
+        var value = color || (mode === 'hilite' ? 'transparent' : 'inherit');
+        this._focusRestore();
+        this._exec(mode === 'hilite' ? 'hiliteColor' : 'foreColor', value);
+        var bar = document.getElementById(mode === 'hilite' ? 'rteHiliteBar' : 'rteForeBar');
+        if (bar) bar.style.background = color || (mode === 'hilite' ? '#ffe58f' : '#606266');
+        var panel = document.getElementById('rteColorPanel');
+        if (panel) panel.classList.remove('show');
+        this._afterRte();
+    }
+
+    rteApplyCustomColor() {
+        var inp = document.getElementById('rteCustomColor');
+        this.rteColor(inp ? inp.value : '');
+    }
+
+    // ==================== 其它命令 ====================
+    rteInsertHr() {
+        this._focusRestore();
+        this._exec('insertHorizontalRule');
+        this._afterRte();
+    }
+
+    rteClearFormat() {
+        this._focusRestore();
+        this._exec('removeFormat');
+        this._exec('formatBlock', '<p>');
+        this._afterRte();
+    }
+
+    // 粘贴：图片文件直接上传插入；HTML 走安全清理（去脚本/事件属性/javascript: 链接）
+    _onRtePaste(e) {
+        var dt = e.clipboardData;
+        if (!dt) return;
+        var files = dt.files;
+        if (files && files.length) {
+            for (var i = 0; i < files.length; i++) {
+                if (files[i].type && files[i].type.indexOf('image/') === 0) {
+                    e.preventDefault();
+                    this._saveSel();
+                    this._uploadImage(files[i]);
+                    return;
+                }
+            }
+        }
+        var html = dt.getData ? dt.getData('text/html') : '';
+        if (html) {
+            e.preventDefault();
+            this._focusRestore();
+            this._exec('insertHTML', this._sanitizeRteHtml(html));
+            this._afterRte();
+        }
+        // 纯文本：交给浏览器默认处理（保留换行）
+    }
+
+    _sanitizeRteHtml(html) {
+        var box = document.createElement('div');
+        box.innerHTML = html || '';
+        // 1) 移除危险标签
+        box.querySelectorAll('script,style,iframe,object,embed,link,meta,form,input,button,textarea,select').forEach(function (n) {
+            n.remove();
+        });
+        // 2) 移除事件属性与 javascript: 链接/图片地址
+        box.querySelectorAll('*').forEach(function (n) {
+            Array.prototype.slice.call(n.attributes || []).forEach(function (attr) {
+                var name = String(attr.name || '').toLowerCase();
+                var value = String(attr.value || '');
+                if (name.indexOf('on') === 0) n.removeAttribute(attr.name);
+                else if ((name === 'href' || name === 'src') && /^\s*javascript:/i.test(value)) n.removeAttribute(attr.name);
+                else if (name === 'style' && /expression\s*\(|url\s*\(\s*['"]?\s*javascript:/i.test(value)) n.removeAttribute(attr.name);
+            });
+        });
+        return box.innerHTML;
+    }
+
     async rteInsertLink() {
         var url = await this.showInputDialog('插入链接', '请输入链接地址');
-        if (url) this.rte('createLink', url.trim());
+        if (!url) return;
+        url = url.trim();
+        // 🔧 createLink 只在「已选中文字」时生效；光标只是落在某处时改为插入一个链接文本，
+        //    否则用户点了没反应会以为功能坏了
+        var collapsed = !this._rteRange || this._rteRange.collapsed;
+        if (collapsed) {
+            this._focusRestore();
+            this._exec('insertHTML', '<a href="' + this._escape(url) + '" target="_blank" style="color:#409eff;">' + this._escape(url) + '</a>');
+            this._afterRte();
+            return;
+        }
+        this.rte('createLink', url);
     }
     async rteInsertVideo() {
         var url = await this.showInputDialog('插入视频', '请输入视频地址（mp4/网页视频URL）');
         if (!url) return;
-        var ed = document.getElementById('rteEditor');
-        ed.focus();
-        document.execCommand('insertHTML', false, '<video controls preload="metadata" style="max-width:100%;border-radius:6px;"><source src="' + this._escape(url.trim()) + '"></video><br>');
+        this._focusRestore();
+        this._exec('insertHTML', '<video controls preload="metadata" style="max-width:100%;border-radius:6px;"><source src="' + this._escape(url.trim()) + '"></video><br>');
+        this._afterRte();
     }
     async rteInsertTable() {
         var rows = parseInt(await this.showInputDialog('插入表格', '表格行数（1-20）', '3'), 10);
@@ -468,20 +805,23 @@ class AnnouncementApp {
             h += '</tr>';
         }
         h += '</tbody></table><br>';
-        document.getElementById('rteEditor').focus();
-        document.execCommand('insertHTML', false, h);
+        this._focusRestore();
+        this._exec('insertHTML', h);
+        this._afterRte();
     }
     async rteInsertFile() {
         var url = await this.showInputDialog('插入附件', '请输入附件链接地址');
         if (!url) return;
         var name = await this.showInputDialog('插入附件', '附件名称', url.split('/').pop() || '附件');
-        document.getElementById('rteEditor').focus();
-        document.execCommand('insertHTML', false, '<p><a href="' + this._escape(url.trim()) + '" target="_blank" style="color:#409eff;"><i class="fa fa-paperclip"></i> ' + this._escape(name) + '</a></p>');
+        this._focusRestore();
+        this._exec('insertHTML', '<p><a href="' + this._escape(url.trim()) + '" target="_blank" style="color:#409eff;"><i class="fa fa-paperclip"></i> ' + this._escape(name) + '</a></p>');
+        this._afterRte();
     }
     rteInsertImage() {
         var self = this;
         var inp = document.getElementById('annImgInput');
         if (!inp) return;
+        this._saveSel();
         inp.onchange = function () {
             var file = inp.files && inp.files[0];
             inp.value = '';
@@ -503,13 +843,15 @@ class AnnouncementApp {
             var url = json.file_url || json.url || json.file || '';
             if (!url && json.data) url = json.data.file_url || json.data.url || '';
             if (!url) { this.showAlert('上传失败', '无法获取图片地址'); return; }
-            document.getElementById('rteEditor').focus();
-            document.execCommand('insertHTML', false, '<img src="' + this._escape(url) + '" style="max-width:100%;border-radius:6px;"><br>');
+            this._focusRestore();
+            this._exec('insertHTML', '<img src="' + this._escape(url) + '" style="max-width:100%;border-radius:6px;"><br>');
+            this._afterRte();
         } catch (e) {
             var url2 = await this.showInputDialog('上传失败', '上传失败，可粘贴图片URL');
             if (url2) {
-                document.getElementById('rteEditor').focus();
-                document.execCommand('insertHTML', false, '<img src="' + this._escape(url2.trim()) + '" style="max-width:100%;border-radius:6px;"><br>');
+                this._focusRestore();
+                this._exec('insertHTML', '<img src="' + this._escape(url2.trim()) + '" style="max-width:100%;border-radius:6px;"><br>');
+                this._afterRte();
             }
         }
     }
@@ -781,11 +1123,6 @@ class AnnouncementApp {
             var isMax = content.classList.toggle('maximized');
             btn.innerHTML = isMax ? '<i class="fas fa-compress"></i>' : '<i class="fas fa-expand"></i>';
         }
-    }
-
-    _escape(text) {
-        if (!text) return '';
-        return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
     _formatTime(iso) {

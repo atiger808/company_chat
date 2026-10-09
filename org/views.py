@@ -528,6 +528,7 @@ class TenantViewSet(viewsets.ModelViewSet):
                 'id': u.id, 'username': u.username,
                 'real_name': u.real_name or '',
                 'avatar': u.get_avatar_url(),
+                'is_active': u.is_active,
                 'email': u.email, 'position': u.position or '',
                 'in_tenant': u.id in member_ids,
             })
@@ -1010,7 +1011,8 @@ class DepartmentViewSet(viewsets.ModelViewSet):
                 added += 1
                 added_ids.append(uid)
         if department.auto_sync_members and department.department_group:
-            users = CustomUser.objects.filter(id__in=user_ids)
+            # 部门群只同步「未禁用」的成员（禁用/离职用户不应出现在群聊中）
+            users = CustomUser.objects.filter(id__in=user_ids, is_active=True)
             department.department_group.members.add(*list(users))
         detail = {'user_ids': user_ids, 'count': added}
         if newly_invited:
@@ -1327,9 +1329,9 @@ class DepartmentViewSet(viewsets.ModelViewSet):
         group.deleted_at = None
         group.save()
 
-        # 同步部门成员到群
+        # 同步部门成员到群（排除已禁用/离职用户）
         user_ids = list(UserDepartment.objects.filter(
-            department=department
+            department=department, user__is_active=True
         ).values_list('user_id', flat=True))
         group.members.set(user_ids)
 
@@ -1456,7 +1458,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def sync_all_members(self, request, pk=None):
-        """将企业所有成员同步到该部门（一键同步）"""
+        """将企业未禁用的所有成员同步到该部门（一键同步）"""
         department = self.get_object()
         tenant = request.tenant
         members = TenantMembership.objects.filter(
@@ -1465,15 +1467,16 @@ class DepartmentViewSet(viewsets.ModelViewSet):
         added = 0
         added_ids = []
         for m in members:
-            _, created = UserDepartment.objects.get_or_create(
-                user=m.user, department=department,
-                defaults={
-                    'is_primary': not UserDepartment.objects.filter(user=m.user).exists()
-                }
-            )
-            if created:
-                added += 1
-                added_ids.append(m.user.id)
+            if m.user.is_active:
+                _, created = UserDepartment.objects.get_or_create(
+                    user=m.user, department=department,
+                    defaults={
+                        'is_primary': not UserDepartment.objects.filter(user=m.user).exists()
+                    }
+                )
+                if created:
+                    added += 1
+                    added_ids.append(m.user.id)
         if added and department.auto_sync_members and department.department_group:
             all_users = [m.user for m in members if m.user.is_active]
             department.department_group.members.add(*all_users)

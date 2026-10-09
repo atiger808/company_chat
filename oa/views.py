@@ -4966,7 +4966,12 @@ class ApprovalViewSet(viewsets.ViewSet):
         if not tenant_ids:
             return Response({'results': [], 'default_id': None})
 
-        depts = list(Department.objects.filter(tenant_id__in=tenant_ids, is_active=True).values(
+        dept_qs = Department.objects.filter(tenant_id__in=tenant_ids, is_active=True)
+        # 新建/重新编辑审批的「所属部门」下拉：排除隐藏部门（visibility='hidden'）
+        # scope=all 为自定义类型「部门」字段选择，保持原样不受影响
+        if scope != 'all':
+            dept_qs = dept_qs.exclude(visibility='hidden')
+        depts = list(dept_qs.values(
             'id', 'name', 'parent_id', 'full_path', 'tenant_id', 'level', 'department_type'))
 
         default_id = None
@@ -7554,7 +7559,8 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def members(self, request):
         """当前企业成员列表，供范围分析选择员工（部门负责人/超管）"""
-        if not self._can_view_all(request.user):
+        scope = request.query_params.get('scope', '').strip()
+        if scope != 'share' and not self._can_view_all(request.user):
             return Response({'error': '仅部门负责人或超级管理员可查看'}, status=403)
         from accounts.models import CustomUser
         from django.db.models import Q as QF

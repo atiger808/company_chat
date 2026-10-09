@@ -23,9 +23,9 @@
     <meta name="msapplication-TileColor" content="#409EFF">
     <meta name="msapplication-TileImage" content="/static/icons/icon-144x144.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261007-6e94482">-->
-    <link rel="stylesheet" href="/static/css/chat.css?v=20261007-6e94482">
-    <link rel="stylesheet" href="/static/css/org.css?v=20261007-6e94482">
+    <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261009-10610c9">-->
+    <link rel="stylesheet" href="/static/css/chat.css?v=20261009-10610c9">
+    <link rel="stylesheet" href="/static/css/org.css?v=20261009-10610c9">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
 
     <!-- 🔧 iOS 专用样式修复 -->
@@ -81,6 +81,109 @@
     <style>
         .chat-input-area {
             padding-bottom: max(8px, env(safe-area-inset-bottom));
+        }
+    </style>
+
+    <!-- 群公告入口 / 详情 样式（参考微信群公告） -->
+    <style>
+        .group-announce-bar {
+            position: sticky;
+            top: 0;
+            z-index: 30;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 14px;
+            background: linear-gradient(90deg, #fff7e6, #fffdf5);
+            border-bottom: 1px solid #f0d9a8;
+            color: #a86a00;
+            font-size: 13px;
+            cursor: pointer;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+        }
+
+        .group-announce-bar:hover {
+            background: linear-gradient(90deg, #fff1d4, #fffaf0);
+        }
+
+        .group-announce-bar .fa-bullhorn {
+            color: #e6a23c;
+            font-size: 15px;
+            flex-shrink: 0;
+        }
+
+        .group-announce-bar .ga-text {
+            flex: 1;
+            min-width: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-weight: 500;
+        }
+
+        .group-announce-bar .ga-tag {
+            flex-shrink: 0;
+            font-size: 11px;
+            padding: 1px 6px;
+            border-radius: 8px;
+            background: #f56c6c;
+            color: #fff;
+        }
+
+        .group-announce-bar .ga-arrow {
+            font-size: 11px;
+            color: #c8a05a;
+            flex-shrink: 0;
+        }
+
+        [data-theme="dark"] .group-announce-bar {
+            background: linear-gradient(90deg, #3a2f1a, #2a2416);
+            border-bottom-color: #5a4a24;
+            color: #e6c07a;
+        }
+
+        /* 群公告入口显示时：容器改为纵向 flex，入口占一行、消息列表占余下空间，
+           避免入口遮住消息，并且桌面端（列表内部滚动）与移动端（容器滚动）都不会跟着滚走 */
+        .messages-container.has-announce {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .messages-container.has-announce .messages-list {
+            flex: 1 1 auto;
+            min-height: 0;
+            height: auto;
+            /* 移动端原本靠 margin-bottom 给输入区留空，这里容器已有 padding-bottom，避免重复占位 */
+            margin-bottom: 0;
+        }
+
+        .messages-container.has-announce .messages-empty {
+            flex: 1 1 auto;
+        }
+
+        .group-announce-content {
+            white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 1.75;
+            font-size: 14px;
+            color: var(--text-primary, #303133);
+            background: var(--bg-secondary, #f5f7fa);
+            border-radius: 8px;
+            padding: 12px 14px;
+            max-height: 46vh;
+            overflow-y: auto;
+        }
+
+        .group-announce-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-light, #909399);
+            margin: 10px 2px 0;
+            flex-wrap: wrap;
         }
     </style>
 
@@ -222,7 +325,7 @@
         </div>
 
         <div class="user-profile">
-            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20261007-6e94482"
+            <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20261009-10610c9"
                  alt="头像" class="avatar">
             <div class="user-info">
                 <div class="username" id="currentUsername">加载中...</div>
@@ -326,7 +429,7 @@
                 </button>
                 <div class="chat-info" onclick="chatClient.showProfile(chatClient.currentRoomId)">
                     <div class="chat-avatar">
-                        <img src="/static/images/default-avatar.png?v=20261007-6e94482"
+                        <img src="/static/images/default-avatar.png?v=20261009-10610c9"
                              alt="聊天对象" id="chatAvatar">
                     </div>
                     <div class="chat-details">
@@ -356,6 +459,15 @@
         </div>
 
         <div class="messages-container" id="messagesContainer">
+            <!-- 群公告未读入口：固定在该群聊天消息顶部，点击查看详情，已读后自动隐藏 -->
+            <div class="group-announce-bar" id="groupAnnounceBar" style="display:none;"
+                 onclick="chatClient.openGroupAnnouncement(chatClient.currentRoomId)">
+                <i class="fas fa-bullhorn"></i>
+                <span class="ga-text" id="groupAnnounceBarText">群公告</span>
+                <span class="ga-tag" id="groupAnnounceBarTag">未读</span>
+                <i class="fas fa-chevron-right ga-arrow"></i>
+            </div>
+
             <div class="messages-empty" id="messagesEmpty">
                 <i class="fas fa-comments"></i>
                 <p>选择聊天对象开始对话</p>
@@ -657,7 +769,7 @@
                 </div>
                 <div class="profile-avatar-section">
                     <div class="avatar-upload-container">
-                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20261007-6e94482"
+                        <img id="settingsAvatar" src="/static/images/default-avatar.png?v=20261009-10610c9"
                              alt="头像">
                         <label class="upload-btn" for="avatarUpload">
                             <i class="fas fa-camera"></i>
@@ -906,24 +1018,24 @@
 
 
 <!-- 🔧 关键修复：脚本资源直接带版本参数 -->
-<script src="/static/js/dist/spark-md5.min.js?v=20261007-6e94482"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20261007-6e94482"></script>
-<script src="/static/js/dist/sm4.min.js?v=20261007-6e94482"></script>
-<script src="/static/js/encrypts.js?v=20261007-6e94482"></script>
-<script src="/static/js/api.js?v=20261007-6e94482"></script>
-<script src="/static/js/utils.js?v=20261007-6e94482"></script>
-<script src="/static/js/chat.js?v=20261007-6e94482"></script>
-<script src="/static/js/tenant.js?v=20261007-6e94482"></script>
-<script src="/static/js/org.js?v=20261007-6e94482"></script>
-<script src="/static/js/notifications.js?v=20261007-6e94482"></script>
-<script src="/static/js/push.js?v=20261007-6e94482"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20261009-10610c9"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20261009-10610c9"></script>
+<script src="/static/js/dist/sm4.min.js?v=20261009-10610c9"></script>
+<script src="/static/js/encrypts.js?v=20261009-10610c9"></script>
+<script src="/static/js/api.js?v=20261009-10610c9"></script>
+<script src="/static/js/utils.js?v=20261009-10610c9"></script>
+<script src="/static/js/chat.js?v=20261009-10610c9"></script>
+<script src="/static/js/tenant.js?v=20261009-10610c9"></script>
+<script src="/static/js/org.js?v=20261009-10610c9"></script>
+<script src="/static/js/notifications.js?v=20261009-10610c9"></script>
+<script src="/static/js/push.js?v=20261009-10610c9"></script>
 
 
 <!-- templates/chat/index.html - 替换原有的版本检测脚本 -->
 
 <script>
     // 🔧 修复1: 从构建时注入的版本号（与后端保持一致）
-    const CURRENT_VERSION = '20261007-6e94482';
+    const CURRENT_VERSION = '20261009-10610c9';
 
     // 🔧 修复2: 首次访问时保存版本到 localStorage（不是 sessionStorage）
     const LAST_VERSION = localStorage.getItem('static_version');
@@ -1007,7 +1119,7 @@
 </script>
 
 
-<script src="/static/js/watermark.js?v=20261007-6e94482"></script>
+<script src="/static/js/watermark.js?v=20261009-10610c9"></script>
 <script>WatermarkManager.init();</script>
 </body>
 </html>

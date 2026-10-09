@@ -8,7 +8,9 @@
 from rest_framework import serializers
 from django.db.models import Q, Count
 from django.utils import timezone
-from .models import ChatRoom, Message, FileUpload, MessageReadStatus, MessageDeleteStatus, ChatRoomDeleteStatus
+from .models import (ChatRoom, Message, FileUpload, MessageReadStatus, MessageDeleteStatus,
+                     ChatRoomDeleteStatus, ChatRoomUserState, GroupAnnouncement,
+                     GroupAnnouncementRead)
 from accounts.models import CustomUser
 from accounts.serializers import UserListSerializer, DepartmentSerializer
 from loguru import logger
@@ -28,6 +30,13 @@ class ChatRoomSerializer(serializers.ModelSerializer):
 
     has_mention_all = serializers.SerializerMethodField()
 
+    # 🔧 置顶 / 免打扰 改为「按用户」的状态（原来是聊天室全局字段，会串到其他成员）
+    is_pinned = serializers.SerializerMethodField()
+    is_muted = serializers.SerializerMethodField()
+
+    # 🔧 群公告：是否有当前用户的未读群公告（未读时群聊顶部显示入口）
+    has_unread_announcement = serializers.SerializerMethodField()
+
     class Meta:
         model = ChatRoom
         fields = [
@@ -35,7 +44,54 @@ class ChatRoomSerializer(serializers.ModelSerializer):
             'last_message', 'unread_count', 'is_pinned', 'is_muted',
             'creator', 'creator_info', 'created_at', 'updated_at',
             'is_deleted', 'deleted_at', 'has_unread_mention', 'has_mention_all',
+            'has_unread_announcement',
         ]
+
+    def get_has_unread_announcement(self, obj):
+        rooms = self.context.get('unread_announcement_rooms')
+        if rooms is not None:
+            return obj.id in rooms
+        # 降级：单对象查询
+        request = self.context.get('request')
+        user = getattr(request, 'user', None) if request else None
+        if not user or not getattr(user, 'is_authenticated', False):
+            return False
+        return GroupAnnouncement.objects.filter(chat_room_id=obj.id).exclude(
+            reads__user=user
+        ).exists()
+
+    def _user_state(self, obj):
+        """返回 (is_pinned, is_muted)；优先使用视图层批量预取的映射。
+
+        缓存按用户 ID 区分——同一个 ChatRoom 实例可能在同一进程内被不同用户的
+        上下文序列化（如 WebSocket 广播），若只按键缓存会把 A 的置顶状态带给 B。
+        """
+        request = self.context.get('request')
+        user = getattr(request, 'user', None) if request else None
+        uid = getattr(user, 'id', None)
+        cached = getattr(obj, '_user_state_cache', None)
+        if cached is not None and cached[0] == uid:
+            return cached[1]
+
+        state_map = self.context.get('user_state_map')
+        if state_map is not None:
+            val = state_map.get(obj.id, (False, False))
+        else:
+            val = (False, False)
+            if user is not None and getattr(user, 'is_authenticated', False):
+                st = ChatRoomUserState.objects.filter(
+                    chat_room_id=obj.id, user=user
+                ).only('is_pinned', 'is_muted').first()
+                if st:
+                    val = (st.is_pinned, st.is_muted)
+        obj._user_state_cache = (uid, val)
+        return val
+
+    def get_is_pinned(self, obj):
+        return self._user_state(obj)[0]
+
+    def get_is_muted(self, obj):
+        return self._user_state(obj)[1]
 
     def get_display_name(self, obj):
         user = self.context['request'].user
@@ -152,8 +208,10 @@ class ChatRoomSerializer(serializers.ModelSerializer):
 
 
     def get_unread_count(self, obj):
-        # 注意：unread_count 的计算依赖当前用户的已读状态，批量优化较复杂，
-        # 但由于列表加载瓶颈主要在 last_message，优化后整体响应应已达标。
+        # 🔧 优先使用视图层批量预取的未读计数映射（避免每个聊天室一次查询）
+        unread_map = self.context.get('unread_count_map')
+        if unread_map is not None:
+            return unread_map.get(obj.id, 0)
         try:
             request = self.context.get('request')
             if not request or not hasattr(request, 'user'):
@@ -182,6 +240,9 @@ class ChatRoomSerializer(serializers.ModelSerializer):
 
     def get_has_unread_mention(self, obj):
         """获取是否有未读的@消息"""
+        rooms = self.context.get('unread_mention_rooms')
+        if rooms is not None:
+            return obj.id in rooms
         try:
             request = self.context.get('request')
             if not request or not hasattr(request, 'user'):
@@ -221,6 +282,9 @@ class ChatRoomSerializer(serializers.ModelSerializer):
 
     def get_has_mention_all(self, obj):
         """获取是否有未读的@全体消息"""
+        rooms = self.context.get('mention_all_rooms')
+        if rooms is not None:
+            return obj.id in rooms
         try:
             request = self.context.get('request')
             if not request or not hasattr(request, 'user'):
@@ -341,6 +405,10 @@ class MessageSerializer(serializers.ModelSerializer):
         return None
 
     def get_is_read(self, obj):
+        # 🔧 优先使用视图层批量预取的已读消息 ID 集合（避免每条消息一次查询）
+        read_ids = self.context.get('read_message_ids')
+        if read_ids is not None:
+            return obj.id in read_ids
         user = self.context['request'].user
         return MessageReadStatus.objects.filter(
             message=obj, user=user
@@ -389,8 +457,9 @@ class MessageSerializer(serializers.ModelSerializer):
         file_md5 = obj.file.md5
 
         # 2. 优先从 context 中获取批量预取的字典（解决 N+1 查询问题，性能极佳）
-        cloud_file_map = self.context.get('cloud_file_map', {})
-        if cloud_file_map:
+        #    注意：空字典也是「已预取」的合法结果，必须用 is not None 判断，否则会退化成逐条查询
+        cloud_file_map = self.context.get('cloud_file_map')
+        if cloud_file_map is not None:
             cloud_file_id = cloud_file_map.get(file_md5)
         else:
             # 3. 降级方案：单条查询（仅在未传入 cloud_file_map 时触发）
@@ -552,3 +621,111 @@ class MemberListSerializer(serializers.ModelSerializer):
             except (AttributeError, ValueError):
                 return None
         return None
+
+
+class ChatRoomMemberDetailSerializer(serializers.ModelSerializer):
+    """群成员详情序列化器
+
+    用于群成员管理弹窗的批量加载：一次性返回全部成员的组织架构部门（含全路径）、
+    职位等信息，替代前端对每个成员并发请求 /api/auth/<id>/profile/ 的做法。
+    需配合 Prefetch('department_relations', ...) 使用以避免 N+1。
+    """
+    avatar_url = serializers.SerializerMethodField()
+    department_info = serializers.SerializerMethodField()
+    org_departments = serializers.SerializerMethodField()
+    is_group_admin = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CustomUser
+        fields = [
+            'id', 'username', 'real_name', 'avatar_url', 'position',
+            'department_info', 'org_departments', 'is_online', 'last_seen',
+            'is_group_admin',
+        ]
+
+    def get_is_group_admin(self, obj):
+        admin_ids = self.context.get('group_admin_ids')
+        if admin_ids is not None:
+            return obj.id in admin_ids
+        return ChatRoomUserState.objects.filter(
+            chat_room_id=self.context.get('room_id'), user=obj, is_group_admin=True
+        ).exists()
+
+    def get_avatar_url(self, obj):
+        try:
+            if hasattr(obj, 'get_avatar_url') and callable(obj.get_avatar_url):
+                return obj.get_avatar_url()
+        except Exception:
+            pass
+        if getattr(obj, 'avatar', None):
+            try:
+                return obj.avatar.url
+            except Exception:
+                return None
+        return '/static/images/default-avatar.png'
+
+    def get_org_departments(self, obj):
+        manager = getattr(obj, 'department_relations', None)
+        if manager is None:
+            return []
+        out = []
+        try:
+            rels = manager.all()
+        except Exception:
+            return []
+        for r in rels:
+            dept = getattr(r, 'department', None)
+            if not dept or not getattr(dept, 'is_active', True):
+                continue
+            out.append({
+                'id': dept.id,
+                'name': dept.name,
+                'full_path': getattr(dept, 'full_path', None) or dept.name,
+                'position': r.position,
+                'is_primary': r.is_primary,
+            })
+        return out
+
+    def get_department_info(self, obj):
+        for d in self.get_org_departments(obj):
+            if d.get('is_primary'):
+                return {'id': d['id'], 'name': d['name'], 'type': 'org', 'position': d['position']}
+        if getattr(obj, 'department', None):
+            return {'id': obj.department.id, 'name': obj.department.name, 'type': 'legacy'}
+        return None
+
+
+class GroupAnnouncementSerializer(serializers.ModelSerializer):
+    """群公告序列化器"""
+    publisher = UserListSerializer(read_only=True)
+    publisher_name = serializers.SerializerMethodField()
+    read_count = serializers.SerializerMethodField()
+    is_read = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GroupAnnouncement
+        fields = [
+            'id', 'chat_room', 'content', 'publisher', 'publisher_id',
+            'publisher_name', 'created_at', 'updated_at', 'read_count', 'is_read',
+        ]
+
+    def get_publisher_name(self, obj):
+        if not obj.publisher:
+            return '系统'
+        return obj.publisher.real_name or obj.publisher.username
+
+    def get_read_count(self, obj):
+        cached = getattr(obj, '_read_count_cache', None)
+        if cached is not None:
+            return cached
+        return obj.reads.count()
+
+    def get_is_read(self, obj):
+        read_ids = self.context.get('read_announcement_ids')
+        if read_ids is not None:
+            return obj.id in read_ids
+        request = self.context.get('request')
+        user = getattr(request, 'user', None) if request else None
+        if not user or not getattr(user, 'is_authenticated', False):
+            return False
+        return GroupAnnouncementRead.objects.filter(announcement=obj, user=user).exists()

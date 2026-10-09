@@ -90,8 +90,8 @@ echo "🔄 重启服务..."
 sudo systemctl restart company_chat && echo "⚠️ daphne 服务未运行或名称不匹配（company_chat）"
 sudo /usr/bin/bash /www/yue/celery_company_chat.sh && echo "⚠️ celery 服务未运行或名称不匹配（celery_company_chat）"
 
-echo "Nginx 配置重载..."
-sudo systemctl reload nginx && echo "⚠️ Nginx 服务未运行或名称不匹配（nginx）"
+#echo "Nginx 配置重载..."
+#sudo systemctl reload nginx && echo "⚠️ Nginx 服务未运行或名称不匹配（nginx）"
 
 echo ""
 echo "✅ 部署完成！"

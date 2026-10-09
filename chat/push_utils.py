@@ -102,9 +102,12 @@ def send_push(sub, payload, ttl=0, urgent=False):
         logger.info(f'push OK  user={sub.user_id} status={code} urgent={urgent} {endpoint_short}')
         return True
     except Exception as e:
-        logger.error(f'push 发送失败 user={sub.user_id} {endpoint_short}: {e}')
-        # pywebpush 的 WebPushException 有 response，其它异常可能是网络/密钥问题
         status = getattr(getattr(e, 'response', None), 'status_code', None)
+
+        # 🔧 增强日志：打印具体的异常类型和信息
+        logger.error(f'push 发送失败 user={sub.user_id} status={status} {endpoint_short} | Error: {type(e).__name__} - {str(e)}')
+
+        # pywebpush 的 WebPushException 有 response，其它异常可能是网络/密钥问题
         if status in (404, 410):
             try:
                 sub.delete()

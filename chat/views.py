@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.exceptions import ValidationError
-from django.db.models import Q, Count, Sum
+from django.db.models import Q, Count, Sum, Max, Prefetch
 from django.http import HttpResponse
 from django.contrib.auth.models import AnonymousUser
 from django.utils import timezone
@@ -34,8 +34,11 @@ from datetime import datetime, timedelta
 from loguru import logger
 
 from accounts.models import CustomUser, Department
-from .models import ChatRoom, Message, MessageReadStatus, MessageDeleteStatus, ChatRoomDeleteStatus, FileUpload, SystemConfig
-from .serializers import ChatRoomSerializer, MessageSerializer, MemberListSerializer
+from .models import (ChatRoom, Message, MessageReadStatus, MessageDeleteStatus,
+                     ChatRoomDeleteStatus, ChatRoomUserState, FileUpload, SystemConfig,
+                     GroupAnnouncement, GroupAnnouncementRead)
+from .serializers import (ChatRoomSerializer, MessageSerializer, MemberListSerializer,
+                         ChatRoomMemberDetailSerializer, GroupAnnouncementSerializer)
 from .pagination import ChatRoomPagination, MessageHistoryPagination, MessagePagination
 
 from accounts.permissions import IsSuperAdmin, IsAdminOrSuperAdmin, IsAdminUserManagement
@@ -122,10 +125,16 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         active_room_ids = [rid for rid in user_room_ids if rid not in deleted_room_ids]
 
         # 🔧 关键优化：预加载关联数据，减少序列化时的额外查询
-        return ChatRoom.objects.filter(id__in=active_room_ids).select_related('creator').prefetch_related('members')
+        #    members 统一 select_related('department')，避免序列化每个成员时再查部门（成员多时是硬伤）；
+        #    creator 同样带出部门，否则每个聊天室的 creator_info 会各触发一次部门查询
+        return ChatRoom.objects.filter(id__in=active_room_ids).select_related(
+            'creator', 'creator__department'
+        ).prefetch_related(
+            Prefetch('members', queryset=CustomUser.objects.select_related('department'))
+        )
 
     def list(self, request, *args, **kwargs):
-        """🔧 重写 list 方法，批量预取最后消息，彻底解决 N+1 性能瓶颈"""
+        """🔧 重写 list 方法：批量预取最后消息 / 未读 / @提及 / 个人状态，彻底解决 N+1 性能瓶颈"""
         queryset = self.filter_queryset(self.get_queryset())
 
         # 处理分页
@@ -135,29 +144,141 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         else:
             rooms_to_serialize = list(queryset)
 
+        context = {'request': request}
+
         if rooms_to_serialize:
             room_ids = [r.id for r in rooms_to_serialize]
+            bulk = self._bulk_room_serialize_data(room_ids, request.user, request.user.date_joined)
+            last_messages_map = bulk.pop('_last_messages_map')
+            context.update(bulk)
 
-            # 1. 批量获取每个房间的最新一条消息（按时间倒序，只取最新）
-            # 注意：此处为了性能优先，暂时不在此处做复杂的软删除/已读过滤，
-            # 复杂过滤保留在序列化器降级逻辑中，确保主流程极快。
-            last_messages_map = {}
-            # 使用 values_list 优化查询速度，但我们需要完整对象用于序列化
-            for msg in Message.objects.filter(chat_room_id__in=room_ids, is_deleted=False) \
-                    .select_related('sender', 'file').order_by('-chat_room_id', '-timestamp'):
-                if msg.chat_room_id not in last_messages_map:
-                    last_messages_map[msg.chat_room_id] = msg
-
-            # 2. 将预取数据挂载到聊天室实例上
+            # 将预取的「最后一条消息」挂载到聊天室实例上
             for room in rooms_to_serialize:
                 room._cached_last_message = last_messages_map.get(room.id)
 
-        # 传入 context 以便序列化器使用
-        serializer = self.get_serializer(rooms_to_serialize, many=True, context={'request': request})
+        serializer = self.get_serializer(rooms_to_serialize, many=True, context=context)
 
         if page is not None:
             return self.get_paginated_response(serializer.data)
         return Response(serializer.data)
+
+    def _bulk_room_serialize_data(self, room_ids, user, date_joined):
+        """构建聊天室列表序列化所需的批量数据（查询数与聊天室/成员数量无关）
+
+        返回 dict：
+          _last_messages_map   : {room_id: Message}
+          unread_count_map     : {room_id: int}
+          unread_mention_rooms : set(room_id)
+          mention_all_rooms    : set(room_id)
+          user_state_map       : {room_id: (is_pinned, is_muted)}
+          read_message_ids     : set(message_id)   供 MessageSerializer.get_is_read 批量使用
+          cloud_file_map       : {md5: cloud_file_id} 供 MessageSerializer.get_cloud_file_id 使用
+        """
+        from django.db.models import Subquery
+
+        # 1. 每个聊天室最后一条可见消息：一条 GROUP BY 查询取 Max(id)，再一条查询取回消息对象
+        #    注意：Message.Meta.ordering=['-timestamp'] 会污染 values().annotate() 的 GROUP BY，
+        #    必须先 .order_by() 清空排序，否则每个房间会按时间戳拆成多组、结果不确定。
+        latest_rows = (
+            Message.objects.filter(chat_room_id__in=room_ids, is_deleted=False)
+            .order_by().values('chat_room_id').annotate(mid=Max('id'))
+        )
+        room_last_id = {row['chat_room_id']: row['mid'] for row in latest_rows}
+        last_messages_map = {}
+        last_message_ids = list(room_last_id.values())
+        if last_message_ids:
+            msgs = Message.objects.filter(id__in=last_message_ids).select_related(
+                'sender', 'sender__department', 'file',
+                'quote_message', 'quote_message__file', 'quote_message__sender',
+            ).prefetch_related(
+                Prefetch('mentioned_users',
+                         queryset=CustomUser.objects.select_related('department'))
+            )
+            msg_by_id = {m.id: m for m in msgs}
+            last_messages_map = {rid: msg_by_id.get(mid) for rid, mid in room_last_id.items()}
+
+        # 未读相关：当前用户已删除 / 已读 的消息 ID 子查询
+        user_deleted_ids = MessageDeleteStatus.objects.filter(
+            user=user, is_deleted=True).values('message_id')
+        user_read_ids = MessageReadStatus.objects.filter(user=user).values('message_id')
+
+        # 2. 未读计数（按聊天室聚合，一条查询）
+        unread_rows = (
+            Message.objects.filter(
+                chat_room_id__in=room_ids, is_deleted=False, timestamp__gte=date_joined
+            ).exclude(sender=user)
+            .exclude(id__in=Subquery(user_deleted_ids))
+            .exclude(id__in=Subquery(user_read_ids))
+            .order_by().values('chat_room_id').annotate(c=Count('id'))
+        )
+        unread_count_map = {row['chat_room_id']: row['c'] for row in unread_rows}
+
+        # 3. 未读 @我 / @所有人 的聊天室集合（各一条查询）
+        unread_mention_rooms = set(
+            Message.objects.filter(chat_room_id__in=room_ids, mentioned_users=user,
+                                   is_deleted=False, timestamp__gte=date_joined)
+            .exclude(id__in=Subquery(user_deleted_ids))
+            .exclude(id__in=Subquery(user_read_ids))
+            .values_list('chat_room_id', flat=True).distinct()
+        )
+        mention_all_rooms = set(
+            Message.objects.filter(chat_room_id__in=room_ids, mentioned_all=True,
+                                   is_deleted=False, timestamp__gte=date_joined)
+            .exclude(sender=user)
+            .exclude(id__in=Subquery(user_deleted_ids))
+            .exclude(id__in=Subquery(user_read_ids))
+            .values_list('chat_room_id', flat=True).distinct()
+        )
+
+        # 4. 当前用户对这些聊天室的置顶 / 免打扰状态（一条查询）
+        user_state_map = {
+            st.chat_room_id: (st.is_pinned, st.is_muted)
+            for st in ChatRoomUserState.objects.filter(user=user, chat_room_id__in=room_ids)
+        }
+
+        # 5. 未读群公告的房间集合（两条查询：公告 → 我的已读回执）
+        ann_rows = list(GroupAnnouncement.objects.filter(chat_room_id__in=room_ids)
+                        .values('id', 'chat_room_id'))
+        unread_announcement_rooms = set()
+        if ann_rows:
+            ann_to_room = {a['id']: a['chat_room_id'] for a in ann_rows}
+            read_ann_ids = set(GroupAnnouncementRead.objects.filter(
+                user=user, announcement_id__in=list(ann_to_room.keys())
+            ).values_list('announcement_id', flat=True))
+            unread_announcement_rooms = {
+                rid for aid, rid in ann_to_room.items() if aid not in read_ann_ids
+            }
+
+        # 6. 最后一条消息的「已读状态」与「云盘文件」映射（各一条查询），
+        #    供内嵌的 MessageSerializer 复用，避免每个房间再查一次
+        read_message_ids = set()
+        if last_message_ids:
+            read_message_ids = set(
+                MessageReadStatus.objects.filter(user=user, message_id__in=last_message_ids)
+                .values_list('message_id', flat=True)
+            )
+        cloud_file_map = {}
+        md5_set = {m.file.md5 for m in last_messages_map.values() if m and m.file and m.file.md5}
+        if md5_set:
+            try:
+                from cloud.models import CloudFile
+                for cid, md5 in CloudFile.objects.filter(
+                    owner=user, md5__in=list(md5_set), deleted_at__isnull=True
+                ).values_list('id', 'md5'):
+                    cloud_file_map.setdefault(md5, cid)
+            except Exception as e:
+                logger.error(f"构建聊天室云盘文件映射失败: {e}")
+
+        return {
+            '_last_messages_map': last_messages_map,
+            'unread_count_map': unread_count_map,
+            'unread_mention_rooms': unread_mention_rooms,
+            'mention_all_rooms': mention_all_rooms,
+            'user_state_map': user_state_map,
+            'read_message_ids': read_message_ids,
+            'cloud_file_map': cloud_file_map,
+            'unread_announcement_rooms': unread_announcement_rooms,
+        }
 
     @action(detail=True, methods=['delete'])
     def soft_delete(self, request, pk=None):
@@ -425,32 +546,226 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+    @action(detail=True, methods=['get'])
+    def members_detail(self, request, pk=None):
+        """批量返回群成员详情（含组织架构部门全路径 / 职位）
+
+        替代前端对每个成员并发请求 /api/auth/<id>/profile/ 的做法：
+        成员数 80 时由 80 次请求降为 1 次，且服务端固定 3 条查询。
+        """
+        try:
+            chat_room = ChatRoom.objects.get(id=pk, members=request.user)
+        except ChatRoom.DoesNotExist:
+            return Response({'error': '聊天室不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+        from org.models import UserDepartment
+        members = chat_room.members.select_related('department').prefetch_related(
+            Prefetch('department_relations',
+                     queryset=UserDepartment.objects.select_related('department'))
+        )
+        admin_ids = set(ChatRoomUserState.objects.filter(
+            chat_room=chat_room, is_group_admin=True
+        ).values_list('user_id', flat=True))
+        serializer = ChatRoomMemberDetailSerializer(
+            members, many=True,
+            context={'request': request, 'group_admin_ids': admin_ids, 'room_id': chat_room.id}
+        )
+        return Response({
+            'room_id': chat_room.id,
+            'creator': chat_room.creator_id,
+            'count': len(serializer.data),
+            'members': serializer.data,
+        })
+
+    # ==================== 群公告 ====================
+
+    @staticmethod
+    def _can_manage_group(chat_room, user):
+        """群主与群管理员可发布/修改群公告"""
+        if chat_room.creator_id == user.id:
+            return True
+        return ChatRoomUserState.objects.filter(
+            chat_room=chat_room, user=user, is_group_admin=True
+        ).exists()
+
+    @action(detail=True, methods=['get', 'post', 'delete'])
+    def announcement(self, request, pk=None):
+        """群公告：GET 查询 / POST 发布或修改 / DELETE 删除"""
+        try:
+            chat_room = ChatRoom.objects.get(id=pk, members=request.user)
+        except ChatRoom.DoesNotExist:
+            return Response({'error': '聊天室不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+        if chat_room.room_type != 'group':
+            return Response({'error': '仅群聊支持群公告'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if request.method == 'GET':
+            return self._announcement_payload(chat_room, request.user)
+
+        if not self._can_manage_group(chat_room, request.user):
+            return Response({'error': '只有群主或群管理员可以管理群公告'},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        if request.method == 'DELETE':
+            GroupAnnouncement.objects.filter(chat_room=chat_room).delete()
+            logger.info(f'{request.user} 删除群公告 room={chat_room.id}')
+            return self._announcement_payload(chat_room, request.user)
+
+        # POST：发布或修改
+        content = (request.data.get('content') or '').strip()
+        if not content:
+            return Response({'error': '公告内容不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(content) > 5000:
+            return Response({'error': '公告内容过长（最多 5000 字）'}, status=status.HTTP_400_BAD_REQUEST)
+
+        ann, _ = GroupAnnouncement.objects.update_or_create(
+            chat_room=chat_room,
+            defaults={'content': content, 'publisher': request.user},
+        )
+        # 公告更新后清空已读回执：所有成员重新看到未读入口（微信同款行为）
+        ann.reads.all().delete()
+        # 发布人自己视为已读，避免发布后立刻看到自己的未读入口
+        GroupAnnouncementRead.objects.get_or_create(announcement=ann, user=request.user)
+        # 同时向群里发一条「群公告」消息（左侧会话列表会显示 [群公告] 前缀）
+        self._push_announcement_message(chat_room, content, request.user)
+        logger.info(f'{request.user} 发布/修改群公告 room={chat_room.id} ann={ann.id}')
+        return self._announcement_payload(chat_room, request.user)
+
+    def _push_announcement_message(self, chat_room, content, publisher):
+        """发布群公告时同步发一条群消息，并实时推送给群成员
+
+        - 会话列表：该消息 message_type='announcement'，前端在其最后一条消息前加 [群公告] 前缀；
+        - 实时性：既广播到聊天室组（正在看该群的人立即看到气泡），
+          也向每个成员的全局通知组发 new_message（未打开该群的人会话列表也会刷新）。
+        """
+        try:
+            msg = Message.objects.create(
+                chat_room=chat_room, sender=publisher,
+                content=content, message_type='announcement',
+            )
+        except Exception as e:
+            logger.warning(f'群公告消息创建失败: {e}')
+            return None
+
+        chat_room.updated_at = timezone.now()
+        chat_room.save(update_fields=['updated_at'])
+
+        sender_name = publisher.real_name or publisher.username
+        avatar_url = None
+        try:
+            avatar_url = publisher.get_avatar_url()
+        except Exception:
+            pass
+        sender_info = {
+            'id': publisher.id, 'username': publisher.username,
+            'real_name': publisher.real_name or publisher.username,
+            'avatar_url': avatar_url,
+        }
+
+        try:
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+            channel_layer = get_channel_layer()
+            payload = {
+                'chat_room': chat_room.id,
+                'message_id': str(msg.id),
+                'sender': sender_info,
+                'sender_id': publisher.id,
+                'sender_name': sender_name,
+                'content': content,
+                'message_type': 'announcement',
+                'timestamp': msg.timestamp.isoformat(),
+            }
+            # 1) 正在浏览该群的成员
+            async_to_sync(channel_layer.group_send)(
+                f'chat_{chat_room.id}', dict(payload, type='chat_message'))
+            # 2) 全体成员的全局通知组（刷新会话列表 / 未读数）
+            member_ids = list(chat_room.members.values_list('id', flat=True))
+            for uid in member_ids:
+                async_to_sync(channel_layer.group_send)(
+                    f'user_{uid}_notifications', dict(payload, type='new_message'))
+        except Exception as e:
+            logger.warning(f'群公告消息广播失败: {e}')
+        return msg
+
+    def _announcement_payload(self, chat_room, user):
+        ann = GroupAnnouncement.objects.filter(chat_room=chat_room).select_related('publisher').first()
+        can_manage = self._can_manage_group(chat_room, user)
+        is_read = False
+        read_count = 0
+        if ann:
+            read_ids = set(GroupAnnouncementRead.objects.filter(
+                announcement=ann, user=user).values_list('announcement_id', flat=True))
+            is_read = ann.id in read_ids
+            read_count = ann.reads.count()
+        data = GroupAnnouncementSerializer(ann, context={'request': self.request}).data if ann else None
+        return Response({
+            'announcement': data,
+            'can_manage': can_manage,
+            'is_read': is_read,
+            'read_count': read_count,
+            'member_count': chat_room.members.count(),
+        })
+
+    @action(detail=True, methods=['post'])
+    def announcement_read(self, request, pk=None):
+        """标记群公告为已读（未读入口随即隐藏）"""
+        try:
+            chat_room = ChatRoom.objects.get(id=pk, members=request.user)
+        except ChatRoom.DoesNotExist:
+            return Response({'error': '聊天室不存在'}, status=status.HTTP_404_NOT_FOUND)
+        ann = GroupAnnouncement.objects.filter(chat_room=chat_room).first()
+        if ann:
+            GroupAnnouncementRead.objects.get_or_create(announcement=ann, user=request.user)
+        return Response({'status': 'success'})
+
+    @action(detail=True, methods=['post'])
+    def set_group_admin(self, request, pk=None):
+        """设置/取消群管理员（仅群主可操作）"""
+        try:
+            chat_room = ChatRoom.objects.get(id=pk, members=request.user)
+        except ChatRoom.DoesNotExist:
+            return Response({'error': '聊天室不存在'}, status=status.HTTP_404_NOT_FOUND)
+        if chat_room.creator_id != request.user.id:
+            return Response({'error': '只有群主可以设置群管理员'}, status=status.HTTP_403_FORBIDDEN)
+
+        user_id = request.data.get('user_id')
+        is_admin = bool(request.data.get('is_admin'))
+        if not user_id:
+            return Response({'error': '缺少 user_id'}, status=status.HTTP_400_BAD_REQUEST)
+        if int(user_id) == chat_room.creator_id:
+            return Response({'error': '群主无需设置为群管理员'}, status=status.HTTP_400_BAD_REQUEST)
+        if not chat_room.members.filter(id=user_id).exists():
+            return Response({'error': '该用户不在群聊中'}, status=status.HTTP_400_BAD_REQUEST)
+
+        st, _ = ChatRoomUserState.objects.get_or_create(chat_room=chat_room, user_id=user_id)
+        st.is_group_admin = is_admin
+        st.save(update_fields=['is_group_admin', 'updated_at'])
+        return Response({'status': 'success', 'user_id': int(user_id), 'is_group_admin': is_admin})
+
     @action(detail=True, methods=['post'])
     def pin_chat(self, request, pk=None):
-        """置顶聊天"""
+        """置顶聊天（仅对当前用户生效）"""
         try:
             logger.info(f'{request.user} 置顶聊天 {pk}')
             chat_room = ChatRoom.objects.get(id=pk, members=request.user)
 
-            if not chat_room.members.filter(id=request.user.id).exists():
-                return Response({'error': '你没有权限置顶此聊天'}, status=status.HTTP_403_FORBIDDEN)
-
-            chat_room.is_pinned = not chat_room.is_pinned
-            chat_room.save()
-            return Response({'is_pinned': chat_room.is_pinned})
+            state, _ = ChatRoomUserState.objects.get_or_create(chat_room=chat_room, user=request.user)
+            state.is_pinned = not state.is_pinned
+            state.save(update_fields=['is_pinned', 'updated_at'])
+            return Response({'is_pinned': state.is_pinned})
         except ChatRoom.DoesNotExist:
             return Response({'error': '聊天室不存在'}, status=status.HTTP_404_NOT_FOUND)
 
     @action(detail=True, methods=['post'])
     def mute_chat(self, request, pk=None):
-        """消息免打扰"""
+        """消息免打扰（仅对当前用户生效）"""
         try:
             chat_room = ChatRoom.objects.get(id=pk, members=request.user)
-            if not chat_room.members.filter(id=request.user.id).exists():
-                return Response({'error': '你没有权限操作此聊天'}, status=status.HTTP_403_FORBIDDEN)
-            chat_room.is_muted = not chat_room.is_muted
-            chat_room.save()
-            return Response({'is_muted': chat_room.is_muted})
+            state, _ = ChatRoomUserState.objects.get_or_create(chat_room=chat_room, user=request.user)
+            state.is_muted = not state.is_muted
+            state.save(update_fields=['is_muted', 'updated_at'])
+            return Response({'is_muted': state.is_muted})
         except ChatRoom.DoesNotExist:
             return Response({'error': '聊天室不存在'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -643,7 +958,11 @@ class MessageViewSet(viewsets.ModelViewSet):
         # 按时间倒序（最新消息在前）
         queryset = queryset.order_by('-timestamp')
 
-        return queryset.select_related('sender', 'chat_room', 'file', 'quote_message')
+        # 🔧 优化：一次带出引用消息及其文件/发送者，避免序列化时逐条回查
+        return queryset.select_related(
+            'sender', 'chat_room', 'file',
+            'quote_message', 'quote_message__file', 'quote_message__sender'
+        ).prefetch_related('mentioned_users')
 
     def list(self, request, *args, **kwargs):
         """🔧 重写 list 方法，对历史消息进行加密"""
@@ -651,19 +970,53 @@ class MessageViewSet(viewsets.ModelViewSet):
 
         page = self.paginate_queryset(queryset)
         if page is not None:
-            serializer = self.get_serializer(page, many=True, context={'request': request})
+            objs = list(page)
+            context = self._build_message_serialize_context(objs, request.user)
+            serializer = self.get_serializer(objs, many=True, context=context)
 
             # 🔧 关键修复：对序列化后的数据进行加密
             encrypted_data = self._encrypt_messages(serializer.data)
 
             return self.get_paginated_response(encrypted_data)
 
-        serializer = self.get_serializer(queryset, many=True, context={'request': request})
+        objs = list(queryset)
+        context = self._build_message_serialize_context(objs, request.user)
+        serializer = self.get_serializer(objs, many=True, context=context)
 
         # 🔧 关键修复：对序列化后的数据进行加密
         encrypted_data = self._encrypt_messages(serializer.data)
 
         return Response(encrypted_data)
+
+    def _build_message_serialize_context(self, messages, user):
+        """批量构建消息序列化所需数据（已读集合 / 云盘文件映射），避免逐条查询"""
+        context = {'request': self.request}
+        msg_ids = [m.id for m in messages]
+        if not msg_ids:
+            context['read_message_ids'] = set()
+            context['cloud_file_map'] = {}
+            return context
+
+        # 1. 当前用户已读的消息 ID 集合（一条查询）
+        context['read_message_ids'] = set(
+            MessageReadStatus.objects.filter(user=user, message_id__in=msg_ids)
+            .values_list('message_id', flat=True)
+        )
+
+        # 2. 云盘文件映射 {md5: cloud_file_id}（一条查询），供 MessageSerializer.get_cloud_file_id 使用
+        md5_set = {m.file.md5 for m in messages if m.file and m.file.md5}
+        cloud_file_map = {}
+        if md5_set:
+            try:
+                from cloud.models import CloudFile
+                for cid, md5 in CloudFile.objects.filter(
+                    owner=user, md5__in=list(md5_set), deleted_at__isnull=True
+                ).values_list('id', 'md5'):
+                    cloud_file_map.setdefault(md5, cid)
+            except Exception as e:
+                logger.error(f"构建云盘文件映射失败: {e}")
+        context['cloud_file_map'] = cloud_file_map
+        return context
 
     def _encrypt_messages(self, messages_data):
         """🔧 加密消息列表数据"""

@@ -641,6 +641,9 @@ class ChatClient {
         // 🔧 无限滚动状态
         this.isInitialLoad = true;      // 是否为首次加载
         this.isLoadingMore = false;     // 是否正在加载更多
+        this._historyReqToken = 0;      // 🔧 历史消息请求令牌（防止快速切换聊天室时过期响应覆盖）
+        this._historyAbortController = null;  // 🔧 上一条历史消息请求的中止器
+        this._historyLoadFailedToken = null;  // 🔧 记录加载失败的那次请求，避免失败后滚动到底部
         this.hasMoreMessages = true;    // 是否还有更多历史消息
         this.oldestMessageId = null;    // 最早消息的ID
         this.newestMessageId = null;    // 最新消息的ID
@@ -1452,6 +1455,14 @@ class ChatClient {
                 room.has_mention_all = true;
             }
 
+            // 3. 群公告消息：标记该群有未读公告（群聊顶部会出现未读入口）
+            if (data.message_type === 'announcement') {
+                room.has_unread_announcement = true;
+                if (this.currentRoomId && parseInt(this.currentRoomId) === roomId) {
+                    this._renderGroupAnnounceBar(room);
+                }
+            }
+
             // 🔧 关键修复：异步获取后端准确的未读数，避免前端计数误差
             this.fetchUnreadCountForRoom(roomId).then(unreadCount => {
                 // 重新渲染聊天室列表
@@ -1561,16 +1572,25 @@ class ChatClient {
         currentRoom.unread_count = Math.max(currentRoom.unread_count - 1, 0);
 
         // 🔑 关键修复：保留本地未读数，防止被跨用户上下文的序列化值覆盖（如撤回、更新群名等操作）
+        //   置顶 / 免打扰 / 未读群公告同样是「按用户」的个人状态，广播方用的是其自身上下文，
+        //   若直接合并会把操作人的状态覆盖到接收方，这里一并保留本地值。
         const preservedUnread = currentRoom.unread_count || 0;
         const hasMentionAll = currentRoom.has_mention_all
         const hasUnreadMention = currentRoom.has_unread_mention
+        const isPinned = currentRoom.is_pinned
+        const isMuted = currentRoom.is_muted
+        const hasUnreadAnnounce = currentRoom.has_unread_announcement
 
         this.chatRooms[roomIndex] = {
             ...currentRoom,
             ...updatedData,
             unread_count: preservedUnread, // 强制覆盖可能错误的未读数
             has_mention_all: hasMentionAll,
-            has_unread_mention: hasUnreadMention
+            has_unread_mention: hasUnreadMention,
+            is_pinned: isPinned,
+            is_muted: isMuted,
+            // 群公告未读：以本地为准（广播方上下文无法代表接收方）
+            has_unread_announcement: hasUnreadAnnounce
         };
 
         this.renderChatRooms();
@@ -2199,6 +2219,11 @@ class ChatClient {
 
     // 确保已订阅 Web Push（已授权且有 token 时执行；未订阅会自动补订）
     ensurePushSubscribed() {
+        // 🔧 用户在「个人设置 → 通知设置」中关闭桌面通知后，不再自动补订 Web Push，
+        //    否则关闭动作会被随后的自动重订阅覆盖，导致「关闭不生效」。
+        if (localStorage.getItem('desktopNotifications') === 'false') {
+            return;
+        }
         if (window.PushNotifier && window.PushNotifier.supported() &&
             'Notification' in window && Notification.permission === 'granted' &&
             localStorage.getItem('access_token')) {
@@ -2225,6 +2250,12 @@ class ChatClient {
                 return;
             }
             attempts++;
+            // 用户关闭桌面通知时停止自动重订阅
+            if (localStorage.getItem('desktopNotifications') === 'false') {
+                clearInterval(this._pushRetryTimer);
+                this._pushRetryTimer = null;
+                return;
+            }
             if ('Notification' in window && Notification.permission === 'granted' &&
                 window.PushNotifier && window.PushNotifier.supported() &&
                 localStorage.getItem('access_token')) {
@@ -2812,6 +2843,14 @@ class ChatClient {
         const vibrateEnabled = localStorage.getItem('vibrateNotifications') !== 'false';
         if (!vibrateEnabled) {
             return;
+        }
+
+        // 🔧 当前聊天室免打扰时不震动（与声音/桌面通知保持一致）
+        if (this.currentRoomId) {
+            const currentRoom = this.chatRooms.find(r => parseInt(r.id) === parseInt(this.currentRoomId));
+            if (currentRoom && currentRoom.is_muted) {
+                return;
+            }
         }
 
         try {
@@ -4204,9 +4243,47 @@ class ChatClient {
             page_size = 50       // 每页消息数
         } = options;
 
-        if (!roomId || this.isLoadingMore) return; // 🔧 防止重复请求
+        if (!roomId) return false;
+        // 🔧 「加载更多」防抖：同一聊天室上滚分页时避免重复请求；
+        //    但切换聊天室（append=false）必须放行，否则会因上一个请求在途而整场加载失败
+        if (append && this.isLoadingMore) return false;
+
+        // 🔧 请求令牌：快速切换聊天室时，旧请求的响应将被丢弃，避免覆盖新房间的消息列表
+        var reqRoomId = parseInt(roomId);
+        var token = ++this._historyReqToken;
+        var self = this;
+
+        // 🔧 切换聊天室时主动中止上一条历史请求：避免快速切换时连接堆积、
+        //    也避免浏览器把被丢弃的请求报成 net::ERR_SSL_PROTOCOL_ERROR 之类的网络错误
+        if (!append && this._historyAbortController) {
+            try { this._historyAbortController.abort(); } catch (ignore) {}
+        }
+        var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        if (!append) this._historyAbortController = controller;
 
         this.isLoadingMore = true; // 🔧 标记为加载中
+
+        // 🔧 请求参数
+        const params = new URLSearchParams({
+            chat_room_id: roomId,
+            page_size: page_size.toString()
+        });
+        if (beforeId) params.append('before_id', beforeId);
+        if (afterId) params.append('after_id', afterId);
+        const requestUrl = `/api/chat/messages/?${params.toString()}`;
+
+        // 🔧 瞬时网络故障（连接被重置 / ERR_SSL_PROTOCOL_ERROR / 502 等）自动重试，
+        //    避免偶发抖动直接把「加载历史消息失败」抛给用户
+        const MAX_ATTEMPTS = 3;
+        const isStale = function () {
+            return token !== self._historyReqToken || self.currentRoomId !== reqRoomId;
+        };
+        const sleep = function (ms) {
+            return new Promise(function (r) { setTimeout(r, ms); });
+        };
+
+        let response = null;
+        let lastError = null;
 
         try {
             // 显示加载指示器（首次加载）
@@ -4214,22 +4291,41 @@ class ChatClient {
                 this.showLoading();
             }
 
-            // 构建查询参数
-            const params = new URLSearchParams({
-                chat_room_id: roomId,
-                page_size: page_size.toString()
-            });
+            for (var attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                try {
+                    response = await fetch(requestUrl, {
+                        headers: TokenManager.getHeaders(),
+                        signal: controller ? controller.signal : undefined
+                    });
+                } catch (fetchError) {
+                    lastError = fetchError;
+                    // 主动中止 / 已被更新的请求取代 → 静默退出，不报错、不重试
+                    if (this._isAbortError(fetchError) || isStale()) return false;
+                    if (!this._isNetworkError(fetchError) || attempt >= MAX_ATTEMPTS) break;
+                    console.warn('加载历史消息网络异常，' + (400 * attempt) + 'ms 后重试（第 ' + attempt + ' 次）：'
+                        + (fetchError && fetchError.message));
+                    await sleep(400 * attempt);
+                    if (isStale()) return false;
+                    continue;
+                }
 
-            if (beforeId) {
-                params.append('before_id', beforeId);
-            }
-            if (afterId) {
-                params.append('after_id', afterId);
+                // 5xx（网关超时/后端重启等）同样属于瞬时故障，重试一次
+                if (response.status >= 500 && attempt < MAX_ATTEMPTS) {
+                    lastError = new Error('HTTP ' + response.status);
+                    console.warn('加载历史消息返回 ' + response.status + '，' + (400 * attempt) + 'ms 后重试');
+                    response = null;
+                    await sleep(400 * attempt);
+                    if (isStale()) return false;
+                    continue;
+                }
+                lastError = null;
+                break;
             }
 
-            const response = await fetch(`/api/chat/messages/?${params.toString()}`, {
-                headers: TokenManager.getHeaders()
-            });
+            if (!response) {
+                throw (lastError || new Error('加载聊天历史失败'));
+            }
+
             this.statusCode = response.status;
             if (!response.ok) {
                 throw new Error('加载聊天历史失败');
@@ -4251,6 +4347,12 @@ class ChatClient {
             // 确保 results 是数组
             let newMessages = Array.isArray(results) ? results : (results ? [results] : []);
 
+            // 🔧 过期响应丢弃：请求发出后用户又切换了聊天室 / 触发了新请求，
+            //    此时直接放弃本次结果，避免旧房间的消息覆盖当前房间
+            if (token !== this._historyReqToken || this.currentRoomId !== reqRoomId) {
+                console.log('丢弃过期的历史消息响应 roomId:', reqRoomId, ' token:', token, '/', this._historyReqToken);
+                return;
+            }
 
             // 🔧 关键修复1: 消息去重（基于ID，避免重复）
             if (append && newMessages.length > 0) {
@@ -4338,20 +4440,79 @@ class ChatClient {
 
 
         } catch (error) {
+            // 主动中止 / 过期请求：静默处理，不打扰用户
+            if (this._isAbortError(error) || token !== this._historyReqToken || this.currentRoomId !== reqRoomId) {
+                console.log('忽略已中止/过期的历史消息请求 roomId:', reqRoomId);
+                return false;
+            }
             console.error('加载聊天历史失败:', error);
-            this.showError('加载聊天历史失败');
-            await this.checkLoginStatus();
-        } finally {
-            this.isLoadingMore = false; // 🔧 恢复加载状态
-            this.hideLoading();
-            // 首次加载滚动到底部
+            if (this.statusCode === 401) {
+                this.handleAuthError();
+            }
+            // 重试后仍失败：给出可重试的提示，并在消息区放一个「点击重试」，而不是只剩空白
+            this.showError('消息加载失败，请点击重试');
             if (!append) {
-                Utils.scrollToBottom(document.getElementById('messagesList'));
+                this._renderHistoryLoadFailed(reqRoomId);
+            }
+            try {
+                await this.checkLoginStatus();
+            } catch (ignore) {
+                // checkLoginStatus 自身失败不影响主流程
+            }
+            return false;
+        } finally {
+            // 🔧 仅最新请求才恢复状态 / 隐藏 loading / 滚动，避免过期请求干扰当前房间
+            if (token === this._historyReqToken) {
+                this.isLoadingMore = false; // 🔧 恢复加载状态
+                this.hideLoading();
+                // 首次加载滚动到底部（加载失败时不滚动，保留重试提示）
+                if (!append && this._historyLoadFailedToken !== token) {
+                    Utils.scrollToBottom(document.getElementById('messagesList'));
+                }
             }
             if (this.statusCode === 401) {
                 this.handleAuthError();
             }
         }
+    }
+
+    // 判断是否为「主动中止」错误（AbortController 引发，属正常流程，不应提示用户）
+    _isAbortError(error) {
+        if (!error) return false;
+        if (error.name === 'AbortError') return true;
+        return /aborted|AbortError/i.test(String(error.message || ''));
+    }
+
+    // 判断是否为「网络/传输层」失败（如 Failed to fetch、ERR_SSL_PROTOCOL_ERROR、连接被重置）
+    _isNetworkError(error) {
+        if (!error || this._isAbortError(error)) return false;
+        if (typeof TypeError !== 'undefined' && error instanceof TypeError) return true;
+        return /failed to fetch|networkerror|network error|load failed|err_ssl|err_connection|err_network|err_http2/i
+            .test(String(error.message || ''));
+    }
+
+    // 消息加载失败时的内联重试提示（避免只剩空白列表）
+    _renderHistoryLoadFailed(roomId) {
+        var messagesList = document.getElementById('messagesList');
+        if (!messagesList) return;
+        this._historyLoadFailedToken = this._historyReqToken;
+        messagesList.innerHTML = ''
+            + '<div class="history-load-failed" id="historyLoadFailed">'
+            + '  <i class="fas fa-exclamation-circle"></i>'
+            + '  <p>消息加载失败，可能是网络波动</p>'
+            + '  <button type="button" class="btn btn-primary" '
+            + '    onclick="chatClient.retryLoadChatHistory(' + roomId + ')">重新加载</button>'
+            + '</div>';
+    }
+
+    // 手动重试加载聊天历史
+    retryLoadChatHistory(roomId) {
+        roomId = parseInt(roomId || this.currentRoomId);
+        if (!roomId) return;
+        var box = document.getElementById('historyLoadFailed');
+        if (box) box.remove();
+        this.isInitialLoad = true;
+        this.loadChatHistory(roomId, { page_size: 50, append: false });
     }
 
 
@@ -4856,6 +5017,7 @@ class ChatClient {
             // 🔧 修改：优先判断 @所有人，其次判断 @我
             const hasMentionAll = room.has_mention_all === true;
             const hasUnreadMention = room.has_unread_mention === true;
+            const hasUnreadAnnouncement = room.has_unread_announcement === true;
             let mentionHint = '';
 
             if (hasMentionAll) {
@@ -4863,6 +5025,10 @@ class ChatClient {
             } else if (hasUnreadMention) {
                 mentionHint = '<span class="mention-hint">[有人@我] </span>';
             }
+
+            // 🔧 群公告消息：最后一条是群公告时，在内容前加 [群公告] 前缀（与 @ 提示同款红字 + 闪烁）
+            const announceHint = (lastMessage.message_type === 'announcement' && hasUnreadAnnouncement)
+                ? '<span class="mention-hint announce-hint">[群公告] </span>' : '';
 
             // 🔧 新增：检测草稿状态
             const hasDraft = this.inputDrafts.has(room.id);
@@ -4943,7 +5109,7 @@ class ChatClient {
                         ${room.is_muted ? '<i class="fas fa-volume-mute muted-icon"></i>' : ''}
                         ${roomName}
                     </div>
-                    <div class="chat-item-subtitle">${mentionHint}${draftHint}${lastMessageText}</div>
+                    <div class="chat-item-subtitle">${announceHint}${mentionHint}${draftHint}${lastMessageText}</div>
                 </div>
                 <div class="chat-item-meta">
                     ${unreadCount > 0 ? `<div class="chat-item-unread-count">${unreadCount > 99 ? '99+' : unreadCount}</div>` : ''}
@@ -6329,6 +6495,30 @@ class ChatClient {
                 container.innerHTML = message.content;
                 break;
 
+            // 🔧 群公告消息（发布群公告时同步发出的群消息）
+            case 'announcement': {
+                const body = document.createElement('div');
+                body.className = 'ga-message';
+                const head = document.createElement('div');
+                head.className = 'ga-message-head';
+                head.innerHTML = '<i class="fas fa-bullhorn"></i> 群公告';
+                const text = document.createElement('div');
+                text.className = 'ga-message-body';
+                text.textContent = message.content || '';
+                body.appendChild(head);
+                body.appendChild(text);
+                const more = document.createElement('div');
+                more.className = 'ga-message-more';
+                more.innerHTML = '<i class="fas fa-chevron-right"></i> 查看群公告详情';
+                more.onclick = (e) => {
+                    e.stopPropagation();
+                    this.openGroupAnnouncement(message.chat_room);
+                };
+                body.appendChild(more);
+                container.appendChild(body);
+                break;
+            }
+
             // 🔧 新增：渲染通话记录消息
             case 'call_audio':
             case 'call_video':
@@ -6456,6 +6646,36 @@ class ChatClient {
 
 
     // 显示用户详细信息
+    // 打开子模态框（用户信息等）前记录当前已打开的模态框，关闭子模态框后原样恢复
+    _captureModalReturnStack(excludeId) {
+        var ids = [];
+        document.querySelectorAll('.modal.show, .user-profile-modal.show').forEach(function (m) {
+            if (m.id && m.id !== excludeId) ids.push(m.id);
+        });
+        this._modalReturnStack = ids;
+    }
+
+    _restoreModalReturnStack() {
+        var ids = this._modalReturnStack || [];
+        this._modalReturnStack = [];
+        if (!ids.length) return;
+        var self = this;
+        // 放到下一个事件循环，确保子模态框的关闭动画/状态已处理完
+        setTimeout(function () {
+            ids.forEach(function (id) { self.openModal(id); });
+        }, 0);
+    }
+
+    // 关闭用户信息模态框；restore 为 false 时不回到上一层（如点了「发起私聊」）
+    _closeUserProfileModal(restore) {
+        this.closeModal('userProfileModal');
+        if (restore === false) {
+            this._modalReturnStack = [];
+        } else {
+            this._restoreModalReturnStack();
+        }
+    }
+
     async showUserProfile(userId) {
         console.log('显示用户详细信息:', userId);
         if (!userId || userId === this.currentUser.id) {
@@ -6463,6 +6683,9 @@ class ChatClient {
             this.showSettings();
             return;
         }
+
+        // 记录当前打开的模态框（例如群成员管理弹窗），关闭用户信息后返回它
+        this._captureModalReturnStack('userProfileModal');
 
         try {
             const userData = await API.toggleGetUserProfile(userId);
@@ -6655,18 +6878,18 @@ class ChatClient {
         if (closeBtn) {
             closeBtn.onclick = (e) => {
                 e.stopPropagation();
-                this.closeModal('userProfileModal');
+                this._closeUserProfileModal();
             };
         }
 
         if (closeModalBtn) {
             closeModalBtn.onclick = (e) => {
                 e.stopPropagation();
-                this.closeModal('userProfileModal');
+                this._closeUserProfileModal();
             };
         }
 
-        // 🔧 关键修复4: 为"发起私聊"按钮单独绑定事件（先私聊再关闭）
+        // 🔧 关键修复4: 为"发起私聊"按钮单独绑定事件（先私聊再关闭，不回到上一层弹窗）
         const startChatBtn = modal.querySelector('.start-chat-btn');
         if (startChatBtn) {
             startChatBtn.onclick = (e) => {
@@ -6675,15 +6898,15 @@ class ChatClient {
 
                 // 先发起私聊
                 this.selectUserForChat(userId);
-                // 再关闭模态框
-                this.closeModal('userProfileModal');
+                // 再关闭模态框（直接进入新私聊，不恢复群成员弹窗）
+                this._closeUserProfileModal(false);
             };
         }
 
 
         // 点击外部关闭
         modal.onclick = (e) => {
-            if (e.target === modal) this.closeModal('userProfileModal');
+            if (e.target === modal) this._closeUserProfileModal();
         };
     }
 
@@ -7083,6 +7306,11 @@ class ChatClient {
                     mentionHint = '<span class="mention-hint">[@所有人] </span> ';
                 } else if (hasUnreadMention) {
                     mentionHint = '<span class="mention-hint">[有人@我] </span> ';
+                }
+
+                // 🔧 群公告消息：最后一条是群公告时加 [群公告] 前缀（红字 + 闪烁，与 @ 提示同款）
+                if (lastMessage.message_type === 'announcement') {
+                    mentionHint = '<span class="mention-hint announce-hint">[群公告] </span> ' + mentionHint;
                 }
 
                 // 🔧 关键修复：群聊头像不添加输入指示器
@@ -7636,6 +7864,10 @@ class ChatClient {
             targetRoom.has_unread_mention = false;
             targetRoom.has_mention_all = false; // 🔧 同步清除 @所有人 标记
         }
+        // 群公告未读入口：仅群聊且有未读公告时显示在消息顶部
+        this._renderGroupAnnounceBar(targetRoom);
+        // 进入群聊时异步校准一次群公告未读状态（列表缓存可能已过期）
+        this._refreshGroupAnnouncementFlag(roomId);
 
         // 🔧 关键修复 1: 保存当前聊天室的草稿
         if (this.currentRoomId) {
@@ -7722,8 +7954,9 @@ class ChatClient {
             this.updateUnreadBadge();
 
         }).catch(error => {
-            console.error('加载聊天历史失败:', error);
-            this.showError('加载聊天历史失败');
+            // loadChatHistory 内部已处理用户可见的错误提示（含重试与内联重试入口），
+            // 这里只兜底记录，避免同一错误弹两次提示
+            console.error('加载聊天历史异常:', error);
         });
 
 
@@ -9055,6 +9288,63 @@ class ChatClient {
 
         // 填充表单数据
         this.populateSettingsForm();
+
+        // 🔧 通知设置即时生效：切换开关立即应用（无需先点保存）
+        this._bindNotificationToggles();
+    }
+
+    // 绑定通知设置的即时生效逻辑
+    _bindNotificationToggles() {
+        var self = this;
+        var desktop = document.getElementById('desktopNotifications');
+        if (desktop) {
+            desktop.addEventListener('change', function () {
+                // 先落盘再应用，保证刷新/其他逻辑读到的是最新值
+                try { localStorage.setItem('desktopNotifications', desktop.checked ? 'true' : 'false'); } catch (ignore) {}
+                self._applyDesktopNotificationSetting(desktop.checked);
+            });
+        }
+        var sound = document.getElementById('soundNotifications');
+        if (sound) {
+            sound.addEventListener('change', function () {
+                try { localStorage.setItem('soundNotifications', sound.checked ? 'true' : 'false'); } catch (ignore) {}
+                if (sound.checked) self.playNotificationSound();
+            });
+        }
+        var vibrate = document.getElementById('vibrateNotifications');
+        if (vibrate) {
+            vibrate.addEventListener('change', function () {
+                try { localStorage.setItem('vibrateNotifications', vibrate.checked ? 'true' : 'false'); } catch (ignore) {}
+                if (vibrate.checked) self.vibrateOnNewMessage();
+            });
+        }
+    }
+
+    // 应用「桌面通知」开关：开启时申请权限并订阅 Web Push，关闭时退订
+    _applyDesktopNotificationSetting(enabled) {
+        var self = this;
+        if (enabled) {
+            if (!('Notification' in window)) {
+                this.showError('当前浏览器不支持桌面通知');
+                return;
+            }
+            if (Notification.permission === 'granted') {
+                this.ensurePushSubscribed();
+            } else if (Notification.permission === 'default') {
+                Notification.requestPermission().then(function (permission) {
+                    if (permission === 'granted') {
+                        self.ensurePushSubscribed();
+                    } else if (permission === 'denied') {
+                        self.showNotificationPermissionHint();
+                    }
+                });
+            } else {
+                // 已被用户或浏览器拒绝，给出引导提示
+                this.showNotificationPermissionHint();
+            }
+        } else if (window.PushNotifier && window.PushNotifier.supported()) {
+            window.PushNotifier.unsubscribe();
+        }
     }
 
     populateSettingsForm() {
@@ -9380,6 +9670,9 @@ class ChatClient {
             localStorage.setItem('soundNotifications', soundNotifications.toString());
             localStorage.setItem('vibrateNotifications', vibrateNotifications.toString());
             console.log('保存通知设置: ', desktopNotifications, soundNotifications, vibrateNotifications);
+
+            // 🔧 保存时同步应用桌面通知设置（申请权限 / 订阅或退订 Web Push），确保及时生效
+            this._applyDesktopNotificationSetting(desktopNotifications);
 
 
             // 验证邮箱格式
@@ -10643,12 +10936,25 @@ class ChatClient {
                 </div>
 
                 <div class="form-group">
+                    <label>群公告</label>
+                    <div id="groupAnnounceEntryBox" onclick="chatClient.openGroupAnnouncement(${roomId})"
+                         style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border-color,#ebeef5);border-radius:8px;cursor:pointer;background:#fffdf5;">
+                        <i class="fas fa-bullhorn" style="color:#e6a23c;font-size:16px;"></i>
+                        <div style="flex:1;min-width:0;">
+                            <div style="font-size:13px;font-weight:600;color:var(--text-primary,#303133);">群公告</div>
+                            <div id="groupAnnounceEntryTip" style="font-size:12px;color:var(--text-light,#909399);margin-top:2px;">点击发布或修改群公告</div>
+                        </div>
+                        <span style="font-size:12px;color:#409eff;flex-shrink:0;">管理 <i class="fas fa-chevron-right" style="font-size:9px;"></i></span>
+                    </div>
+                </div>
+
+                <div class="form-group">
                     <label>群成员 (${room.members ? room.members.length : 0})</label>
-                    <div class="search-box">
+                    <div class="search-input-wrapper">
                         <i class="fas fa-search"></i>
                         <input type="text" placeholder="搜索成员..." id="groupManageSearch">
                     </div>
-                    <div class="member-list" id="groupManageMembers">
+                    <div class="member-list gm-scope" id="groupManageMembers">
                         <!-- 成员列表将动态生成 -->
                         <span>正在加载中...</span>
                     </div>
@@ -10656,11 +10962,11 @@ class ChatClient {
 
                 <div class="form-group">
                     <label>添加成员</label>
-                    <div class="search-box">
+                    <div class="search-input-wrapper">
                         <i class="fas fa-search"></i>
                         <input type="text" placeholder="搜索用户添加到群聊..." id="addMemberSearch">
                     </div>
-                    <div class="member-results" id="addMemberResults">
+                    <div class="member-results gm-scope" id="addMemberResults">
                         <!-- 可添加的成员列表 -->
                     </div>
                 </div>
@@ -10708,6 +11014,261 @@ class ChatClient {
     }
 
 
+    // ==================== 群公告 ====================
+
+    // 群聊消息顶部的群公告入口：有未读公告时固定显示，已读后隐藏
+    _renderGroupAnnounceBar(room) {
+        var bar = document.getElementById('groupAnnounceBar');
+        var container = document.getElementById('messagesContainer');
+        if (!bar) return;
+        var show = !!(room && room.room_type === 'group' && room.has_unread_announcement);
+        bar.style.display = show ? 'flex' : 'none';
+        if (container) container.classList.toggle('has-announce', show);
+        if (show) {
+            var txt = document.getElementById('groupAnnounceBarText');
+            if (txt) txt.textContent = ((room && room.name) || '群聊') + ' · 有新的群公告';
+        }
+    }
+
+    // 异步校准群公告未读标记（切换群聊时调用；失败静默，不影响聊天）
+    async _refreshGroupAnnouncementFlag(roomId) {
+        var room = this.chatRooms.find(r => r.id === parseInt(roomId));
+        if (!room || room.room_type !== 'group') return;
+        try {
+            var resp = await fetch('/api/chat/rooms/' + roomId + '/announcement/', {
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) return;
+            var payload = await resp.json();
+            var unread = !!(payload && payload.announcement && !payload.is_read);
+            if (!!room.has_unread_announcement !== unread) {
+                room.has_unread_announcement = unread;
+                if (this.currentRoomId === parseInt(roomId)) this._renderGroupAnnounceBar(room);
+            }
+        } catch (e) {
+            // 静默失败
+        }
+    }
+
+    async _fetchGroupAnnouncement(roomId) {
+        try {
+            var resp = await fetch('/api/chat/rooms/' + roomId + '/announcement/', {
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) {
+                var err = await resp.json().catch(function () { return {}; });
+                throw new Error(err.error || '加载群公告失败');
+            }
+            return await resp.json();
+        } catch (e) {
+            console.error('加载群公告失败:', e);
+            this.showError('加载群公告失败');
+            return null;
+        }
+    }
+
+    // 打开群公告：查看详情；群主/群管理员可在此发布或修改
+    async openGroupAnnouncement(roomId) {
+        roomId = parseInt(roomId || this.currentRoomId);
+        if (!roomId) return;
+        var payload = await this._fetchGroupAnnouncement(roomId);
+        if (!payload) return;
+        this._gaRoomId = roomId;
+        this._gaPayload = payload;
+        this._buildGroupAnnouncementModal(roomId, payload);
+        // 查看即已读：未读入口随即隐藏
+        if (payload.announcement && !payload.is_read) {
+            this._markGroupAnnouncementRead(roomId);
+        }
+    }
+
+    _fmtAnnTime(iso) {
+        if (!iso) return '';
+        try {
+            var d = new Date(iso);
+            var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+            return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+                + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+        } catch (e) {
+            return iso;
+        }
+    }
+
+    _buildGroupAnnouncementModal(roomId, payload) {
+        this.clearModal('groupAnnouncementModal');
+        var ann = payload.announcement;
+        var canManage = !!payload.can_manage;
+
+        var modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.id = 'groupAnnouncementModal';
+
+        var bodyHtml;
+        if (ann) {
+            bodyHtml = '<div id="gaViewWrap">'
+                + '<div class="group-announce-content" id="gaContent">' + this._escape(ann.content) + '</div>'
+                + '<div class="group-announce-meta">'
+                + '<span><i class="fas fa-user-edit"></i> ' + this._escape(ann.publisher_name || '系统')
+                + ' · ' + this._escape(this._fmtAnnTime(ann.updated_at)) + '</span>'
+                + '<span><i class="fas fa-eye"></i> 已读 ' + (payload.read_count || 0) + ' / ' + (payload.member_count || 0) + '</span>'
+                + '</div>'
+                + '</div>';
+        } else {
+            bodyHtml = '<div id="gaViewWrap"><div class="empty-state" style="padding:26px 0;">'
+                + '<i class="fas fa-bullhorn" style="font-size:28px;color:#dcdfe6;"></i>'
+                + '<p style="margin-top:8px;color:var(--text-light,#909399);">'
+                + (canManage ? '本群还没有群公告，点击下方「发布群公告」开始编辑' : '本群暂无群公告') + '</p>'
+                + '</div></div>';
+        }
+
+        // 编辑区（默认隐藏）
+        var editHtml = '<div id="gaEditWrap" style="display:none;">'
+            + '<textarea id="gaInput" class="form-input" rows="8" maxlength="5000" '
+            + 'style="width:100%;box-sizing:border-box;resize:vertical;line-height:1.7;" '
+            + 'placeholder="请输入群公告内容（最多 5000 字）"></textarea>'
+            + '<div style="font-size:12px;color:var(--text-light,#909399);margin-top:6px;">'
+            + '<i class="fas fa-info-circle"></i> 发布或修改后，群成员将在群聊顶部重新看到未读公告入口。</div>'
+            + '</div>';
+
+        modal.innerHTML = '<div class="modal-content" style="max-width:560px;">'
+            + '<div class="modal-header"><h3><i class="fas fa-bullhorn" style="color:#e6a23c;"></i> 群公告</h3>'
+            + '<button class="close-btn" onclick="chatClient.closeModal(\'groupAnnouncementModal\')">&times;</button></div>'
+            + '<div class="modal-body" style="max-height:66vh;overflow-y:auto;">' + bodyHtml + editHtml + '</div>'
+            + '<div class="modal-footer">'
+            + (canManage && ann ? '<button class="btn btn-danger" onclick="chatClient.deleteGroupAnnouncement()">删除公告</button>' : '')
+            + '<span style="flex:1;"></span>'
+            + '<button class="btn btn-secondary" onclick="chatClient.closeModal(\'groupAnnouncementModal\')">关闭</button>'
+            + (canManage ? '<button class="btn btn-secondary" id="gaEditBtn" onclick="chatClient._toggleGroupAnnouncementEdit(' + (ann ? 'true' : 'false') + ')">' + (ann ? '编辑公告' : '发布群公告') + '</button>' : '')
+            + (canManage ? '<button class="btn btn-primary" id="gaSaveBtn" style="display:none;" onclick="chatClient.saveGroupAnnouncement()">发布</button>' : '')
+            + '</div></div>';
+
+        document.body.appendChild(modal);
+        this._gaEditing = false;
+        this.openModal('groupAnnouncementModal');
+
+        var closeBtn = modal.querySelector('.close-btn');
+        if (closeBtn) closeBtn.onclick = () => this.closeModal('groupAnnouncementModal');
+        modal.onclick = (e) => {
+            if (e.target === modal) this.closeModal('groupAnnouncementModal');
+        };
+    }
+
+    _toggleGroupAnnouncementEdit(hasAnn) {
+        var view = document.getElementById('gaViewWrap');
+        var edit = document.getElementById('gaEditWrap');
+        var input = document.getElementById('gaInput');
+        var editBtn = document.getElementById('gaEditBtn');
+        var saveBtn = document.getElementById('gaSaveBtn');
+        var opening = edit && edit.style.display === 'none';
+        if (edit) edit.style.display = opening ? 'block' : 'none';
+        if (view) view.style.display = opening ? 'none' : 'block';
+        if (saveBtn) saveBtn.style.display = opening ? 'inline-flex' : 'none';
+        if (editBtn) editBtn.textContent = opening ? '取消编辑' : (hasAnn ? '编辑公告' : '发布群公告');
+        if (opening && input) {
+            var cur = this._gaPayload && this._gaPayload.announcement;
+            input.value = cur ? cur.content : '';
+            input.focus();
+        }
+    }
+
+    async saveGroupAnnouncement() {
+        var roomId = this._gaRoomId;
+        var input = document.getElementById('gaInput');
+        if (!roomId || !input) return;
+        var content = (input.value || '').trim();
+        if (!content) {
+            this.showError('公告内容不能为空');
+            return;
+        }
+        try {
+            var resp = await fetch('/api/chat/rooms/' + roomId + '/announcement/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify({ content: content })
+            });
+            var data = await resp.json().catch(function () { return {}; });
+            if (!resp.ok) throw new Error(data.error || '发布失败');
+            this.showSuccess('群公告已发布');
+            this._gaPayload = data;
+            this._buildGroupAnnouncementModal(roomId, data);
+            // 发布后把自己视为已读，本地同步群列表标记
+            var room = this.chatRooms.find(function (r) { return r.id === roomId; });
+            if (room) {
+                room.has_unread_announcement = false;
+                this._renderGroupAnnounceBar(room);
+            }
+        } catch (e) {
+            console.error('发布群公告失败:', e);
+            this.showError('发布失败: ' + e.message);
+        }
+    }
+
+    async deleteGroupAnnouncement() {
+        var roomId = this._gaRoomId;
+        if (!roomId) return;
+        var ok = await this.showConfirmDialog('删除群公告', '确定要删除该群的群公告吗？', 'danger');
+        if (!ok) return;
+        try {
+            var resp = await fetch('/api/chat/rooms/' + roomId + '/announcement/', {
+                method: 'DELETE',
+                headers: TokenManager.getHeaders()
+            });
+            var data = await resp.json().catch(function () { return {}; });
+            if (!resp.ok) throw new Error(data.error || '删除失败');
+            this.showSuccess('群公告已删除');
+            this._gaPayload = data;
+            this._buildGroupAnnouncementModal(roomId, data);
+            var room = this.chatRooms.find(function (r) { return r.id === roomId; });
+            if (room) {
+                room.has_unread_announcement = false;
+                this._renderGroupAnnounceBar(room);
+            }
+        } catch (e) {
+            console.error('删除群公告失败:', e);
+            this.showError('删除失败: ' + e.message);
+        }
+    }
+
+    async _markGroupAnnouncementRead(roomId) {
+        try {
+            await fetch('/api/chat/rooms/' + roomId + '/announcement_read/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders()
+            });
+        } catch (e) {
+            console.warn('群公告已读上报失败:', e);
+        }
+        var room = this.chatRooms.find(r => r.id === parseInt(roomId));
+        if (room) {
+            room.has_unread_announcement = false;
+            this._renderGroupAnnounceBar(room);
+        }
+    }
+
+    // 群主设置/取消群管理员
+    async setGroupAdmin(roomId, userId, isAdmin) {
+        try {
+            var resp = await fetch('/api/chat/rooms/' + roomId + '/set_group_admin/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify({ user_id: userId, is_admin: !!isAdmin })
+            });
+            var data = await resp.json().catch(function () { return {}; });
+            if (!resp.ok) throw new Error(data.error || '操作失败');
+            var room = this.chatRooms.find(r => r.id === parseInt(roomId));
+            if (room && room.members) {
+                var m = room.members.find(function (x) { return x.id === parseInt(userId); });
+                if (m) m.is_group_admin = !!isAdmin;
+            }
+            this.showSuccess(isAdmin ? '已设为群管理员' : '已取消群管理员');
+            this.loadGroupMembersForManagement(roomId);
+        } catch (e) {
+            console.error('设置群管理员失败:', e);
+            this.showError('操作失败: ' + e.message);
+        }
+    }
+
+
     // 非群主查看群成员列表模态框
     showGroupMemberListModal(room) {
         let roomId = room.id;
@@ -10742,12 +11303,25 @@ class ChatClient {
                 </div>
 
                 <div class="form-group">
+                    <label>群公告</label>
+                    <div id="groupAnnounceEntryBox" onclick="chatClient.openGroupAnnouncement(${roomId})"
+                         style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border-color,#ebeef5);border-radius:8px;cursor:pointer;background:#fffdf5;">
+                        <i class="fas fa-bullhorn" style="color:#e6a23c;font-size:16px;"></i>
+                        <div style="flex:1;min-width:0;">
+                            <div style="font-size:13px;font-weight:600;color:var(--text-primary,#303133);">群公告</div>
+                            <div id="groupAnnounceEntryTip" style="font-size:12px;color:var(--text-light,#909399);margin-top:2px;">点击查看群公告</div>
+                        </div>
+                        <span style="font-size:12px;color:#409eff;flex-shrink:0;">查看 <i class="fas fa-chevron-right" style="font-size:9px;"></i></span>
+                    </div>
+                </div>
+
+                <div class="form-group">
                     <label>群成员 (${room.members ? room.members.length : 0})</label>
-                    <div class="search-box">
+                    <div class="search-input-wrapper">
                         <i class="fas fa-search"></i>
                         <input type="text" placeholder="搜索成员..." id="groupManageSearch">
                     </div>
-                    <div class="member-list" id="groupManageMembers">
+                    <div class="member-list gm-scope" id="groupManageMembers">
                         <!-- 成员列表将动态生成 -->
                         <span>正在加载中...</span>
                     </div>
@@ -10796,32 +11370,31 @@ class ChatClient {
             return;
         }
 
-        var self = this;
-
         const membersContainer = document.getElementById('groupManageMembers');
         if (!membersContainer) return;
 
-        // 批量获取成员的企业角色和部门信息
-        var memberIds = room.members.map(function (m) {
-            return m.id;
-        });
-        var memberMap = {};
+        // 一次性批量获取成员详情（职位 / 群管理员标记），
+        // 替代原先对每个成员并发请求 /api/auth/<id>/profile/（80 人 = 80 次请求，>5 秒）
         try {
-            // 调用 me API 获取当前用户的 org 信息
-            // 对每个成员，调用 profile API 获取 org_departments
-            var promises = memberIds.map(function (uid) {
-                return fetch('/api/auth/' + uid + '/profile/', {
-                    headers: TokenManager.getHeaders()
-                }).then(function (r) {
-                    return r.ok ? r.json() : null;
-                }).catch(function () {
-                    return null;
-                });
+            var resp = await fetch('/api/chat/rooms/' + roomId + '/members_detail/', {
+                headers: TokenManager.getHeaders()
             });
-            var profiles = await Promise.all(promises);
-            for (var i = 0; i < memberIds.length; i++) {
-                if (profiles[i]) {
-                    memberMap[memberIds[i]] = profiles[i];
+            if (resp.ok) {
+                var payload = await resp.json();
+                var list = (payload && payload.members) ? payload.members : [];
+                // 同步最新的职位 / 群管理员标记到本地成员列表，保证后续渲染（含搜索）一致
+                if (list.length) {
+                    var byId = {};
+                    list.forEach(function (m) { byId[m.id] = m; });
+                    room.members.forEach(function (m) {
+                        var d = byId[m.id];
+                        if (d) {
+                            m.org_departments = d.org_departments;
+                            m.department_info = d.department_info;
+                            m.position = d.position;
+                            m.is_group_admin = d.is_group_admin;
+                        }
+                    });
                 }
             }
         } catch (e) {
@@ -10835,42 +11408,49 @@ class ChatClient {
             return 0;
         });
 
-        let html = '<div class="member-grid">';
-        sortedMembers.forEach(function (member) {
-            var isCreator = member.id === room.creator
-            var isMember = self.currentUser?.id != room.creator;
-            var profile = memberMap[member.id];
-            var deptNames = [];
-            var posName = '';
-            if (profile) {
-                if (profile.org_departments && profile.org_departments.length) {
-                    deptNames = profile.org_departments.map(function (d) {
-                        return d.full_path || d.name;
-                    });
-                    if (profile.org_departments[0].position) posName = profile.org_departments[0].position;
-                }
-                if (!deptNames.length && profile.department_info) deptNames = [profile.department_info.name || ''];
-                if (!posName) posName = profile.position || '';
-            } else {
-                deptNames = (member.department_info && member.department_info.name) ? [member.department_info.name] : [];
-                posName = member.position || '';
+        membersContainer.innerHTML = this._buildGroupMemberGridHtml(roomId, sortedMembers)
+            || '<div class="empty-state"><p>暂无成员</p></div>';
+    }
+
+    // 统一的群成员宫格渲染（加载与搜索共用，保证两处展示一致）
+    // 参考微信：每行 5 个，只展示昵称与职位；点击头像查看用户信息；群主可设置群管理员 / 移除成员
+    _buildGroupMemberGridHtml(roomId, members) {
+        var room = this.chatRooms.find(r => r.id === parseInt(roomId));
+        if (!room || !members || !members.length) return '';
+        // 只有群主能设置群管理员 / 移除成员
+        var iAmCreator = this.currentUser && this.currentUser.id === room.creator;
+
+        var html = '<div class="member-grid">';
+        members.forEach(function (member) {
+            var isCreator = member.id === room.creator;
+            var posName = member.position || '';
+            if (!posName && member.org_departments && member.org_departments.length) {
+                posName = member.org_departments[0].position || '';
             }
+            var isAdmin = !isCreator && !!member.is_group_admin;
             html += '<div class="member-grid-item ' + (isCreator ? 'creator' : '') + '" data-member-id="' + member.id + '">'
-                + '<div class="member-grid-avatar">'
+                + '<div class="member-grid-avatar" title="查看用户信息" '
+                + 'onclick="event.stopPropagation();chatClient.showUserProfile(' + member.id + ');">'
                 + '<img src="' + chatClient._escape(member.avatar_url || '/static/images/default-avatar.png') + '" alt="' + chatClient._escape(member.username) + '">'
                 + '</div>'
-                + '<div class="member-grid-name">' + chatClient._escape(member.real_name || member.username) + '</div>'
-                + (posName ? '<div style="font-size:10px;color:#409eff;margin-top:1px;">' + chatClient._escape(posName) + '</div>' : '')
-                + (deptNames && deptNames.length ? '<div style="font-size:11px;color:var(--text-light,#909399);margin-top:2px;line-height:1.5;">' + deptNames.map(function (n) {
-                    return '<div><i class="fas fa-angle-right" style="font-size:9px;margin-right:2px;color:#c0c4cc;"></i>' + chatClient._escape(n) + '</div>';
-                }).join('') + '</div>' : '')
-                + (isCreator ? '<div class="member-grid-tag">群主</div>' : '')
-                + (!isCreator && !isMember ? '<button class="btn-remove" onclick="chatClient.removeGroupMember(' + roomId + ', ' + member.id + ')" title="移除成员">×</button>' : '')
+                + '<div class="member-grid-name" title="' + chatClient._escape(member.real_name || member.username) + '">' + chatClient._escape(member.real_name || member.username) + '</div>'
+                + (posName ? '<div class="member-grid-position" title="' + chatClient._escape(posName) + '">' + chatClient._escape(posName) + '</div>' : '')
+                + (isCreator ? '<div class="member-grid-tag">群主</div>' : (isAdmin ? '<div class="member-grid-tag admin">管理员</div>' : ''))
+                + (!isCreator && iAmCreator
+                    ? '<div class="gm-actions" onclick="event.stopPropagation();">'
+                        + '<button type="button" class="gm-btn' + (isAdmin ? ' is-admin' : '') + '" '
+                        + 'title="' + (isAdmin ? '取消群管理员' : '设为群管理员') + '" '
+                        + 'onclick="chatClient.setGroupAdmin(' + roomId + ', ' + member.id + ', ' + (isAdmin ? 'false' : 'true') + ')">'
+                        + '<i class="fas fa-star"></i><span class="gm-btn-text">' + (isAdmin ? '取消管理员' : '设管理员') + '</span></button>'
+                        + '<button type="button" class="gm-btn danger" title="移除成员" '
+                        + 'onclick="chatClient.removeGroupMember(' + roomId + ', ' + member.id + ')">'
+                        + '<i class="fas fa-user-minus"></i><span class="gm-btn-text">移除</span></button>'
+                      + '</div>'
+                    : '')
                 + '</div>';
         });
         html += '</div>';
-
-        membersContainer.innerHTML = html || '<div class="empty-state"><p>暂无成员</p></div>';
+        return html;
     }
 
 
@@ -10917,11 +11497,17 @@ class ChatClient {
         availableMembers.forEach(user => {
             html += `
         <div class="member-grid-item" data-user-id="${user.id}" onclick="chatClient.addMemberToGroup(${user.id})">
-            <div class="member-grid-avatar">
+            <div class="member-grid-avatar" title="查看用户信息"
+                 onclick="event.stopPropagation();chatClient.showUserProfile(${user.id});">
                 <img src="${user.avatar_url || '/static/images/default-avatar.png'}" alt="${user.real_name || user.username}">
             </div>
-            <div class="member-grid-name">${user.real_name || user.username}</div>
-            <button class="btn btn-primary btn-small">添加</button>
+            <div class="member-grid-name" title="${user.real_name || user.username}">${user.real_name || user.username}</div>
+            ${user.position ? '<div class="member-grid-position" title="' + user.position + '">' + user.position + '</div>' : ''}
+            <div class="gm-actions">
+                <button type="button" class="gm-btn primary" title="添加到群聊">
+                    <i class="fas fa-plus"></i><span class="gm-btn-text">添加</span>
+                </button>
+            </div>
         </div>
         `;
         });
@@ -10994,36 +11580,22 @@ class ChatClient {
             this.loadGroupMembersForManagement(roomId);
             return;
         }
-        const self = this;
 
         const room = this.chatRooms.find(r => r.id === parseInt(roomId));
         if (!room || !room.members) return;
 
+        const q = query.toLowerCase();
         const filteredMembers = room.members.filter(member =>
-            member.username.toLowerCase().includes(query.toLowerCase()) ||
-            (member.real_name && member.real_name.toLowerCase().includes(query.toLowerCase()))
+            (member.username && member.username.toLowerCase().includes(q)) ||
+            (member.real_name && member.real_name.toLowerCase().includes(q))
         );
 
         const membersContainer = document.getElementById('groupManageMembers');
         if (!membersContainer) return;
 
-        let html = '';
-        filteredMembers.forEach(member => {
-            const isCreator = member.id === room.creator;
-            var isMember = self.currentUser?.id != room.creator;
-            html += `
-            <div class="member-item" data-member-id="${member.id}">
-                <img src="${member.avatar_url || '/static/images/default-avatar.png'}" alt="${member.username}">
-                <div class="member-info">
-                    <div class="member-name">${member.real_name || member.username}</div>
-                    ${isCreator ? '<span class="member-tag">群主</span>' : ''}
-                </div>
-                ${!isCreator && !isMember ? `<button class="btn-remove" onclick="chatClient.removeGroupMember(${roomId}, ${member.id})">×</button>` : ''}
-            </div>
-        `;
-        });
-
-        membersContainer.innerHTML = html || '<div class="empty-state"><p>未找到成员</p></div>';
+        // 与默认加载共用同一套宫格渲染，避免搜索结果样式不一致
+        membersContainer.innerHTML = this._buildGroupMemberGridHtml(roomId, filteredMembers)
+            || '<div class="empty-state"><p>未找到成员</p></div>';
     }
 
 

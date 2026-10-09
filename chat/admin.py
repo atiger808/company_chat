@@ -1,10 +1,12 @@
 from django.contrib import admin
-from .models import ChatRoom, Message, MessageReadStatus, MessageDeleteStatus, UserOnlineStatus, ChatRoomDeleteStatus, FileUpload, SystemConfig, PushSubscription
+from .models import (ChatRoom, Message, MessageReadStatus, MessageDeleteStatus, UserOnlineStatus,
+                     ChatRoomUserState, ChatRoomDeleteStatus, FileUpload, SystemConfig,
+                     PushSubscription, GroupAnnouncement, GroupAnnouncementRead)
 
 @admin.register(ChatRoom)
 class ChatRoomAdmin(admin.ModelAdmin):
     list_display = ('id', 'name', 'creator', 'room_type',  'is_pinned', 'is_muted', 'is_deleted', 'deleted_at', 'updated_at', 'created_at')
-    list_filter = ('creator', 'room_type')
+    list_filter = ('creator', 'room_type', 'is_pinned', 'is_muted', 'is_deleted')
     search_fields = ('name', 'id')
     list_per_page = 20
 
@@ -16,11 +18,18 @@ class MessageAdmin(admin.ModelAdmin):
     list_per_page = 20
 
 
+@admin.register(ChatRoomUserState)
+class ChatRoomUserStateAdmin(admin.ModelAdmin):
+    list_display = ('id', 'chat_room', 'user', 'is_pinned', 'is_muted', 'updated_at')
+    list_filter = ('is_pinned', 'is_muted')
+    search_fields = ('id', 'user__username', 'user__real_name', 'chat_room__name')
+    list_per_page = 20
+
 @admin.register(ChatRoomDeleteStatus)
 class ChatRoomDeleteStatusAdmin(admin.ModelAdmin):
     list_display = ('id', 'chat_room', 'user', 'is_deleted', 'deleted_at', 'created_at')
-    list_filter = ('user', 'chat_room')
-    search_fields = ('id',)
+    list_filter = ('is_deleted', )
+    search_fields =  ('id', 'user__username', 'user__real_name', 'chat_room__name')
     list_per_page = 20
 
 
@@ -28,14 +37,14 @@ class ChatRoomDeleteStatusAdmin(admin.ModelAdmin):
 class MessageReadStatusAdmin(admin.ModelAdmin):
     list_display = ('id', 'user', 'message', 'read_at')
     list_filter = ('user', )
-    search_fields = ('id',)
+    search_fields = ('id', 'user__username', 'user__real_name')
     list_per_page = 20
 
 @admin.register(MessageDeleteStatus)
 class MessageDeleteStatusAdmin(admin.ModelAdmin):
     list_display = ('id', 'user', 'message', 'is_deleted', 'deleted_at', 'created_at')
-    list_filter = ('user', )
-    search_fields = ('id',)
+    list_filter = ('is_deleted', )
+    search_fields = ('id', 'user__username', 'user__real_name')
     list_per_page = 20
 
 @admin.register(FileUpload)
@@ -66,4 +75,20 @@ class PushSubscriptionAdmin(admin.ModelAdmin):
     list_display = ('id', 'user', 'user_agent', 'updated_at', 'created_at')
     list_filter = ('user_agent', )
     search_fields = ('id', 'endpoint')
+    list_per_page = 20
+
+
+@admin.register(GroupAnnouncement)
+class GroupAnnouncementAdmin(admin.ModelAdmin):
+    list_display = ('id', 'chat_room', 'publisher', 'content', 'updated_at', 'created_at')
+    list_filter = ('publisher',)
+    search_fields = ('content', 'chat_room__name', 'id')
+    list_per_page = 20
+
+
+@admin.register(GroupAnnouncementRead)
+class GroupAnnouncementReadAdmin(admin.ModelAdmin):
+    list_display = ('id', 'announcement', 'user', 'read_at')
+    list_filter = ('user',)
+    search_fields = ('id', 'user__username', 'user__real_name')
     list_per_page = 20
