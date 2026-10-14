@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理控制台 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/chat.css?v=20261009-10610c9">
-    <link rel="stylesheet" href="/static/css/admin.css?v=20261009-10610c9">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20261014-a4b2e7c">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20261014-a4b2e7c">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260820-d0b2c3e">
     <!-- 🔧 新增：Chart.js 用于图表展示 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>-->
-    <script src="/static/js/dist/chart.min.js?v=20261009-10610c9"></script>
+    <script src="/static/js/dist/chart.min.js?v=20261014-a4b2e7c"></script>
     <!-- 🔧 关键修复2: 添加 Chart.js 加载失败的回退方案 -->
     <script>
         // 检查 Chart.js 是否加载成功
@@ -120,6 +120,11 @@
                 <i class="fas fa-chart-line"></i> 报表权限
             </a>
 
+            <!-- 智能体：仅超级管理员可见（按页面启用 AI 智能体 + 自定义嵌入代码） -->
+            <a href="#" class="nav-item super-admin-only" data-tab="agent" id="agentNavItem" style="display:none">
+                <i class="fas fa-robot"></i> 智能体
+            </a>
+
             <!-- 登录日志：仅超级管理员可见 -->
             <a href="#" class="nav-item super-admin-only" data-tab="login-logs" style="display: none">
                 <i class="fas fa-sign-in-alt"></i> 登录日志
@@ -189,7 +194,7 @@
                 </div>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="adminConsole.toggleUserDropdown(event)">
                     <span id="adminUsername" class="btn-text"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20261009-10610c9" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20261014-a4b2e7c" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu show" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item"
@@ -224,9 +229,16 @@
                             <i class="fas fa-file-signature"></i> 每日工作总结
                         </div>
 
+                        <div class="dropdown-divider"></div>
+
                         <div class="dropdown-item" id="announcementBtn" onclick="event.stopPropagation();window.location.href='/oa/announcements/'">
                             <i class="fas fa-bullhorn" style="color:#7c4dff;"></i>
                             <span>集团公告</span>
+                        </div>
+
+                        <div class="dropdown-item" id="knowledgeBaseBtn" onclick="event.stopPropagation();window.location.href='/docs/'">
+                            <i class="fas fa-book" style="color:#409eff;"></i>
+                            <span>企业知识库</span>
                         </div>
 
                         <div class="dropdown-divider"></div>
@@ -1119,18 +1131,18 @@
         <div class="spinner"></div>
     </div>
 </div>
-<script src="/static/js/dist/spark-md5.min.js?v=20261009-10610c9"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20261009-10610c9"></script>
-<script src="/static/js/dist/sm4.min.js?v=20261009-10610c9"></script>
-<script src="/static/js/encrypts.js?v=20261009-10610c9"></script>
-<script src="/static/js/utils.js?v=20261009-10610c9"></script>
-<script src="/static/js/api.js?v=20261009-10610c9"></script>
-<script src="/static/js/admin.js?v=20261009-10610c9"></script>
-<script src="/static/js/admin_chat_rooms.js?v=20261009-10610c9"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/dist/sm4.min.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/encrypts.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/utils.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/api.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/admin.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/admin_chat_rooms.js?v=20261014-a4b2e7c"></script>
 <!-- 🔧 新增：数据统计和系统设置 JS -->
-<script src="/static/js/admin_statistics.js?v=20261009-10610c9"></script>
-<script src="/static/js/admin_settings.js?v=20261009-10610c9"></script>
-<script src="/static/js/notifications.js?v=20261009-10610c9"></script>
+<script src="/static/js/admin_statistics.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/admin_settings.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/notifications.js?v=20261014-a4b2e7c"></script>
 
 
 <script>
@@ -1426,7 +1438,54 @@
     </div>
 </div>
 
-<script src="/static/js/watermark.js?v=20261009-10610c9"></script>
+<!-- 智能体设置模态框（仅超级管理员）：按页面启用 + 自定义嵌入代码 -->
+<div id="agentConfigModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:720px;">
+        <div class="modal-header">
+            <h3><i class="fas fa-robot" style="color:#409eff;"></i> 智能体设置</h3>
+            <button class="close-btn" onclick="adminConsole.closeAgentConfig()">&times;</button>
+        </div>
+        <div class="modal-body" style="max-height:72vh;overflow-y:auto;">
+            <div style="padding:10px 12px;background:#ecf5ff;border:1px solid #b3d8ff;border-radius:8px;color:#3a7bd5;font-size:12px;margin-bottom:14px;">
+                <i class="fas fa-info-circle"></i>
+                开启后，被勾选的页面会自动嵌入下面配置的智能体代码（在页面右下角出现 AI 助手入口）。
+                <b>默认全部关闭</b>，按需为指定页面开启；嵌入代码可自行修改。
+            </div>
+            <div class="form-group">
+                <label class="switch-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="agentEnabled" style="width:16px;height:16px;cursor:pointer;">
+                    <span><i class="fas fa-toggle-on" style="color:#52c41a;"></i> 全局开启智能体（总开关，关闭后所有页面都不加载）</span>
+                </label>
+            </div>
+            <div class="form-group">
+                <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">
+                    <i class="fas fa-code" style="color:#409eff;"></i> 智能体嵌入代码
+                </label>
+                <textarea id="agentEmbedCode" class="form-input" rows="4" spellcheck="false"
+                          style="width:100%;font-family:Consolas,'Courier New',monospace;font-size:12px;line-height:1.6;"
+                          placeholder="&lt;script async defer src=&quot;...&quot;&gt;&lt;/script&gt;"></textarea>
+                <div style="font-size:12px;color:#909399;margin-top:4px;">
+                    支持整段 <code>&lt;script&gt;…&lt;/script&gt;</code>（外链或内联）；留空则该页面不加载任何内容。
+                </div>
+            </div>
+            <div style="border-top:1px solid var(--border-color,#ebeef5);padding-top:12px;margin-top:6px;">
+                <label style="font-size:13px;font-weight:600;display:block;margin-bottom:8px;">
+                    <i class="fas fa-window-restore" style="color:#409eff;"></i> 启用智能体的页面
+                </label>
+                <div id="agentPageToggles" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <span style="flex:1;"></span>
+            <button class="btn btn-secondary" onclick="adminConsole.closeAgentConfig()">取消</button>
+            <button class="btn btn-primary" onclick="adminConsole.saveAgentConfig()"><i class="fas fa-save"></i> 保存配置</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/watermark.js?v=20261014-a4b2e7c"></script>
 <script>WatermarkManager.init();</script>
+<script src="/static/js/agent.js?v=20261014-agent03"></script>
+<script>AgentManager.init();</script>
 </body>
 </html>

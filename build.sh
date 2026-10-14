@@ -82,6 +82,7 @@ $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/oa/work-summary.
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/oa/announcement.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/org/org.html" ${VERSION}
 $CONDA_ENV_PATH/bin/python update_static_versions.py "templates/org/org_mobile.html" ${VERSION}
+$CONDA_ENV_PATH/bin/python update_static_versions.py "templates/docs/knowledge.html" ${VERSION}
 
 
 

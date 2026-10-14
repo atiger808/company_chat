@@ -895,6 +895,7 @@ class AdminStatisticsClient {
             'task_card': '任务卡片',
             'approval_card': '审批卡片',
             'collab_card': '协作卡片',
+            'announcement': '群公告',
             'work_summary_card': '工作总结'
         };
         return map[type] || type;
@@ -916,6 +917,7 @@ class AdminStatisticsClient {
             'task_card': '#e4e7ed',
             'approval_card': '#79b1ec',
             'collab_card': '#bae7ff',
+            'announcement': '#7c4dff',
             'work_summary_card': '#9b59b6'
         }
         return map[type] || '#909399';

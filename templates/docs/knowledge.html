@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>企业知识库 - 浙企钉</title>
+    <meta name="format-detection" content="telephone=no, email=no, address=no">
+    {% include '_pwa_meta.html' %}
+    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/css/knowledge.css?v=20261014-kbopen02">
+    <script>
+        // 主题在首屏就应用，避免闪白
+        (function () {
+            try {
+                var t = localStorage.getItem('theme');
+                if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+            } catch (e) {}
+        })();
+    </script>
+</head>
+<body class="kb-body">
+<header class="kb-topbar">
+    <div class="kb-topbar-left">
+        <button class="kb-icon-btn kb-menu-btn" id="kbMenuBtn" title="展开/收起目录"><i class="fas fa-bars"></i></button>
+        <a href="/chat/" class="kb-icon-btn" title="返回聊天室"><i class="fas fa-arrow-left"></i></a>
+        <div class="kb-brand">
+            <i class="fas fa-book"></i>
+            <span>企业知识库</span>
+            <small>浙企钉</small>
+        </div>
+    </div>
+    <div class="kb-topbar-center">
+        <div class="kb-search">
+            <i class="fas fa-search"></i>
+            <input type="text" id="kbSearchInput" placeholder="搜索文档内容…（Ctrl + K）" autocomplete="off">
+            <button class="kb-search-clear" id="kbSearchClear" title="清除" style="display:none;"><i class="fas fa-times-circle"></i></button>
+        </div>
+    </div>
+    <div class="kb-topbar-right">
+        <button class="kb-icon-btn" id="kbPrintBtn" title="打印当前文档"><i class="fas fa-print"></i></button>
+        <button class="kb-icon-btn" id="kbThemeBtn" title="切换主题"><i class="fas fa-moon"></i></button>
+    </div>
+</header>
+
+<div class="kb-layout">
+    <div class="kb-sidebar-mask" id="kbMask"></div>
+    <aside class="kb-sidebar" id="kbSidebar">
+        <div class="kb-sidebar-head">
+            <span class="kb-sidebar-title" id="kbSidebarTitle">文档目录</span>
+            <span class="kb-sidebar-count" id="kbSidebarCount"></span>
+            <button class="kb-sidebar-close" id="kbSidebarClose" title="收起"><i class="fas fa-times"></i></button>
+        </div>
+        <nav class="kb-tree" id="kbTree">
+            <div class="kb-loading"><i class="fas fa-spinner fa-spin"></i> 正在加载文档…</div>
+        </nav>
+    </aside>
+
+    <main class="kb-main" id="kbMain">
+        <article class="kb-article">
+            <div class="kb-welcome" id="kbWelcome">
+                <div class="kb-welcome-icon"><i class="fas fa-book-reader"></i></div>
+                <h1>企业知识库</h1>
+                <p>这里汇总了浙企钉平台的使用手册、项目结构与第三方接口文档。<br>
+                    左侧目录可展开到章节，顶部可全文搜索，标题右侧的 <code>#</code> 可直接复制锚点链接。</p>
+                <div class="kb-welcome-tips">
+                    <span><i class="fas fa-search"></i> Ctrl + K 快速搜索</span>
+                    <span><i class="fas fa-link"></i> 点击标题 # 复制锚点</span>
+                    <span><i class="fas fa-print"></i> 右上角可打印当前文档</span>
+                </div>
+                <div class="kb-welcome-docs" id="kbWelcomeDocs"></div>
+            </div>
+            <div id="kbDoc" class="kb-doc" style="display:none;"></div>
+        </article>
+    </main>
+</div>
+
+<div class="kb-toast" id="kbToast"></div>
+
+
+<script src="/static/js/dist/spark-md5.min.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/dist/sm4.min.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/encrypts.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/utils.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/api.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/md-render.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/knowledge.js?v=20261014-kbopen02"></script>
+<script src="/static/js/agent.js?v=20261014-agent03"></script>
+<script>AgentManager.init();</script>
+</body>
+</html>

@@ -82,7 +82,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 
 .oa-container {
     display: flex;
-    height: 100vh;
+    /*height: 100vh;*/
     background: var(--bg-primary, #f0f2f5);
 }
 
@@ -328,6 +328,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     overflow-y: auto;
     padding: 20px 24px;
 }
+
 
 /* ==================== 考勤打卡页面 ==================== */
 

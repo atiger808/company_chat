@@ -28,6 +28,7 @@ from .models import (
     WatermarkConfig, DEFAULT_WATERMARK_PAGES, PrintLog, DailyWorkSummary,
     Announcement, AnnouncementComment, FinanceSpecialist,
     NotificationPopupConfig, AnnouncementConfig, ReportAccessConfig,
+    AgentConfig, DEFAULT_AGENT_EMBED_CODE,
 )
 from .type_utils import (
     ensure_builtin_types, resolve_approval_type,
@@ -6631,6 +6632,58 @@ class WatermarkViewSet(viewsets.ViewSet):
                 pass
         if 'print_enabled' in request.data:
             cfg.print_enabled = bool(request.data.get('print_enabled'))
+        if 'page_enabled' in request.data and isinstance(request.data.get('page_enabled'), dict):
+            merged = dict(cfg.page_enabled or {})
+            for k, v in request.data.get('page_enabled').items():
+                merged[str(k)] = bool(v)
+            cfg.page_enabled = merged
+        cfg.save()
+        return Response({'encrypt': True, 'data': encrypt_data(self._config_data(cfg))})
+
+
+class AgentViewSet(viewsets.ViewSet):
+    """企业智能体配置：管理控制台维护（仅超管），各页面按开关加载智能体嵌入代码"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _tenant(self, request):
+        return getattr(request, 'tenant', None) or request.user.get_active_tenant()
+
+    def _config_data(self, cfg):
+        return {
+            'enabled': bool(cfg.enabled),
+            'embed_code': cfg.embed_code or '',
+            'page_enabled': cfg.page_enabled or {},
+        }
+
+    def config(self, request):
+        """获取当前企业智能体配置（各页面加载智能体用）"""
+        tenant = self._tenant(request)
+        # 无有效企业（如系统级账号/未归属企业）时不加载智能体
+        if not tenant:
+            data = {'config': {'enabled': False, 'embed_code': '', 'page_enabled': {}}}
+        else:
+            cfg, _ = AgentConfig.objects.get_or_create(
+                tenant=tenant, defaults={'embed_code': DEFAULT_AGENT_EMBED_CODE})
+            data = {'config': self._config_data(cfg)}
+        resp = Response({'encrypt': True, 'data': encrypt_data(data)})
+        # 配置可能被管理控制台随时修改 → 禁止任何层级缓存，保证「改完即时生效」
+        resp['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        resp['Pragma'] = 'no-cache'
+        return resp
+
+    def save_config(self, request):
+        """保存智能体配置（仅超级管理员）"""
+        if request.user.user_type != 'super_admin':
+            return Response({'error': '仅超级管理员可配置'}, status=403)
+        tenant = self._tenant(request)
+        if not tenant:
+            return Response({'error': '未找到所属企业，无法配置智能体'}, status=400)
+        cfg, _ = AgentConfig.objects.get_or_create(
+            tenant=tenant, defaults={'embed_code': DEFAULT_AGENT_EMBED_CODE})
+        if 'enabled' in request.data:
+            cfg.enabled = bool(request.data.get('enabled'))
+        if 'embed_code' in request.data:
+            cfg.embed_code = str(request.data.get('embed_code') or '')
         if 'page_enabled' in request.data and isinstance(request.data.get('page_enabled'), dict):
             merged = dict(cfg.page_enabled or {})
             for k, v in request.data.get('page_enabled').items():

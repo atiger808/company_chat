@@ -2339,18 +2339,30 @@ class AdminConsole {
                     return;
                 }
 
+                // 智能体：打开配置模态框，不切换标签
+                if (item.dataset.tab === 'agent') {
+                    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                    item.classList.add('active');
+                    this.openAgentConfig();
+                    return;
+                }
+
+                const tabName = item.dataset.tab;
+
+                // 🔧 无对应内容页的导航项（如纯弹窗类配置）不切换内容区，避免主内容区被清空
+                const targetTab = document.getElementById(tabName + 'Tab');
+                if (!targetTab) {
+                    console.warn('该导航项没有对应内容页:', tabName);
+                    return;
+                }
+
                 // 更新激活状态
                 document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
                 item.classList.add('active');
 
-                const tabName = item.dataset.tab;
-
                 // 切换标签页
                 document.querySelectorAll('.admin-tab').forEach(tab => tab.classList.remove('active'));
-                const targetTab = document.getElementById(tabName + 'Tab');
-                if (targetTab) {
-                    targetTab.classList.add('active');
-                }
+                targetTab.classList.add('active');
 
                 // 移动端自动关闭侧边栏
                 if (window.innerWidth <= 768) {
@@ -3156,6 +3168,85 @@ class AdminConsole {
             }
             this.closeWatermarkConfig();
         } catch (e) { this.showError ? this.showError('保存失败', e.message) : (alert && alert('保存失败：' + e.message)); }
+    }
+
+    // ==================== 智能体设置（仅超级管理员） ====================
+    // 为项目各页面按需启用 AI 智能体，并自定义嵌入代码。
+    openAgentConfig() {
+        document.getElementById('agentConfigModal').style.display = 'flex';
+        setTimeout(function () { document.getElementById('agentConfigModal').classList.add('show'); }, 10);
+        this.loadAgentConfig();
+    }
+    closeAgentConfig() {
+        var m = document.getElementById('agentConfigModal');
+        if (m) { m.classList.remove('show'); setTimeout(function () { m.style.display = 'none'; }, 150); }
+    }
+    async loadAgentConfig() {
+        try {
+            const resp = await fetch('/api/system/agent-config/', {headers: TokenManager.getHeaders()});
+            if (!resp.ok) { this.showError && this.showError('加载失败', '无法获取智能体配置'); return; }
+            const raw = await resp.json();
+            const d = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+            const cfg = d.config || {};
+            document.getElementById('agentEnabled').checked = cfg.enabled === true;
+            document.getElementById('agentEmbedCode').value = cfg.embed_code || '';
+            this._renderAgentPageToggles(cfg.page_enabled || {});
+        } catch (e) { console.warn('加载智能体配置失败', e); }
+    }
+    _renderAgentPageToggles(pageEnabled) {
+        var wrap = document.getElementById('agentPageToggles');
+        if (!wrap) return;
+        var defs = [
+            ['chat', '企业聊天室'], ['admin', '管理控制台'],
+            ['cloud', '企业网盘'], ['cloud_settings', '网盘系统配置'], ['cloud_editor', '文档编辑器'],
+            ['oa_approval', 'OA审批'], ['oa_subsidy', '普惠补贴'],
+            ['oa_subsidy_verify', '财务核验'], ['oa_subsidy_pay', '财务支付'],
+            ['oa_attendance', '考勤打卡'], ['oa_announcements', '集团公告'], ['work_calendar', '工作日历'],
+            ['work_summary', '每日工作总结'], ['tasks', '任务中心'], ['org', '组织架构'],
+            ['knowledge', '企业知识库'], ['other', '其他页面']
+        ];
+        wrap.innerHTML = defs.map(function (d) {
+            var on = pageEnabled[d[0]] === true;
+            return '<label style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:var(--bg-secondary,#f5f7fa);border-radius:6px;cursor:pointer;font-size:13px;">'
+                + '<input type="checkbox" class="agent-page-cb" data-page="' + d[0] + '" ' + (on ? 'checked' : '') + ' style="width:15px;height:15px;cursor:pointer;"> ' + d[1] + '</label>';
+        }).join('');
+    }
+    async saveAgentConfig() {
+        var pageEnabled = {};
+        document.querySelectorAll('#agentPageToggles .agent-page-cb').forEach(function (cb) {
+            pageEnabled[cb.getAttribute('data-page')] = cb.checked;
+        });
+        var payload = {
+            enabled: document.getElementById('agentEnabled').checked,
+            embed_code: document.getElementById('agentEmbedCode').value,
+            page_enabled: pageEnabled,
+        };
+        try {
+            const resp = await fetch('/api/system/agent-config/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify(payload)
+            });
+            if (!resp.ok) { const e2 = await resp.json().catch(function(){return{};}); throw new Error(e2.error || '保存失败'); }
+            this.showToast ? this.showToast('智能体配置已保存', false) : (alert && alert('智能体配置已保存'));
+            // 立即让「当前页 + 管理控制台内嵌的各页面」按新配置生效
+            this._refreshAgents();
+            this.closeAgentConfig();
+        } catch (e) { this.showError ? this.showError('保存失败', e.message) : (alert && alert('保存失败：' + e.message)); }
+    }
+    // 让当前页与管理控制台内嵌 iframe 页面重新拉取智能体配置（改完即时生效）
+    _refreshAgents() {
+        try {
+            if (window.AgentManager && AgentManager.reload) AgentManager.reload();
+        } catch (e) {}
+        try {
+            document.querySelectorAll('iframe').forEach(function (fr) {
+                try {
+                    var w = fr.contentWindow;
+                    if (w && w.AgentManager && w.AgentManager.reload) w.AgentManager.reload();
+                } catch (e) {}
+            });
+        } catch (e) {}
     }
 
     // ==================== 通知弹窗设置（仅超级管理员） ====================

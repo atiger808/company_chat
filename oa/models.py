@@ -1433,6 +1433,24 @@ class WatermarkConfig(models.Model):
         return f'{self.tenant} 水印配置'
 
 
+class AgentConfig(models.Model):
+    """企业智能体配置（每企业一条，超管在管理控制台维护；可按页面启用并自定义嵌入代码）"""
+    tenant = models.OneToOneField('accounts.Tenant', on_delete=models.CASCADE,
+                                  related_name='agent_config', verbose_name='所属企业')
+    enabled = models.BooleanField(default=False, verbose_name='全局开启智能体')
+    embed_code = models.TextField(default='', blank=True, verbose_name='智能体嵌入代码')
+    # 每个页面的智能体开关 {page_key: bool}；默认全关，按需开启
+    page_enabled = models.JSONField(default=dict, verbose_name='页面智能体开关')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '企业智能体配置'
+        verbose_name_plural = '企业智能体配置'
+
+    def __str__(self):
+        return f'{self.tenant} 智能体配置'
+
+
 class PrintLog(models.Model):
     """打印操作留痕：记录用户何时在哪个页面打印了什么，便于打印统计与打印权限分配"""
     tenant = models.ForeignKey('accounts.Tenant', null=True, blank=True, on_delete=models.SET_NULL,
@@ -1902,4 +1920,18 @@ DEFAULT_WATERMARK_PAGES = [
     'chat', 'admin', 'cloud', 'cloud_settings', 'cloud_editor',
     'oa_approval', 'oa_subsidy', 'oa_subsidy_verify', 'oa_subsidy_pay',
     'oa_attendance', 'work_calendar', 'work_summary', 'tasks', 'org', 'other',
+]
+
+# 智能体默认嵌入代码（可在管理控制台「智能体设置」中修改）
+DEFAULT_AGENT_EMBED_CODE = (
+    '<script async defer src="https://agent.first-iq.com/chat/api/embed'
+    '?protocol=https&host=agent.first-iq.com&token=a42a34f3944bc8f9"></script>'
+)
+
+# 智能体支持的页面 key（与前端 AgentManager._detectPageKey 保持一致；默认全关，按需开启）
+DEFAULT_AGENT_PAGES = [
+    'chat', 'admin', 'cloud', 'cloud_settings', 'cloud_editor',
+    'oa_approval', 'oa_subsidy', 'oa_subsidy_verify', 'oa_subsidy_pay',
+    'oa_attendance', 'oa_announcements', 'work_calendar', 'work_summary',
+    'tasks', 'org', 'knowledge', 'other',
 ]

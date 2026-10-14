@@ -18,6 +18,7 @@ from .models import (
     MaterialStockIn, MaterialStockInItem, MaterialStockLog,
     DocumentSequence, WatermarkConfig, PrintLog,
     NotificationPopupConfig, AnnouncementConfig, ReportAccessConfig,
+    AgentConfig,
     DailyWorkSummary, WorkSummaryRangeAnalysis,
     WorkSummaryConfig,
     FinanceSpecialist, Announcement, AnnouncementComment, AnnouncementOperation,
@@ -258,6 +259,14 @@ class WatermarkConfigAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'company_name', 'text', 'font_size', 'font_color', 'font_style', 'rotation', 'opacity', 'position', 'updated_at']
     search_fields = ['id', 'tenant__name', 'company_name', 'text']
     list_filter = ['enabled', 'position', 'shape', 'hidden_enabled', 'page_enabled']
+    list_per_page = 20
+
+
+@admin.register(AgentConfig)
+class AgentConfigAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'enabled', 'embed_code', 'page_enabled', 'updated_at']
+    search_fields = ['id', 'tenant__name', 'embed_code']
+    list_filter = ['enabled', 'page_enabled']
     list_per_page = 20
 
 

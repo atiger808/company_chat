@@ -2959,8 +2959,8 @@ class ApprovalApp {
         var sab = document.getElementById('submitApprovalBtn');
         if (sab) sab.innerHTML = '<i class="fas fa-paper-plane"></i> 提交审批';
 
-        // 固定为会签 + 顺序审批，不可修改
-        this._lockApprovalDefaults();
+        // 审批方式/审批模式：先置默认，随后按「该审批类型配置」覆盖（见 _loadConfigDefaults）
+        this._applyApprovalModeDefaults();
         this._renderCcTags();
     }
 
@@ -3274,8 +3274,8 @@ class ApprovalApp {
                 this._renderCcTags();
                 return;
             }
-            // 审批方式/审批模式固定为会签+顺序审批，不受配置影响（不可修改）
-            this._lockApprovalDefaults();
+            // 审批方式/审批模式：默认读取「该审批类型配置」（default_sign_type / default_approval_mode），可修改
+            this._applyApprovalModeDefaults(cfg.default_sign_type, cfg.default_approval_mode);
             // 配置中的默认抄送人/部门自动带入，且不可删除（locked）
             if (cfg.cc_user_details && cfg.cc_user_details.length) {
                 cfg.cc_user_details.forEach(function (u) {
@@ -3303,16 +3303,17 @@ class ApprovalApp {
         }
     }
 
-    // 审批方式/审批模式固定为 会签 + 顺序审批，不可修改
-    _lockApprovalDefaults() {
+    // 审批方式/审批模式：只读展示，取值来自「该审批类型配置」的 default_sign_type / default_approval_mode
+    // （不可由用户选择；提交时仍读取该下拉的值 → 即配置值）
+    _applyApprovalModeDefaults(signType, approvalMode) {
         var signTypeSel = document.getElementById('newSignType');
         if (signTypeSel) {
-            signTypeSel.value = 'countersign';
+            signTypeSel.value = signType || 'countersign';
             signTypeSel.disabled = true;
         }
         var apprModeSel = document.getElementById('newApprovalMode');
         if (apprModeSel) {
-            apprModeSel.value = 'sequential';
+            apprModeSel.value = approvalMode || 'sequential';
             apprModeSel.disabled = true;
         }
     }
@@ -4094,8 +4095,11 @@ class ApprovalApp {
             if (d.expense_type) document.getElementById('newExpenseType').value = d.expense_type;
             this._syncExpenseTypeDisplay();
             if (d.expense_date) document.getElementById('newExpenseDate').value = d.expense_date;
-            // 审批方式/模式固定为会签+顺序审批，历史草稿也强制这两个值
-            this._lockApprovalDefaults();
+            // 审批方式/审批模式：默认读取该审批类型配置（无配置时回退到原单的取值）
+            var _amCfg = await this._resolveApprovalConfig(d.approval_type);
+            this._applyApprovalModeDefaults(
+                (_amCfg && _amCfg.default_sign_type) || d.sign_type,
+                (_amCfg && _amCfg.default_approval_mode) || d.approval_mode);
             // 重置附件列表与预览，避免残留上一份草稿的附件
             this._attachmentFiles = [];
             var ap = document.getElementById('attachmentPreview');

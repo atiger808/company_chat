@@ -20,9 +20,11 @@ from django.urls import path, include
 from django.views.generic import TemplateView
 from django.conf import settings
 from django.conf.urls.static import static
-from .views import service_worker_view, admin_console_view
+from .views import (service_worker_view, admin_console_view,
+                    knowledge_base_view, KnowledgeCatalogView)
 from oa.views import (WatermarkViewSet, PrintLogViewSet,
-                      AnnouncementConfigViewSet, ReportAccessConfigViewSet)
+                      AnnouncementConfigViewSet, ReportAccessConfigViewSet,
+                      AgentViewSet)
 import sys
 
 
@@ -91,6 +93,8 @@ urlpatterns = [
     path('api/system/announcement-config/', AnnouncementConfigViewSet.as_view({'get': 'config', 'post': 'save_config'}), name='announcement-config'),
     # 报表与数据分析配置（OA审批 / 普惠补贴的报表开关与授权用户；管理控制台维护，仅超管）
     path('api/system/report-access-config/', ReportAccessConfigViewSet.as_view({'get': 'config', 'post': 'save_config'}), name='report-access-config'),
+    # 企业智能体配置（按页面启用 + 自定义嵌入代码；管理控制台维护，仅超管）
+    path('api/system/agent-config/', AgentViewSet.as_view({'get': 'config', 'post': 'save_config'}), name='agent-config'),
     path('api/org/', include('org.urls')),
     path('org/', TemplateView.as_view(template_name='org/org.html'), name='org'),
 
@@ -98,6 +102,9 @@ urlpatterns = [
     path('', TemplateView.as_view(template_name='index.html'), name='index'),
     path('contact/', TemplateView.as_view(template_name='contact.html'), name='contact'),
     path('docs/api/', TemplateView.as_view(template_name='docs/api_docs.html'), name='api_docs'),
+    # 企业知识库（在线文档）：左侧树导航 + 右侧文档内容（锚点 / 全文搜索）
+    path('docs/', knowledge_base_view, name='knowledge-base'),
+    path('api/docs/catalog/', KnowledgeCatalogView.as_view(), name='knowledge-catalog'),
     path('ByteDanceVerify.html', TemplateView.as_view(template_name='ByteDanceVerify.html'), name='ByteDanceVerify'),
 
     # 🔧 聊天页面路由

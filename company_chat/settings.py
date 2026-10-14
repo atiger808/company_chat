@@ -355,6 +355,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://192.168.1.122:8000",  # OnlyOffice
     "http://192.168.1.130",  # Django
     "http://192.168.1.130:10900",  # Django
+    "http://digit.first-iq.com:12380",  # 本地 agent
 ]
 
 # 指定允许的后端地址（推荐用于生产环境）
@@ -366,6 +367,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://chat.first-iq.com",  # 前端地址
     "http://onlyoffice.first-iq.com",  # OnlyOffice 域名
     "http://onlyoffice.first-iq.com:12280",  # OnlyOffice 域名
+    "http://digit.first-iq.com:12380",  # 本地 agent
     # Add other trusted origins if needed
 ]
 
@@ -431,7 +433,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20261009-10610c9'
+STATIC_VERSION = '20261014-a4b2e7c'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -714,6 +716,8 @@ API_MODEL_MAP = {
     "/api/oa/work-summary/<int:pk>/add-comment/": "每日总结添加评论",
     "/api/system/watermark-config/": "企业水印配置",
     "/api/system/print-log/": "打印记录",
+    "/api/system/agent-config/": "企业智能体配置",
+    "/api/docs/catalog/": "企业知识库文档",
     "/api/oa/notifications/": "工作通知",
     "/api/oa/notifications/unread-count/": "通知未读数",
     "/api/oa/notifications/mark-all-read/": "通知全部已读",

@@ -1,3 +1,49 @@
+175. OA审批：审批方式/审批模式由「该审批类型配置」决定（只读展示，用户不可选择）：
+   1）**取值来源**：新建/重新编辑审批时，审批方式与审批模式**只读展示**，其值读取自该审批类型的配置 `ApprovalDeptConfig.default_sign_type` / `default_approval_mode`（即「审批配置」里设置的默认审批方式、默认审批模式）；切换审批类型会按新类型的配置刷新；
+   2）**用户不可选择**：两个下拉保持 `disabled`，只能看不能改；重新编辑时同样读配置（无配置则回退到原单保存的值）；
+   3）**按配置的方式/模式审批**：提交时按该值写入 `sign_type` / `approval_mode`，后端审批链已完整支持或签/会签、顺序/并行，无需改动后端；
+   4）说明：下拉内部补齐了「或签」「并行审批」选项以便正确显示配置值（仍不可选）。本次为**纯前端**改动，**无需迁移、无需重启后端**；同步 `static/js/approval.js` 与 `templates/oa/approval.html`（引用版本号升为 `20261014-apvmode02`）后清缓存即可。
+174. 企业知识库按「公开 / 需登录」分级（方便智能体检索，同时保护内部文档）：
+   1）**分级规则**：`company_chat/views.py` 的 `KNOWLEDGE_DOCS` 为每篇文档增加 `public` 标记——「员工使用手册」「百度增值税发票验真接口」为**公开**（未登录可读）；「项目结构文档」「项目文件自动备份功能」为**内部文档**（需登录后查看）；
+   2）**接口按登录态过滤**：`/api/docs/catalog/` 权限为 `AllowAny`，但**未登录只返回 public 文档**（内部文档不下发、内容不泄露），已登录返回全部；某分组若全是内部文档，则对未登录者隐藏该分组；响应新增 `restricted_count` 供前端提示；
+   3）**页面**：`/docs/` 仍可匿名打开；前端对未登录用户展示公开文档，并在目录底部提示「另有 N 篇内部文档需登录后查看」（带登录入口）；
+   4）**健壮性**：若本地令牌已失效（接口返回 401/403），自动清除令牌并改为匿名请求一次，保证公开文档始终可读；
+   5）说明：本次为纯后端 + 前端改动，**无需迁移、无需重启后端**；同步 `company_chat/views.py`、`static/js/knowledge.js`、`static/css/knowledge.css`（引用版本号升为 `20261014-kbopen02`）后清缓存即可。
+173. 修复「配置启用智能体的页面，智能体仍不显示」——第三方挂件在 window load 后不再初始化：
+173. 修复「配置启用智能体的页面，智能体仍不显示」——第三方挂件在 window load 后不再初始化：
+   1）**根因**：智能体嵌入代码（MaxKB 挂件）内部是用 `window.addEventListener('load', embedChatbot)` 在**页面 load 事件**里初始化自己的；而我们是在页面里**异步**拉取配置后才动态注入该 `<script>` 的，此时 **window 的 load 事件早已触发、不会再来**，于是那段 load 回调永远不执行，挂件也就始终不出现（与「异步加载」确实有关，但不是脚本没加载，而是它等待的 load 事件已经错过）；
+   2）**修复**：`AgentManager._appendScript()` 在注入时判断 `document.readyState === 'complete'`（即 load 已触发）。若已触发，则**临时接管 `window.addEventListener`**，把该脚本自身注册的 `load` 回调接住；待脚本加载执行完成后**手动执行一次**并立即还原 `window.addEventListener`（不影响页面上其它已有监听、也不会重复触发别的 load 处理）；
+   3）若注入发生在 load 之前，则保持原样（交给真实 load 事件），逻辑不变；
+   4）说明：本次为**纯前端**修复，**无需迁移、无需重启后端**；仅需同步 `static/js/agent.js`（引用版本号升为 `20261014-agent03`）后刷新/清缓存即可。同步后可在控制台看到 `[AgentManager] 已注入智能体` 日志确认已注入。
+172. 智能体配置「改完即时生效」+ 新增「企业知识库」页面开关 + 知识库移动端/PWA 顶栏修复：
+   1）**配置即时生效（根因）**：`static/js/agent.js` 里的 `AgentManager` 是顶层 `class` 声明，**不会成为 `window` 属性**，所以管理控制台里 `if (window.AgentManager) …` 恒为假、保存后从不重新加载；现已显式 `window.AgentManager = AgentManager`，并新增 `AgentManager.reload()`；
+   2）**保存后立刻刷新**：管理控制台保存智能体配置后调用 `_refreshAgents()`，会重新加载**当前页**以及**管理控制台内嵌的各页面 iframe**（考勤/OA审批/普惠补贴/聊天/组织架构），无需手动刷新；
+   3）**杜绝缓存**：取配置改为 `cache:'no-store'` + 追加时间戳 `&_t=…`，后端 `AgentViewSet.config` 也返回 `Cache-Control: no-store`，保证「改了马上就是最新的」；
+   4）**新增「企业知识库」开关**：智能体配置里新增独立的「企业知识库」页面项（页面 key `knowledge`，`/docs/` 自动识别），不再与「其他页面」混在一起；`DEFAULT_AGENT_PAGES` 同步加入 `knowledge`；
+   5）**判定更宽容**：页面开关判定由「严格等于 true」改为「真值即视为开启」，避免后端返回 1/"true" 等值时不生效；
+   6）**知识库移动端/PWA 顶栏修复（关键）**：PWA 使用 `apple-mobile-web-app-status-bar-style: black-translucent`，状态栏会**盖在网页顶部**，而知识库顶栏原本 `top:0`、无安全区留白，导致顶部按钮**被状态栏遮挡、点不到**；现为顶栏与布局、侧边栏、抽屉遮罩统一加入 `env(safe-area-inset-top)` 安全区，移动端可点击区域增大到 42px（图标按钮/搜索框/关闭按钮），并把视口补上 `viewport-fit=cover`；
+   7）说明：`agent.js`/`admin.js`/`knowledge.css` 的引用版本号已同步升为 `20261013-agent02`（16 个页面 + 管理控制台 + 知识库），**无需迁移、无需重启后端**；同步 `static/js/agent.js`、`static/js/admin.js`、`static/css/knowledge.css`、`templates/docs/knowledge.html`、`oa/views.py`、`oa/models.py` 及含 agent.js 的各页面模板后清缓存即可（智能体模型 `AgentConfig` 若尚未迁移，仍需 `makemigrations oa && migrate`）。
+171. 修复管理控制台点击「智能体」后右侧主内容区空白的问题：
+   1）**根因**：上一版给 `admin.html` 加了「智能体」导航项与配置弹窗，但 `admin.js` 的引用版本号仍是旧的 `20261010-5c7f007` —— 浏览器/网关缓存命中旧版 `admin.js`（其中没有 `agent` 分支），点击「智能体」便落到通用标签切换逻辑，隐藏了所有内容页又找不到 `agentTab`，于是主内容区变空白；
+   2）**修复**：把 `admin.html` 中 `admin.js` 的引用版本号升为 `20261013-agent01`，强制拉取最新脚本（含 `agent` 分支 → 打开「智能体设置」弹窗）；
+   3）**顺带加固**：通用导航点击逻辑新增保护——当某个导航项**没有对应的内容页**（`<tabName>Tab` 不存在）时直接 `return`，不再清空主内容区，避免此类问题再次出现；
+   4）说明：仅前端，**无需迁移、无需重启后端**；同步 `static/js/admin.js` 与 `templates/chat/admin.html` 后强制刷新/清缓存即可（智能体配置接口与模型为上一版内容，仍需 `makemigrations oa && migrate`）。
+170. 新增「智能体」（AI 助手）按页面嵌入功能（管理控制台配置，参考水印设置）：
+   1）**管理控制台新增「智能体」入口**（仅超级管理员可见，位于「报表权限」下方）：可设置**全局总开关**、**自定义智能体嵌入代码**、以及**逐页启用**（企业聊天室 / 管理控制台 / 企业网盘 / 网盘系统配置 / 文档编辑器 / OA审批 / 普惠补贴 / 财务核验 / 财务支付 / 考勤打卡 / 集团公告 / 工作日历 / 每日工作总结 / 任务中心 / 组织架构 / 其他页面），默认**全部关闭**、按需开启；
+   2）**嵌入代码可配置**：默认填入 `https://agent.first-iq.com` 的嵌入脚本，可直接在文本框里修改（支持整段 `<script>…</script>` 外链或内联脚本）；留空则该页面不加载任何内容；
+   3）**自动注入**：各页面加载 `static/js/agent.js` 并调用 `AgentManager.init()`，按当前 URL 识别页面 key，命中且在「全局开启 + 该页面已勾选」时，把配置的嵌入代码动态注入页面（自动解析 `<script>` 的 `src`/`async`/`defer` 等属性并执行），因此无需改动业务代码即可为任意页面挂上 AI 助手；
+   4）**已接入页面**：与水印一致的 15 个业务页 + 企业知识库页（`/docs/`，归入「其他页面」），共 16 个页面；未登录（无 Token）时不加载；
+   5）**安全**：仅超级管理员可配置；页面接口 `/api/system/agent-config/`（GET 取配置 / POST 保存）需登录，配置按企业隔离；
+   6）说明：新增模型 `AgentConfig`（企业智能体配置），需在服务器执行 `makemigrations oa && migrate` 后重启服务；同步 oa/models.py、oa/views.py、oa/admin.py、company_chat/urls.py、company_chat/settings.py（API_MODEL_MAP）、static/js/agent.js、static/js/admin.js、templates/chat/admin.html 及各页面模板（静态版本号 `20261013-agent01`）。
+169. 新增「企业知识库」在线文档（左侧目录树 + 右侧正文 + 锚点 + 全文搜索）：
+   1）**在线文档页面**：新增 `/docs/`（模板 `templates/docs/knowledge.html`）——顶部固定导航栏，**左侧树状目录**（分组 → 文档 → 章节，可折叠/展开），**右侧文档正文**，支持深色/浅色主题、打印当前文档、移动端抽屉式目录，并可直接返回聊天室；
+   2）**锚点（Github 风格）**：每个标题自动生成稳定 id（中文保留可读、重复标题自动加后缀 `-2`…），标题右侧的 `#` 可一键复制锚点链接；文档顶部会按需生成「本页目录」，点击即可平滑滚动并高亮定位（支持 `#/文档/章节` 路由，刷新后停留在原位置）；
+   3）**全文搜索**：顶部搜索框（`Ctrl + K` 聚焦）跨**全部收录文档**搜索，结果显示所属文档与命中片段并高亮 `<mark>`，点击直接跳转到对应章节；左侧也提供搜索模式下的结果树；
+   4）**文档来源**：服务端 `company_chat/views.py` 里的白名单目录 `KNOWLEDGE_DOCS` 决定收录哪些 Markdown 文档（当前为「员工使用手册」「项目结构文档」「项目文件自动备份功能」「百度增值税发票验真接口文档」），接口 `GET /api/docs/catalog/`（需登录）一次性返回目录与全文，前端纯客户端渲染；
+   5）**安全**：内置的通用 Markdown 渲染器（`static/js/md-render.js`，浏览器与 Node 共用 UMD）先整体 HTML 转义再套用行内样式，文档里写 `<script>` 也只会显示为文本，天然防 XSS；
+   6）**入口**：聊天室左侧底栏与右上角头像下拉菜单均新增「企业知识库」入口（跳转 `/docs/`）；
+   7）**文档完善**：同步更新了「员工使用手册」与「项目结构文档」，并新增脚本 `docs/build_manual_html.js`（复用 `md-render.js`）把手册 Markdown 重新生成为带目录/锚点/打印样式的 `docs/浙企钉-员工使用手册.html`；
+   8）说明：本次为**新增页面 + 文档**，**无需迁移、无需重启后端**；同步 `company_chat/views.py`、`company_chat/urls.py`、`company_chat/settings.py`（API_MODEL_MAP）、`templates/docs/knowledge.html`、`templates/chat/chat.html`、`static/css/knowledge.css`、`static/js/knowledge.js`、`static/js/md-render.js` 与 `docs/` 下相关文档即可（静态版本号 `20261013-kb01`），刷新（清缓存）后生效。手册 PDF 为旧版，可用知识库里的「打印当前文档」重新导出。
 168. 修复集团公告富文本「设置字号不生效」及其它隐藏问题：
    1）**字号不生效（根因）**：上一版为了让颜色/字体输出 CSS 而全局开启了 `styleWithCSS`，此时 Chrome 的 `execCommand('fontSize')` 会输出 `<span style="font-size:xxx-large">` 而**不是** `<font size=7>`，原来的替换逻辑按 `<font size=7>` 查找，结果一个都找不到 —— 于是无论选 12px 还是 36px，文字只会变成浏览器默认的「关键词字号」。现在**只在执行 fontSize 时临时关闭 styleWithCSS**（执行完在 `finally` 里立即恢复），确保拿到可替换的标记；
    2）**字号换算更健壮**：临时标记统一换成 `<span style="font-size:Npx">`，并同时兼容两类标记——`<font size=7>` 与浏览器给出的**关键词字号 span**（`xxx-large` 等），且会**保留原有的颜色 / 字体 / 加粗等内联样式**；若命令没有产出任何可识别标记，则退化为「按当前选区直接包一层带 px 的 span」，保证选多少就生效多少；

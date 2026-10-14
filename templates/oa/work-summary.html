@@ -9,8 +9,8 @@
 
 <!--    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">-->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-<!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261009-10610c9">-->
-    <link rel="stylesheet" href="/static/css/oa.css?v=20261009-10610c9">
+<!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261014-a4b2e7c">-->
+    <link rel="stylesheet" href="/static/css/oa.css?v=20261014-a4b2e7c">
 
     <style>
         body { background: var(--bg-primary, #f5f7fa); }
@@ -234,7 +234,7 @@
         <div class="notif-bell-wrap" id="notifBellWrap" title="工作通知" style="margin-right:4px;color:#fff;"><i class="fas fa-bell"></i><span class="notif-badge hide" id="notifBadge">0</span></div>
         <div style="position:relative;display:flex;align-items:center;gap:4px;">
             <div class="user-avatar-wrap" id="oaUserAvatarWrap" onclick="toggleWsUserMenu(event)">
-                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20261009-10610c9" alt="头像">
+                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20261014-a4b2e7c" alt="头像">
             </div>
             <i class="fas fa-chevron-down" style="font-size:10px;color:rgba(255,255,255,0.7);cursor:pointer;" onclick="toggleWsUserMenu(event)"></i>
             <div class="oa-user-dropdown" id="oaUserDropdown">
@@ -244,9 +244,15 @@
                 <div class="dd-divider"></div>
                 <div class="dd-item" onclick="window.location.href='/oa/work-calendar/'"><i class="fas fa-calendar-alt"></i> 工作日历</div>
                 <div class="dd-item" onclick="window.location.href='/oa/work-summary/'"><i class="fas fa-file-signature"></i> 每日工作总结</div>
+
+                <div class="dd-divider"></div>
                 <div class="dd-item" onclick="event.stopPropagation();window.location.href='/oa/announcements/'">
                     <i class="fas fa-bullhorn" style="color:#7c4dff;"></i> 集团公告
                 </div>
+                <div class="dd-item" onclick="event.stopPropagation();window.location.href='/docs/'">
+                    <i class="fas fa-book" style="color:#409eff;"></i> 企业知识库
+                </div>
+
                 <div class="dd-divider"></div>
                 <div class="dd-item" onclick="window.location.href='/chat/'"><i class="fas fa-comments"></i> 聊天</div>
                 <div class="dd-item" onclick="window.location.href='/cloud/'"><i class="fas fa-cloud"></i> 网盘</div>
@@ -591,15 +597,15 @@
     </div>
 </div>
 
-<script src="/static/js/dist/spark-md5.min.js?v=20261009-10610c9"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20261009-10610c9"></script>
-<script src="/static/js/dist/sm4.min.js?v=20261009-10610c9"></script>
-<script src="/static/js/encrypts.js?v=20261009-10610c9"></script>
-<script src="/static/js/utils.js?v=20261009-10610c9"></script>
-<script src="/static/js/api.js?v=20261009-10610c9"></script>
-<script src="/static/js/tenant.js?v=20261009-10610c9"></script>
-<script src="/static/js/notifications.js?v=20261009-10610c9"></script>
-<script src="/static/js/cloud-picker.js?v=20261009-10610c9"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/dist/sm4.min.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/encrypts.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/utils.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/api.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/tenant.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/notifications.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/cloud-picker.js?v=20261014-a4b2e7c"></script>
 <script>
     function toggleWsTheme() {
         var cur = document.documentElement.getAttribute('data-theme') || 'light';
@@ -635,8 +641,10 @@
         }).catch(function () {});
     })();
 </script>
-<script src="/static/js/work-summary.js?v=20261009-10610c0"></script>
-<script src="/static/js/watermark.js?v=20261009-10610c9"></script>
+<script src="/static/js/work-summary.js?v=20261014-a4b2e7c"></script>
+<script src="/static/js/watermark.js?v=20261014-a4b2e7c"></script>
 <script>WatermarkManager.init();</script>
+<script src="/static/js/agent.js?v=20261014-agent03"></script>
+<script>AgentManager.init();</script>
 </body>
 </html>

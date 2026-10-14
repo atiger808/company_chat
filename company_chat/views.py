@@ -1,9 +1,15 @@
 # -*- coding: utf-8 -*-
 """项目级视图"""
+from datetime import datetime
+
 from django.conf import settings
 from django.http import HttpResponse, Http404
 from django.shortcuts import render
+from django.utils import timezone
 from loguru import logger
+from rest_framework import permissions
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 
 def is_admin_user(user):
@@ -50,6 +56,15 @@ def _find_service_worker():
     return None
 
 
+def knowledge_base_view(request):
+    """知识库（在线文档）页面壳。
+
+    公开页面：为方便企业智能体（AI 助手）检索，未登录用户也可直接打开，
+    页面内容接口 /api/docs/catalog/ 同为 AllowAny，仅暴露 docs/ 白名单内的文档。
+    """
+    return render(request, 'docs/knowledge.html')
+
+
 def service_worker_view(request):
     """从根路径提供 Service Worker。
 
@@ -66,4 +81,112 @@ def service_worker_view(request):
     response['Service-Worker-Allowed'] = '/'
     response['Cache-Control'] = 'no-cache'
     return response
+
+
+# ==================== 企业知识库（在线文档） ====================
+# 知识库文档目录：白名单式声明，只读取 docs/ 下这些文件（避免路径穿越），
+# 文档内容直接来自仓库内的 Markdown，新增文档只需在这里加一条。
+KNOWLEDGE_DOCS = [
+    {
+        'name': '平台使用',
+        'icon': 'fa-book-open',
+        'docs': [
+            {
+                'slug': 'manual',
+                'title': '员工使用手册',
+                'desc': '各模块使用说明、限制速查与常见问题',
+                'file': '浙企钉-员工使用手册.md',
+                'public': True,
+            },
+        ],
+    },
+    {
+        'name': '研发与运维',
+        'icon': 'fa-code',
+        'docs': [
+            {
+                'slug': 'structure',
+                'title': '项目结构文档',
+                'desc': '目录结构、模块职责、数据库模型与 API 汇总',
+                'file': '浙企钉-企业协同办公平台 · 项目结构文档.md',
+                'public': False,
+            },
+            {
+                'slug': 'auto-backup',
+                'title': '项目文件自动备份功能',
+                'desc': '增量备份系统与定时任务说明',
+                'file': '项目文件自动备份功能.md',
+                'public': False,
+            },
+        ],
+    },
+    {
+        'name': '第三方接口',
+        'icon': 'fa-plug',
+        'docs': [
+            {
+                'slug': 'baidu-invoice',
+                'title': '百度增值税发票验真接口',
+                'desc': '验真接口的请求参数与返回结构',
+                'file': '百度增值税发票验真接口文档.md',
+                'public': True,
+            },
+        ],
+    },
+]
+
+
+class KnowledgeCatalogView(APIView):
+    """知识库目录 + 文档内容（一次性返回，前端本地做树/锚点/全文搜索）。
+
+    公开可读（AllowAny）：为方便企业智能体（AI 助手）检索知识库内容，
+    未登录用户也能访问该接口与知识库页面；仅暴露 docs/ 白名单内的文档，
+    不涉及任何业务数据。
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        docs_dir = settings.BASE_DIR / 'docs'
+        is_authed = bool(getattr(request.user, 'is_authenticated', False))
+        groups = []
+        total = 0
+        restricted = 0
+        for group in KNOWLEDGE_DOCS:
+            docs = []
+            for item in group['docs']:
+                # 架构 / 内部类文档需登录后查看；未登录只返回标记为 public 的文档
+                if not is_authed and not item.get('public', False):
+                    restricted += 1
+                    continue
+                doc = {
+                    'slug': item['slug'],
+                    'title': item['title'],
+                    'desc': item.get('desc', ''),
+                    'content': '',
+                    'updated_at': '',
+                }
+                try:
+                    path = docs_dir / item['file']
+                    doc['content'] = path.read_text(encoding='utf-8')
+                    doc['updated_at'] = datetime.fromtimestamp(
+                        path.stat().st_mtime).strftime('%Y-%m-%d')
+                except (OSError, UnicodeDecodeError) as e:
+                    logger.warning(f'知识库文档读取失败 {item["file"]}: {e}')
+                    doc['error'] = '文档读取失败，请联系管理员'
+                doc['size'] = len(doc['content'])
+                total += 1
+                docs.append(doc)
+            if docs:  # 未登录时若某分组下全是内部文档，则不显示空分组
+                groups.append({
+                    'name': group['name'],
+                    'icon': group.get('icon', 'fa-file-lines'),
+                    'docs': docs,
+                })
+        return Response({
+            'groups': groups,
+            'doc_count': total,
+            'restricted_count': restricted,   # 需登录后可见的内部文档数量（供前端提示）
+            'generated_at': timezone.now().isoformat(),
+        })
 
