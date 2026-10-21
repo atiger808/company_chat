@@ -11,6 +11,27 @@ BUILTIN_TYPES = [
     {'code': 'purchase', 'name': '采购', 'icon': 'fa-cart-plus', 'color': '#f56c6c', 'desc': ''},
     {'code': 'recruit', 'name': '招聘需求', 'icon': 'fa-user-plus', 'color': '#e6a23c', 'desc': ''},
     {'code': 'other', 'name': '其他', 'icon': 'fa-file-lines', 'color': '#909399', 'desc': ''},
+    # 考勤申诉/补卡申请：审批通过后自动恢复对应异常考勤为正常
+    {'code': 'attendance_appeal', 'name': '考勤申诉/补卡申请', 'icon': 'fa-user-clock', 'color': '#e6a23c',
+     'desc': '迟到/早退/缺卡/缺勤/地点异常申诉，审批通过后自动恢复为正常考勤',
+     'form_schema': [
+         {'key': 'date', 'label': '考勤日期', 'type': 'date', 'required': True},
+         {'key': 'clock_type', 'label': '缺卡类型', 'type': 'select', 'required': True,
+          'options': [
+              {'value': 'clock_in', 'label': '上班卡'},
+              {'value': 'clock_out', 'label': '下班卡'},
+              {'value': 'day', 'label': '全天（缺勤/地点异常等）'},
+          ]},
+         {'key': 'anomaly_type', 'label': '异常类型', 'type': 'select', 'required': True,
+          'options': [
+              {'value': 'late', 'label': '迟到'},
+              {'value': 'early_leave', 'label': '早退'},
+              {'value': 'missing_clock', 'label': '缺卡'},
+              {'value': 'absent', 'label': '缺勤'},
+              {'value': 'location_abnormal', 'label': '地点异常'},
+          ]},
+         {'key': 'reason', 'label': '申诉/补卡说明', 'type': 'textarea', 'required': True},
+     ]},
     # 物资需求单：分公司负责人 → 集团采购部；采购入库后可被领用
     {'code': 'material_requirement', 'name': '物资需求单', 'icon': 'fa-box-open', 'color': '#16a085',
      'desc': '分公司物资需求，采购入库后生成可领用额度',

@@ -84,6 +84,14 @@ class VersionView(APIView):
                 update_message = '<br>'.join([i for i in f.readlines() if i.strip()])
                 build_time = str(datetime.fromtimestamp(os.path.getmtime(update_msg_file)))[:19]
 
+        # 版本提示自动关闭时长（管理控制台「系统设置-聊天设置」可配置，默认 120 秒）
+        try:
+            prompt_seconds = int(SystemConfigManager.get_config(
+                'chat.version_prompt_duration_seconds', 120))
+        except (TypeError, ValueError):
+            prompt_seconds = 120
+        prompt_seconds = max(10, min(prompt_seconds, 600))
+
         # 更新版本日志
         info = {
             'app_version': app_version,
@@ -91,6 +99,7 @@ class VersionView(APIView):
             'build_time': build_time,
             'force_update': force_update,
             'update_message': update_message,
+            'version_prompt_duration_seconds': prompt_seconds,
             'environment': settings.ENVIRONMENT if hasattr(settings, 'ENVIRONMENT') else 'production'
         }
 
@@ -128,7 +137,7 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         #    members 统一 select_related('department')，避免序列化每个成员时再查部门（成员多时是硬伤）；
         #    creator 同样带出部门，否则每个聊天室的 creator_info 会各触发一次部门查询
         return ChatRoom.objects.filter(id__in=active_room_ids).select_related(
-            'creator', 'creator__department'
+            'creator', 'creator__department', 'tenant'
         ).prefetch_related(
             Prefetch('members', queryset=CustomUser.objects.select_related('department'))
         )
@@ -143,6 +152,9 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
             rooms_to_serialize = list(page)
         else:
             rooms_to_serialize = list(queryset)
+
+        # 历史聊天室没有所属企业：按用户当前企业补齐（批量更新）
+        self._backfill_room_tenants(rooms_to_serialize, request)
 
         context = {'request': request}
 
@@ -161,6 +173,28 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         if page is not None:
             return self.get_paginated_response(serializer.data)
         return Response(serializer.data)
+
+    def _backfill_room_tenants(self, rooms, request):
+        """已存在的聊天室若没有所属企业，且用户当前有所属企业，则补齐该字段
+
+        只处理本页展示、tenant 为空的聊天室，用一条 UPDATE 批量写入，
+        避免历史数据在列表接口里出现「无所属企业」。
+        """
+        from org.filters import resolve_tenant_for_request
+
+        tenant = resolve_tenant_for_request(request)
+        if tenant is None:
+            return
+
+        legacy_rooms = [r for r in rooms if r.tenant_id is None]
+        if not legacy_rooms:
+            return
+
+        ChatRoom.objects.filter(
+            id__in=[r.id for r in legacy_rooms], tenant__isnull=True
+        ).update(tenant=tenant)
+        for room in legacy_rooms:
+            room.tenant = tenant
 
     def _bulk_room_serialize_data(self, room_ids, user, date_joined):
         """构建聊天室列表序列化所需的批量数据（查询数与聊天室/成员数量无关）
@@ -395,6 +429,10 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
+        # 当前企业（JWT 请求下中间件难以解析，这里从登录用户补齐）
+        from org.filters import resolve_tenant_for_request
+        current_tenant = resolve_tenant_for_request(request)
+
         # 验证 member_ids 格式
         if not isinstance(member_ids, list):
             member_ids = []
@@ -425,6 +463,10 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
             ).first()
 
             if existing_room:
+                # 历史私聊可能没有写入所属企业：用户当前有企业时补齐该字段
+                if existing_room.tenant_id is None and current_tenant is not None:
+                    existing_room.tenant = current_tenant
+                    existing_room.save(update_fields=['tenant'])
 
                 obj = ChatRoomDeleteStatus.objects.filter(chat_room=existing_room, user=request.user).first()
                 if obj and obj.is_deleted:
@@ -450,11 +492,12 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
                 )
 
         try:
-            # 创建聊天室 - 必须设置 creator
+            # 创建聊天室：写入当前企业，保证多租户数据隔离生效
             chat_room = ChatRoom.objects.create(
                 room_type=room_type,
                 name=request.data.get('name', ''),
-                creator=request.user  # ← 关键修复：设置 creator
+                creator=request.user,  # ← 关键修复：设置 creator
+                tenant=current_tenant,
             )
 
             # 添加成员（包括创建者）
@@ -2066,7 +2109,7 @@ class AudioFormatView(APIView):
 
 class ChatRoomAdminViewSet(viewsets.ModelViewSet):
     """聊天室管理视图集（管理员专用）"""
-    queryset = ChatRoom.objects.select_related('creator')
+    queryset = ChatRoom.objects.select_related('creator', 'tenant')
     serializer_class = ChatRoomSerializer
     permission_classes = [permissions.IsAuthenticated, IsSuperAdmin]
     pagination_class = ChatRoomPagination  # 🔑 关键修复：添加分页支持

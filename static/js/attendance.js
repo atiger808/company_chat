@@ -7,6 +7,8 @@ class AttendanceApp {
         this.currentPage = 1;
         this.pageSize = 20;
         this.searchKeyword = '';
+        this._searchTimer = null;
+        this._recordsReqToken = 0;
         this._initTimer = null;
         this.chat_login_url = '/login/';
         // 用户端打卡范围地图状态
@@ -51,8 +53,8 @@ class AttendanceApp {
             const newValue = event.target.value;
             // 2. 更新 state
             this.state.start = newValue;
-            // 3. 触发加载
-            this.loadRecords();
+            // 3. 触发加载（回到第一页）
+            this.loadRecords(1);
         });
 
         document.getElementById('vDateTo').addEventListener('change', (event) => {
@@ -60,17 +62,30 @@ class AttendanceApp {
             const newValue = event.target.value;
             // 2. 更新 state
             this.state.end = newValue;
-            // 3. 触发加载
-            this.loadRecords();
+            // 3. 触发加载（回到第一页）
+            this.loadRecords(1);
         });
 
+
+        // 点击空白处关闭考勤日历的成员下拉
+        if (!this._calDropBound) {
+            this._calDropBound = true;
+            document.addEventListener('click', function(e) {
+                var dd = document.getElementById('calMemberDropdown');
+                var btn = document.getElementById('calMemberBtn');
+                if (!dd || dd.style.display === 'none') return;
+                if (!e.target.closest('#calMemberBtn') && !e.target.closest('#calMemberDropdown')) {
+                    dd.style.display = 'none';
+                }
+                if (btn && e.target.closest('#calMemberBtn')) return;
+            });
+        }
 
         this.updateClock();
         this._initTimer = setInterval(() => this.updateClock(), 1000);
         this._bindViewportRelayout();
-        await this.loadToday();
-        await this.loadStats();
-        await this.loadRecords();
+        // 今日状态/统计/记录并行加载，缩短首屏等待时间
+        await Promise.all([this.loadToday(), this.loadStats(), this.loadRecords()]);
 
         // 管理功能按钮：管理员/超级管理员；企业/部门过滤：仅超级管理员
         var userType = localStorage.getItem('user_type');
@@ -680,6 +695,10 @@ class AttendanceApp {
         const tbody = document.getElementById('attendanceTableBody');
         const pagination = document.getElementById('attendancePagination');
         if (!tbody) return;
+        var token = ++this._recordsReqToken;
+        // 只更新表格区域，不影响上方打卡按钮的正常使用
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:36px;color:#909399;">'
+            + '<i class="fas fa-spinner fa-spin" style="margin-right:6px;"></i>正在加载打卡记录...</td></tr>';
         try {
             let url = OA_API_URL + '/attendance/?page=' + page + '&page_size=' + this.pageSize;
             if (this.searchKeyword) url += '&search=' + encodeURIComponent(this.searchKeyword);
@@ -687,15 +706,18 @@ class AttendanceApp {
             var tenantId = document.getElementById('attendanceFilterTenant') ? document.getElementById('attendanceFilterTenant').value : '';
             var deptId = document.getElementById('attendanceFilterDepartment') ? document.getElementById('attendanceFilterDepartment').value : '';
             var clockType = document.getElementById('attendanceFilterClockType') ? document.getElementById('attendanceFilterClockType').value : '';
+            var statusVal = document.getElementById('attendanceFilterStatus') ? document.getElementById('attendanceFilterStatus').value : '';
             if (tenantId) url += '&tenant_id=' + tenantId;
             if (deptId) url += '&org_dept_id=' + deptId;
             if (clockType) url += '&clock_type=' + clockType;
+            if (statusVal) url += '&status=' + statusVal;
             const data = await this.apiGet(url);
-            // console.log(data);
+            if (token !== this._recordsReqToken) return; // 丢弃过期响应（快速切换筛选时）
             this._renderRecords(data, tbody);
             this._renderPagination(data, pagination);
         } catch (e) {
-            tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:40px;color:#909399;">加载失败: ' + e.message + '</td></tr>';
+            if (token !== this._recordsReqToken) return;
+            tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:40px;color:#909399;">加载失败: ' + this._escape(e.message) + '</td></tr>';
             pagination.style.display = 'none';
         }
     }
@@ -718,30 +740,97 @@ class AttendanceApp {
         // Clear selection on page change
         if (this._selectedRecordIds) this._selectedRecordIds.clear();
         const rows = data.results || [];
+        this._rowCache = {};
+        rows.forEach(function(r) { attendanceApp._rowCache[String(r.id)] = r; });
         if (!rows.length) {
             tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:40px;color:#909399;">暂无打卡记录</td></tr>';
             this._updateExportPrintButtons();
             return;
         }
-        const statusMap = { 'normal': '正常', 'late': '迟到', 'early_leave': '早退' };
+        const statusMap = {
+            'normal': '正常', 'late': '迟到', 'early_leave': '早退',
+            'missing_clock': '缺卡', 'absent': '缺勤', 'rest': '休息',
+            'location_abnormal': '地点异常', 'leave': '请假', 'trip': '出差'
+        };
+        const appealable = {late: 1, early_leave: 1, missing_clock: 1, absent: 1, location_abnormal: 1};
+        const selfId = parseInt(localStorage.getItem('user_id'));
         const defaultAvatar = '/static/images/default-avatar.png';
         tbody.innerHTML = rows.map(function(r) {
             const st = r.status || 'normal';
             const avatar = r.avatar_url || defaultAvatar;
-            var checked = attendanceApp._selectedRecordIds && attendanceApp._selectedRecordIds.has(r.id) ? 'checked' : '';
+            const key = String(r.id);
+            const checked = attendanceApp._selectedRecordIds && attendanceApp._selectedRecordIds.has(key) ? 'checked' : '';
+            const canAppeal = (r.user === selfId) && appealable[st];
+            const appealBtn = canAppeal
+                ? '<button class="action-btn" onclick="event.stopPropagation();attendanceApp.openAppeal(\'' + (r.date || '') + '\',\'' + (r.clock_type || 'day') + '\',\'' + st + '\')" title="申诉/补卡申请" style="color:#e6a23c;"><i class="fas fa-balance-scale"></i></button>'
+                : '';
             return '<tr style="cursor:pointer;">'
-                + '<td><input type="checkbox" class="record-cb" data-id="' + r.id + '" ' + checked + ' onchange="event.stopPropagation();attendanceApp._toggleRecord(' + r.id + ', this.checked)"></td>'
+                + '<td><input type="checkbox" class="record-cb" data-id="' + key + '" ' + checked + ' onchange="event.stopPropagation();attendanceApp._toggleRecord(this.dataset.id, this.checked)"></td>'
                 + '<td><div style="display:flex;align-items:center;gap:8px;"><img src="' + avatar + '" alt="" style="width:32px;height:32px;border-radius:50%;object-fit:cover;">'
                 + '<span>' + attendanceApp._escape(r.user_name || '') + '</span></div></td>'
                 + '<td>' + attendanceApp._escape(r.department_name || '-') + '</td>'
                 + '<td>' + (r.date || '-') + '</td>'
-                + '<td><span class="badge badge-info">' + (r.clock_type_display || r.clock_type) + '</span></td>'
-                + '<td>' + attendanceApp._formatTime(r.clock_time) + '</td>'
-                + '<td><span class="status-badge ' + st + '">' + (statusMap[st] || st) + '</span></td>'
-                + '<td onclick="event.stopPropagation();attendanceApp.showDetail(' + r.id + ')">' + (r.location || '-') + (r.bd09_latitude ? ' <i class="fas fa-map-marker-alt" style="color:#f56c6c;font-size:11px;" title="已标记地图位置"></i>' : '') + '</td>'
-                + '<td>' + (r.device || '-') + '</td>'
-                + '<td><button class="action-btn" onclick="event.stopPropagation();attendanceApp.showDetail(' + r.id + ')" title="详情"><i class="fas fa-eye"></i></button></td></tr>';
+                + '<td><span class="badge badge-info">' + attendanceApp._escape(r.clock_type_display || r.clock_type) + '</span></td>'
+                + '<td>' + (r.clock_time ? attendanceApp._formatTime(r.clock_time) : '-') + '</td>'
+                + '<td><span class="status-badge ' + st + '">' + attendanceApp._escape(r.status_display || statusMap[st] || st) + '</span></td>'
+                + '<td onclick="event.stopPropagation();attendanceApp.showDetail(\'' + key + '\')">' + attendanceApp._escape(r.location || '-') + (r.bd09_latitude ? ' <i class="fas fa-map-marker-alt" style="color:#f56c6c;font-size:11px;" title="已标记地图位置"></i>' : '') + '</td>'
+                + '<td>' + attendanceApp._escape(r.device || '-') + '</td>'
+                + '<td style="white-space:nowrap;"><button class="action-btn" onclick="event.stopPropagation();attendanceApp.showDetail(\'' + key + '\')" title="详情"><i class="fas fa-eye"></i></button>'
+                + appealBtn + '</td></tr>';
         }).join('');
+    }
+
+    // 申诉/补卡申请（联动 OA 审批，审批通过后自动恢复为正常考勤）
+    openAppeal(date, clockType, anomalyType) {
+        var labels = {late: '迟到', early_leave: '早退', missing_clock: '缺卡', absent: '缺勤', location_abnormal: '地点异常'};
+        var label = labels[anomalyType] || anomalyType;
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
+        overlay.innerHTML = '<div style="background:var(--bg-primary,#fff);border-radius:12px;max-width:460px;width:90%;box-shadow:0 12px 48px rgba(0,0,0,.2);">'
+            + '<div style="padding:16px 20px;border-bottom:1px solid var(--border-color,#ebeef5);font-size:16px;font-weight:600;"><i class="fas fa-balance-scale" style="color:#e6a23c;"></i> 考勤申诉 · ' + this._escape(date) + ' ' + this._escape(label) + '</div>'
+            + '<div style="padding:16px 20px;"><div style="font-size:13px;color:#909399;margin-bottom:10px;">补卡次数不足或无法补卡时，可提交申诉，审批通过后该异常考勤自动恢复为正常。</div>'
+            + '<textarea id="appealReasonInput" class="form-textarea" rows="4" placeholder="请填写申诉/补卡说明（必填）" style="width:100%;"></textarea></div>'
+            + '<div style="padding:12px 20px;border-top:1px solid var(--border-color,#ebeef5);display:flex;gap:8px;justify-content:flex-end;">'
+            + '<button class="btn btn-secondary" data-act="cancel">取消</button>'
+            + '<button class="btn btn-primary" data-act="submit"><i class="fas fa-paper-plane"></i> 提交申诉</button></div></div>';
+        document.body.appendChild(overlay);
+        var close = function() { overlay.remove(); };
+        overlay.querySelector('[data-act="cancel"]').onclick = close;
+        overlay.addEventListener('click', function(e) { if (e.target === overlay) close(); });
+        var self = this;
+        overlay.querySelector('[data-act="submit"]').onclick = async function() {
+            var reason = (document.getElementById('appealReasonInput').value || '').trim();
+            if (!reason) { self.showToast('请填写申诉说明', true); return; }
+            var payload = {
+                approval_type: 'attendance_appeal',
+                title: '考勤申诉：' + date + ' ' + label,
+                content: reason,
+                start_date: date,
+                end_date: date,
+                form_data: {
+                    date: date,
+                    clock_type: clockType || 'day',
+                    anomaly_type: anomalyType,
+                    reason: reason
+                },
+                sign_type: 'countersign',
+                approval_mode: 'sequential'
+            };
+            try {
+                var resp = await fetch(OA_API_URL + '/approval/', {
+                    method: 'POST',
+                    headers: Object.assign({}, TokenManager.getHeaders(), {'Content-Type': 'application/json'}),
+                    body: JSON.stringify(payload)
+                });
+                var raw = await resp.json().catch(function() { return {}; });
+                var data = (raw && raw.encrypt && window.EncryptUtils) ? window.EncryptUtils.decryptPacket(raw) : raw;
+                if (!resp.ok) throw new Error((data && (data.error || data.detail)) || '提交失败');
+                close();
+                self.showToast('申诉已提交，等待审批通过后自动恢复考勤', false);
+            } catch (e) {
+                self.showToast((e && e.message) || '提交失败', true);
+            }
+        };
     }
 
     _renderPagination(data, container) {
@@ -772,9 +861,18 @@ class AttendanceApp {
     }
 
     async showDetail(id) {
+        id = String(id);
+        if (id.indexOf('v:') === 0) {
+            this._showVirtualDetail(id);
+            return;
+        }
         try {
             const d = await this.apiGet(OA_API_URL + '/attendance/' + id + '/');
-            const statusMap = { 'normal': '正常', 'late': '迟到', 'early_leave': '早退' };
+            const statusMap = {
+                'normal': '正常', 'late': '迟到', 'early_leave': '早退',
+                'missing_clock': '缺卡', 'absent': '缺勤', 'rest': '休息',
+                'location_abnormal': '地点异常', 'leave': '请假', 'trip': '出差'
+            };
             const avatar = d.avatar_url || '/static/images/default-avatar.png';
             let html = '<div class="detail-grid">'
                 + '<div class="detail-item" style="grid-column:1/-1;"><label>用户</label><span style="display:flex;align-items:center;gap:8px;"><img src="' + avatar + '" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">' + this._escape(d.user_name || '') + '</span></div>'
@@ -813,6 +911,28 @@ class AttendanceApp {
         } catch (e) {
             console.error('加载详情失败:', e);
         }
+    }
+
+    _showVirtualDetail(key) {
+        var r = (this._rowCache || {})[key] || {};
+        var parts = key.split(':');
+        var statusMap = {
+            missing_clock: '缺卡', absent: '缺勤', rest: '休息',
+            location_abnormal: '地点异常', leave: '请假', trip: '出差'
+        };
+        var st = r.status || parts[3] || '';
+        var html = '<div class="detail-grid">'
+            + '<div class="detail-item"><label>用户</label><span>' + this._escape(r.user_name || '') + '</span></div>'
+            + '<div class="detail-item"><label>部门</label><span>' + this._escape(r.department_name || '-') + '</span></div>'
+            + '<div class="detail-item"><label>日期</label><span>' + this._escape(r.date || parts[2] || '-') + '</span></div>'
+            + '<div class="detail-item"><label>类型</label><span>' + this._escape(r.clock_type_display || '-') + '</span></div>'
+            + '<div class="detail-item"><label>状态</label><span class="status-badge ' + this._escape(st) + '">' + this._escape(r.status_display || statusMap[st] || st) + '</span></div>'
+            + '<div class="detail-item"><label>说明</label><span>' + this._escape(r.remark || '-') + '</span></div>'
+            + '</div><div style="margin-top:10px;font-size:12px;color:#909399;"><i class="fas fa-info-circle"></i> 该记录为系统按考勤规则自动生成的状态记录（非实际打卡）。</div>';
+        if (['late', 'early_leave', 'missing_clock', 'absent', 'location_abnormal'].indexOf(st) !== -1) {
+            html += '<div style="margin-top:12px;text-align:right;"><button class="btn btn-primary btn-sm" onclick="attendanceApp.openAppeal(\'' + (r.date || parts[2] || '') + '\',\'' + (r.clock_type || parts[4] || 'day') + '\',\'' + st + '\')"><i class="fas fa-balance-scale"></i> 申诉/补卡申请</button></div>';
+        }
+        this.showAlert('考勤状态详情', html);
     }
 
     async _convertAndShowMap(id, status, clock_time) {
@@ -1167,14 +1287,22 @@ class AttendanceApp {
     search() {
         const el = document.getElementById('attendanceSearch');
         this.searchKeyword = el ? el.value.trim() : '';
+        // 输入防抖：避免每敲一个字都请求一次（远程/大企业数据加载更顺畅）
+        clearTimeout(this._searchTimer);
+        var self = this;
+        this._searchTimer = setTimeout(function() { self.loadRecords(1); }, 350);
+    }
+
+    onFilterStatusChange() {
         this.loadRecords(1);
     }
 
     fmtDate(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 
     initRange() {
+        // 默认展示近 7 天，避免首次加载一次生成整月所有成员的虚拟考勤行导致卡顿
         var end = new Date(), start = new Date();
-        start.setMonth(end.getMonth() - 1);
+        start.setDate(end.getDate() - 6);
         this.state.end = this.fmtDate(end); this.state.start = this.fmtDate(start);
     }
 
@@ -1212,7 +1340,7 @@ class AttendanceApp {
         set.clear();
         if (checked) {
             document.querySelectorAll('.record-cb').forEach(function(cb) {
-                var id = parseInt(cb.dataset.id);
+                var id = cb.dataset.id;
                 if (id) set.add(id);
             });
         }
@@ -1373,7 +1501,7 @@ class AttendanceApp {
             + '</style></head><body>'
             + '<div class="print-header"><div class="print-title">考勤打卡记录</div><div class="print-date">打印时间：' + dateStr + '</div></div>'
             + '<table><thead><tr>';
-        var statusMap = {'normal':'正常','late':'迟到','early_leave':'早退'};
+        var statusMap = {'normal':'正常','late':'迟到','early_leave':'早退','missing_clock':'缺卡','absent':'缺勤','rest':'休息','location_abnormal':'地点异常','leave':'请假','trip':'出差'};
         // Header
         fields.forEach(function(f) {
             if (selSet[f.key]) html += '<th>' + f.label + '</th>';
@@ -1420,16 +1548,32 @@ class AttendanceApp {
         }
     }
 
+    // 确保网盘目录存在（不存在自动创建），返回目录 id
+    async _ensureCloudFolder(name) {
+        var resp = await fetch('/api/cloud/folders/ensure/', {
+            method: 'POST',
+            headers: Object.assign({}, TokenManager.getHeaders(), {'Content-Type': 'application/json'}),
+            body: JSON.stringify({name: name})
+        });
+        var data = await resp.json().catch(function() { return {}; });
+        if (!resp.ok || !data.id) throw new Error((data && data.error) || '创建网盘目录失败');
+        return data.id;
+    }
+
     _doExportRecords(selectedFields, target) {
         var self = this;
         var token = localStorage.getItem('access_token');
         if (!token) { this.showAlert('提示', '登录已过期，请重新登录'); return; }
-        var url = OA_API_URL + '/attendance/export/?';
-        var params = [];
+        this.showToast(target === 'cloud' ? '正在生成并保存到网盘，请稍候...' : '正在生成考勤导出文件，请稍候...', false);
+        var url = OA_API_URL + '/attendance/export/';
         var ids = Array.from(this._getSelectedIds());
-        if (ids.length) params.push('record_ids=' + ids.join(','));
-        if (selectedFields && selectedFields.length) params.push('fields=' + selectedFields.join(','));
-        url += params.join('&');
+        var payload = {
+            record_ids: ids,
+            fields: selectedFields || [],
+            start: (this.state && this.state.start) || '',
+            end: (this.state && this.state.end) || ''
+        };
+        var exportHeaders = Object.assign({}, TokenManager.getHeaders(), { 'Content-Type': 'application/json' });
         // Generate filename with current datetime
 
         var now = new Date();
@@ -1443,21 +1587,28 @@ class AttendanceApp {
 
         if (target === 'cloud') {
             fetch(url, {
-                headers: { 'Authorization': 'Bearer ' + token }
+                method: 'POST',
+                headers: exportHeaders,
+                body: JSON.stringify(payload)
             }).then(function(resp) {
                 if (!resp.ok) { throw new Error('导出失败 ' + resp.status); }
                 return resp.blob();
             }).then(function(blob) {
-                var file = new File([blob], filename, {type: blob.type || 'text/csv'});
-                return Utils.uploadToCloud(file, null);
+                var file = new File([blob], filename, {type: blob.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+                // 默认保存到「文档（来自考勤）」，不存在则自动创建
+                return self._ensureCloudFolder('文档（来自考勤）').then(function(folderId) {
+                    return Utils.uploadToCloud(file, folderId, '考勤记录');
+                });
             }).then(function() {
-                self.showAlert('成功', '已保存到网盘');
+                self.showAlert('成功', '已保存到网盘 / 文档（来自考勤）');
             }).catch(function(err) {
                 self.showAlert('错误', '保存到网盘失败：' + err.message);
             });
         } else {
             fetch(url, {
-                headers: { 'Authorization': 'Bearer ' + token }
+                method: 'POST',
+                headers: exportHeaders,
+                body: JSON.stringify(payload)
             }).then(function(resp) {
                 if (!resp.ok) { throw new Error('导出失败 ' + resp.status); }
                 return resp.blob();
@@ -1469,6 +1620,7 @@ class AttendanceApp {
                 link.click();
                 document.body.removeChild(link);
                 URL.revokeObjectURL(link.href);
+                self.showToast('考勤记录导出成功', false);
             }).catch(function(err) {
                 self.showAlert('错误', '导出失败：' + err.message);
             });
@@ -1601,6 +1753,8 @@ class AttendanceApp {
         if (deptFilter) deptFilter.value = '';
         var clockTypeFilter = document.getElementById('attendanceFilterClockType');
         if (clockTypeFilter) clockTypeFilter.value = '';
+        var statusFilter = document.getElementById('attendanceFilterStatus');
+        if (statusFilter) statusFilter.value = '';
         this.initRange()
         document.getElementById('vDateFrom').value = this.state.start;
         document.getElementById('vDateTo').value = this.state.end;
@@ -3155,11 +3309,79 @@ class AttendanceApp {
     _openCalendar() {
         this._calYear = new Date().getFullYear();
         this._calMonth = new Date().getMonth() + 1;
+        this._calUserId = '';
+        this._loadCalendarMembers();
         this._renderCalendar();
         document.getElementById('attendanceCalendarModal').style.display = 'flex';
         setTimeout(function() {
             document.getElementById('attendanceCalendarModal').classList.add('show');
         }, 10);
+    }
+
+    _loadCalendarMembers() {
+        var btn = document.getElementById('calMemberBtn');
+        var dd = document.getElementById('calMemberDropdown');
+        if (!btn || !dd) return;
+        btn.style.display = 'none';
+        dd.style.display = 'none';
+        dd.innerHTML = '';
+        var self = this;
+        var selfId = parseInt(localStorage.getItem('user_id'));
+        fetch(OA_API_URL + '/attendance/members/', {headers: TokenManager.getHeaders()})
+            .then(function(r) { return r.ok ? r.json() : {results: []}; })
+            .then(function(data) {
+                var list = data.results || [];
+                var others = list.filter(function(u) { return u.id !== selfId; });
+                if (!others.length) return;
+                var items = [{id: '', name: '本人', position: '', department_name: '', avatar: ''}].concat(others);
+                self._calMembers = items;
+                dd.innerHTML = items.map(function(u) {
+                    var uid = u.id === '' ? '' : String(u.id);
+                    var avatar = u.avatar || '/static/images/default-avatar.png';
+                    var meta = [u.position, u.department_name].filter(Boolean).join(' · ') || '—';
+                    return '<div data-uid="' + uid + '" style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-color,#f0f2f5);">'
+                        + '<img src="' + avatar + '" style="width:34px;height:34px;border-radius:50%;object-fit:cover;flex-shrink:0;background:#f5f7fa;">'
+                        + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;color:var(--text-primary,#303133);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape(u.name || u.username || '') + '</div>'
+                        + '<div style="font-size:11px;color:#909399;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape(meta) + '</div></div>'
+                        + '</div>';
+                }).join('');
+                dd.querySelectorAll('[data-uid]').forEach(function(it) {
+                    it.addEventListener('click', function() { self._pickCalMember(it.getAttribute('data-uid')); });
+                });
+                self._setCalMemberButton('');
+                btn.style.display = 'inline-flex';
+            })
+            .catch(function() {});
+    }
+
+    _setCalMemberButton(uid) {
+        var btn = document.getElementById('calMemberBtn');
+        var avatarEl = document.getElementById('calMemberBtnAvatar');
+        var textEl = document.getElementById('calMemberBtnText');
+        if (!btn || !avatarEl || !textEl) return;
+        var list = this._calMembers || [];
+        var item = null;
+        for (var i = 0; i < list.length; i++) {
+            if (String(list[i].id) === String(uid)) { item = list[i]; break; }
+        }
+        if (!item) item = {name: '本人', position: '', department_name: '', avatar: ''};
+        avatarEl.src = item.avatar || '/static/images/default-avatar.png';
+        var meta = [item.position, item.department_name].filter(Boolean).join(' · ');
+        textEl.textContent = (item.name || '本人') + (meta ? '（' + meta + '）' : '');
+    }
+
+    _toggleCalMemberDropdown(e) {
+        if (e && e.stopPropagation) e.stopPropagation();
+        var dd = document.getElementById('calMemberDropdown');
+        if (dd) dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+    }
+
+    _pickCalMember(uid) {
+        var dd = document.getElementById('calMemberDropdown');
+        if (dd) dd.style.display = 'none';
+        this._calUserId = uid ? parseInt(uid) : '';
+        this._setCalMemberButton(this._calUserId);
+        this._renderCalendar();
     }
 
     _closeCalendar() {
@@ -3189,7 +3411,9 @@ class AttendanceApp {
         if (!grid) return;
         grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:30px;"><i class="fas fa-spinner fa-spin"></i></div>';
         try {
-            var data = await this.apiGet(OA_API_URL + '/attendance/calendar-stats/?year=' + year + '&month=' + month);
+            var url = OA_API_URL + '/attendance/calendar-stats/?year=' + year + '&month=' + month;
+            if (this._calUserId) url += '&user_id=' + encodeURIComponent(this._calUserId);
+            var data = await this.apiGet(url);
             var days = data.days || [];
             var summary = data.summary || {};
             document.getElementById('calNormalCount').textContent = summary.normal || 0;
@@ -3197,6 +3421,8 @@ class AttendanceApp {
             document.getElementById('calMissCount').textContent = summary.miss_clock || 0;
             document.getElementById('calAbsentCount').textContent = summary.absent || 0;
             document.getElementById('calLeaveCount').textContent = summary.leave || 0;
+            var tripEl = document.getElementById('calTripCount');
+            if (tripEl) tripEl.textContent = summary.trip || 0;
             document.getElementById('calRestCount').textContent = summary.rest || 0;
             var weekDays = ['日', '一', '二', '三', '四', '五', '六'];
             var html = '';
@@ -3222,6 +3448,7 @@ class AttendanceApp {
                 else if (status === 'absent') { bgColor = '#f5f5f5'; dotColor = '#909399'; textColor = '#bbb'; }
                 else if (status === 'future') { bgColor = '#fafafa'; textColor = '#ccc'; }
                 else if (status === 'leave') { bgColor = '#ecf5ff'; dotColor = '#409eff'; }
+                else if (status === 'trip') { bgColor = '#f3e8ff'; dotColor = '#9b59b6'; }
                 else if (status === 'rest') { bgColor = '#f0f2f5'; dotColor = '#a0a4ab'; textColor = '#999'; }
                 var tooltip = '';
                 if (info.clock_in && info.clock_out) {
@@ -3249,14 +3476,16 @@ class AttendanceApp {
 
     async _showCalDayDetail(dateStr) {
         try {
-            var data = await this.apiGet(OA_API_URL + '/attendance/calendar-day-detail/?date=' + dateStr);
+            var url = OA_API_URL + '/attendance/calendar-day-detail/?date=' + dateStr;
+            if (this._calUserId) url += '&user_id=' + encodeURIComponent(this._calUserId);
+            var data = await this.apiGet(url);
             if (!data) return;
-            var title = dateStr + ' 打卡详情';
+            var title = (data.user_name ? data.user_name + ' · ' : '') + dateStr + ' 考勤详情';
             var body = '<div style="padding:8px 0;">';
             // Clock-in info
             var ci = data.clock_in;
             var co = data.clock_out;
-            var statusMap = {'normal': '正常', 'late': '迟到', 'early_leave': '早退'};
+            var statusMap = {'normal': '正常', 'late': '迟到', 'early_leave': '早退', 'location_abnormal': '地点异常'};
             if (ci) {
                 body += '<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#f0f9eb;border-radius:8px;margin-bottom:8px;border-left:3px solid #67c23a;">'
                     + '<i class="fas fa-sign-in-alt" style="color:#52c41a;font-size:18px;"></i>'
@@ -3292,6 +3521,22 @@ class AttendanceApp {
                     + '<div style="font-size:13px;color:var(--text-secondary);">时数: ' + (ot.duration || 0) + ' 小时</div>'
                     + (ot.content ? '<div style="font-size:12px;color:#606266;margin-top:2px;">内容: ' + this._escape(ot.content) + '</div>' : '')
                     + (ot.title ? '<div style="font-size:12px;color:#909399;margin-top:2px;">审批: ' + this._escape(ot.title) + '</div>' : '')
+                    + '</div></div>';
+            }
+            if (data.leave) {
+                var lv = data.leave;
+                body += '<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#ecf5ff;border-radius:8px;margin-bottom:8px;border-left:3px solid #409eff;">'
+                    + '<i class="fas fa-calendar-check" style="color:#409eff;font-size:18px;"></i>'
+                    + '<div><div style="font-weight:600;font-size:14px;">请假（' + this._escape(lv.type || '请假') + '）</div>'
+                    + (lv.title ? '<div style="font-size:12px;color:#909399;">审批：' + this._escape(lv.title) + '</div>' : '')
+                    + '</div></div>';
+            }
+            if (data.trip) {
+                var tp = data.trip;
+                body += '<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#f3e8ff;border-radius:8px;margin-bottom:8px;border-left:3px solid #9b59b6;">'
+                    + '<i class="fas fa-plane" style="color:#9b59b6;font-size:18px;"></i>'
+                    + '<div><div style="font-weight:600;font-size:14px;">出差' + (tp.destination ? '（' + this._escape(tp.destination) + '）' : '') + '</div>'
+                    + (tp.title ? '<div style="font-size:12px;color:#909399;">审批：' + this._escape(tp.title) + '</div>' : '')
                     + '</div></div>';
             }
             body += '</div>';

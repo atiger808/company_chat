@@ -301,10 +301,20 @@ class SubsidyVerifyApp {
     async _doExportSelected(ids, selectedFields, target) {
         const token = localStorage.getItem('access_token');
         if (!token) { this._handleAuthError(); return; }
-        const parts = this._adminQuery().split('&').filter(function (p) { return p.indexOf('page=') !== 0 && p.indexOf('page_size=') !== 0; });
-        parts.push('record_ids=' + ids.join(','));
-        parts.push('fields=' + selectedFields.join(','));
-        const url = SUBSIDY_API + '/export/?' + parts.join('&');
+        const get = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+        const payload = {
+            record_ids: ids,
+            fields: selectedFields,
+            search: get('vSearch'),
+            status: get('vStatus'),
+            invoice_type: get('vType'),
+            invoice_number: get('vInvNumber'),
+            date_from: get('vDateFrom'),
+            date_to: get('vDateTo'),
+            min_amount: get('vMinAmount'),
+            max_amount: get('vMaxAmount')
+        };
+        const url = SUBSIDY_API + '/export/';
         const now = new Date();
         const d = String(now.getFullYear()) + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
         const t = String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
@@ -317,7 +327,11 @@ class SubsidyVerifyApp {
 
         this.showToast(target === 'cloud' ? '正在生成并保存到网盘，请稍候...' : '正在导出 Excel，请稍候...', false);
         try {
-            const resp = await fetch(url, {headers: TokenManager.getHeaders()});
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: Object.assign({}, TokenManager.getHeaders(), {'Content-Type': 'application/json'}),
+                body: JSON.stringify(payload)
+            });
             if (!resp.ok) throw new Error('导出失败 ' + resp.status);
             const blob = await resp.blob();
             if (target === 'cloud') {

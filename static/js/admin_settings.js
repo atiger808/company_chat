@@ -314,6 +314,7 @@ class AdminSettingsClient {
             'chat.typing_timeout': '秒',
             'chat.message_retention_days': '天',
             'chat.message_canrevoke_minutes': '分钟',
+            'chat.version_prompt_duration_seconds': '秒',
             'security.login_lockout_minutes': '分钟',
             'security.session_timeout_hours': '小时',
             'advanced.cache_ttl_seconds': '秒',

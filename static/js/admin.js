@@ -909,12 +909,32 @@ class AdminConsole {
         var html = '<div class="user-pagination-bar">'
             + '<span class="user-pagination-total">共 ' + data.count + ' 条</span>'
             + '<div class="user-pagination-btns">';
-        html += '<button class="pagination-btn" onclick="adminConsole.loadUsers(' + (p - 1) + ')" ' + (p <= 1 ? 'disabled' : '') + '><i class="fas fa-chevron-left"></i></button>';
+        html += '<button class="pagination-btn" title="首页" onclick="adminConsole.loadUsers(1)" ' + (p <= 1 ? 'disabled' : '') + '><i class="fas fa-angle-double-left"></i></button>';
+        html += '<button class="pagination-btn" title="上一页" onclick="adminConsole.loadUsers(' + (p - 1) + ')" ' + (p <= 1 ? 'disabled' : '') + '><i class="fas fa-chevron-left"></i></button>';
         for (var i = Math.max(1, p - 2); i <= Math.min(t, p + 2); i++) {
             html += '<button class="pagination-btn ' + (i === p ? 'active' : '') + '" onclick="adminConsole.loadUsers(' + i + ')">' + i + '</button>';
         }
-        html += '<button class="pagination-btn" onclick="adminConsole.loadUsers(' + (p + 1) + ')" ' + (p >= t ? 'disabled' : '') + '><i class="fas fa-chevron-right"></i></button></div></div>';
+        html += '<button class="pagination-btn" title="下一页" onclick="adminConsole.loadUsers(' + (p + 1) + ')" ' + (p >= t ? 'disabled' : '') + '><i class="fas fa-chevron-right"></i></button>';
+        html += '<button class="pagination-btn" title="末页" onclick="adminConsole.loadUsers(' + t + ')" ' + (p >= t ? 'disabled' : '') + '><i class="fas fa-angle-double-right"></i></button>';
+        html += '<span class="pagination-jump">跳至 <input type="number" class="pagination-jump-input" id="userPageJump" min="1" max="' + t + '" value="' + p + '"'
+            + ' onkeydown="if(event.key===\'Enter\'){adminConsole.jumpToPage(this,' + t + ',\'loadUsers\');}"> / ' + t + ' 页 '
+            + '<button class="pagination-btn" title="跳转" onclick="adminConsole.jumpToPage(document.getElementById(\'userPageJump\'),' + t + ',\'loadUsers\')"><i class="fas fa-arrow-right"></i></button></span>';
+        html += '</div></div>';
         container.innerHTML = html;
+    }
+
+    jumpToPage(inputEl, totalPages, loadFn) {
+        if (!inputEl || !totalPages) return;
+        var page = parseInt(inputEl.value, 10);
+        if (!Number.isFinite(page)) page = NaN;
+        if (!page || page < 1 || page > totalPages) {
+            this.showError('页码无效', '请输入 1 - ' + totalPages + ' 之间的页码');
+            inputEl.value = '';
+            return;
+        }
+        if (typeof this[loadFn] === 'function') {
+            this[loadFn](page);
+        }
     }
 
     _loadFilterTenants() {
@@ -1555,22 +1575,38 @@ class AdminConsole {
     }
 
 
-    // 加载所有用户用于好友分配
+    // 加载所有可分配好友（按当前管理员权限范围，分页拉取全量）
     async loadAllUsersForFriends() {
         try {
-            const response = await fetch(`${API_ADMIN_URL}/users/`, {
-                headers: TokenManager.getHeaders()
+            // 与「用户管理」同一数据范围：
+            // 超级管理员 = 全部用户；普通管理员 = 本企业 + 本部门用户（后端强制收窄）
+            const pageSize = 100;
+            const collected = [];
+            let page = 1;
+            let totalPages = 1;
+            do {
+                const response = await fetch(
+                    `${API_ADMIN_URL}/admin/users/?page=${page}&page_size=${pageSize}&is_active=1`,
+                    { headers: TokenManager.getHeaders() }
+                );
+                if (!response.ok) {
+                    const errorData = await this.parseErrorResponse(response);
+                    throw new Error(errorData.message || '加载用户列表失败');
+                }
+                let data = await response.json();
+                if (data && data.encrypt && window.EncryptUtils) {
+                    data = window.EncryptUtils.decryptPacket(data);
+                }
+                const rows = Array.isArray(data) ? data : (data.results || []);
+                collected.push(...rows);
+                totalPages = (data && data.total_pages) || 1;
+                page += 1;
+            } while (page <= totalPages && page <= 100);
+
+            const selfId = this.currentUser && this.currentUser.id;
+            this.allUsersForFriends = collected.filter(function (u) {
+                return String(u.id) !== String(selfId);
             });
-
-            if (!response.ok) {
-                const errorData = await this.parseErrorResponse(response);
-                throw new Error(errorData.message || '加载用户列表失败');
-            }
-
-            const data = await response.json();
-            // console.log('data:', data)
-            this.allUsersForFriends = Array.isArray(data) ? data : (data.results || []);
-            // console.log('this.allUsersForFriends:', this.allUsersForFriends)
             return this.allUsersForFriends;
         } catch (error) {
             console.error('加载用户列表失败:', error);
@@ -1622,27 +1658,35 @@ class AdminConsole {
         const friendContainer = document.getElementById('friendSelectionContainer');
         if (!friendContainer) return;
 
-        // 获取所有用户（排除当前用户）
-        const allUsers = this.users.filter(u => u.id !== userId);
+        // 使用全量可分配好友（按当前管理员权限范围加载），排除正在编辑的用户
+        const sourceUsers = (this.allUsersForFriends && this.allUsersForFriends.length)
+            ? this.allUsersForFriends
+            : this.users;
+        const allUsers = sourceUsers.filter(u => u.id !== userId);
 
         let html = `
         <div class="form-group">
             <label><i class="fas fa-user-friends"></i> 分配好友</label>
-            <div class="search-box">
+            <div class="input-with-icon">
                 <i class="fas fa-search"></i>
                 <input type="text" id="friendSearch" placeholder="搜索用户...">
             </div>
-            <div class="member-grid" id="friendGrid">
+            <div class="member-grid friend-grid-5" id="friendGrid">
     `;
 
         allUsers.forEach(user => {
             const isSelected = friends.some(f => f.id === user.id);
+            var posName = user.position || '';
+            if (!posName && user.org_departments && user.org_departments.length) {
+                posName = user.org_departments[0].position || '';
+            }
             html += `
             <div class="member-grid-item ${isSelected ? 'selected' : ''}" data-user-id="${user.id}">
                 <div class="member-grid-avatar">
                     <img src="${user.avatar_url || '/static/images/default-avatar.png'}" alt="${user.username}">
                 </div>
                 <div class="member-grid-name">${user.real_name || user.username}</div>
+                ${posName ? '<div class="member-grid-position">' + posName + '</div>' : ''}
                 ${isSelected ? '<div class="member-grid-tag">已选</div>' : ''}
             </div>
         `;
@@ -1684,9 +1728,10 @@ class AdminConsole {
         if (!container) return;
 
 
-        // 获取所有用户（排除当前用户 - 仅在编辑用户时需要）
-        // let allUsers = this.allUsersForFriends;
-        let allUsers = this.users;
+        // 使用全量可分配好友（按当前管理员权限范围加载），而不是当前页用户
+        let allUsers = (this.allUsersForFriends && this.allUsersForFriends.length)
+            ? this.allUsersForFriends
+            : this.users;
 
         // 将已选好友排到前面
         const sortedUsers = [...allUsers].sort((a, b) => {
@@ -1701,12 +1746,17 @@ class AdminConsole {
 
         sortedUsers.forEach(user => {
             const isSelected = selectedFriends.some(f => f.id === user.id);
+            var posName = user.position || '';
+            if (!posName && user.org_departments && user.org_departments.length) {
+                posName = user.org_departments[0].position || '';
+            }
             html += `
             <div class="member-grid-item ${isSelected ? 'selected' : ''}" data-user-id="${user.id}">
                 <div class="member-grid-avatar">
                     <img src="${user.avatar_url || '/static/images/default-avatar.png'}" alt="${user.username}">
                 </div>
                 <div class="member-grid-name">${user.real_name || user.username}</div>
+                ${posName ? '<div class="member-grid-position">' + posName + '</div>' : ''}
                 ${isSelected ? '<div class="member-grid-tag">已选</div>' : ''}
             </div>
         `;
@@ -2347,6 +2397,14 @@ class AdminConsole {
                     return;
                 }
 
+                // 数据隔离：打开配置模态框，不切换标签
+                if (item.dataset.tab === 'tenant-isolation') {
+                    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                    item.classList.add('active');
+                    this.openTenantIsolationConfig();
+                    return;
+                }
+
                 const tabName = item.dataset.tab;
 
                 // 🔧 无对应内容页的导航项（如纯弹窗类配置）不切换内容区，避免主内容区被清空
@@ -2918,7 +2976,7 @@ class AdminConsole {
             const rawData = await resp.json();
             const data = window.EncryptUtils.decryptPacket(rawData);
             this._renderLoginLogs(data, tbody);
-            this._renderLogPagination(data, pagination, 'loadLoginLogs');
+            this._renderLogPagination(data, pagination, 'loadLoginLogs', 'loginLogPageJump');
         } catch (e) {
             tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:#909399;">Failed: ' + e.message + '</td></tr>';
             pagination.style.display = 'none';
@@ -2982,7 +3040,7 @@ class AdminConsole {
             const rawData = await resp.json();
             const data = window.EncryptUtils.decryptPacket(rawData);
             this._renderOperationLogs(data, tbody);
-            this._renderLogPagination(data, pagination, 'loadOperationLogs');
+            this._renderLogPagination(data, pagination, 'loadOperationLogs', 'opLogPageJump');
         } catch (e) {
             tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:#909399;">Failed: ' + e.message + '</td></tr>';
             pagination.style.display = 'none';
@@ -3034,18 +3092,25 @@ class AdminConsole {
 
     searchOperationLogs() { clearTimeout(this._opLogTimer); this._opLogTimer = setTimeout(() => this.loadOperationLogs(1), 300); }
 
-    _renderLogPagination(data, container, loadFn) {
+    _renderLogPagination(data, container, loadFn, jumpInputId) {
         if (!data.total_pages || data.total_pages <= 1) { container.style.display = 'none'; return; }
         container.style.display = 'flex';
         const p = data.page; const t = data.total_pages;
+        const jid = jumpInputId || (loadFn + 'Jump');
         let html = '<div class="log-pagination-bar">'
             + '<span class="log-pagination-total">共 ' + data.count + ' 条</span>'
             + '<div class="log-pagination-btns">';
-        html += '<button class="pagination-btn" onclick="adminConsole.' + loadFn + '(' + (p - 1) + ')" ' + (p <= 1 ? 'disabled' : '') + '><i class="fas fa-chevron-left"></i></button>';
+        html += '<button class="pagination-btn" title="首页" onclick="adminConsole.' + loadFn + '(1)" ' + (p <= 1 ? 'disabled' : '') + '><i class="fas fa-angle-double-left"></i></button>';
+        html += '<button class="pagination-btn" title="上一页" onclick="adminConsole.' + loadFn + '(' + (p - 1) + ')" ' + (p <= 1 ? 'disabled' : '') + '><i class="fas fa-chevron-left"></i></button>';
         for (let i = Math.max(1, p - 2); i <= Math.min(t, p + 2); i++) {
             html += '<button class="pagination-btn ' + (i === p ? 'active' : '') + '" onclick="adminConsole.' + loadFn + '(' + i + ')">' + i + '</button>';
         }
-        html += '<button class="pagination-btn" onclick="adminConsole.' + loadFn + '(' + (p + 1) + ')" ' + (p >= t ? 'disabled' : '') + '><i class="fas fa-chevron-right"></i></button></div></div>';
+        html += '<button class="pagination-btn" title="下一页" onclick="adminConsole.' + loadFn + '(' + (p + 1) + ')" ' + (p >= t ? 'disabled' : '') + '><i class="fas fa-chevron-right"></i></button>';
+        html += '<button class="pagination-btn" title="末页" onclick="adminConsole.' + loadFn + '(' + t + ')" ' + (p >= t ? 'disabled' : '') + '><i class="fas fa-angle-double-right"></i></button>';
+        html += '<span class="pagination-jump">跳至 <input type="number" class="pagination-jump-input" id="' + jid + '" min="1" max="' + t + '" value="' + p + '"'
+            + ' onkeydown="if(event.key===\'Enter\'){adminConsole.jumpToPage(this,' + t + ',\'' + loadFn + '\');}"> / ' + t + ' 页 '
+            + '<button class="pagination-btn" title="跳转" onclick="adminConsole.jumpToPage(document.getElementById(\'' + jid + '\'),' + t + ',\'' + loadFn + '\')"><i class="fas fa-arrow-right"></i></button></span>';
+        html += '</div></div>';
         container.innerHTML = html;
     }
 
@@ -3055,11 +3120,23 @@ class AdminConsole {
         const modal = document.createElement('div');
         modal.className = 'modal show'; modal.id = 'logDetailModal'; modal.style.display = 'flex';
         modal.innerHTML = '<div class="modal-content" style="max-width:700px;">'
-            + '<div class="modal-header"><h3><i class="fas fa-info-circle"></i> ' + title + '</h3><button class="close-btn">&times;</button></div>'
+            + '<div class="modal-header"><h3><i class="fas fa-info-circle"></i> ' + title + '</h3>'
+            + '<div style="display:flex;align-items:center;gap:4px;">'
+            + '<button type="button" class="maximize-btn log-detail-max-btn" title="全屏"><i class="fas fa-expand"></i></button>'
+            + '<button class="close-btn">&times;</button></div></div>'
             + '<div class="modal-body">' + content + '</div>'
             + '<div class="modal-footer"><button class="btn btn-secondary" onclick="this.closest(\'.modal\').remove()">Close</button></div></div>';
         document.body.appendChild(modal);
         modal.querySelector('.close-btn').onclick = function() { modal.remove(); };
+        var maxBtn = modal.querySelector('.log-detail-max-btn');
+        if (maxBtn) {
+            maxBtn.onclick = function() {
+                var modalContent = modal.querySelector('.modal-content');
+                var isFull = modalContent.classList.toggle('log-detail-fullscreen');
+                maxBtn.innerHTML = isFull ? '<i class="fas fa-compress"></i>' : '<i class="fas fa-expand"></i>';
+                maxBtn.title = isFull ? '退出全屏' : '全屏';
+            };
+        }
         modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
     }
 
@@ -3247,6 +3324,48 @@ class AdminConsole {
                 } catch (e) {}
             });
         } catch (e) {}
+    }
+
+    // ==================== 企业/租户数据隔离（仅超级管理员） ====================
+    // 默认关闭：未归属企业的历史账号共享可见；开启后完整隔离。
+    openTenantIsolationConfig() {
+        document.getElementById('tenantIsolationModal').style.display = 'flex';
+        setTimeout(function () { document.getElementById('tenantIsolationModal').classList.add('show'); }, 10);
+        this.loadTenantIsolationConfig();
+    }
+    closeTenantIsolationConfig() {
+        var m = document.getElementById('tenantIsolationModal');
+        if (m) { m.classList.remove('show'); setTimeout(function () { m.style.display = 'none'; }, 150); }
+    }
+    async loadTenantIsolationConfig() {
+        try {
+            const resp = await fetch('/api/system/tenant-isolation/', {headers: TokenManager.getHeaders()});
+            if (!resp.ok) { this.showError && this.showError('加载失败', '无法获取数据隔离配置'); return; }
+            const raw = await resp.json();
+            const d = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+            const cb = document.getElementById('tenantIsolationEnabled');
+            if (cb) cb.checked = d.enabled === true;
+        } catch (e) { console.warn('加载数据隔离配置失败', e); }
+    }
+    async saveTenantIsolationConfig() {
+        const enabled = document.getElementById('tenantIsolationEnabled').checked;
+        try {
+            const resp = await fetch('/api/system/tenant-isolation/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify({enabled: enabled})
+            });
+            if (!resp.ok) {
+                const e2 = await resp.json().catch(function () { return {}; });
+                throw new Error(e2.error || '保存失败');
+            }
+            this.showToast
+                ? this.showToast(enabled ? '已开启企业/租户数据隔离' : '已关闭企业/租户数据隔离', false)
+                : (alert && alert('保存成功'));
+            this.closeTenantIsolationConfig();
+        } catch (e) {
+            this.showError ? this.showError('保存失败', e.message) : (alert && alert('保存失败：' + e.message));
+        }
     }
 
     // ==================== 通知弹窗设置（仅超级管理员） ====================

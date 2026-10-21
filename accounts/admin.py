@@ -12,14 +12,14 @@ class TenantAdmin(admin.ModelAdmin):
 @admin.register(TenantMembership)
 class TenantMembershipAdmin(admin.ModelAdmin):
     list_display = ('id', 'user', 'tenant', 'role', 'is_active', 'is_default', 'joined_at')
-    list_filter = ('role', 'is_active')
+    list_filter = ('role', 'is_active', 'tenant', 'is_default')
     search_fields = ('user__username', 'user__real_name', 'tenant__name', 'employee_id')
     list_per_page = 20
 
 @admin.register(CustomUser)
 class CustomUserAdmin(admin.ModelAdmin):
-    list_display = ('id', 'username', 'real_name', 'gender', 'position', 'phone', 'email', 'is_online', 'is_active', 'last_seen', 'date_joined')
-    list_filter = ('is_active', 'is_online', 'gender', 'user_type')
+    list_display = ('id', 'active_tenant', 'username', 'real_name', 'gender', 'position', 'phone', 'email', 'is_online', 'is_active', 'last_seen', 'date_joined')
+    list_filter = ('is_active', 'active_tenant', 'is_online', 'gender', 'user_type')
     search_fields = ('id', 'username', 'real_name', 'phone', 'email')
     list_per_page = 20
 
@@ -76,7 +76,7 @@ class CustomLoginLogAdmin(admin.ModelAdmin):
 class CustomOperationLogAdmin(admin.ModelAdmin):
     list_display = ('id', 'request_modular', 'creator', 'request_path', 'request_method', 'request_ip', 'request_browser', 'response_code', 'request_os', 'status', 'create_time')
     list_filter = ['request_os', 'request_method', 'status', 'response_code', 'request_browser']
-    search_fields = ('request_path', 'request_ip', 'request_modular')
+    search_fields = ('request_path', 'request_ip', 'request_modular', 'creator__username', 'creator__real_name')
     list_per_page = 20
 
 

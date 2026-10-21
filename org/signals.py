@@ -19,6 +19,7 @@ def create_department_group(sender, instance, created, **kwargs):
             room_type='group',
             name=f'{instance.name}部门群',
             creator=creator,
+            tenant=instance.tenant,
         )
         members = instance.get_all_members()
         if members:

@@ -563,7 +563,7 @@
         fetchPopupConfig().then(popupRecentUnread);
 
         // 轮询
-        pollTimer = setInterval(fetchUnreadCount, 20000);
+        pollTimer = setInterval(fetchUnreadCount, 1000*60);
 
         // WebSocket 连接
         connectWs();

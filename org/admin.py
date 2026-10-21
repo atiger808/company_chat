@@ -13,15 +13,15 @@ class UserDepartmentAdmin(admin.ModelAdmin):
 
 @admin.register(ReportRelation)
 class ReportRelationAdmin(admin.ModelAdmin):
-    list_display = ('id', 'user', 'supervisor', 'department', 'is_direct')
-    list_filter = ('is_direct',)
+    list_display = ('id', 'user', 'tenant', 'supervisor', 'department', 'is_direct')
+    list_filter = ('is_direct', 'tenant')
     search_fields = ('user__username', 'supervisor__username')
     list_per_page = 20
 
 
 @admin.register(OrgChangeLog)
 class OrgChangeLogAdmin(admin.ModelAdmin):
-    list_display = ('id', 'action', 'department', 'operator', 'created_at')
-    list_filter = ('action',)
+    list_display = ('id', 'action', 'tenant', 'department', 'operator', 'created_at')
+    list_filter = ('action', 'tenant')
     search_fields = ('department__name', 'operator__username')
     list_per_page = 20

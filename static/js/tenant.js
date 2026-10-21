@@ -103,6 +103,40 @@ class TenantManager {
                     if (mc) mc.innerHTML = '';
                     await window.orgApp.loadDeptTree();
                 }
+                // 5. 数据隔离：切换企业后同步刷新聊天列表、群组列表和通讯录
+                if (window.chatClient) {
+                    var cc = window.chatClient;
+                    try {
+                        if (typeof cc.loadChatRooms === 'function') {
+                            // loadChatRooms 内部会同时渲染聊天列表与群组列表
+                            await cc.loadChatRooms();
+                        }
+                        if (typeof cc.loadUsers === 'function') {
+                            // 通讯录按当前企业重新拉取
+                            await cc.loadUsers();
+                        }
+                        // 当前打开的会话若不属于新企业，回到空状态，避免继续显示旧企业消息
+                        if (cc.currentRoomId && !(cc.chatRooms || []).some(function (r) {
+                            return r.id === cc.currentRoomId;
+                        })) {
+                            cc.currentRoomId = null;
+                            cc.messages = [];
+                            var me = document.getElementById('messagesEmpty');
+                            var ml = document.getElementById('messagesList');
+                            if (me) me.style.display = 'flex';
+                            if (ml) {
+                                ml.style.display = 'none';
+                                ml.innerHTML = '';
+                            }
+                            var ct = document.getElementById('chatTitle');
+                            if (ct) ct.textContent = '选择聊天';
+                            var cs = document.getElementById('chatStatus');
+                            if (cs) cs.textContent = '未连接';
+                        }
+                    } catch (e) {
+                        console.warn('切换企业后刷新聊天数据失败:', e);
+                    }
+                }
                 this._showToast('已切换到 ' + (newTenant.short_name || newTenant.name));
             }
         } catch (e) {

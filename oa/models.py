@@ -11,11 +11,18 @@ class AttendanceRecord(models.Model):
     CLOCK_TYPE_CHOICES = [
         ('clock_in', '上班打卡'),
         ('clock_out', '下班打卡'),
+        ('day', '全天'),
     ]
     STATUS_CHOICES = [
         ('normal', '正常'),
         ('late', '迟到'),
         ('early_leave', '早退'),
+        ('missing_clock', '缺卡'),
+        ('absent', '缺勤'),
+        ('rest', '休息'),
+        ('location_abnormal', '地点异常'),
+        ('leave', '请假'),
+        ('trip', '出差'),
     ]
 
     user = models.ForeignKey(
@@ -130,6 +137,7 @@ class ApprovalRequest(models.Model):
         ('trip', '出差'),
         ('purchase', '采购'),
         ('recruit', '招聘需求'),
+        ('attendance_appeal', '考勤申诉/补卡申请'),
         ('other', '其他'),
     ]
     STATUS_CHOICES = [

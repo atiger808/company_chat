@@ -1305,17 +1305,20 @@ class DepartmentViewSet(viewsets.ModelViewSet):
         department = self.get_object()
         from chat.models import ChatRoom
 
+        # 以部门所属企业为准（request.tenant 在 JWT 请求中可能为空）
+        group_tenant = department.tenant or getattr(request, 'tenant', None)
+
         if department.department_group:
             # 更新已有群
             group = department.department_group
             group.name = department.name
-            group.tenant = request.tenant
+            group.tenant = group_tenant
         else:
             # 创建新群
             group = ChatRoom.objects.create(
                 name=department.name,
                 room_type='group',
-                tenant=request.tenant,
+                tenant=group_tenant,
                 creator=request.user,
             )
             department.department_group = group

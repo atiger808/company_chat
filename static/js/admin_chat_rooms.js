@@ -395,6 +395,9 @@ class AdminChatRoomsClient {
                         <span class="room-type-badge ${roomTypeClass}">${roomType}</span>
                     </td>
                     <td>
+                        <span class="room-tenant-name">${room.tenant_id ? this.escapeHtml(room.tenant_name || '-') : '-'}</span>
+                    </td>
+                    <td>
                         <div class="members-container">
                             ${membersInfo}
                         </div>
@@ -425,7 +428,7 @@ class AdminChatRoomsClient {
 
         chatRoomsTableBody.innerHTML = html || `
             <tr>
-                <td colspan="6" class="empty-table">
+                <td colspan="7" class="empty-table">
                     <i class="fas fa-inbox"></i>
                     <p>暂无聊天室</p>
                 </td>
@@ -956,6 +959,8 @@ class AdminChatRoomsClient {
                         const color = statusColors[apData.status] || '#909399';
                         const title = apData.title || '审批';
                         const typeName = apData.type_name || '';
+                        const typeIcon = apData.type_icon || 'fa-clipboard-check';
+                        const typeColor = apData.type_color || '#409EFF';
                         const applicant = apData.applicant_name || '';
                         const amount = apData.amount ? '¥' + apData.amount : '';
                         contentHtml = `
@@ -963,7 +968,7 @@ class AdminChatRoomsClient {
                                  onclick="window.open('/oa/approval/?approval_id=${apData.approval_id}', '_blank')">
                                 <div style="padding: 10px 14px; background: linear-gradient(135deg, #eef6ff 0%, #dbeafe 100%); border-bottom: 1px solid #e4e7ed; display: flex; justify-content: space-between; align-items: center;">
                                     <span style="font-weight: 600; color: #303133; font-size: 13px; display: flex; align-items: center; gap: 6px;">
-                                        <i class="fas fa-clipboard-check" style="color: #409EFF;"></i> ${this.escapeHtml(typeName ? typeName + ' ' : '')}审批卡片
+                                        <i class="fas ${typeIcon}" style="color: ${typeColor};"></i> ${this.escapeHtml(typeName ? typeName + ' ' : '')}
                                     </span>
                                     <span style="font-size: 11px; padding: 2px 8px; border-radius: 10px; color: #fff; background: ${color};">${this.escapeHtml(statusText)}</span>
                                 </div>

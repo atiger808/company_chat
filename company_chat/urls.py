@@ -21,7 +21,8 @@ from django.views.generic import TemplateView
 from django.conf import settings
 from django.conf.urls.static import static
 from .views import (service_worker_view, admin_console_view,
-                    knowledge_base_view, KnowledgeCatalogView)
+                    knowledge_base_view, KnowledgeCatalogView,
+                    TenantIsolationConfigView)
 from oa.views import (WatermarkViewSet, PrintLogViewSet,
                       AnnouncementConfigViewSet, ReportAccessConfigViewSet,
                       AgentViewSet)
@@ -95,6 +96,8 @@ urlpatterns = [
     path('api/system/report-access-config/', ReportAccessConfigViewSet.as_view({'get': 'config', 'post': 'save_config'}), name='report-access-config'),
     # 企业智能体配置（按页面启用 + 自定义嵌入代码；管理控制台维护，仅超管）
     path('api/system/agent-config/', AgentViewSet.as_view({'get': 'config', 'post': 'save_config'}), name='agent-config'),
+    # 企业/租户数据隔离开关（仅超级管理员可保存；默认关闭=兼容历史账号共享）
+    path('api/system/tenant-isolation/', TenantIsolationConfigView.as_view(), name='tenant-isolation-config'),
     path('api/org/', include('org.urls')),
     path('org/', TemplateView.as_view(template_name='org/org.html'), name='org'),
 

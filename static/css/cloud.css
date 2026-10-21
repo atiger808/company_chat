@@ -2544,7 +2544,7 @@ body {
 
 /* 🔧 文件夹树容器 */
 .folder-tree-container {
-    max-height: 300px;
+    max-height: 550px;
     overflow-y: auto;
     border: 1px solid #ebeef5;
     border-radius: 6px;
@@ -2633,7 +2633,7 @@ body {
     }
 
     .folder-tree-container {
-        max-height: 250px;
+        max-height: 350px;
     }
 
     .batch-move-info,
@@ -3349,6 +3349,54 @@ body {
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
     animation: slideUp 0.3s ease;
 }
+
+/* 批量上传：逐文件状态列表（成功/失败一目了然） */
+.batch-file-list {
+    margin-top: 12px;
+    max-height: 220px;
+    overflow-y: auto;
+    border-top: 1px solid #ebeef5;
+    padding-top: 8px;
+}
+
+.batch-file-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 4px;
+    font-size: 13px;
+    color: #606266;
+    line-height: 1.4;
+}
+
+.batch-file-item + .batch-file-item {
+    border-top: 1px dashed #f0f2f5;
+}
+
+.batch-file-item .batch-file-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.batch-file-item .batch-file-msg {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: #f56c6c;
+}
+
+.batch-file-item.pending i { color: #909399; }
+.batch-file-item.uploading i { color: #409eff; }
+.batch-file-item.uploading .batch-file-name { color: #409eff; font-weight: 600; }
+.batch-file-item.success i { color: #67c23a; }
+.batch-file-item.failed i { color: #f56c6c; }
+.batch-file-item.failed .batch-file-name { color: #f56c6c; }
+
+[data-theme="dark"] .batch-file-list { border-top-color: #363840; }
+[data-theme="dark"] .batch-file-item { color: #c0c4cc; }
+[data-theme="dark"] .batch-file-item + .batch-file-item { border-top-color: #2b2d33; }
 
 @keyframes slideUp {
     from {
@@ -4379,6 +4427,103 @@ body {
 
 [data-theme="dark"] #adminUsername{
     color: #b0b0b0
+}
+
+/* ==================== 移动目标文件夹：不可选项（自身/子文件夹） ==================== */
+.folder-tree-hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    color: #909399;
+    background: #f5f7fa;
+    border-radius: 6px;
+}
+
+.folder-tree-item.disabled {
+    opacity: .45;
+    cursor: not-allowed;
+    background: transparent !important;
+}
+
+.folder-tree-item.disabled:hover {
+    background: #f5f7fa !important;
+    color: inherit;
+}
+
+.folder-tree-item .badge-forbidden {
+    color: #f56c6c;
+    font-size: 11px;
+    margin-left: auto;
+}
+
+[data-theme="dark"] .folder-tree-hint {
+    background: #26272d;
+    color: #8a8f99;
+}
+
+[data-theme="dark"] .folder-tree-item.disabled:hover {
+    background: #26272d !important;
+}
+
+/* ==================== 列表视图：可拖拽调整列宽（全部文件） ==================== */
+#fileListView .col-resizer { display: none; }
+
+@media (min-width: 769px) {
+    /* 4 列与行内 .file-col 一一对应；名称列可拖动加宽以显示完整文件名 */
+    #fileListView .file-list-header,
+    #fileListView .file-item {
+        grid-template-columns:
+            var(--fl-name, minmax(200px, 1fr))
+            var(--fl-size, 110px)
+            var(--fl-date, 160px)
+            var(--fl-actions, 300px);
+    }
+
+    #fileListView .file-list-header .file-col {
+        position: relative;
+        overflow: visible;   /* 允许拖拽手柄溢出显示 */
+        min-width: 0;
+    }
+
+    #fileListView .file-item .file-col {
+        min-width: 0;
+    }
+
+    #fileListView .file-col.resizable {
+        padding-right: 6px;
+    }
+
+    #fileListView .col-resizer {
+        display: block;
+        position: absolute;
+        top: 0;
+        right: -5px;
+        width: 10px;
+        height: 100%;
+        cursor: col-resize;
+        z-index: 6;
+    }
+
+    #fileListView .col-resizer::after {
+        content: '';
+        position: absolute;
+        top: 20%;
+        bottom: 20%;
+        left: 50%;
+        width: 2px;
+        transform: translateX(-50%);
+        background: transparent;
+        border-radius: 1px;
+        transition: background .15s;
+    }
+
+    #fileListView .col-resizer:hover::after,
+    #fileListView .col-resizer:active::after {
+        background: var(--primary-color, #409eff);
+    }
 }
 
 

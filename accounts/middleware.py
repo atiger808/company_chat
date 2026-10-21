@@ -151,12 +151,12 @@ class ApiLoggingMiddleware(MiddlewareMixin):
         if not hasattr(response, 'data') or not isinstance(response.data, dict):
             response.data = {}
         try:
-            if not response.data and response.content:
+            # 文件下载/导出类响应是二进制流，不能按 JSON 解析；但要保留日志记录
+            if not getattr(response, 'streaming', False) and not response.data and response.content:
                 content = json.loads(response.content.decode())
                 response.data = content if isinstance(content, dict) else {}
         except Exception as e:
             logger.info(f'error: {e}')
-            return
 
         try:
             if isinstance(response.data, dict):

@@ -166,7 +166,9 @@ class DocumentEditorApp {
 
             // 2. 检查 OnlyOffice API
             if (typeof DocsAPI === 'undefined') {
-                throw new Error('OnlyOffice 组件未加载，请刷新页面');
+                // throw new Error('OnlyOffice 组件未加载，请刷新页面');
+                console.error('OnlyOffice 组件未加载，请刷新页面')
+                this.showError('OnlyOffice 组件未加载，请刷新页面')
             }
 
             // 3. 获取编辑配置

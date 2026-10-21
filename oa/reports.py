@@ -227,9 +227,31 @@ class _AdminReportBase(viewsets.ViewSet):
         return ids
 
     @staticmethod
-    def _user_id(request):
+    def _merged_params(request):
+        """GET 查询参数 + POST 请求体（导出接口改为 POST 后复用原有参数解析）"""
+        try:
+            if request.method == 'POST' and hasattr(request, 'data'):
+                merged = dict(request.query_params)
+                for k, v in request.data.items():
+                    if isinstance(v, (list, tuple)):
+                        merged[k] = ','.join(str(x) for x in v)
+                    elif isinstance(v, dict):
+                        continue
+                    else:
+                        merged[k] = v
+                return merged
+        except Exception:
+            pass
+        return request.query_params
+
+    @classmethod
+    def _param(cls, request, key, default=''):
+        return cls._merged_params(request).get(key, default)
+
+    @classmethod
+    def _user_id(cls, request):
         """按用户筛选（可选）：报表支持搜索用户后查看该用户的数据"""
-        uid = (request.query_params.get('user_id') or '').strip()
+        uid = str(cls._merged_params(request).get('user_id') or '').strip()
         try:
             return int(uid) if uid else None
         except (ValueError, TypeError):
@@ -265,7 +287,7 @@ class _AdminReportBase(viewsets.ViewSet):
     @staticmethod
     def _parse_range(request):
         today = timezone.localdate()
-        qs = request.query_params
+        qs = _AdminReportBase._merged_params(request)
         start_s = (qs.get('start') or '').strip()
         end_s = (qs.get('end') or '').strip()
         try:
@@ -323,7 +345,7 @@ class ApprovalReportViewSet(_AdminReportBase):
         """流程效率分析聚合"""
         start_d, end_d, start_dt, end_dt = self._parse_range(request)
         try:
-            timeout_days = int(request.query_params.get('timeout_days') or 3)
+            timeout_days = int(self._param(request, 'timeout_days', 3) or 3)
         except (ValueError, TypeError):
             timeout_days = 3
         qs = self._base_qs(request, start_dt, end_dt)
@@ -510,8 +532,8 @@ class ApprovalReportViewSet(_AdminReportBase):
         """流程效率分析：审批时长、节点耗时、驳回率、超时率、积压量、类型分布、趋势"""
         if not self._require_admin(request):
             return Response({'error': '报表与数据分析未开启或您未被授权查看，请联系超级管理员'}, status=403)
-        if (request.query_params.get('export_format') or '').strip().lower() in ('xlsx', 'pdf'):
-            return self._export_file(request, 'overview', request.query_params.get('export_format').strip().lower())
+        if (self._param(request, 'export_format') or '').strip().lower() in ('xlsx', 'pdf'):
+            return self._export_file(request, 'overview', self._param(request, 'export_format').strip().lower())
         return Response({'encrypt': True, 'data': encrypt_data(self._overview_data(request))})
 
     @action(detail=False, methods=['get'])
@@ -519,8 +541,8 @@ class ApprovalReportViewSet(_AdminReportBase):
         """业务统计分析（带 format=xlsx/pdf 时直接导出该报表）"""
         if not self._require_admin(request):
             return Response({'error': '报表与数据分析未开启或您未被授权查看，请联系超级管理员'}, status=403)
-        if (request.query_params.get('export_format') or '').strip().lower() in ('xlsx', 'pdf'):
-            return self._export_file(request, 'business', request.query_params.get('export_format').strip().lower())
+        if (self._param(request, 'export_format') or '').strip().lower() in ('xlsx', 'pdf'):
+            return self._export_file(request, 'business', self._param(request, 'export_format').strip().lower())
         return Response({'encrypt': True, 'data': encrypt_data(self._business_data(request))})
 
     @action(detail=False, methods=['post'])
@@ -544,8 +566,8 @@ class ApprovalReportViewSet(_AdminReportBase):
         """导出报表（兼容入口）：kind=overview(流程效率)/business(业务统计)，export_format=xlsx(默认)/pdf"""
         if not self._require_admin(request):
             return Response({'error': '报表与数据分析未开启或您未被授权导出，请联系超级管理员'}, status=403)
-        kind = (request.query_params.get('kind') or 'overview').strip()
-        fmt = (request.query_params.get('export_format') or 'xlsx').strip().lower()
+        kind = (self._param(request, 'kind') or 'overview').strip()
+        fmt = (self._param(request, 'export_format') or 'xlsx').strip().lower()
         return self._export_file(request, kind, fmt)
 
     # ==================== 审计复盘（超管 / 财务专员） ====================
@@ -574,15 +596,15 @@ class ApprovalReportViewSet(_AdminReportBase):
     def _audit_data(self, request):
         """审计复盘聚合：期间汇总 + 按 月/季/年 的周期构成 + 审批类型构成 + 审计台账明细"""
         start_d, end_d, start_dt, end_dt = self._parse_range(request)
-        period = (request.query_params.get('period') or 'month').strip().lower()
+        period = (self._param(request, 'period') or 'month').strip().lower()
         if period not in ('month', 'quarter', 'year'):
             period = 'month'
         qs = self._base_qs(request, start_dt, end_dt)
-        t = (request.query_params.get('type') or '').strip()
+        t = (self._param(request, 'type') or '').strip()
         if t:
             qs = qs.filter(approval_type=t)
         # 归档筛选：审计复盘默认看全量（含已归档）；archived=1 只看已归档；archived=0 只看未归档
-        archived_filter = (request.query_params.get('archived') or '').strip().lower()
+        archived_filter = (self._param(request, 'archived') or '').strip().lower()
         if archived_filter in ('1', 'true', 'yes', 'archived'):
             qs = qs.filter(is_archived=True)
         elif archived_filter in ('0', 'false', 'no'):
@@ -696,8 +718,8 @@ class ApprovalReportViewSet(_AdminReportBase):
         带 export_format=xlsx 时直接导出审计复盘 Excel（含台账明细）。"""
         if not self._can_audit(request):
             return Response({'error': '仅超级管理员或财务专员可查看审计复盘'}, status=403)
-        if (request.query_params.get('export_format') or '').strip().lower() in ('xlsx', 'pdf'):
-            return self._export_file(request, 'audit', request.query_params.get('export_format').strip().lower())
+        if (self._param(request, 'export_format') or '').strip().lower() in ('xlsx', 'pdf'):
+            return self._export_file(request, 'audit', self._param(request, 'export_format').strip().lower())
         return Response({'encrypt': True, 'data': encrypt_data(self._audit_data(request))})
 
     def _export_file(self, request, kind, fmt):
@@ -952,8 +974,8 @@ class SubsidyReportViewSet(_AdminReportBase):
         """补贴发放统计/趋势/排行（带 format=xlsx/pdf 时直接导出补贴明细）"""
         if not self._can_view(request):
             return Response({'error': '仅超级管理员、财务核验人员或财务支付人员可查看'}, status=403)
-        if (request.query_params.get('export_format') or '').strip().lower() in ('xlsx', 'pdf'):
-            return self._export_file(request, request.query_params.get('export_format').strip().lower())
+        if (self._param(request, 'export_format') or '').strip().lower() in ('xlsx', 'pdf'):
+            return self._export_file(request, self._param(request, 'export_format').strip().lower())
         return Response({'encrypt': True, 'data': encrypt_data(self._stats_data(request))})
 
     @action(detail=False, methods=['post'])
@@ -977,14 +999,14 @@ class SubsidyReportViewSet(_AdminReportBase):
         """导出补贴明细（兼容入口）：export_format=xlsx(默认)/pdf，可按状态/时间筛选"""
         if not self._can_view(request):
             return Response({'error': '仅超级管理员、财务核验人员或财务支付人员可导出'}, status=403)
-        fmt = (request.query_params.get('export_format') or 'xlsx').strip().lower()
+        fmt = (self._param(request, 'export_format') or 'xlsx').strip().lower()
         return self._export_file(request, fmt)
 
     def _export_file(self, request, fmt):
         """构建并返回补贴明细文件（xlsx/pdf）"""
         start_d, end_d, start_dt, end_dt = self._parse_range(request)
         qs = self._base_qs(request, start_dt, end_dt)
-        status = (request.query_params.get('status') or '').strip()
+        status = (self._param(request, 'status') or '').strip()
         if status in ('pending', 'approved', 'rejected'):
             qs = qs.filter(status=status)
         qs = qs.select_related('applicant', 'tenant').order_by('-created_at')[:10000]

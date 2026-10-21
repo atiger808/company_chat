@@ -337,6 +337,25 @@
     }
     // 打印当前模态框内容（图表以图片、表格以表格输出）
     function printReport() {
+        if (window.WatermarkManager && WatermarkManager.reportPrint) {
+            WatermarkManager.reportPrint({
+                page: 'approval',
+                target_type: 'approval_report',
+                target_id: state.tab || '',
+                count: 1
+            }).then(function (res) {
+                if (res && res.allowed === false) {
+                    toast('您没有打印权限，请联系管理员开通', true);
+                    return;
+                }
+                _printReportNow();
+            }).catch(function () { _printReportNow(); });
+        } else {
+            _printReportNow();
+        }
+    }
+
+    function _printReportNow() {
         var blocks = collectBlocks();
         if (!blocks.length) { toast('暂无可打印的内容', true); return; }
         var title = tabMeta().title;
@@ -650,13 +669,23 @@
                 }
                 blob = await rp.blob();
             } else {
-                var url = OA + '/approval/' + seg + '/?export_format=' + format
-                    + '&start=' + encodeURIComponent(state.start) + '&end=' + encodeURIComponent(state.end) + userParam();
+                // 导出改为 POST（GET 不记录操作日志），参数放在请求体
+                var payload = {
+                    kind: state.tab,
+                    export_format: format,
+                    start: state.start,
+                    end: state.end,
+                    user_id: state.userId || ''
+                };
                 if (state.tab === 'audit') {
-                    url += '&period=' + encodeURIComponent(state.period || 'month')
-                        + (state.auditArchived ? ('&archived=' + encodeURIComponent(state.auditArchived)) : '');
+                    payload.period = state.period || 'month';
+                    payload.archived = state.auditArchived || '';
                 }
-                var r = await fetch(url, { headers: authHeaders() });
+                var r = await fetch(OA + '/approval/report-export/', {
+                    method: 'POST',
+                    headers: Object.assign({}, authHeaders(), { 'Content-Type': 'application/json' }),
+                    body: JSON.stringify(payload)
+                });
                 if (!r.ok) {
                     var e = await r.json().catch(function () { return {}; });
                     throw new Error(e.error || ('导出失败(' + r.status + ')'));

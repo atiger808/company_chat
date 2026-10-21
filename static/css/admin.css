@@ -422,12 +422,12 @@
 
 /* 响应式适配 */
 @media (max-width: 768px) {
-    .admin-table th:nth-child(3),
-    .admin-table td:nth-child(3),
-    .admin-table th:nth-child(4),
-    .admin-table td:nth-child(4) {
-        display: none;
-    }
+    /*.admin-table th:nth-child(3),*/
+    /*.admin-table td:nth-child(3),*/
+    /*.admin-table th:nth-child(4),*/
+    /*.admin-table td:nth-child(4) {*/
+    /*    display: none;*/
+    /*}*/
 
     .history-message {
         max-width: 100%;
@@ -2635,4 +2635,128 @@ input:checked + .slider:before {
 [data-theme="dark"] .toast-content {
     background: #1e1e1e;
     border-left-color: var(--primary-color,#409eff);
+}
+
+/* ==================== 好友分配：固定每行 5 列（PC / 移动端一致） ==================== */
+.member-grid.friend-grid-5 {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 12px;
+}
+.member-grid.friend-grid-5 .member-grid-item {
+    padding: 8px 4px;
+    min-width: 0;
+}
+.member-grid.friend-grid-5 .member-grid-avatar {
+    width: 48px;
+    height: 48px;
+    margin-bottom: 6px;
+}
+.member-grid.friend-grid-5 .member-grid-name {
+    max-width: 100%;
+    font-size: 12px;
+}
+
+.member-grid.friend-grid-5 .member-grid-position {
+    font-size: 10px;
+    line-height: 14px;
+    color: #409eff;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.member-grid.friend-grid-5 .member-grid-tag {
+    top: 2px;
+    right: 2px;
+    padding: 1px 5px;
+    font-size: 10px;
+}
+@media (max-width: 768px) {
+    .member-grid.friend-grid-5 {
+        gap: 6px;
+        padding: 10px 0;
+    }
+    .member-grid.friend-grid-5 .member-grid-item {
+        padding: 6px 2px;
+    }
+    .member-grid.friend-grid-5 .member-grid-avatar {
+        width: 36px;
+        height: 36px;
+        margin-bottom: 4px;
+    }
+    .member-grid.friend-grid-5 .member-grid-name {
+        font-size: 11px;
+        margin-bottom: 2px;
+    }
+    .member-grid.friend-grid-5 .member-grid-tag {
+        padding: 1px 4px;
+        font-size: 9px;
+    }
+}
+
+/* ==================== 翻页：首页/末页/页码跳转 ==================== */
+.pagination-jump {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 8px;
+    font-size: 12px;
+    color: var(--text-light, #909399);
+    white-space: nowrap;
+}
+.pagination-jump-input {
+    width: 56px;
+    height: 32px;
+    padding: 0 6px;
+    border: 1px solid var(--border-color, #dcdfe6);
+    border-radius: 4px;
+    background: #fff;
+    color: var(--text-primary, #303133);
+    font-size: 13px;
+    text-align: center;
+    outline: none;
+}
+.pagination-jump-input:focus {
+    border-color: var(--primary-color, #409eff);
+}
+[data-theme="dark"] .pagination-jump-input {
+    background: #2d2d2d;
+    border-color: #444;
+    color: var(--text-primary, #e0e0e0);
+}
+
+/* ==================== 日志详情模态框全屏 ==================== */
+.modal-content.log-detail-fullscreen {
+    position: fixed !important;
+    top: 20px !important;
+    left: 20px !important;
+    right: 20px !important;
+    bottom: 20px !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: none !important;
+    height: auto !important;
+    margin: 0 !important;
+    display: flex !important;
+    flex-direction: column;
+    z-index: 2100;
+}
+.modal-content.log-detail-fullscreen .modal-body {
+    flex: 1;
+    max-height: none !important;
+    overflow-y: auto;
+}
+@media (max-width: 768px) {
+    .pagination-jump {
+        margin-left: 0;
+        width: 100%;
+        justify-content: center;
+    }
+    .modal-content.log-detail-fullscreen {
+        top: max(8px, env(safe-area-inset-top, 0px)) !important;
+        left: 8px !important;
+        right: 8px !important;
+        bottom: 8px !important;
+    }
 }

@@ -43,10 +43,12 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
 
     def get_department_name(self, obj):
         try:
-            from org.models import UserDepartment
-            ud = UserDepartment.objects.filter(user=obj.user, is_primary=True).select_related('department').first()
-            if ud and ud.department:
-                return ud.department.name
+            # 优先使用预取的组织架构关系，避免每条记录一次查询
+            rels = list(obj.user.department_relations.all())
+            primary = next((r for r in rels if r.is_primary and r.department), None) \
+                or next((r for r in rels if r.department), None)
+            if primary:
+                return primary.department.name
         except Exception:
             pass
         return obj.user.department.name if obj.user.department else ''

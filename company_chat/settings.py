@@ -263,6 +263,11 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'oa.tasks.announcement_archive_task',
         'schedule': _crontab(minute=41, hour=3),
     },
+    # 每 2 分钟同步聊天卡片消息中的审批/任务状态，保证卡片展示与真实状态一致
+    'sync-chat-card-status': {
+        'task': 'chat.tasks.sync_chat_card_status_task',
+        'schedule': _crontab(minute='*/2'),
+    },
 }
 
 # 添加这些关键配置
@@ -433,7 +438,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20261014-a4b2e7c'
+STATIC_VERSION = '20261021-6252cb2'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -717,6 +722,7 @@ API_MODEL_MAP = {
     "/api/system/watermark-config/": "企业水印配置",
     "/api/system/print-log/": "打印记录",
     "/api/system/agent-config/": "企业智能体配置",
+    "/api/system/tenant-isolation/": "企业/租户数据隔离",
     "/api/docs/catalog/": "企业知识库文档",
     "/api/oa/notifications/": "工作通知",
     "/api/oa/notifications/unread-count/": "通知未读数",
@@ -767,7 +773,6 @@ API_MODEL_MAP = {
 EXLUDE_API_LOG = [
     "/api/chat/messages/mark_as_read/",  # 标记已读
     "/api/cloud/files/upload_chunk/",  # 文件分片上传
-    "/api/oa/subsidy/export/",  # 普惠补贴导出（二进制文件）
 ]
 API_METHOD_MAP = {
     'GET': '查询',
@@ -1015,6 +1020,14 @@ PREDEFINED_CONFIGS = {
         'default': 'true',
         'description': '是否启用表情发送功能',
         'category': 'chat'
+    },
+    'chat.version_prompt_duration_seconds': {
+        'name': '版本提示显示时长',
+        'value_type': 'integer',
+        'default': '120',
+        'description': '版本更新提示横幅的自动关闭时间（秒），默认 120 秒（2 分钟）',
+        'category': 'chat',
+        'validation': {'min': 10, 'max': 600}
     },
 
     # ==================== 文件设置 ====================

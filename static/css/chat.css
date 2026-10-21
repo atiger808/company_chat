@@ -476,16 +476,17 @@ body {
 }
 
 .chat-item-unread-count {
-    width: 20px;
+    min-width: 20px;
     height: 20px;
     background-color: #ff4d4f;
     color: white;
-    border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 12px;
-    font-weight: bold;
+    font-weight: 600;
+    padding: 0 4px;
+    border-radius: 14px;
 }
 
 /* ==================== 工作通知侧边栏项 ==================== */
@@ -504,12 +505,13 @@ body {
     min-height: 56px;
     margin-bottom: 10px;
     flex-shrink: 0;
+    padding: 0px 10px;
 }
 .sidebar-bottom-item {
     flex: 1;
     display: flex;
-    align-items: center;
-    gap: 8px;
+    /*align-items: center;*/
+    gap: 2px;
     padding: 10px 12px;
     cursor: pointer;
     transition: background 0.2s;
@@ -536,6 +538,7 @@ body {
 .sidebar-bottom-item .sb-text {
     flex: 1;
     min-width: 0;
+    display:none;
 }
 .sidebar-bottom-item .sb-title {
     font-size: 13px;
@@ -9077,28 +9080,37 @@ body.pwa-mode .sidebar {
 /* 版本更新提示 */
 .version-update-banner {
     position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
+    top: max(12px, env(safe-area-inset-top, 0px));
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    width: min(960px, calc(100vw - 32px));
     background: linear-gradient(135deg, #409EFF 0%, #337ecc 100%);
     color: white;
-    padding: 12px 20px;
+    padding: 18px 24px;
     text-align: center;
     z-index: 9999;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    animation: slideDown 0.3s ease;
-    /* 🔧 高度上限 + 可滚动：更新日志动辄几百字，若让内容把横幅无限撑高，
-       排在文字后面的「版本 / 更新时间 / 立即更新按钮」会被顶出屏幕；
-       而 position:fixed 元素超出视口的部分无法靠页面滚动看到 → 用户"点不到按钮"。
-       这里给死高度上限，超出部分横幅自己滚，保证按钮永远够得着。 */
-    max-height: 520px;
-    max-height: min(80vh, 520px);
+    border-radius: 14px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.25);
+    animation: versionBannerDrop 0.3s ease;
+    /* 🔧 高度上限 + 可滚动：给更新内容更大的可读区域，同时保证按钮永远够得着。 */
+    max-height: min(86vh, 680px);
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
 }
 
 .version-update-banner.fade-out {
-    animation: slideUp 0.3s ease forwards;
+    animation: versionBannerFadeOut 0.3s ease forwards;
+}
+
+@keyframes versionBannerDrop {
+    from { opacity: 0; transform: translate(-50%, -18px); }
+    to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@keyframes versionBannerFadeOut {
+    from { opacity: 1; transform: translate(-50%, 0); }
+    to { opacity: 0; transform: translate(-50%, -14px); }
 }
 
 
@@ -9118,14 +9130,14 @@ body.pwa-mode .sidebar {
 .update-content {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 12px;
     text-align: left;
 }
 
 .update-head {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     flex-wrap: wrap;
 }
 
@@ -9145,9 +9157,9 @@ body.pwa-mode .sidebar {
 }
 
 .update-title {
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 700;
-    line-height: 1.3;
+    line-height: 1.35;
 }
 
 .update-time {
@@ -9181,16 +9193,17 @@ body.pwa-mode .sidebar {
 
 /* 正文区（更新说明）：限高 + 自己滚动，不参与上面的按钮布局 */
 .update-body {
-    max-height: min(38vh, 520px);
+    max-height: min(58vh, 460px);
     overflow-y: auto;
+    padding-right: 2px;
 }
 
 .update-desc {
-    font-size: 13px;
-    line-height: 1.65;
+    font-size: 13.5px;
+    line-height: 1.7;
     opacity: 0.95;
-    /* 折叠态的预览最多三行：用 em 限高（不依赖 line-clamp 支持度） */
-    max-height: 5.2em;
+    /* 折叠态的预览限高（不依赖 line-clamp 支持度），比之前多留几行便于查看 */
+    max-height: 7.5em;
     overflow: hidden;
 }
 
@@ -9207,8 +9220,10 @@ body.pwa-mode .sidebar {
     background: white;
     color: #409EFF;
     border: none;
-    padding: 6px 16px;
+    padding: 8px 18px;
+    min-height: 34px;
     border-radius: 20px;
+    font-size: 13px;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.2s ease;
@@ -9242,26 +9257,44 @@ body.pwa-mode .sidebar {
     background: rgba(255, 255, 255, 0.2);
     color: white;
     border: none;
-    width: 28px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     border-radius: 50%;
-    font-size: 18px;
+    font-size: 20px;
+    line-height: 1;
     cursor: pointer;
     transition: all 0.2s ease;
+    flex: 0 0 auto;
 }
 
 .update-close:hover {
     background: rgba(255, 255, 255, 0.3);
 }
 
-/* 窄屏：文字与按钮各占一行，按钮居中且更好点按 */
+/* 窄屏：文字与按钮各占一行，按钮居中且更好点按；横幅接近全屏高度，内容更易查看 */
 @media (max-width: 768px) {
     .version-update-banner {
-        padding: 10px 12px;
+        top: max(8px, env(safe-area-inset-top, 0px));
+        width: calc(100vw - 16px);
+        max-height: calc(100dvh - 16px);
+        padding: 12px 14px;
+        border-radius: 12px;
     }
 
     .update-content {
+        gap: 10px;
+    }
+
+    .update-head {
         gap: 8px;
+    }
+
+    .update-title {
+        font-size: 15px;
+    }
+
+    .update-time {
+        gap: 2px 10px;
     }
 
     /* 窄屏：标题/版本占一行，按钮整行居中（仍在正文之前） */
@@ -9276,11 +9309,25 @@ body.pwa-mode .sidebar {
     }
 
     .update-body {
-        max-height: min(32vh, 180px);
+        max-height: min(55vh, 420px);
+    }
+
+    .update-desc {
+        max-height: 8.5em;
     }
 
     .update-btn {
-        padding: 7px 18px;
+        padding: 9px 16px;
+        min-height: 40px;
+    }
+
+    .update-close {
+        width: 32px;
+        height: 32px;
+    }
+
+    .update-log-full {
+        max-height: min(36vh, 280px);
     }
 }
 
@@ -9303,8 +9350,8 @@ body.pwa-mode .sidebar {
 }
 
 .update-log-full {
-    max-height: 180px;
-    max-height: min(28vh, 180px);
+    max-height: 320px;
+    max-height: min(40vh, 320px);
     overflow-y: auto;
     text-align: left;
     font-size: 12px;
@@ -9807,6 +9854,8 @@ body.pwa-mode .sidebar {
     .user-dropdown-menu {
         width: 180px;
         right: -10px;
+        max-height: calc(100vh - 200px);
+        overflow-y: auto;
     }
 }
 
@@ -11448,3 +11497,98 @@ body.pwa-mode .sidebar {
 [data-theme="dark"] .assignee-option:hover { background: #2a2a2a; }
 [data-theme="dark"] .assignee-name { color: #eee; }
 [data-theme="dark"] .assignee-meta { color: #999; }
+
+/* ==================== 通讯录：主部门/职位/所属企业 ==================== */
+.user-list-info {
+    min-width: 0;
+}
+.user-list-department {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 10px;
+    align-items: center;
+    font-size: 12px;
+    color: var(--text-light, #909399);
+}
+.user-list-department span {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.user-list-department i,
+.user-list-enterprise i,
+.group-enterprise i {
+    font-size: 10px;
+    color: #a8b0bd;
+    flex-shrink: 0;
+}
+.user-list-enterprise {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-light, #909399);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.user-list-enterprise i {
+    color: #409eff;
+}
+[data-theme="dark"] .user-list-department,
+[data-theme="dark"] .user-list-enterprise {
+    color: #8a8f99;
+}
+
+/* ==================== 群组列表：所属企业 ==================== */
+.group-enterprise {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-light, #909399);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.group-enterprise i {
+    color: #409eff;
+}
+[data-theme="dark"] .group-enterprise {
+    color: #8a8f99;
+}
+
+/* ==================== 私聊用户信息：私聊所属企业 ==================== */
+.private-room-tenant-banner {
+    margin-bottom: 16px;
+    padding: 12px 16px;
+    background: #f0f9eb;
+    border-radius: 8px;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #67c23a;
+}
+.private-room-tenant-banner i {
+    color: #67c23a;
+    flex-shrink: 0;
+}
+.private-room-tenant-banner strong {
+    color: #529b2e;
+    word-break: break-all;
+}
+[data-theme="dark"] .private-room-tenant-banner {
+    background: #1f2d1a;
+    color: #95d475;
+}
+[data-theme="dark"] .private-room-tenant-banner strong {
+    color: #b3e19d;
+}

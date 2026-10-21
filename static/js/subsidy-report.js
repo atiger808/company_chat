@@ -140,6 +140,25 @@
     }
     // 打印当前模态框内容（图表以图片、表格以表格输出）
     function printReport() {
+        if (window.WatermarkManager && WatermarkManager.reportPrint) {
+            WatermarkManager.reportPrint({
+                page: 'subsidy',
+                target_type: 'subsidy_report',
+                target_id: '',
+                count: 1
+            }).then(function (res) {
+                if (res && res.allowed === false) {
+                    toast('您没有打印权限，请联系管理员开通', true);
+                    return;
+                }
+                _printReportNow();
+            }).catch(function () { _printReportNow(); });
+        } else {
+            _printReportNow();
+        }
+    }
+
+    function _printReportNow() {
         var blocks = collectBlocks();
         if (!blocks.length) { toast('暂无可打印的内容', true); return; }
         var title = '普惠补贴-报表与数据分析';
@@ -542,9 +561,18 @@
                 }
                 blob = await rp.blob();
             } else {
-                var url = OA + '/subsidy/report-stats/?export_format=' + format
-                    + '&start=' + encodeURIComponent(state.start) + '&end=' + encodeURIComponent(state.end) + userParam();
-                var r = await fetch(url, { headers: authHeaders() });
+                // 导出改为 POST（GET 不记录操作日志），参数放在请求体
+                var payload = {
+                    export_format: format,
+                    start: state.start,
+                    end: state.end,
+                    user_id: state.userId || ''
+                };
+                var r = await fetch(OA + '/subsidy/report-stats/', {
+                    method: 'POST',
+                    headers: Object.assign({}, authHeaders(), { 'Content-Type': 'application/json' }),
+                    body: JSON.stringify(payload)
+                });
                 if (!r.ok) {
                     var e = await r.json().catch(function () { return {}; });
                     throw new Error(e.error || ('导出失败(' + r.status + ')'));

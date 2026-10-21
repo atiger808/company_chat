@@ -22,7 +22,7 @@ from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 from django.contrib.auth.models import AnonymousUser
 from django.utils import timezone
 from django.contrib.auth import logout
-from django.db.models import Q
+from django.db.models import Q, Prefetch
 from django.conf import settings
 from .models import (CustomUser, Department, ConsultationRequest, LoginLog, OperationLog,
                      TenantMembership)
@@ -993,18 +993,8 @@ class UserViewSet(viewsets.ModelViewSet):
         return UserDetailSerializer
 
     def get_queryset(self):
-        """返回当前用户可见的用户列表（通讯录）"""
-        # 🔧 关键修复1: 优化查询，使用 select_related 和 only
-        # 排除当前用户自身和未激活用户
-        return CustomUser.objects.filter(
-            is_active=True
-        ).exclude(
-            id=self.request.user.id
-        ).select_related('department').only(
-            'id', 'username', 'real_name', 'email', 'phone',
-            'gender', 'avatar', 'department', 'position',
-            'user_type', 'is_online', 'last_seen', 'date_joined'
-        )
+        """返回当前用户可见的用户列表（通讯录，统一按数据隔离开关处理）"""
+        return self._contact_prefetch(self._contact_scope_queryset(self.request))
 
     def get_permissions(self):
         if self.action in ['register', 'login', 'request_password_reset', 'confirm_password_reset']:
@@ -1202,44 +1192,125 @@ class UserViewSet(viewsets.ModelViewSet):
         serializer = UserListSerializer(friends, many=True, context={'request': request})
         return Response(serializer.data)
 
+    @staticmethod
+    def _is_super_account(user):
+        """超级管理员判定（Django 超管或 user_type=super_admin）"""
+        return bool(getattr(user, 'is_superuser', False)) or getattr(user, 'user_type', '') == 'super_admin'
+
+    @staticmethod
+    def _contact_isolation_enabled():
+        """通讯录是否按企业隔离：读取管理控制台「数据隔离」开关（默认关闭）。"""
+        try:
+            from org.filters import is_tenant_isolation_enabled
+            return bool(is_tenant_isolation_enabled())
+        except Exception:
+            return False
+
+    @staticmethod
+    def _contact_request_tenant(request, user):
+        """通讯录当前企业：复用 org.filters 的解析逻辑（优先 X-Tenant-Id，其次激活企业）"""
+        try:
+            from org.filters import resolve_tenant_for_request
+            return resolve_tenant_for_request(request)
+        except Exception:
+            pass
+        try:
+            return user.get_active_tenant()
+        except Exception:
+            return None
+
+    def _contact_scope_queryset(self, request):
+        """通讯录统一入口：
+        - 超级管理员：全部用户；
+        - 普通管理员：关闭隔离=全部；开启隔离=当前企业用户；
+        - 普通用户：所在部门成员 + 被分配好友（开启隔离时仅当前企业；关闭时跨全部企业）。
+        """
+        user = request.user
+        queryset = CustomUser.objects.filter(is_active=True).exclude(id=user.id)
+        if self._is_super_account(user):
+            return queryset
+        isolated = self._contact_isolation_enabled()
+        if not isolated:
+            if getattr(user, 'user_type', '') in ('admin', 'super_admin'):
+                return queryset
+            return self._normal_contact_queryset(user, isolated=False)
+        tenant = self._contact_request_tenant(request, user)
+        if tenant is None:
+            return queryset.none()
+        if getattr(user, 'user_type', '') in ('admin', 'super_admin'):
+            return queryset.filter(
+                tenant_memberships__tenant=tenant,
+                tenant_memberships__is_active=True,
+            ).distinct()
+        return self._normal_contact_queryset(user, tenant=tenant, isolated=True)
+
+    @staticmethod
+    def _contact_prefetch(queryset):
+        """通讯录序列化所需的主部门/企业关联一次性预取"""
+        from org.models import UserDepartment
+        return queryset.select_related('department', 'active_tenant').prefetch_related(
+            Prefetch('tenant_memberships',
+                     queryset=TenantMembership.objects.filter(is_active=True).select_related('tenant')),
+            Prefetch('department_relations',
+                     queryset=UserDepartment.objects.select_related('department')),
+        )
+
+    @staticmethod
+    def _normal_contact_queryset(user, tenant=None, isolated=False):
+        """普通用户通讯录范围：
+        - 开启数据隔离：当前所属企业下、本人所在部门的成员 + 被分配给本人的好友（限当前企业）；
+        - 关闭数据隔离：本人所属所有企业下所在部门的成员 + 所有被分配给本人的好友。
+        """
+        from org.models import UserDepartment
+        if isolated and tenant is None:
+            return CustomUser.objects.none()
+        if not isolated:
+            tenant = None
+        dept_rels = UserDepartment.objects.filter(user=user)
+        if tenant is not None:
+            dept_rels = dept_rels.filter(department__tenant=tenant)
+        # 优先使用「主部门」：很多历史账号会同时关联公司/集团根部门，若把全部关联部门都算进去，
+        # 会把整个企业成员都当成同部门成员；没有主部门时才回退到全部关联部门。
+        dept_ids = list(dept_rels.filter(is_primary=True).values_list('department_id', flat=True))
+        if not dept_ids:
+            # 无主部门（历史数据常见）：优先排除「公司/集团」级根部门，避免把全企业成员当作同部门
+            rels = list(dept_rels.select_related('department'))
+            non_company = [
+                r.department_id for r in rels
+                if r.department and r.department.department_type != 'company'
+            ]
+            dept_ids = non_company or [r.department_id for r in rels]
+        if dept_ids:
+            member_ids = UserDepartment.objects.filter(
+                department_id__in=dept_ids
+            ).values_list('user_id', flat=True)
+        else:
+            member_ids = []
+        friend_qs = user.friends.filter(is_active=True)
+        if tenant is not None:
+            friend_qs = friend_qs.filter(
+                tenant_memberships__tenant=tenant,
+                tenant_memberships__is_active=True,
+            )
+        queryset = CustomUser.objects.filter(is_active=True).exclude(
+            id=user.id
+        ).filter(Q(id__in=member_ids) | Q(id__in=friend_qs.values_list('id', flat=True)))
+        if tenant is not None:
+            queryset = queryset.filter(
+                tenant_memberships__tenant=tenant,
+                tenant_memberships__is_active=True,
+            )
+        return queryset.distinct()
+
     @action(detail=False, methods=['get'])
     def list_users(self, request):
         """
         通讯录用户列表（优化版）
-        - 管理员显示所有用户
-        - 普通用户显示同企业成员
+        - 超级管理员：显示所有用户
+        - 普通管理员：仅显示当前所属企业的用户
+        - 普通用户：显示其直属部门成员
         """
-        user = request.user
-        if user.user_type in ['admin', 'super_admin']:
-            # 管理员可以看到所有用户
-            queryset = CustomUser.objects.filter(
-                is_active=True
-            ).exclude(
-                id=user.id
-            ).select_related('department').prefetch_related(
-                'friends'
-            )
-        else:
-            # 普通用户：返回其直属部门内的所有成员（通过 UserDepartment 关联）
-            try:
-                from org.models import UserDepartment
-                user_dept_ids = UserDepartment.objects.filter(
-                    user=user
-                ).values_list('department_id', flat=True)
-                if user_dept_ids:
-                    dept_user_ids = UserDepartment.objects.filter(
-                        department_id__in=list(user_dept_ids)
-                    ).values_list('user_id', flat=True).distinct()
-                    queryset = CustomUser.objects.filter(
-                        is_active=True,
-                        id__in=list(dept_user_ids)
-                    ).exclude(
-                        id=user.id
-                    ).select_related('department')
-                else:
-                    queryset = user.friends.filter(is_active=True).select_related('department')
-            except ImportError:
-                queryset = user.friends.filter(is_active=True).select_related('department')
+        queryset = self._contact_prefetch(self._contact_scope_queryset(request))
 
         # 支持搜索
         search_query = request.query_params.get('search', '')
@@ -1275,19 +1346,7 @@ class UserViewSet(viewsets.ModelViewSet):
         if not query:
             return Response([])
 
-        # 管理员显示所有用户，普通用户只显示好友
-        if request.user.user_type in ['admin', 'super_admin']:
-            # 管理员可以看到所有用户
-            queryset = CustomUser.objects.filter(
-                is_active=True
-            ).exclude(
-                id=request.user.id
-            ).select_related('department')
-        else:
-            # 普通用户只能看到分配的好友
-            queryset = request.user.friends.filter(
-                is_active=True
-            ).select_related('department')
+        queryset = self._contact_prefetch(self._contact_scope_queryset(request))
 
         # 排除当前用户，按多个维度搜索
         queryset = queryset.filter(
@@ -1317,7 +1376,7 @@ class UserViewSet(viewsets.ModelViewSet):
         """搜索可指派/选择的任务执行人（企业内所有活跃用户，含头像/部门/职位）。
 
         与通讯录搜索不同：普通用户也可搜索全部活跃用户用于任务指派，不受好友限制。
-        q 为空时返回最近在线的用户（上限 50）。"""
+        q 为空时返回最近在线的用户（上限 500）。"""
         query = request.query_params.get('q', '').strip()
         qs = CustomUser.objects.filter(
             is_active=True

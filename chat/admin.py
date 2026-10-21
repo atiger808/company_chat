@@ -5,16 +5,16 @@ from .models import (ChatRoom, Message, MessageReadStatus, MessageDeleteStatus, 
 
 @admin.register(ChatRoom)
 class ChatRoomAdmin(admin.ModelAdmin):
-    list_display = ('id', 'name', 'creator', 'room_type',  'is_pinned', 'is_muted', 'is_deleted', 'deleted_at', 'updated_at', 'created_at')
-    list_filter = ('creator', 'room_type', 'is_pinned', 'is_muted', 'is_deleted')
-    search_fields = ('name', 'id')
+    list_display = ('id', 'name', 'creator', 'room_type', 'tenant',  'is_pinned', 'is_muted', 'is_deleted', 'deleted_at', 'updated_at', 'created_at')
+    list_filter = ('room_type', 'is_pinned', 'is_muted', 'is_deleted', 'tenant')
+    search_fields = ('name', 'id', 'creator__username', 'creator__real_name', 'tenant__name')
     list_per_page = 20
 
 @admin.register(Message)
 class MessageAdmin(admin.ModelAdmin):
     list_display = ('id', 'chat_room', 'sender', 'content', 'message_type', 'is_read', 'is_deleted', 'deleted_at', 'timestamp')
     list_filter = ('message_type', 'is_read', 'is_deleted', 'mentioned_all', 'call_type', 'call_status', 'quote_message_type')
-    search_fields = ('content', 'id')
+    search_fields = ('content', 'id', 'sender__username', 'sender__real_name')
     list_per_page = 20
 
 

@@ -140,17 +140,21 @@ class API {
         });
     }
 
-    // 聊天室相关
-    static async getChatRooms() {
-        const response = await fetch(`${API_BASE_URL}/chat/rooms/`, {
+    // 聊天室相关（分页：返回完整分页信息，供侧边栏滚动加载更多使用）
+    static async getChatRoomsPage(page = 1) {
+        const response = await fetch(`${API_BASE_URL}/chat/rooms/?page=${encodeURIComponent(page)}`, {
             headers: TokenManager.getHeaders()
         });
         if (!response.ok) {
             const errorData = await response.json();
             throw new Error(errorData?.detail || errorData?.error || errorData?.message || '获取聊天室失败');
         }
-        const data = await response.json();
-        return data.results || [];
+        return await response.json();
+    }
+
+    static async getChatRooms() {
+        const data = await API.getChatRoomsPage(1);
+        return Array.isArray(data) ? data : (data.results || []);
     }
 
     static async createChatRoom(data) {
@@ -219,17 +223,21 @@ class API {
         return await response.json();
     }
 
-    // 用户列表
-    static async getUsers() {
-        const response = await fetch(`${API_BASE_URL}/auth/list/`, {
+    // 用户列表（分页：返回完整分页信息，供通讯录滚动加载更多使用）
+    static async getUsersPage(page = 1) {
+        const response = await fetch(`${API_BASE_URL}/auth/list/?page=${encodeURIComponent(page)}`, {
             headers: TokenManager.getHeaders()
         });
         if (!response.ok) {
             const errorData = await response.json();
             throw new Error(errorData?.error || errorData?.message || '获取用户列表失败');
         }
-        const data = await response.json();
-        return data.results || [];
+        return await response.json();
+    }
+
+    static async getUsers() {
+        const data = await API.getUsersPage(1);
+        return Array.isArray(data) ? data : (data.results || []);
     }
 
 

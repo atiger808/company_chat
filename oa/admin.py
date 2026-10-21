@@ -28,15 +28,15 @@ from .models import (
 
 @admin.register(AttendanceRecord)
 class AttendanceRecordAdmin(admin.ModelAdmin):
-    list_display = ['id', 'user', 'clock_type', 'clock_time', 'date', 'status', 'location']
-    list_filter = ['clock_type', 'status', 'date']
+    list_display = ['id', 'user', 'tenant', 'clock_type', 'clock_time', 'date', 'status', 'location']
+    list_filter = ['clock_type', 'status', 'date', 'tenant']
     search_fields = ['id', 'user__username', 'user__real_name', 'location']
     list_per_page = 20
 
 @admin.register(AttendanceConfig)
 class AttendanceConfigAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'sub_tenant', 'department', 'shift_type', 'location_required', 'updated_by', 'makeup_allowance', 'clock_out_limit', 'clock_in_enabled', 'clock_in_time', 'clock_out_enabled', 'clock_out_time', 'updated_at', 'created_at']
-    list_filter = ['clock_in_enabled', 'clock_out_enabled', 'shift_type']
+    list_filter = ['clock_in_enabled', 'clock_out_enabled', 'shift_type', 'tenant']
     search_fields = ['id', 'tenant__name', 'sub_tenant__name', 'department__name']
     list_per_page = 20
 
@@ -50,9 +50,9 @@ class UserAttendanceConfigAdmin(admin.ModelAdmin):
 
 @admin.register(ApprovalRequest)
 class ApprovalRequestAdmin(admin.ModelAdmin):
-    list_display = ['id', 'applicant', 'title', 'approval_type', 'status', 'receipt_deadline', 'sign_type', 'approval_mode', 'is_archived', 'archived_by', 'archived_at', 'updated_at',
+    list_display = ['id', 'applicant', 'title', 'approval_type', 'tenant', 'status', 'receipt_deadline', 'sign_type', 'approval_mode', 'is_archived', 'archived_by', 'archived_at', 'updated_at',
                     'created_at']
-    list_filter = ['status', 'approval_type', 'sign_type', 'approval_mode', 'is_archived']
+    list_filter = ['status', 'approval_type', 'tenant', 'sign_type', 'approval_mode', 'is_archived']
     search_fields = ['id', 'title', 'applicant__username', 'applicant__real_name', 'archive_note']
     list_per_page = 20
 
@@ -67,8 +67,8 @@ class ApprovalLogAdmin(admin.ModelAdmin):
 
 @admin.register(ApprovalNode)
 class ApprovalNodeAdmin(admin.ModelAdmin):
-    list_display = ['id', 'request', 'node_type', 'user', 'department', 'order']
-    list_filter = ['node_type']
+    list_display = ['id', 'request', 'node_type', 'user', 'is_final_approver', 'department', 'order']
+    list_filter = ['node_type', 'is_final_approver']
     search_fields = ['request__title', 'user__username', 'user__real_name', 'department__name']
     list_per_page = 20
 
@@ -83,8 +83,8 @@ class ApprovalAssigneeAdmin(admin.ModelAdmin):
 
 @admin.register(WorkNotification)
 class WorkNotificationAdmin(admin.ModelAdmin):
-    list_display = ['id', 'recipient', 'notification_type', 'title', 'content', 'is_read', 'created_at']
-    list_filter = ['notification_type', 'is_read']
+    list_display = ['id', 'recipient', 'notification_type', 'tenant', 'title', 'content', 'is_read', 'created_at']
+    list_filter = ['notification_type', 'is_read', 'tenant']
     search_fields = ['title', 'content', 'recipient__username']
     list_per_page = 20
 
@@ -93,13 +93,15 @@ class WorkNotificationAdmin(admin.ModelAdmin):
 class ApprovalCarbonCopyAdmin(admin.ModelAdmin):
     list_display = ['id', 'request', 'cc_type', 'cc_user', 'cc_department', 'created_at']
     list_filter = ['cc_type']
+    search_fields = ['cc_user__username', 'cc_user__real_name', 'cc_department__name']
+    list_per_page = 20
 
 
 @admin.register(ApprovalDeptConfig)
 class ApprovalDeptConfigAdmin(admin.ModelAdmin):
-    list_display = ['id', 'tenant', 'sub_tenant', 'approval_type', 'invoice_max_count', 'receipt_max_count', 'enable_receipt_return', 'require_signature', 'final_approver',
+    list_display = ['id', 'tenant', 'sub_tenant', 'approval_type', 'default_sign_type', 'invoice_max_count', 'receipt_max_count', 'enable_receipt_return', 'require_signature', 'final_approver',
                     'threshold_enabled', 'updated_by', 'department', 'updated_at', 'created_at']
-    list_filter = ['approval_type', 'enable_receipt_return', 'require_signature', 'threshold_enabled', 'threshold_field']
+    list_filter = ['approval_type', 'tenant', 'default_sign_type', 'enable_receipt_return', 'require_signature', 'threshold_enabled', 'threshold_field']
     search_fields = ['tenant__name', 'department__name']
     list_per_page = 20
 
@@ -115,8 +117,8 @@ class CustomPaymentMethodAdmin(admin.ModelAdmin):
 
 @admin.register(ApprovalType)
 class ApprovalTypeAdmin(admin.ModelAdmin):
-    list_display = ['id', 'code', 'name', 'icon', 'color', 'enabled', 'is_builtin', 'sort_order', 'updated_at', 'created_at']
-    list_filter = ['enabled', 'is_builtin']
+    list_display = ['id', 'code', 'name', 'icon', 'color', 'tenant', 'enabled', 'is_builtin', 'sort_order', 'updated_at', 'created_at']
+    list_filter = ['enabled', 'is_builtin', 'tenant']
     search_fields = ['code', 'name', 'tenant__name']
     list_per_page = 20
 
@@ -124,7 +126,7 @@ class ApprovalTypeAdmin(admin.ModelAdmin):
 @admin.register(SubsidyApplication)
 class SubsidyApplicationAdmin(admin.ModelAdmin):
     list_display = ['id', 'applicant', 'tenant', 'invoice_type', 'tax_rate', 'invoice_number', 'invoice_original_name', 'buyer_name', 'seller_name', 'invoice_date', 'invoice_amount', 'verified_at', 'verified_by', 'updated_at', 'created_at']
-    list_filter = ['status', 'invoice_type', 'tax_rate']
+    list_filter = ['status', 'invoice_type', 'tax_rate', 'tenant']
     search_fields = ['application_no', 'invoice_number', 'buyer_name', 'seller_name', 'invoice_code', 'invoice_original_name', 'applicant__username', 'applicant__real_name', 'tenant__name']
     list_per_page = 20
 
@@ -132,26 +134,28 @@ class SubsidyApplicationAdmin(admin.ModelAdmin):
 @admin.register(SubsidyPayment)
 class SubsidyPaymentAdmin(admin.ModelAdmin):
     list_display = ['id', 'user', 'tenant', 'amount', 'paid_at']
+    list_filter = ['tenant']
     search_fields = ['user__username', 'user__real_name', 'tenant__name', 'note']
     list_per_page = 20
 
 @admin.register(SubsidyConfig)
 class SubsidyConfigAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'sub_tenant', 'department', 'enabled', 'special_rate', 'ordinary_rate', 'tax_rate_threshold', 'updated_at', 'created_at']
-    list_filter = ['enabled', ]
+    list_filter = ['enabled', 'tenant', 'sub_tenant']
     search_fields = ['verifiers__username', 'verifiers__real_name', 'tenant__name']
     list_per_page = 20
 
 @admin.register(SubsidyWithdrawal)
 class SubsidyWithdrawalAdmin(admin.ModelAdmin):
     list_display = ['id', 'user', 'tenant', 'amount', 'status', 'paid_at', 'requested_at']
-    list_filter = ['status', ]
+    list_filter = ['status', 'tenant']
     search_fields = ['user__username', 'user__real_name', 'tenant__name', 'note']
     list_per_page = 20
 
 @admin.register(SubsidyWallet)
 class SubsidyWalletAdmin(admin.ModelAdmin):
     list_display = ['id', 'user', 'tenant', 'balance', 'total_in', 'total_out', 'updated_at', 'created_at']
+    list_filter = ['tenant']
     search_fields = ['user__username', 'user__real_name', 'tenant__name']
     list_per_page = 20
 
@@ -166,13 +170,14 @@ class SubsidyInvoiceVerifyRecordAdmin(admin.ModelAdmin):
 class DailyDigestConfigAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'enabled', 'auto_send', 'send_time', 'last_sent_date', 'updated_at']
     search_fields = ['id', 'tenant__name']
-    list_filter = ['enabled', 'auto_send']
+    list_filter = ['enabled', 'auto_send', 'tenant']
     list_per_page = 20
 
 
 @admin.register(ActivityWeightConfig)
 class ActivityWeightConfigAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'weights', 'updated_at']
+    list_filter = ['tenant']
     search_fields = ['tenant__name']
     list_per_page = 20
 
@@ -180,7 +185,7 @@ class ActivityWeightConfigAdmin(admin.ModelAdmin):
 @admin.register(MaterialItem)
 class MaterialItemAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'name', 'spec', 'unit', 'category', 'price', 'is_active', 'created_by', 'updated_at']
-    list_filter = ['is_active', 'category']
+    list_filter = ['is_active', 'category', 'tenant']
     search_fields = ['name', 'spec', 'category', 'tenant__name']
     list_per_page = 20
 
@@ -188,7 +193,7 @@ class MaterialItemAdmin(admin.ModelAdmin):
 @admin.register(MaterialRequirement)
 class MaterialRequirementAdmin(admin.ModelAdmin):
     list_display = ['id', 'doc_no', 'tenant', 'branch_dept', 'purpose', 'status', 'created_by', 'created_at', 'updated_at']
-    list_filter = ['status']
+    list_filter = ['status', 'tenant']
     search_fields = ['doc_no', 'purpose', 'tenant__name', 'branch_dept__name', 'created_by__username', 'created_by__real_name']
     list_per_page = 20
 
@@ -203,7 +208,7 @@ class MaterialRequirementItemAdmin(admin.ModelAdmin):
 @admin.register(MaterialRequisition)
 class MaterialRequisitionAdmin(admin.ModelAdmin):
     list_display = ['id', 'doc_no', 'tenant', 'requirement', 'requirement_doc_no', 'branch_dept', 'status', 'created_by', 'created_at', 'updated_at']
-    list_filter = ['status']
+    list_filter = ['status', 'tenant']
     search_fields = ['doc_no', 'requirement_doc_no', 'tenant__name', 'created_by__username', 'created_by__real_name']
     list_per_page = 20
 
@@ -223,7 +228,7 @@ class MaterialStockInItemInline(admin.TabularInline):
 @admin.register(MaterialStockIn)
 class MaterialStockInAdmin(admin.ModelAdmin):
     list_display = ['id', 'doc_no', 'tenant', 'requirement_doc_no', 'warehouse', 'stock_date', 'status', 'created_by', 'created_at', 'updated_at']
-    list_filter = ['status']
+    list_filter = ['status', 'tenant']
     search_fields = ['doc_no', 'requirement_doc_no', 'warehouse', 'tenant__name', 'created_by__username', 'created_by__real_name']
     inlines = [MaterialStockInItemInline]
     list_per_page = 20
@@ -239,7 +244,7 @@ class MaterialStockInItemAdmin(admin.ModelAdmin):
 @admin.register(MaterialStockLog)
 class MaterialStockLogAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'item', 'item_name', 'spec', 'delta', 'ref_type', 'doc_no', 'operator', 'created_at']
-    list_filter = ['ref_type']
+    list_filter = ['ref_type', 'tenant']
     search_fields = ['item_name', 'spec', 'doc_no', 'tenant__name', 'operator__username', 'operator__real_name']
     readonly_fields = ['tenant', 'item', 'item_name', 'spec', 'delta', 'ref_type', 'ref_id', 'doc_no', 'operator', 'note', 'created_at']
     date_hierarchy = 'created_at'
@@ -250,7 +255,7 @@ class MaterialStockLogAdmin(admin.ModelAdmin):
 class DocumentSequenceAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'doc_type', 'date_key', 'seq']
     search_fields = ['tenant__name', 'doc_type', 'date_key']
-    list_filter = ['doc_type']
+    list_filter = ['doc_type', 'tenant']
     list_per_page = 20
 
 
@@ -258,7 +263,7 @@ class DocumentSequenceAdmin(admin.ModelAdmin):
 class WatermarkConfigAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'company_name', 'text', 'font_size', 'font_color', 'font_style', 'rotation', 'opacity', 'position', 'updated_at']
     search_fields = ['id', 'tenant__name', 'company_name', 'text']
-    list_filter = ['enabled', 'position', 'shape', 'hidden_enabled', 'page_enabled']
+    list_filter = ['enabled', 'tenant', 'position', 'shape', 'hidden_enabled', 'page_enabled']
     list_per_page = 20
 
 
@@ -266,7 +271,7 @@ class WatermarkConfigAdmin(admin.ModelAdmin):
 class AgentConfigAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'enabled', 'embed_code', 'page_enabled', 'updated_at']
     search_fields = ['id', 'tenant__name', 'embed_code']
-    list_filter = ['enabled', 'page_enabled']
+    list_filter = ['enabled', 'page_enabled', 'tenant']
     list_per_page = 20
 
 
@@ -281,7 +286,7 @@ class AnnouncementConfigAdmin(admin.ModelAdmin):
 class ReportAccessConfigAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'oa_enabled', 'subsidy_enabled', 'user_ids', 'updated_at']
     search_fields = ['id', 'tenant__name']
-    list_filter = ['oa_enabled', 'subsidy_enabled']
+    list_filter = ['oa_enabled', 'subsidy_enabled', 'tenant']
     list_per_page = 20
 
 
@@ -289,14 +294,15 @@ class ReportAccessConfigAdmin(admin.ModelAdmin):
 class NotificationPopupConfigAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'enabled_types', 'duration_seconds', 'updated_at']
     search_fields = ['id', 'tenant__name']
+    list_filter = ['tenant', 'enabled_types']
     list_per_page = 20
 
 
 @admin.register(PrintLog)
 class PrintLogAdmin(admin.ModelAdmin):
-    list_display = ['id', 'user', 'page', 'target_type', 'target_id', 'count', 'ip', 'created_at']
+    list_display = ['id', 'user', 'tenant', 'page', 'target_type', 'target_id', 'count', 'ip', 'created_at']
     search_fields = ['id', 'user__username', 'user__real_name', 'page', 'target_type', 'target_id', 'ip']
-    list_filter = ['page', 'target_type', 'created_at']
+    list_filter = ['tenant', 'page', 'target_type', 'created_at']
     date_hierarchy = 'created_at'
     list_per_page = 20
 
@@ -306,7 +312,7 @@ class PrintLogAdmin(admin.ModelAdmin):
 class DailyWorkSummaryAdmin(admin.ModelAdmin):
     list_display = ['id', 'user', 'tenant', 'summary_date', 'status', 'position', 'analyzed_at', 'updated_at', 'created_at']
     search_fields = ['id', 'user__username', 'user__real_name', 'tenant__name', 'content']
-    list_filter = ['status', 'position']
+    list_filter = ['status', 'position', 'tenant']
     list_per_page = 20
 
 
@@ -314,7 +320,7 @@ class DailyWorkSummaryAdmin(admin.ModelAdmin):
 class WorkSummaryRangeAnalysisAdmin(admin.ModelAdmin):
     list_display = ['id', 'requester', 'target_user', 'tenant', 'status', 'analyzed_at', 'updated_at', 'created_at']
     search_fields = ['id', 'requester__username', 'requester__real_name', 'tenant__name', 'target_user__username', 'target_user__real_name']
-    list_filter = ['status',]
+    list_filter = ['status', 'tenant']
     list_per_page = 20
 
 
@@ -322,7 +328,7 @@ class WorkSummaryRangeAnalysisAdmin(admin.ModelAdmin):
 class WorkSummaryConfigAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'tenant', 'updated_by', 'model_id', 'enabled', 'limit_enabled', 'limit_notified', 'near_limit_notified', 'today_call_count', 'today_cost', 'updated_at']
     search_fields = ['id', 'updated_by__username', 'updated_by__real_name', 'tenant__name']
-    list_filter = ['enabled', 'scope_type', 'limit_enabled', 'near_limit_notified', 'limit_notified']
+    list_filter = ['tenant', 'enabled', 'scope_type', 'limit_enabled', 'near_limit_notified', 'limit_notified']
     list_per_page = 20
 
 
@@ -330,7 +336,7 @@ class WorkSummaryConfigAdmin(admin.ModelAdmin):
 class FinanceSpecialistAdmin(admin.ModelAdmin):
     list_display = ['id', 'user', 'tenant', 'is_active', 'updated_at', 'created_at']
     search_fields = ['user__username', 'user__real_name', 'tenant__name', 'remark']
-    list_filter = ['is_active']
+    list_filter = ['is_active', 'tenant']
     list_per_page = 20
 
 
@@ -338,7 +344,7 @@ class FinanceSpecialistAdmin(admin.ModelAdmin):
 class AnnouncementAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'author', 'title', 'scope_type', 'enable_comments', 'comment_mode', 'is_published', 'published_at', 'is_archived', 'updated_at', 'created_at']
     search_fields = ['title', 'author__username', 'author__real_name', 'tenant__name']
-    list_filter = ['scope_type', 'enable_comments', 'comment_mode', 'is_published', 'is_archived']
+    list_filter = ['tenant', 'scope_type', 'enable_comments', 'comment_mode', 'is_published', 'is_archived']
     list_per_page = 20
 
 
@@ -354,7 +360,7 @@ class AnnouncementCommentAdmin(admin.ModelAdmin):
 class AnnouncementOperationAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'user', 'announcement', 'action', 'title', 'created_at']
     search_fields = ['title', 'user__username', 'user__real_name']
-    list_filter = ['action']
+    list_filter = ['action', 'tenant']
     list_per_page = 20
 
 
@@ -362,5 +368,5 @@ class AnnouncementOperationAdmin(admin.ModelAdmin):
 class ApprovalLifecycleConfigAdmin(admin.ModelAdmin):
     list_display = ['id', 'tenant', 'enabled', 'archive_days',
                     'withdrawn_delete_days', 'draft_delete_days', 'updated_at']
-    list_filter = ['enabled']
+    list_filter = ['enabled', 'tenant']
     list_per_page = 20

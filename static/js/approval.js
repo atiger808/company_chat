@@ -2021,7 +2021,7 @@ class ApprovalApp {
                 + '<div class="approval-item-meta">'
                 + '<span title="审批ID（可在搜索框输入该ID检索）" style="cursor:pointer;" onclick="event.stopPropagation();approvalApp._copyText(\'' + r.id + '\')"><i class="fas fa-hashtag"></i> ' + r.id + '</span>'
                 + '<span><i class="fas fa-user"></i> ' + self._escape(r.applicant_name || '') + '</span>'
-                + '<span><i class="fas fa-tag"></i> <span class="type-icon-badge type-' + r.approval_type + '" style="color:' + (r.approval_type_color || self._getTypeColor(r.approval_type)) + ';"><i class="fas ' + (r.approval_type_icon || self._getTypeIcon(r.approval_type)) + '"></i> ' + self._escape(r.approval_type_display || r.approval_type) + '</span></span>'
+                + '<span><i class="fas fa-tag"></i> <span class="type-icon-badge type-' + r.approval_type + '" style="background:' + self._hexA((r.approval_type_color || self._getTypeColor(r.approval_type)), 0.14) + ';color:' + (r.approval_type_color || self._getTypeColor(r.approval_type)) + ';"><i class="fas ' + (r.approval_type_icon || self._getTypeIcon(r.approval_type)) + '"></i> ' + self._escape(r.approval_type_display || r.approval_type) + '</span></span>'
                 + '<span title="更新时间"><i class="fas fa-clock"></i> ' + self._formatTime(r.updated_at) + '</span>'
                 + (r.department_name ? '<span><i class="fas fa-building"></i> ' + self._escape(r.department_name) + '</span>' : '')
                 + (r.is_archived ? '<span title="已归档' + (r.archived_at ? '：' + self._formatTime(r.archived_at) : '') + (r.archived_by_name ? '（' + self._escape(r.archived_by_name) + '）' : '') + '" style="color:#e6a23c;"><i class="fas fa-box-archive"></i> 已归档</span>' : '')
@@ -5332,7 +5332,7 @@ class ApprovalApp {
             let html = cancelledBanner + archivedBanner + lifecycleBanner + idBanner + '<div class="detail-grid">'
                 + '<div class="detail-item" style="grid-column:1/-1;"><label><i class="fas fa-user-circle" style="color:var(--primary-color,#409eff);"></i> 申请人</label><span style="display:flex;align-items:center;gap:8px;"><img src="' + (d.applicant_avatar || defAv) + '" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">' + (d.applicant === currentUserId ? '我' : this._escape(d.applicant_name || '')) + '</span></div>'
                 + '<div class="detail-item"><label><i class="fas fa-tag" style="color:#409eff;"></i> 审批标题</label><span>' + this._escape(d.title) + '</span></div>'
-                + '<div class="detail-item"><label><i class="fas fa-list" style="color:#67c23a;"></i> 审批类型</label><span><span class="type-icon-badge type-' + d.approval_type + '" style="color:' + (d.approval_type_color || this._getTypeColor(d.approval_type)) + ';"><i class="fas ' + (d.approval_type_icon || this._getTypeIcon(d.approval_type)) + '"></i> ' + this._escape(d.approval_type_name || d.approval_type_display || d.approval_type) + '</span></span></div>'
+                + '<div class="detail-item"><label><i class="fas fa-list" style="color:#67c23a;"></i> 审批类型</label><span><span class="type-icon-badge type-' + d.approval_type + '" style="background:' + this._hexA((d.approval_type_color || this._getTypeColor(d.approval_type)), 0.14) + ';color:' + (d.approval_type_color || this._getTypeColor(d.approval_type)) + ';"><i class="fas ' + (d.approval_type_icon || this._getTypeIcon(d.approval_type)) + '"></i> ' + this._escape(d.approval_type_name || d.approval_type_display || d.approval_type) + '</span></span></div>'
                 + '<div class="detail-item"><label><i class="fas fa-building" style="color:#e6a23c;"></i> 所属部门</label><span>' + this._escape(d.department_name || '-') + '</span></div>'
                 + '<div class="detail-item"><label><i class="fas fa-sitemap" style="color:#9b59b6;"></i> 审批方式</label><span>' + modeLabel + '</span></div>'
                 + '<div class="detail-item"><label><i class="fas fa-info-circle" style="color:#909399;"></i> 状态</label><span class="' + (scMap[d.status] || '') + '"><i class="fas ' + this._statusIcon(d.status) + '" style="margin-right:4px;"></i>' + (statusMap[d.status] || d.status) + '</span></div>'
@@ -5591,7 +5591,7 @@ class ApprovalApp {
                             + '<span class="' + stCls + '" style="font-size:11px;">' + stTxt + '</span>'
                             + (as.comment ? '<span style="font-size:12px;color:var(--text-light);">: ' + as.comment + '</span>' : '')
                             // 发起人查看自己发起的审批时，对"待审批且节点已到达"的审批人提供"发送私聊"提醒
-                            + (d.applicant === currentUserId && as.status === 'pending' && as.user !== currentUserId
+                            + (d.applicant === currentUserId && d.status === 'pending' && as.status === 'pending' && as.user !== currentUserId
                                 && (d.approval_mode === 'parallel' || node.order <= (d.current_node_order || 0) || node.node_type === 'initiator')
                                 ? '<button type="button" onclick="approvalApp.sendApprovalPrivate(' + d.id + ',' + as.user + ',this)" style="border:1px solid #409eff;color:#409eff;background:#fff;border-radius:4px;font-size:11px;padding:2px 8px;cursor:pointer;white-space:nowrap;flex-shrink:0;line-height:1.6;" title="以私聊形式发送给该审批人，对方点击可直接处理"><i class="fas fa-comment-dots" style="margin-right:2px;"></i>发送私聊</button>'
                                 : '')
@@ -7722,10 +7722,16 @@ class ApprovalApp {
                 + ' 个、发票 ' + _invN + '/' + _maxN + ' 张'
                 + (d.status === 'approved' ? '；<span style="color:#e6a23c;">审批已通过，回传的票据不可删除</span>' : '') + '</div>';
         }
-        // 最后审批人可填写审批意见（随票据一起回传，展示在审批记录最下面）
-        if (canUpload && isLastApprover && !isApplicant) {
-            html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;"><i class="fas fa-comment-dots" style="color:#16a085;"></i> 审批意见</label>'
-                + '<textarea id="receiptComment' + d.id + '" rows="2" placeholder="选填，填写回传票据的相关说明..." style="width:100%;padding:8px 10px;border:1px solid var(--border-color,#dcdfe6);border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea></div>';
+        // 文字反馈/审批意见：随票据一起回传，展示在审批记录最下面，并随回传通知发送给对方
+        // 发起人 →「反馈内容」（随通知发给最后审批人）；最后审批人 →「审批意见」（随通知发给发起人）
+        if (canUpload) {
+            var isLastOnly = isLastApprover && !isApplicant;
+            var commentLabel = isLastOnly ? '审批意见' : '反馈内容';
+            var commentPlaceholder = isLastOnly
+                ? '选填，填写回传票据的相关说明...'
+                : '选填，填写本次票据回传的反馈说明（将随回传通知一并发送给最后审批人，并记录到审批记录）...';
+            html += '<div style="margin-bottom:8px;"><label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;"><i class="fas fa-comment-dots" style="color:#16a085;"></i> ' + commentLabel + '</label>'
+                + '<textarea id="receiptComment' + d.id + '" rows="2" placeholder="' + commentPlaceholder + '" style="width:100%;padding:8px 10px;border:1px solid var(--border-color,#dcdfe6);border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea></div>';
         }
         // 发起人/最后审批人可上传；最后审批人还可单独提交审批意见
         if (canUpload) {
@@ -7733,9 +7739,8 @@ class ApprovalApp {
                 + '<button type="button" class="btn btn-sm btn-primary" onclick="approvalApp._triggerReceiptUpload(' + d.id + ')"><i class="fas fa-upload"></i> 回传付款凭证/票据</button>'
                 + '<button type="button" class="btn btn-sm btn-secondary" onclick="approvalApp._pickReceiptCloudFiles(' + d.id + ')"><i class="fas fa-cloud"></i> 从网盘选择</button>'
                 + '<input type="file" id="receiptFileInput' + d.id + '" style="display:none;" multiple onchange="approvalApp._handleReceiptFileSelect(' + d.id + ', this)">'
-                + (isLastApprover && !isApplicant
-                    ? '<button type="button" class="btn btn-sm btn-secondary" onclick="approvalApp._submitReceiptComment(' + d.id + ')"><i class="fas fa-comment-dots"></i> 单独提交审批意见</button>'
-                    : '')
+                + '<button type="button" class="btn btn-sm btn-secondary" onclick="approvalApp._submitReceiptComment(' + d.id + ')"><i class="fas fa-comment-dots"></i> '
+                + (isLastApprover && !isApplicant ? '单独提交审批意见' : '单独提交反馈') + '</button>'
                 + '<span style="font-size:12px;color:#909399;">本审批回传上限：附件/发票分别最多 '
                 + (d.receipt_max_count || 10) + ' 个（可在「审批类型配置」里调整）</span>'
                 + '</div>';
@@ -7758,12 +7763,12 @@ class ApprovalApp {
         const commentEl = document.getElementById('receiptComment' + id);
         const comment = commentEl ? commentEl.value.trim() : '';
         if (!comment) {
-            this.showToast('请先填写审批意见', true);
+            this.showToast('请先填写反馈或审批意见', true);
             return;
         }
         try {
             const res = await this.apiPost(OA_API_URL + '/approval/' + id + '/upload-receipt/', {comment: comment});
-            this.showToast((res && res.message) || '审批意见已提交', false);
+            this.showToast((res && res.message) || '已提交', false);
             if (commentEl) commentEl.value = '';
             this.showDetail(id);
         } catch (e) {

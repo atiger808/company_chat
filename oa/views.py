@@ -42,6 +42,20 @@ def _approval_type_label(approval):
     t = resolve_approval_type(approval.approval_type, approval.tenant)
     return t.name if t else approval.approval_type
 
+def _approval_type_icon(approval):
+    """审批类型图标（动态类型表解析，兼容历史数据）"""
+    t = resolve_approval_type(approval.approval_type, approval.tenant)
+    return t.icon if t else 'fa-clipboard-check'
+
+def _approval_type_color(approval):
+    """审批类型颜色（动态类型表解析，兼容历史数据）"""
+    t = resolve_approval_type(approval.approval_type, approval.tenant)
+    return t.color if t else '#409EFF'
+
+def _approval_type_item(approval):
+    """审批类型颜色（动态类型表解析，兼容历史数据）"""
+    t = resolve_approval_type(approval.approval_type, approval.tenant)
+    return t
 
 def _approval_schema(approval):
     """审批类型对应的表单 schema（自定义/带表单的内置类型；无则空列表）"""
@@ -219,18 +233,19 @@ class AttendanceViewSet(viewsets.ViewSet):
         return ids
 
     @staticmethod
-    def _user_id(request):
+    def _user_id(request, params=None):
         """按用户筛选（可选）：报表支持搜索用户后查看该用户的数据"""
-        uid = (request.query_params.get('user_id') or '').strip()
+        params = params if params is not None else request.query_params
+        uid = str(params.get('user_id') or '').strip()
         try:
             return int(uid) if uid else None
         except (ValueError, TypeError):
             return None
 
     @staticmethod
-    def _parse_range(request):
+    def _parse_range(request, params=None):
         today = timezone.localdate()
-        qs = request.query_params
+        qs = params if params is not None else request.query_params
         start_s = (qs.get('start') or '').strip()
         end_s = (qs.get('end') or '').strip()
         try:
@@ -258,72 +273,285 @@ class AttendanceViewSet(viewsets.ViewSet):
             qs = qs.filter(applicant_id=uid)
         return qs
 
+    def _can_view_user(self, user, target_user):
+        """是否可查看指定成员的考勤：超管全部；部门负责人本部门（含子部门）；普通用户仅自己"""
+        if user.user_type == 'super_admin' or user.id == target_user.id:
+            return True
+        managed = self._get_managed_department_ids(user)
+        if managed:
+            from org.models import UserDepartment
+            return UserDepartment.objects.filter(
+                user_id=target_user.id, department_id__in=managed).exists()
+        return False
+
+    def _scope_users(self, request, params=None, user_ids=None):
+        """当前考勤可见的成员范围（供列表虚拟状态与日历成员选择复用）"""
+        from accounts.models import CustomUser
+        params = params if params is not None else request.query_params
+        if user_ids is not None:
+            user_ids = list(user_ids)
+            if not user_ids:
+                return CustomUser.objects.none()
+        tenant_ids = self._tenant_ids(request)
+        qs = CustomUser.objects.filter(is_active=True)
+        if user_ids is not None:
+            qs = qs.filter(id__in=user_ids)
+        if tenant_ids:
+            qs = qs.filter(
+                tenant_memberships__tenant_id__in=tenant_ids,
+                tenant_memberships__is_active=True)
+        if request.user.user_type != 'super_admin':
+            managed = self._get_managed_department_ids(request.user)
+            if managed:
+                qs = qs.filter(department_relations__department_id__in=managed)
+            else:
+                qs = qs.filter(id=request.user.id)
+        uid = self._user_id(request, params)
+        if uid:
+            qs = qs.filter(id=uid)
+        tenant_param = (params.get('tenant_id') or '').strip()
+        if tenant_param:
+            qs = qs.filter(tenant_memberships__tenant_id=tenant_param,
+                           tenant_memberships__is_active=True)
+        dept_param = (params.get('org_dept_id') or '').strip()
+        if dept_param:
+            qs = qs.filter(department_relations__department_id=dept_param)
+        # 注意：搜索词需要匹配日期/位置/设备等行级字段，统一由 _merged_attendance_rows 过滤，
+        # 这里不能只按用户名预筛，否则会漏掉「按日期/位置搜索」的结果。
+        return qs.distinct().select_related('department', 'active_tenant').prefetch_related(
+            'department_relations__department')[:2000]
+
+    def _config_for_user(self, tenant, user, cache):
+        if user.id in cache:
+            return cache[user.id]
+        cfg = None
+        try:
+            from org.models import UserDepartment
+            primary = UserDepartment.objects.filter(
+                user=user, is_primary=True).select_related('department').first()
+            dept_id = primary.department_id if primary else None
+            cfg = self._get_attendance_config(tenant, dept_id, user)
+        except Exception:
+            cfg = None
+        cache[user.id] = cfg
+        return cfg
+
+    @staticmethod
+    def _virtual_key(uid, d, status, clock_type):
+        return f'v:{uid}:{d.isoformat()}:{status}:{clock_type}'
+
+    @staticmethod
+    def _user_presentation(user):
+        """成员展示信息（姓名/头像/主部门），虚拟行按用户缓存一次，避免逐日重复计算"""
+        dept_name = ''
+        try:
+            rels = list(user.department_relations.all())
+            primary = next((r for r in rels if r.is_primary and r.department), None) \
+                or next((r for r in rels if r.department), None)
+            if primary:
+                dept_name = primary.department.name
+        except Exception:
+            dept_name = ''
+        if not dept_name and getattr(user, 'department', None):
+            dept_name = user.department.name
+        return {
+            'user_name': user.real_name or user.username,
+            'avatar_url': user.get_avatar_url() if hasattr(user, 'get_avatar_url') else '',
+            'department_name': dept_name,
+        }
+
+    def _virtual_row(self, user, d, status, clock_type, label, remark='', pres=None):
+        if pres is None:
+            pres = self._user_presentation(user)
+        return {
+            'id': self._virtual_key(user.id, d, status, clock_type),
+            'record_key': self._virtual_key(user.id, d, status, clock_type),
+            'user': user.id,
+            'user_name': pres.get('user_name') or '',
+            'avatar_url': pres.get('avatar_url') or '',
+            'department_name': pres.get('department_name') or '',
+            'clock_type': clock_type,
+            'clock_type_display': dict(AttendanceRecord.CLOCK_TYPE_CHOICES).get(clock_type, clock_type),
+            'clock_time': None,
+            'date': d.isoformat(),
+            'latitude': None, 'longitude': None, 'location': '', 'device': '',
+            'status': status,
+            'status_display': label,
+            'remark': remark,
+            'reverse_geocoding': None,
+            'bd09_latitude': None, 'bd09_longitude': None,
+            'ip_address': '', 'user_agent': '', 'makeup_at': None,
+            'is_virtual': True,
+        }
+
+    def _virtual_rows(self, users, start_d, end_d, tenant):
+        """生成缺卡/缺勤/休息/请假/出差等虚拟考勤行"""
+        from datetime import timedelta as _td
+        from .holidays import is_rest_day
+        users = list(users)
+        if not users or start_d > end_d:
+            return []
+        uids = [u.id for u in users]
+        record_rows = AttendanceRecord.objects.filter(
+            user_id__in=uids, date__gte=start_d, date__lte=end_d
+        ).values('user_id', 'date', 'clock_type')
+        rec_map = {}
+        for r in record_rows:
+            rec_map.setdefault((r['user_id'], r['date']), set()).add(r['clock_type'])
+        leave_map, trip_map = {}, {}
+        try:
+            approvals = ApprovalRequest.objects.filter(
+                applicant_id__in=uids, status='approved',
+                approval_type__in=['leave', 'trip'],
+                start_date__lte=end_d, end_date__gte=start_d,
+            ).values('applicant_id', 'approval_type', 'start_date', 'end_date',
+                     'title', 'leave_type', 'form_data')
+            for ap in approvals:
+                s = max(ap['start_date'] or start_d, start_d)
+                e = min(ap['end_date'] or ap['start_date'] or end_d, end_d)
+                cur = s
+                while cur <= e:
+                    key = (ap['applicant_id'], cur)
+                    if ap['approval_type'] == 'leave':
+                        label = (ap.get('leave_type') or
+                                 (ap.get('form_data') or {}).get('leave_type') or '请假')
+                        leave_map[key] = label
+                    else:
+                        dest = (ap.get('form_data') or {}).get('destination') or ''
+                        trip_map[key] = dest or ap.get('title') or '出差'
+                    cur += _td(days=1)
+        except Exception:
+            pass
+
+        today = timezone.localdate()
+        rows = []
+        day_count = (end_d - start_d).days + 1
+        for u in users:
+            joined = u.date_joined.date() if getattr(u, 'date_joined', None) else None
+            pres = self._user_presentation(u)
+            for offset in range(day_count):
+                d = start_d + _td(days=offset)
+                if d > today:
+                    continue
+                if joined and d < joined:
+                    continue
+                types = rec_map.get((u.id, d), set())
+                has_in = 'clock_in' in types
+                has_out = 'clock_out' in types
+                if types:
+                    # 有打卡记录：只补「缺卡」虚拟行（半天漏打）
+                    if not has_in:
+                        ct = 'clock_in'
+                        rows.append(self._virtual_row(
+                            u, d, 'missing_clock', ct, '缺卡（上班）', '缺少上班打卡', pres))
+                    elif not has_out:
+                        ct = 'clock_out'
+                        rows.append(self._virtual_row(
+                            u, d, 'missing_clock', ct, '缺卡（下班）', '缺少下班打卡', pres))
+                    continue
+                leave_label = leave_map.get((u.id, d))
+                trip_label = trip_map.get((u.id, d))
+                if leave_label:
+                    rows.append(self._virtual_row(
+                        u, d, 'leave', 'day', f'请假（{leave_label}）', leave_label, pres))
+                elif trip_label:
+                    rows.append(self._virtual_row(
+                        u, d, 'trip', 'day', f'出差（{trip_label}）', trip_label, pres))
+                elif is_rest_day(d):
+                    rows.append(self._virtual_row(u, d, 'rest', 'day', '休息', '非工作日', pres))
+                elif d == today:
+                    # 今天尚未打卡不判缺勤
+                    continue
+                else:
+                    rows.append(self._virtual_row(u, d, 'absent', 'day', '缺勤', '当日无打卡记录', pres))
+        return rows
+
+    def _merged_attendance_rows(self, request, start_d, end_d, tenant, params=None, user_ids=None):
+        """实际打卡记录 + 虚拟状态行（缺卡/缺勤/休息/请假/出差）"""
+        params = params if params is not None else request.query_params
+        users = list(self._scope_users(request, params, user_ids=user_ids))
+        uids = [u.id for u in users]
+        if not uids:
+            return []
+        status_filter = (params.get('status') or '').strip()
+        clock_type = (params.get('clock_type') or '').strip()
+        search = (params.get('search') or '').strip().lower()
+        records = AttendanceRecord.objects.filter(
+            user_id__in=uids, date__gte=start_d, date__lte=end_d
+        ).select_related('user__department').prefetch_related(
+            'user__department_relations__department').order_by('-clock_time')
+        actual = list(AttendanceRecordSerializer(
+            records, many=True, context={'request': request}).data)
+        cfg_cache = {}
+        user_by_id = {u.id: u for u in users}
+        geo_cache = {}
+        for row in actual:
+            row['record_key'] = str(row.get('id'))
+            row['is_virtual'] = False
+            u = user_by_id.get(row.get('user'))
+            cfg = self._config_for_user(tenant, u, cfg_cache) if u else None
+            if not u or not cfg:
+                continue
+            dept_id = None
+            try:
+                rels = list(u.department_relations.all())
+                primary = next((r for r in rels if r.is_primary and r.department), None) \
+                    or next((r for r in rels if r.department), None)
+                dept_id = primary.department_id if primary else None
+            except Exception:
+                pass
+            if u.id not in geo_cache:
+                geo_cache[u.id] = self._attendance_geo_config(tenant, dept_id, u)
+            required, ranges, _src = geo_cache[u.id]
+            abnormal = False
+            if required:
+                if row.get('latitude') is None or row.get('longitude') is None:
+                    abnormal = True
+                elif ranges:
+                    try:
+                        from utils.coord_transform import distance_to_ranges_m
+                        _dist, hit = distance_to_ranges_m(
+                            row.get('latitude'), row.get('longitude'), ranges)
+                        abnormal = hit is None
+                    except Exception:
+                        abnormal = False
+            if abnormal:
+                row['status'] = 'location_abnormal'
+                row['status_display'] = '地点异常'
+        # 只筛选实际打卡状态（正常/迟到/早退/地点异常）时无需生成虚拟行，显著提速
+        actual_only = status_filter in ('normal', 'late', 'early_leave', 'location_abnormal')
+        virtual = [] if actual_only else self._virtual_rows(users, start_d, end_d, tenant)
+        rows = actual + virtual
+
+        # 状态/类型/搜索筛选（对实际与虚拟行统一处理）
+        if status_filter:
+            rows = [r for r in rows if r.get('status') == status_filter]
+        if clock_type:
+            rows = [r for r in rows if r.get('clock_type') == clock_type]
+        if search:
+            def hit(r):
+                hay = ' '.join(str(r.get(k) or '') for k in (
+                    'user_name', 'department_name', 'date', 'location', 'device'))
+                return search in hay.lower()
+            rows = [r for r in rows if hit(r)]
+        rows.sort(key=lambda r: (str(r.get('date') or ''),
+                                 str(r.get('clock_time') or '')),
+                  reverse=True)
+        return rows
+
     def list(self, request):
-        """打卡记录列表（分页+搜索，三级权限：超管/部门负责人/普通用户）"""
-        user = request.user
-        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        """打卡记录列表（含缺卡/缺勤/休息/请假/出差等状态，分页+搜索）"""
+        tenant = self._tenant(request)
         page = int(request.query_params.get('page', 1))
         page_size = int(request.query_params.get('page_size', 20))
-        search = request.query_params.get('search', '').strip()
-        status_filter = request.query_params.get('status', '').strip()
-        clock_type = request.query_params.get('clock_type', '').strip()
-
-        start_d, end_d, start_dt, end_dt = self._parse_range(request)
-        qs = self._base_qs(request, start_dt, end_dt)
-
-        if user.user_type == 'super_admin':
-            # 超级管理员：可见全部成员（当前企业 + 子企业）
-            if tenant:
-                tenant_ids = [tenant.id]
-                try:
-                    sub_ids = list(tenant.sub_tenants.filter(is_active=True).values_list('id', flat=True))
-                    if sub_ids:
-                        tenant_ids.extend(sub_ids)
-                except Exception:
-                    pass
-                qs = qs.filter(tenant_id__in=tenant_ids)
-        else:
-            # 部门负责人：仅可见所管理部门的成员（含子部门）
-            managed_dept_ids = self._get_managed_department_ids(user)
-            if managed_dept_ids:
-                qs = qs.filter(
-                    user__department_relations__department_id__in=managed_dept_ids
-                ).distinct()
-            else:
-                # 普通用户：仅可见自己
-                qs = qs.filter(user=user)
-
-        filter_tenant_id = request.query_params.get('tenant_id', '').strip()
-        if filter_tenant_id:
-            qs = qs.filter(tenant_id=filter_tenant_id)
-        filter_org_dept_id = request.query_params.get('org_dept_id', '').strip()
-        if filter_org_dept_id:
-            qs = qs.filter(user__department_relations__department_id=filter_org_dept_id)
-
-        if status_filter:
-            qs = qs.filter(status=status_filter)
-
-        if clock_type:
-            qs = qs.filter(clock_type=clock_type)
-
-        if search:
-            qs = qs.filter(
-                Q(user__username__icontains=search) |
-                Q(user__real_name__icontains=search) |
-                Q(location__icontains=search) |
-                Q(date__icontains=search)
-            )
-
-        qs = qs.order_by('-clock_time')
-        total = qs.count()
+        start_d, end_d, _start_dt, _end_dt = self._parse_range(request)
+        rows = self._merged_attendance_rows(request, start_d, end_d, tenant)
+        total = len(rows)
         total_pages = max(1, (total + page_size - 1) // page_size)
         start = (page - 1) * page_size
-        items = qs[start:start + page_size]
-
-        results = AttendanceRecordSerializer(items, many=True, context={'request': request}).data
-
+        data = rows[start:start + page_size]
         return Response({'encrypt': True, 'data': encrypt_data({
-            'results': results,
+            'results': data,
             'count': total,
             'page': page,
             'page_size': page_size,
@@ -779,8 +1007,9 @@ class AttendanceViewSet(viewsets.ViewSet):
                 continue
         return response
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['post'])
     def export(self, request):
+        """考勤记录导出（POST，支持实际记录与缺卡/缺勤/休息/请假/出差虚拟状态）"""
         from django.http import FileResponse
         try:
             import openpyxl
@@ -789,58 +1018,68 @@ class AttendanceViewSet(viewsets.ViewSet):
         except ImportError:
             return Response({'error': '服务器缺少 openpyxl 依赖，请联系管理员安装'}, status=500)
 
-        user = request.user
-        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
-        if user.user_type == 'super_admin':
-            qs = AttendanceRecord.objects.select_related('user__department').all()
-            if tenant:
-                tenant_ids = [tenant.id]
-                try:
-                    sub_ids = list(tenant.sub_tenants.filter(is_active=True).values_list('id', flat=True))
-                    if sub_ids:
-                        tenant_ids.extend(sub_ids)
-                except Exception:
-                    pass
-                qs = qs.filter(tenant_id__in=tenant_ids)
-        else:
-            # 部门负责人：仅可见所管理部门的成员（含子部门）；普通用户：仅自己
-            managed_dept_ids = self._get_managed_department_ids(user)
-            if managed_dept_ids:
-                qs = AttendanceRecord.objects.select_related('user__department').filter(
-                    user__department_relations__department_id__in=managed_dept_ids
-                ).distinct()
-            else:
-                qs = AttendanceRecord.objects.select_related('user__department').filter(user=user)
+        tenant = self._tenant(request)
+        params = {}
+        try:
+            params.update({k: v for k, v in request.query_params.items()})
+        except Exception:
+            pass
+        try:
+            params.update({k: v for k, v in request.data.items()})
+        except Exception:
+            pass
+        start_d, end_d, _sdt, _edt = self._parse_range(request, params)
 
-        # Filter by selected record IDs
-        record_ids_str = request.query_params.get('record_ids', '').strip()
-        if record_ids_str:
-            ids = [int(x) for x in record_ids_str.split(',') if x.strip().isdigit()]
-            if ids:
-                qs = qs.filter(id__in=ids)
-        items = qs.order_by('-clock_time')[:10000]
-        # Determine fields to export
-        fields_param = request.query_params.get('fields', '').strip()
+        raw_ids = params.get('record_ids') or []
+        if isinstance(raw_ids, str):
+            raw_ids = [x.strip() for x in raw_ids.split(',') if x.strip()]
+        wanted = {str(x) for x in raw_ids}
+        # 仅导出选中记录时，先按选中记录反推用户范围，避免为全企业成员生成虚拟行
+        selected_user_ids = None
+        if wanted:
+            selected_user_ids = set()
+            actual_ids = []
+            for key in wanted:
+                if key.startswith('v:'):
+                    parts = key.split(':')
+                    if len(parts) > 1 and parts[1].isdigit():
+                        selected_user_ids.add(int(parts[1]))
+                elif key.isdigit():
+                    actual_ids.append(int(key))
+            if actual_ids:
+                selected_user_ids |= set(
+                    AttendanceRecord.objects.filter(id__in=actual_ids)
+                    .values_list('user_id', flat=True))
+            if not selected_user_ids:
+                return Response({'error': '未找到可导出的考勤记录'}, status=404)
+
+        rows = self._merged_attendance_rows(
+            request, start_d, end_d, tenant, params, user_ids=selected_user_ids)
+        if wanted:
+            rows = [r for r in rows if str(r.get('id')) in wanted][:10000]
+        else:
+            rows = rows[:10000]
+
+        raw_fields = params.get('fields') or []
+        if isinstance(raw_fields, str):
+            raw_fields = [x.strip() for x in raw_fields.split(',') if x.strip()]
         field_map = {
-            'user_name': lambda r: r.user.real_name or r.user.username,
-            # 'department_name': lambda r: r.user.department.name if r.user.department else '',
-            'department_name': lambda r: r.user.get_primary_department().name if hasattr(r.user, 'get_primary_department') else r.user.department.name if r.user.department else '',
-            'date': lambda r: str(r.date),
-            'clock_type_display': lambda r: r.get_clock_type_display(),
-            'clock_time': lambda r: timezone.localtime(r.clock_time).strftime('%Y-%m-%d %H:%M:%S') if r.clock_time else '',
-            'status': lambda r: {'normal': '正常', 'late': '迟到', 'early_leave': '早退'}.get(r.status, r.status),
-            'location': lambda r: r.location or '',
-            'device': lambda r: r.device or '',
+            'user_name': lambda r: r.get('user_name') or '',
+            'department_name': lambda r: r.get('department_name') or '',
+            'date': lambda r: r.get('date') or '',
+            'clock_type_display': lambda r: r.get('clock_type_display') or '',
+            'clock_time': lambda r: r.get('clock_time') or '',
+            'status': lambda r: r.get('status_display') or r.get('status') or '',
+            'location': lambda r: r.get('location') or '',
+            'device': lambda r: r.get('device') or '',
         }
         field_labels = {
             'user_name': '用户', 'department_name': '部门', 'date': '日期',
             'clock_type_display': '打卡类型', 'clock_time': '打卡时间', 'status': '状态',
             'location': '位置', 'device': '设备',
         }
-
-        if fields_param:
-            selected_fields = [f.strip() for f in fields_param.split(',') if f.strip() in field_map]
-        else:
+        selected_fields = [f for f in raw_fields if f in field_map] if raw_fields else list(field_map.keys())
+        if not selected_fields:
             selected_fields = list(field_map.keys())
 
         try:
@@ -859,12 +1098,8 @@ class AttendanceViewSet(viewsets.ViewSet):
                 cell.font = header_font
                 cell.alignment = Alignment(horizontal='center', vertical='center')
                 cell.border = border
-            for app in items:
-                try:
-                    row = [field_map[f](app) for f in selected_fields]
-                except Exception:
-                    continue
-                ws.append(row)
+            for r in rows:
+                ws.append([field_map[f](r) for f in selected_fields])
             for col, width in enumerate([22, 18, 20, 18, 16, 16, 14, 12, 14, 12, 14, 30, 12, 22, 22, 22, 18, 20, 20, 30], start=1):
                 ws.column_dimensions[get_column_letter(col)].width = width
             from io import BytesIO
@@ -887,7 +1122,8 @@ class AttendanceViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def calendar_stats(self, request):
-        """日历统计：按月返回每日打卡状态"""
+        """日历统计：按月返回每日打卡状态（支持查看部门成员/任意成员考勤日历）"""
+        from accounts.models import CustomUser
         now = timezone.localtime(timezone.now())
         year = int(request.query_params.get('year', now.year))
         month = int(request.query_params.get('month', now.month))
@@ -895,8 +1131,16 @@ class AttendanceViewSet(viewsets.ViewSet):
         _, days_in_month = cal_mod.monthrange(year, month)
         from datetime import date, timedelta
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        target_user = request.user
+        target_uid = self._user_id(request)
+        if target_uid and target_uid != request.user.id:
+            target_user = CustomUser.objects.filter(id=target_uid).first()
+            if not target_user:
+                return Response({'error': '成员不存在'}, status=404)
+            if not self._can_view_user(request.user, target_user):
+                return Response({'error': '暂无查看该成员考勤的权限'}, status=403)
         records = AttendanceRecord.objects.filter(
-            user=request.user,
+            user=target_user,
             date__year=year, date__month=month
         ).order_by('date', 'clock_time')
         daily = {}
@@ -919,18 +1163,26 @@ class AttendanceViewSet(viewsets.ViewSet):
         from .holidays import is_rest_day
         month_start = date(year, month, 1)
         month_end = date(year, month, days_in_month)
-        leave_dates = set()
+        leave_dates = {}
+        trip_dates = {}
         try:
-            leaves = ApprovalRequest.objects.filter(
-                applicant=request.user, approval_type='leave', status='approved',
+            approvals = ApprovalRequest.objects.filter(
+                applicant=target_user, approval_type__in=['leave', 'trip'], status='approved',
                 start_date__lte=month_end, end_date__gte=month_start,
             )
-            for lv in leaves:
-                s = max(lv.start_date or month_start, month_start)
-                e = min(lv.end_date or month_end, month_end)
+            for ap in approvals:
+                s = max(ap.start_date or month_start, month_start)
+                e = min(ap.end_date or ap.start_date or month_end, month_end)
+                if ap.approval_type == 'leave':
+                    label = ap.leave_type or (ap.form_data or {}).get('leave_type') or '请假'
+                    target = leave_dates
+                else:
+                    dest = (ap.form_data or {}).get('destination') or ''
+                    label = dest or ap.title or '出差'
+                    target = trip_dates
                 dd = s
                 while dd <= e:
-                    leave_dates.add(dd.isoformat())
+                    target[dd.isoformat()] = label
                     dd += timedelta(days=1)
         except Exception:
             pass
@@ -944,6 +1196,7 @@ class AttendanceViewSet(viewsets.ViewSet):
             entry = daily.get(d_str, {'date': d_str, 'clock_in': None, 'clock_out': None})
             ci = entry.get('clock_in')
             co = entry.get('clock_out')
+            has_clock = bool(ci or co)
             day_status = 'normal'
             day_label = '正常'
             if dt > today:
@@ -951,9 +1204,12 @@ class AttendanceViewSet(viewsets.ViewSet):
                 day_label = '未到'
             elif d_str in leave_dates:
                 day_status = 'leave'
-                day_label = '请假'
-            elif is_rest_day(dt):
-                # 星期日/法定节假日为休息日，不算缺卡/缺勤
+                day_label = '请假（%s）' % leave_dates[d_str]
+            elif d_str in trip_dates:
+                day_status = 'trip'
+                day_label = '出差（%s）' % trip_dates[d_str]
+            elif is_rest_day(dt) and not has_clock:
+                # 国家法定节假日/星期日默认休息；但当天实际有打卡则视为正常上班日
                 day_status = 'rest'
                 day_label = '休息'
             elif ci and co:
@@ -990,13 +1246,14 @@ class AttendanceViewSet(viewsets.ViewSet):
             'absent': sum(1 for e in result if e['day_status'] == 'absent'),
             'future': sum(1 for e in result if e['day_status'] == 'future'),
             'leave': sum(1 for e in result if e['day_status'] == 'leave'),
+            'trip': sum(1 for e in result if e['day_status'] == 'trip'),
             'rest': sum(1 for e in result if e['day_status'] == 'rest'),
         }
-        # 当前用户生效考勤配置的打卡时间（补卡日历据此判断「今日」漏卡是否可补、并提示将按配置时间补卡）
+        # 目标成员生效考勤配置的打卡时间（补卡日历据此判断「今日」漏卡是否可补、并提示将按配置时间补卡）
         from org.models import UserDepartment as _UD
-        _primary = _UD.objects.filter(user=request.user, is_primary=True).select_related('department').first()
+        _primary = _UD.objects.filter(user=target_user, is_primary=True).select_related('department').first()
         _dept_id = _primary.department_id if _primary else None
-        _cfg = self._get_attendance_config(tenant, _dept_id, request.user)
+        _cfg = self._get_attendance_config(tenant, _dept_id, target_user)
         _cfg_time = {
             'clock_in': _cfg.clock_in_time.strftime('%H:%M') if _cfg and _cfg.clock_in_time else '09:00',
             'clock_out': _cfg.clock_out_time.strftime('%H:%M') if _cfg and _cfg.clock_out_time else '18:00',
@@ -1005,11 +1262,14 @@ class AttendanceViewSet(viewsets.ViewSet):
         return Response({'encrypt': True, 'data': encrypt_data({
             'year': year, 'month': month, 'days': result, 'summary': summary,
             'config_time': _cfg_time,
+            'user_id': target_user.id,
+            'user_name': target_user.real_name or target_user.username,
         })})
 
     @action(detail=False, methods=['get'])
     def calendar_day_detail(self, request):
-        """日历日期详情：返回该日打卡记录及加班审批信息"""
+        """日历日期详情：返回该日打卡记录及请假/出差/加班审批信息（支持查看成员）"""
+        from accounts.models import CustomUser
         date_str = request.query_params.get('date', '')
         if not date_str:
             return Response({'error': '缺少日期参数'}, status=400)
@@ -1018,8 +1278,16 @@ class AttendanceViewSet(viewsets.ViewSet):
             target_date = dt_date.fromisoformat(date_str)
         except ValueError:
             return Response({'error': '日期格式错误'}, status=400)
+        target_user = request.user
+        target_uid = self._user_id(request)
+        if target_uid and target_uid != request.user.id:
+            target_user = CustomUser.objects.filter(id=target_uid).first()
+            if not target_user:
+                return Response({'error': '成员不存在'}, status=404)
+            if not self._can_view_user(request.user, target_user):
+                return Response({'error': '暂无查看该成员考勤的权限'}, status=403)
         records = AttendanceRecord.objects.filter(
-            user=request.user, date=target_date
+            user=target_user, date=target_date
         ).order_by('clock_time')
         clock_in = None
         clock_out = None
@@ -1030,30 +1298,50 @@ class AttendanceViewSet(viewsets.ViewSet):
                 clock_out = AttendanceRecordSerializer(r, context={'request': request}).data
         # 查找该日的加班审批（加班类型，日期覆盖该日）
         overtime_info = None
+        leave_info = None
+        trip_info = None
         try:
-            overtime_reqs = ApprovalRequest.objects.filter(
-                applicant=request.user,
-                approval_type='overtime',
+            reqs = ApprovalRequest.objects.filter(
+                applicant=target_user,
+                approval_type__in=['overtime', 'leave', 'trip'],
                 status='approved',
                 start_date__lte=target_date,
                 end_date__gte=target_date,
             )
-            for req in overtime_reqs:
-                overtime_info = {
-                    'id': req.id,
-                    'title': req.title,
-                    'duration': float(req.duration) if req.duration else 0,
-                    'content': req.content or '',
-                    'status': req.status,
-                }
-                break
+            for req in reqs:
+                if req.approval_type == 'overtime' and not overtime_info:
+                    overtime_info = {
+                        'id': req.id,
+                        'title': req.title,
+                        'duration': float(req.duration) if req.duration else 0,
+                        'content': req.content or '',
+                        'status': req.status,
+                    }
+                elif req.approval_type == 'leave' and not leave_info:
+                    leave_info = {
+                        'id': req.id,
+                        'type': req.leave_type or (req.form_data or {}).get('leave_type') or '请假',
+                        'title': req.title,
+                        'content': req.content or '',
+                    }
+                elif req.approval_type == 'trip' and not trip_info:
+                    trip_info = {
+                        'id': req.id,
+                        'destination': (req.form_data or {}).get('destination') or '',
+                        'title': req.title,
+                        'content': req.content or '',
+                    }
         except Exception:
             pass
         result = {
             'date': date_str,
+            'user_id': target_user.id,
+            'user_name': target_user.real_name or target_user.username,
             'clock_in': clock_in,
             'clock_out': clock_out,
             'overtime': overtime_info,
+            'leave': leave_info,
+            'trip': trip_info,
         }
         return Response({'encrypt': True, 'data': encrypt_data(result)})
 
@@ -2205,15 +2493,27 @@ class ApprovalViewSet(viewsets.ViewSet):
         room = ChatRoom.objects.filter(
             room_type='private', members=user
         ).filter(members__id=target_user.id).first()
+        # 私聊聊天室所属企业（优先取审批所属企业）
+        room_tenant = getattr(approval, 'tenant', None) or user.get_active_tenant()
         if not room:
-            room = ChatRoom.objects.create(room_type='private', name='', creator=user)
+            room = ChatRoom.objects.create(
+                room_type='private', name='', creator=user, tenant=room_tenant)
             room.members.add(user, target_user)
+        elif room.tenant_id is None and room_tenant is not None:
+            # 历史私聊没有写入所属企业：补齐该字段
+            room.tenant = room_tenant
+            room.save(update_fields=['tenant'])
 
-        type_label = _approval_type_label(approval)
+        t = _approval_type_item(approval)
+        type_label = t.name if t else approval.approval_type
+        type_icon = t.icon if t else  'fa-clipboard-check'
+        type_color = t.color if t else '#409EFF'
         card_data = {
             'approval_id': approval.id,
             'title': approval.title,
             'type_name': type_label,
+            'type_icon': type_icon,
+            'type_color': type_color,
             'applicant_name': user.real_name or user.username,
             'applicant_id': user.id,
             'amount': str(approval.amount) if approval.amount is not None else None,
@@ -2222,7 +2522,6 @@ class ApprovalViewSet(viewsets.ViewSet):
             'created_at': approval.created_at.isoformat() if approval.created_at else None,
             'sender_name': user.real_name or user.username,
         }
-        preview_text = f"📨 {card_data['applicant_name']} 给您发送了一条审批: {approval.title}"
 
         message = Message.objects.create(
             chat_room=room,
@@ -2230,6 +2529,12 @@ class ApprovalViewSet(viewsets.ViewSet):
             content=json.dumps(card_data, ensure_ascii=False),
             message_type='approval_card'
         )
+        # 更新聊天室时间戳
+        message.chat_room.updated_at = timezone.now()
+        message.chat_room.save(update_fields=['updated_at'])
+        message.save()  # 保存所有字段
+
+        preview_text = f"📨 {card_data['applicant_name']} 给您发送了一条审批: {approval.title}"
 
         # WebSocket 实时广播到该私聊房间
         channel_layer = get_channel_layer()
@@ -2346,7 +2651,12 @@ class ApprovalViewSet(viewsets.ViewSet):
     def _send_mention_cards(self, approval, from_user, targets, comment=''):
         """把审批以私聊卡片消息发给被 @ 的成员（附带本次审批意见），并同步工作通知"""
         from chat.models import ChatRoom, Message
-        type_label = _approval_type_label(approval)
+
+        t = _approval_type_item(approval)
+        type_label = t.name if t else approval.approval_type
+        type_icon = t.icon if t else 'fa-clipboard-check'
+        type_color = t.color if t else '#409EFF'
+
         sender_name = from_user.real_name or from_user.username
         channel_layer = get_channel_layer()
         sent = 0
@@ -2355,14 +2665,23 @@ class ApprovalViewSet(viewsets.ViewSet):
                 room = ChatRoom.objects.filter(
                     room_type='private', members=from_user
                 ).filter(members__id=target.id).first()
+                # 私聊聊天室所属企业（优先取审批所属企业）
+                room_tenant = getattr(approval, 'tenant', None) or from_user.get_active_tenant()
                 if not room:
-                    room = ChatRoom.objects.create(room_type='private', name='', creator=from_user)
+                    room = ChatRoom.objects.create(
+                        room_type='private', name='', creator=from_user, tenant=room_tenant)
                     room.members.add(from_user, target)
+                elif room.tenant_id is None and room_tenant is not None:
+                    # 历史私聊没有写入所属企业：补齐该字段
+                    room.tenant = room_tenant
+                    room.save(update_fields=['tenant'])
 
                 card_data = {
                     'approval_id': approval.id,
                     'title': approval.title,
                     'type_name': type_label,
+                    'type_icon': type_icon,
+                    'type_color': type_color,
                     'applicant_name': (approval.applicant.real_name or approval.applicant.username)
                     if approval.applicant else '',
                     'applicant_id': approval.applicant_id,
@@ -2379,6 +2698,11 @@ class ApprovalViewSet(viewsets.ViewSet):
                     content=json.dumps(card_data, ensure_ascii=False),
                     message_type='approval_card',
                 )
+                # 更新聊天室时间戳
+                message.chat_room.updated_at = timezone.now()
+                message.chat_room.save(update_fields=['updated_at'])
+                message.save()  # 保存所有字段
+
                 preview_text = f'📢 {sender_name} 在审批中提及了您：{approval.title}'
                 try:
                     async_to_sync(channel_layer.group_send)(
@@ -2648,21 +2972,30 @@ class ApprovalViewSet(viewsets.ViewSet):
 
         uploader_name = request.user.real_name or request.user.username
         related_url = f'/oa/approval/?approval_id={approval.id}'
+        # 文字反馈摘要：换行折叠、过长截断，并随回传通知一并发送给对方
+        _c = ' '.join((receipt_comment or '').split())
+        _c_short = (_c[:60] + '…') if len(_c) > 60 else _c
+        comment_suffix = f'；反馈：{_c_short}' if _c_short else ''
         if added > 0:
             notify_act = 'receipt_uploaded'
-            last_approver_notify = f'{uploader_name} 已回传 {added} 个票据/凭证，请及时查看'
-            applicant_notify_done = f'{uploader_name} 已补传 {added} 个票据/凭证，请及时查看'
-            applicant_notify_ing = f'{uploader_name} 已补传 {added} 个票据/凭证，请及时处理'
+            last_approver_notify = f'{uploader_name} 已回传 {added} 个票据/凭证{comment_suffix}，请及时查看'
+            applicant_notify_done = f'{uploader_name} 已补传 {added} 个票据/凭证{comment_suffix}，请及时查看'
+            applicant_notify_ing = f'{uploader_name} 已补传 {added} 个票据/凭证{comment_suffix}，请及时处理'
+            last_approver_subject = '票据已回传'
+            applicant_subject = '发起人已补传票据'
         else:
+            # 未附票据、仅提交文字反馈（上方逻辑已保证此时 comment 非空）
             notify_act = 'receipt_comment'
-            last_approver_notify = f'{uploader_name} 提交了审批意见，请及时查看'
-            applicant_notify_done = f'{uploader_name} 提交了审批意见，请及时查看'
-            applicant_notify_ing = f'{uploader_name} 提交了审批意见，请及时处理'
+            last_approver_notify = f'{uploader_name} 提交了反馈：{_c_short}，请及时查看'
+            applicant_notify_done = f'{uploader_name} 提交了审批意见：{_c_short}，请及时查看'
+            applicant_notify_ing = f'{uploader_name} 提交了审批意见：{_c_short}，请及时处理'
+            last_approver_subject = '审批人提交了意见'
+            applicant_subject = '发起人提交了反馈'
         # 最后审批人回传/提交意见 → 通知审批发起人
         if is_last_approver and not is_applicant:
             send_work_notification(
                 approval.applicant.id,
-                '票据已回传',
+                last_approver_subject,
                 last_approver_notify,
                 notification_type='approval',
                 related_url=related_url,
@@ -2681,7 +3014,7 @@ class ApprovalViewSet(viewsets.ViewSet):
                     continue
                 send_work_notification(
                     uid,
-                    '发起人已补传票据',
+                    applicant_subject,
                     content,
                     notification_type='approval',
                     related_url=related_url,
@@ -3021,6 +3354,8 @@ class ApprovalViewSet(viewsets.ViewSet):
         return self._snapshot_default_payment(user)
 
     def create(self, request):
+        # 确保内置审批类型已播种（含「考勤申诉/补卡申请」等新增类型）
+        ensure_builtin_types()
         serializer = ApprovalCreateSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
 
@@ -3933,6 +4268,11 @@ class ApprovalViewSet(viewsets.ViewSet):
                 self._on_material_approved(approval)
             except Exception as e:
                 logger.warning(f'物资单据审批通过后处理失败: {approval.id} {e}')
+            # 考勤申诉通过：自动恢复对应异常考勤为正常
+            try:
+                self._on_attendance_appeal_approved(approval)
+            except Exception as e:
+                logger.warning(f'考勤申诉审批通过后恢复考勤失败: {approval.id} {e}')
             return True
 
         return False
@@ -4006,6 +4346,78 @@ class ApprovalViewSet(viewsets.ViewSet):
                             )
                     except Exception:
                         pass
+
+    def _on_attendance_appeal_approved(self, approval):
+        """考勤申诉/补卡审批通过：把对应日期的异常考勤恢复为正常（含补录缺卡）"""
+        if approval.approval_type != 'attendance_appeal':
+            return
+        from datetime import date as _d, datetime as _dt, time as _t, timedelta as _td
+        data = approval.form_data or {}
+        date_s = str(data.get('date') or '').strip()
+        if not date_s and approval.start_date:
+            date_s = approval.start_date.isoformat()
+        try:
+            target_date = _d.fromisoformat(date_s)
+        except (ValueError, TypeError):
+            logger.warning(f'考勤申诉日期无效: approval={approval.id} date={date_s}')
+            return
+        clock_type = str(data.get('clock_type') or 'day')
+        if clock_type not in ('clock_in', 'clock_out', 'day'):
+            clock_type = 'day'
+        target_user = approval.applicant
+        tenant = approval.tenant
+
+        # 复用考勤配置解析（个人 > 部门 > 子公司 > 企业）
+        try:
+            from org.models import UserDepartment
+            primary = UserDepartment.objects.filter(
+                user=target_user, is_primary=True).select_related('department').first()
+            dept_id = primary.department_id if primary else None
+            config = AttendanceViewSet()._get_attendance_config(tenant, dept_id, target_user)
+        except Exception:
+            config = None
+        cfg_in = config.clock_in_time if config and config.clock_in_time else _t(9, 0)
+        cfg_out = config.clock_out_time if config and config.clock_out_time else _t(18, 0)
+
+        now = timezone.now()
+        existing = list(AttendanceRecord.objects.filter(
+            user=target_user, date=target_date))
+        types = [clock_type] if clock_type != 'day' else ['clock_in', 'clock_out']
+        for ct in types:
+            rec = next((r for r in existing if r.clock_type == ct), None)
+            if rec:
+                rec.status = 'normal'
+                rec.makeup_at = now
+                rec.remark = '申诉通过'
+                rec.save(update_fields=['status', 'makeup_at', 'remark'])
+            else:
+                base_time = cfg_in if ct == 'clock_in' else cfg_out
+                clock_dt = timezone.make_aware(_dt.combine(target_date, base_time)) \
+                    if timezone.is_naive(_dt.combine(target_date, base_time)) \
+                    else _dt.combine(target_date, base_time)
+                rec = AttendanceRecord.objects.create(
+                    user=target_user, clock_type=ct, date=target_date,
+                    tenant=tenant, status='normal', remark='申诉通过',
+                    location='', device='申诉补录', makeup_at=now,
+                )
+                rec.clock_time = clock_dt
+                rec.save(update_fields=['clock_time'])
+        # 地点异常（全天型）也要把当天所有异常记录恢复正常
+        if clock_type == 'day':
+            AttendanceRecord.objects.filter(
+                user=target_user, date=target_date
+            ).exclude(status='normal').update(status='normal', makeup_at=now, remark='申诉通过')
+        try:
+            send_work_notification(
+                user_id=target_user.id,
+                title='考勤申诉已通过',
+                content=f'{target_date} 的考勤异常申诉已通过，相关考勤已恢复为正常',
+                notification_type='attendance',
+                related_url='/oa/attendance/',
+                extra_data={'date': str(target_date), 'appeal_approved': True, 'approval_id': approval.id},
+            )
+        except Exception:
+            pass
 
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
@@ -7447,9 +7859,16 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
             return Response({'error': '不能分享给自己'}, status=400)
         # get-or-create 私聊房间（与审批私聊保持一致）
         room = ChatRoom.objects.filter(room_type='private', members=user).filter(members__id=target.id).first()
+        # 私聊聊天室所属企业（优先取工作总结所属企业）
+        room_tenant = getattr(s, 'tenant', None) or user.get_active_tenant()
         if not room:
-            room = ChatRoom.objects.create(room_type='private', name='', creator=user)
+            room = ChatRoom.objects.create(
+                room_type='private', name='', creator=user, tenant=room_tenant)
             room.members.add(user, target)
+        elif room.tenant_id is None and room_tenant is not None:
+            # 历史私聊没有写入所属企业：补齐该字段
+            room.tenant = room_tenant
+            room.save(update_fields=['tenant'])
         card_data = {
             'summary_id': s.id,
             'user_name': s.user.real_name or s.user.username,
@@ -10325,6 +10744,18 @@ class SubsidyViewSet(viewsets.ViewSet):
         from .serializers import SubsidyPaymentSerializer
         return Response({'encrypt': True, 'data': encrypt_data({'results': SubsidyPaymentSerializer(qs, many=True).data})})
 
+    @staticmethod
+    def _req_param(request, key, default=''):
+        """读取参数：POST 请求优先取请求体（导出接口已改为 POST），否则取查询参数"""
+        try:
+            if request.method == 'POST':
+                v = request.data.get(key)
+                if v not in (None, ''):
+                    return v
+        except Exception:
+            pass
+        return request.query_params.get(key, default)
+
     def _build_all_queryset(self, request):
         """构建核验列表过滤后的 queryset（供列表/导出共用），返回 (qs, tenant)
         仅超级管理员或配置的财务核验人员可访问核验列表"""
@@ -10341,18 +10772,18 @@ class SubsidyViewSet(viewsets.ViewSet):
         qs = SubsidyApplication.objects.select_related('applicant', 'tenant', 'verified_by').all()
         if tenant_ids:
             qs = qs.filter(Q(tenant_id__in=tenant_ids) | Q(tenant__isnull=True))
-        record_ids = request.query_params.get('record_ids', '').strip()
+        record_ids = str(self._req_param(request, 'record_ids', '') or '').strip()
         if record_ids:
             ids = [int(x) for x in record_ids.split(',') if x.strip().isdigit()]
             if ids:
                 qs = qs.filter(id__in=ids)
-        status = request.query_params.get('status', '').strip()
+        status = str(self._req_param(request, 'status', '') or '').strip()
         if status:
             qs = qs.filter(status=status)
-        invoice_type = request.query_params.get('invoice_type', '').strip()
+        invoice_type = str(self._req_param(request, 'invoice_type', '') or '').strip()
         if invoice_type:
             qs = qs.filter(invoice_type=invoice_type)
-        search = request.query_params.get('search', '').strip()
+        search = str(self._req_param(request, 'search', '') or '').strip()
         if search:
             from accounts.models import CustomUser
             applicant_ids = list(CustomUser.objects.filter(
@@ -10365,28 +10796,28 @@ class SubsidyViewSet(viewsets.ViewSet):
                 | Q(invoice_code__icontains=search)
                 | Q(invoice_number__icontains=search)
             )
-        invoice_number = request.query_params.get('invoice_number', '').strip()
+        invoice_number = str(self._req_param(request, 'invoice_number', '') or '').strip()
         if invoice_number:
             qs = qs.filter(invoice_number__icontains=invoice_number)
-        date_from = request.query_params.get('date_from', '').strip()
+        date_from = str(self._req_param(request, 'date_from', '') or '').strip()
         if date_from:
             try:
                 qs = qs.filter(created_at__date__gte=timezone.datetime.strptime(date_from, '%Y-%m-%d').date())
             except (ValueError, TypeError):
                 pass
-        date_to = request.query_params.get('date_to', '').strip()
+        date_to = str(self._req_param(request, 'date_to', '') or '').strip()
         if date_to:
             try:
                 qs = qs.filter(created_at__date__lte=timezone.datetime.strptime(date_to, '%Y-%m-%d').date())
             except (ValueError, TypeError):
                 pass
-        min_amount = request.query_params.get('min_amount', '').strip()
+        min_amount = str(self._req_param(request, 'min_amount', '') or '').strip()
         if min_amount:
             try:
                 qs = qs.filter(invoice_amount__gte=float(min_amount))
             except (ValueError, TypeError):
                 pass
-        max_amount = request.query_params.get('max_amount', '').strip()
+        max_amount = str(self._req_param(request, 'max_amount', '') or '').strip()
         if max_amount:
             try:
                 qs = qs.filter(invoice_amount__lte=float(max_amount))
@@ -10457,7 +10888,7 @@ class SubsidyViewSet(viewsets.ViewSet):
             'seller_tax_no': '销售方纳税人识别号', 'verified_by': '核验人', 'verified_at': '核验时间',
             'created_at': '申请时间', 'reject_reason': '驳回原因',
         }
-        fields_param = request.query_params.get('fields', '').strip()
+        fields_param = str(self._req_param(request, 'fields', '') or '').strip()
         if fields_param:
             selected_fields = [f.strip() for f in fields_param.split(',') if f.strip() in field_map]
         else:
@@ -10648,15 +11079,15 @@ class SubsidyViewSet(viewsets.ViewSet):
             except Exception:
                 pass
         qs = qs.filter(Q(tenant_id__in=tenant_ids) | Q(tenant__isnull=True))
-        record_ids = request.query_params.get('record_ids', '').strip()
+        record_ids = str(self._req_param(request, 'record_ids', '') or '').strip()
         if record_ids:
             ids = [int(x) for x in record_ids.split(',') if x.strip().isdigit()]
             if ids:
                 qs = qs.filter(id__in=ids)
-        status = request.query_params.get('status', '').strip()
+        status = str(self._req_param(request, 'status', '') or '').strip()
         if status:
             qs = qs.filter(status=status)
-        search = request.query_params.get('search', '').strip()
+        search = str(self._req_param(request, 'search', '') or '').strip()
         if search:
             qs = qs.filter(Q(user__username__icontains=search) | Q(user__real_name__icontains=search))
         qs = qs.order_by('-requested_at')[:10000]
@@ -10677,7 +11108,7 @@ class SubsidyViewSet(viewsets.ViewSet):
             'remaining_balance': '剩余金额(元)', 'status': '状态', 'requested_at': '申请时间',
             'paid_at': '支付时间', 'paid_by': '支付人员', 'note': '备注', 'reject_reason': '驳回原因',
         }
-        fields_param = request.query_params.get('fields', '').strip()
+        fields_param = str(self._req_param(request, 'fields', '') or '').strip()
         if fields_param:
             selected_fields = [f.strip() for f in fields_param.split(',') if f.strip() in field_map]
         else:

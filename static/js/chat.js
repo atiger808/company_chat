@@ -136,6 +136,13 @@ class VersionManager {
             }
 
             const serverVersion = await response.json();
+
+            // 版本提示自动关闭时长由管理控制台配置（默认 120 秒 / 2 分钟）
+            const promptSeconds = parseInt(serverVersion.version_prompt_duration_seconds, 10);
+            if (Number.isFinite(promptSeconds) && promptSeconds > 0) {
+                this.updateBannerTimeout = Math.min(Math.max(promptSeconds, 10), 600) * 1000;
+            }
+
             const localVersion = this.getStoredVersion();
 
             // 🔧 修复1: 首次访问时保存版本
@@ -232,8 +239,8 @@ class VersionManager {
         // 🔧 预览的每一行还要截断：日志是「一行一个段落」（动辄几百字），原样塞进横幅会把横幅撑得
         //    比屏幕还高，把后面的「版本 / 更新时间 / 立即更新按钮」顶出视口（fixed 元素超出的部分
         //    无法靠页面滚动看到 → 用户点不到按钮）。完整内容仍在「查看全部更新日志」里可看。
-        const PREVIEW_LINE_COUNT = 2;
-        const PREVIEW_MAX_CHARS = 80;
+        const PREVIEW_LINE_COUNT = 3;
+        const PREVIEW_MAX_CHARS = 110;
         const clipText = (s) => (s.length > PREVIEW_MAX_CHARS ? s.slice(0, PREVIEW_MAX_CHARS) + '…' : s);
         const logLines = String(updateInfo.updateMessage || '').split('<br>').map(l => l.trim()).filter(Boolean);
         const previewLines = logLines.slice(0, PREVIEW_LINE_COUNT).map(clipText);
@@ -618,6 +625,13 @@ class ChatClient {
         this.chatRooms = [];
         this.messages = [];
         this.users = [];
+        // 侧边栏分页（滚动到底部时加载更多）
+        this.chatRoomsPage = 1;
+        this.chatRoomsHasMore = false;
+        this.chatRoomsLoading = false;
+        this.usersPage = 1;
+        this.usersHasMore = false;
+        this.usersLoading = false;
         this.departments = [];
         this.membersForGroup = [];
         this.isTyping = false;
@@ -1082,6 +1096,7 @@ class ChatClient {
             // 设置事件监听
             this.setupEventListeners();
             this.setupSidebar();
+            this.setupSidebarInfiniteScroll();
             this.setupContextMenu();
 
             // 初始化用户下拉菜单
@@ -3360,7 +3375,7 @@ class ChatClient {
      * 🔧 渲染审批卡片到聊天室（审批发起人私聊发送给审批人，点击直达审批详情）
      */
     renderApprovalCardInChat(data, container) {
-        container.className = '';
+        // container.className = '';
         if (!data || !data.approval_id) {
             container.innerHTML = '<div class="message-text" style="color:#909399;"><i class="fas fa-clipboard-check"></i> [审批卡片]</div>';
             return;
@@ -3375,6 +3390,8 @@ class ChatClient {
 
         const title = this.escapeHtml(data.title || '审批');
         const typeName = this.escapeHtml(data.type_name || '');
+        const typeIcon = this.escapeHtml(data.type_icon || '');
+        const typeColor = this.escapeHtml(data.type_color || '');
         const applicant = this.escapeHtml(data.applicant_name || '');
         const amount = data.amount ? '¥' + this.escapeHtml(data.amount) : '';
 
@@ -3385,7 +3402,7 @@ class ChatClient {
                 <!-- 卡片头部 -->
                 <div style="padding: 12px 16px; gap: 8px; background: linear-gradient(135deg, ${data.mention ? '#fff7e6 0%, #ffedd6 100%' : '#eef6ff 0%, #dbeafe 100%'}); border-bottom: 1px solid #e4e7ed; display: flex; justify-content: space-between; align-items: center;">
                     <span style="font-weight: 600; color: #303133; font-size: 14px; display: flex; align-items: center; gap: 6px;">
-                        <i class="fas ${data.mention ? 'fa-at' : 'fa-clipboard-check'}" style="color: ${data.mention ? '#e6a23c' : 'var(--primary-color, #409eff)'};"></i> ${data.mention ? this.escapeHtml(data.sender_name || '') + ' 在审批中提及了您' : (typeName ? typeName + ' ' : '') + '审批卡片'}
+                        <i class="fas ${data.mention ? 'fa-at' : typeIcon || 'fa-clipboard-check'}" style="color: ${data.mention ? '#e6a23c' : typeColor || 'var(--primary-color, #409eff)'};"></i>${(typeName ? typeName + ' ' : '')} ${data.mention ?  '' : ''}
                     </span>
                     <span style="font-size: 10px; padding: 4px 8px; border-radius: 10px; color: #fff; background: ${statusColor}; white-space: nowrap;">${statusText}</span>
                 </div>
@@ -3396,9 +3413,14 @@ class ChatClient {
                         <span title="发起人"><i class="fas fa-user-circle" style="width: 14px;"></i> ${applicant}</span>
                         ${amount ? `<span title="金额"><i class="fas fa-yen-sign" style="width: 14px;"></i> ${amount}</span>` : ''}
                     </div>
+                    ${data.mention ? `
+                    <div style="margin-top: 10px; padding: 8px 10px; background: #fdf6ec; border-left: 3px solid #e6a23c; border-radius: 4px; font-size: 12px; color: #8a6d3b; line-height: 1.5; word-break: break-all;">
+                        <i class="fas fa-at" style="margin-right: 4px;"></i> ${this.escapeHtml(data.sender_name || '')} 在审批中提及了您
+                    </div>` : ''}
+                    
                     ${data.mention && data.mention_comment ? `
                     <div style="margin-top: 10px; padding: 8px 10px; background: #fdf6ec; border-left: 3px solid #e6a23c; border-radius: 4px; font-size: 12px; color: #8a6d3b; line-height: 1.5; word-break: break-all;">
-                        <i class="fas fa-comment-dots" style="margin-right: 4px;"></i>审批意见：${this.escapeHtml(data.mention_comment)}
+                        <i class="fas fa-comment-dots" style="margin-right: 4px;"></i> 审批意见：${this.escapeHtml(data.mention_comment)}
                     </div>` : ''}
                 </div>
                 <!-- 卡片底部 -->
@@ -4217,20 +4239,69 @@ class ChatClient {
     }
 
 
-    // 加载聊天室
-    async loadChatRooms() {
+    // 加载聊天室（append=true 表示滚动到底部加载下一页）
+    async loadChatRooms(append = false) {
+        if (this.chatRoomsLoading) return;
+        const page = append ? (this.chatRoomsPage || 1) + 1 : 1;
+        this.chatRoomsLoading = true;
         try {
-            const response = await API.getChatRooms();
-            this.chatRooms = Array.isArray(response) ? response : (response.results || []);
+            const data = await API.getChatRoomsPage(page);
+            const rows = Array.isArray(data) ? data : (data.results || []);
 
-            // 渲染所有标签页
+            if (append) {
+                const existing = new Set(this.chatRooms.map(r => r.id));
+                this.chatRooms = this.chatRooms.concat(rows.filter(r => !existing.has(r.id)));
+            } else {
+                this.chatRooms = rows;
+            }
+
+            this.chatRoomsPage = (data && data.page) || page;
+            const hasNextKey = data && !Array.isArray(data) &&
+                Object.prototype.hasOwnProperty.call(data, 'next');
+            this.chatRoomsHasMore = Array.isArray(data) ? false : (hasNextKey
+                ? !!data.next
+                : (typeof data.count === 'number' && this.chatRooms.length < data.count));
+
+            // 渲染所有标签页（保留滚动位置，避免加载更多时列表跳回顶部）
+            const chatEl = document.getElementById('chatList');
+            const groupEl = document.getElementById('groupsList');
+            const chatScrollTop = append && chatEl ? chatEl.scrollTop : 0;
+            const groupScrollTop = append && groupEl ? groupEl.scrollTop : 0;
             this.renderChatRooms();
             this.renderGroups();
+            if (append && chatEl) chatEl.scrollTop = chatScrollTop;
+            if (append && groupEl) groupEl.scrollTop = groupScrollTop;
 
         } catch (error) {
             console.error('加载聊天室失败:', error);
-            this.showError('加载聊天室失败，请刷新页面');
+            if (!append) {
+                this.showError('加载聊天室失败，请刷新页面');
+            }
+        } finally {
+            this.chatRoomsLoading = false;
         }
+    }
+
+    // 滚动到底部加载更多聊天室
+    async loadMoreChatRooms() {
+        if (this.chatRoomsLoading || !this.chatRoomsHasMore) return;
+        await this.loadChatRooms(true);
+    }
+
+    // 侧边栏无限滚动：聊天 / 群组 / 通讯录
+    setupSidebarInfiniteScroll() {
+        const bind = (el, loader) => {
+            if (!el || el._sidebarInfiniteBound) return;
+            el._sidebarInfiniteBound = true;
+            el.addEventListener('scroll', () => {
+                if (el.scrollHeight - el.scrollTop - el.clientHeight < 120) {
+                    loader();
+                }
+            }, {passive: true});
+        };
+        bind(document.getElementById('chatList'), () => this.loadMoreChatRooms());
+        bind(document.getElementById('groupsList'), () => this.loadMoreChatRooms());
+        bind(document.getElementById('contactsList'), () => this.loadMoreUsers());
     }
 
 
@@ -4910,26 +4981,48 @@ class ChatClient {
     }
 
 
-    // 加载用户列表
-    async loadUsers() {
+    // 加载用户列表（append=true 表示滚动到底部加载下一页）
+    async loadUsers(append = false) {
+        if (this.usersLoading) return;
+        const page = append ? (this.usersPage || 1) + 1 : 1;
+        this.usersLoading = true;
         try {
-            // 根据用户类型决定加载方式
-            let response;
-            if (this.currentUser.user_type === 'normal') {
-                // 普通用户加载好友列表
-                response = await API.getUsers();
+            const data = await API.getUsersPage(page);
+            const rows = Array.isArray(data) ? data : (data.results || []);
+
+            if (append) {
+                const existing = new Set(this.users.map(u => u.id));
+                this.users = this.users.concat(rows.filter(u => !existing.has(u.id)));
             } else {
-                // 管理员加载所有用户列表
-                response = await API.getUsers();
+                this.users = rows;
             }
 
-            this.users = Array.isArray(response) ? response : (response.results || []);
+            this.usersPage = (data && data.page) || page;
+            const hasNextKey = data && !Array.isArray(data) &&
+                Object.prototype.hasOwnProperty.call(data, 'next');
+            this.usersHasMore = Array.isArray(data) ? false : (hasNextKey
+                ? !!data.next
+                : (typeof data.count === 'number' && this.users.length < data.count));
+
+            const contactsEl = document.getElementById('contactsList');
+            const scrollTop = append && contactsEl ? contactsEl.scrollTop : 0;
             this.renderUserList();
+            if (append && contactsEl) contactsEl.scrollTop = scrollTop;
         } catch (error) {
             console.error('加载用户列表失败:', error?.detail || error.message);
-            this.showError('加载用户列表失败');
-            await this.checkLoginStatus();
+            if (!append) {
+                this.showError('加载用户列表失败');
+                await this.checkLoginStatus();
+            }
+        } finally {
+            this.usersLoading = false;
         }
+    }
+
+    // 滚动到底部加载更多通讯录好友
+    async loadMoreUsers() {
+        if (this.usersLoading || !this.usersHasMore) return;
+        await this.loadUsers(true);
     }
 
     // 加载部门列表
@@ -6676,7 +6769,7 @@ class ChatClient {
         }
     }
 
-    async showUserProfile(userId) {
+    async showUserProfile(userId, room) {
         console.log('显示用户详细信息:', userId);
         if (!userId || userId === this.currentUser.id) {
             // 如果是当前用户，显示设置模态框
@@ -6689,8 +6782,8 @@ class ChatClient {
 
         try {
             const userData = await API.toggleGetUserProfile(userId);
-            // 创建用户信息弹窗
-            this.createUserProfileModal(userData);
+            // 创建用户信息弹窗（room 用于展示私聊聊天室所属企业）
+            this.createUserProfileModal(userData, room);
         } catch (error) {
             console.error('获取用户信息失败:', error);
             this.showError('获取用户信息失败: ' + (error.error || error.message || '未知错误'));
@@ -6700,10 +6793,11 @@ class ChatClient {
 
     showProfile(roomId) {
         const room = this.chatRooms.find(r => r.id === parseInt(roomId));
+        if (!room) return;
         if (room.room_type === 'private') {
             let otherUser = room.members.find(m => m.id !== this.currentUser.id);
             if (otherUser?.id) {
-                this.showUserProfile(otherUser?.id);
+                this.showUserProfile(otherUser?.id, room);
             }
         } else if (room.room_type === 'group') {
             this.showGroupProfile(room);
@@ -6722,7 +6816,7 @@ class ChatClient {
 
 
     // 优化用户信息模态框
-    createUserProfileModal(userData) {
+    createUserProfileModal(userData, room) {
         // 关闭可能存在的其他模态框
         this.closeAllModals();
 
@@ -6773,6 +6867,11 @@ class ChatClient {
             <button class="close-btn">&times;</button>
         </div>
         <div class="modal-body">
+                ${room && room.room_type === 'private' ? `
+                <div class="private-room-tenant-banner">
+                    <i class="fas fa-building"></i> 私聊所属企业：<strong>${this._escape(room.tenant_name || userData.tenant_info?.name || '-')}</strong>
+                </div>` : ''}
+
                 <!-- 头像和基本信息宫格 -->
                 <div class="profile-section profile-avatar-section">
                     <div class="profile-avatar-large">
@@ -7238,15 +7337,22 @@ class ChatClient {
 
             if (user.id === this.currentUser.id) return; // 排除自己
 
+            const mainDept = user.department_info?.name || user.department || '未设置';
+            const position = user.position || user.department_info?.position || '未设置';
+            const tenantName = user.tenant_info?.short_name || user.tenant_info?.name || '';
             html += `
             <div class="user-list-item" data-user-id="${user.id}">
-                <img src="${user.avatar_url || '/static/images/default-avatar.png'}" 
-                     alt="${user.real_name || user.username}" class="user-list-avatar" 
+                <img src="${user.avatar_url || '/static/images/default-avatar.png'}"
+                     alt="${user.real_name || user.username}" class="user-list-avatar"
                      onclick="chatClient.showUserProfile(${user.id})">
                 <div class="user-list-info">
                     <div class="user-list-name">${user.real_name || user.username}</div>
                     <div class="user-list-department">
-                        ${user.department_info?.name || user.department || ''} - ${user.position || ''}
+                        <span title="主部门"><i class="fas fa-sitemap"></i> ${this._escape(mainDept)}</span>
+                        <span title="职位"><i class="fas fa-user-tie"></i> ${this._escape(position)}</span>
+                    </div>
+                    <div class="user-list-enterprise" title="所属企业">
+                        <i class="fas fa-building"></i> ${this._escape(tenantName || '未归属企业')}
                     </div>
                 </div>
                 <div class="status ${user.online_status?.is_online ? 'online' : 'offline'}">
@@ -7324,6 +7430,9 @@ class ChatClient {
                     </div>
                     <div class="group-info">
                         <div class="group-title">${group.display_name}</div>
+                        <div class="group-enterprise" title="所属企业">
+                            <i class="fas fa-building"></i> ${this._escape(group.tenant_name || '未归属企业')}
+                        </div>
                         <div class="group-subtitle">${mentionHint}${lastMessageText || '暂无消息'}</div>
                     </div>
                     <div class="group-meta">
@@ -10906,9 +11015,11 @@ class ChatClient {
             room = this.chatRooms.find(r => r.id === parseInt(roomId));
         }
 
-        // 获取当前企业名称
+        // 显示该群聊自身所属企业（历史群聊没有 tenant 时后端会回退）
         var tenantName = '';
-        if (window.tenantManager && tenantManager.activeTenant) {
+        if (room && room.tenant_name) {
+            tenantName = room.tenant_name;
+        } else if (window.tenantManager && tenantManager.activeTenant) {
             tenantName = tenantManager.activeTenant.short_name || tenantManager.activeTenant.name;
         }
 
@@ -11273,9 +11384,11 @@ class ChatClient {
     showGroupMemberListModal(room) {
         let roomId = room.id;
 
-        // 获取当前企业名称
+        // 显示该群聊自身所属企业（历史群聊没有 tenant 时后端会回退）
         var tenantName = '';
-        if (window.tenantManager && tenantManager.activeTenant) {
+        if (room && room.tenant_name) {
+            tenantName = room.tenant_name;
+        } else if (window.tenantManager && tenantManager.activeTenant) {
             tenantName = tenantManager.activeTenant.short_name || tenantManager.activeTenant.name;
         }
 

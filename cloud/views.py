@@ -2139,10 +2139,17 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
             # 检查是否所有分片都已上传（自愈后仍有缺失才报错）
             if len(session.uploaded_chunks) != session.total_chunks:
                 missing = session.get_missing_chunks()
+                logger.warning(
+                    f'合并被拒：session={session.id}, 已上传 '
+                    f'{len(session.uploaded_chunks)}/{session.total_chunks}, '
+                    f'缺失 {len(missing)} 个: {missing[:20]}')
                 return Response(
                     {
                         'error': f'还有 {len(missing)} 个分片未上传',
-                        'missing_chunks': missing[:10]  # 只返回前10个
+                        # 返回全部缺失索引，前端可一次性补传后再合并
+                        'missing_chunks': missing,
+                        'uploaded_count': len(session.uploaded_chunks),
+                        'total_chunks': session.total_chunks,
                     },
                     status=status.HTTP_400_BAD_REQUEST
                 )
@@ -3894,11 +3901,13 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                 owner=user,
                 deleted_at__isnull=True
             )
+            has_error = False
             for folder_obj in folders:
                 try:
                     # 防止循环引用
                     if target_folder and self._is_descendant_of(target_folder, folder_obj):
                         errors.append(f'文件夹 {folder_obj.id}: 不能移动到自身子文件夹中')
+                        has_error = True
                         continue
 
                     folder_obj.parent = target_folder
@@ -3920,7 +3929,9 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                     )
                 except Exception as e:
                     errors.append(f'文件夹 {folder_obj.id}: {str(e)}')
-
+            if moved_count == 0 and has_error:
+                logger.error(f'user: {user} 批量移动失败: 不能移动到自身子文件夹中!')
+                return Response({'error': '移动操作全部失败，不能移动到自身子文件夹中！'}, status=status.HTTP_400_BAD_REQUEST)
             return Response({
                 'message': f'成功移动 {moved_count} 个项目',
                 'moved_count': moved_count,
@@ -7361,8 +7372,14 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                     members=collaborator
                 ).first()
 
+                # 私聊聊天室所属企业（优先取协作文件所属企业）
+                room_tenant = getattr(file_obj, 'tenant', None) or inviter.get_active_tenant()
                 if existing_room:
                     chat_room = existing_room
+                    # 历史私聊没有写入所属企业：补齐该字段
+                    if chat_room.tenant_id is None and room_tenant is not None:
+                        chat_room.tenant = room_tenant
+                        chat_room.save(update_fields=['tenant'])
                     # 如果已删除则恢复
                     for user in [inviter, collaborator]:
                         ChatRoomDeleteStatus_obj = existing_room.delete_statuses.filter(user=user).first()
@@ -7371,9 +7388,11 @@ class DocumentEditorViewSet(viewsets.ViewSet, UtilsTools):
                             ChatRoomDeleteStatus_obj.deleted_at = None
                             ChatRoomDeleteStatus_obj.save()
                 else:
+                    # 私聊聊天室写入当前企业（优先取协作文件所属企业），保证多租户数据隔离
                     chat_room = ChatRoom.objects.create(
                         room_type='private',
                         creator=inviter,
+                        tenant=room_tenant,
                     )
                     chat_room.members.add(inviter, collaborator)
 
@@ -9666,8 +9685,14 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
             members=target_user
         ).first()
 
+        # 私聊聊天室所属企业（优先取共享文件夹所属企业）
+        room_tenant = getattr(folder, 'tenant', None) or inviter.get_active_tenant()
         if existing_room:
             chat_room = existing_room
+            # 历史私聊没有写入所属企业：补齐该字段
+            if chat_room.tenant_id is None and room_tenant is not None:
+                chat_room.tenant = room_tenant
+                chat_room.save(update_fields=['tenant'])
             for user in [inviter, target_user]:
                 del_status = existing_room.delete_statuses.filter(user=user).first()
                 if del_status and del_status.is_deleted:
@@ -9675,7 +9700,9 @@ class SharedFolderViewSet(viewsets.ModelViewSet, UtilsTools):
                     del_status.deleted_at = None
                     del_status.save()
         else:
-            chat_room = ChatRoom.objects.create(room_type='private', creator=inviter)
+            # 私聊聊天室写入当前企业（优先取共享文件夹所属企业），保证多租户数据隔离
+            chat_room = ChatRoom.objects.create(
+                room_type='private', creator=inviter, tenant=room_tenant)
             chat_room.members.add(inviter, target_user)
 
         # 构建邀请消息内容（结构化 JSON，前端渲染为协作邀请卡片）

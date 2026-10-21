@@ -803,7 +803,8 @@ class AvatarUploadSerializer(serializers.Serializer):
 class UserListSerializer(serializers.ModelSerializer):
     """用户列表序列化器（精简版，用于通讯录）"""
 
-    department_info = DepartmentSerializer(source='department', read_only=True)
+    department_info = serializers.SerializerMethodField()
+    tenant_info = serializers.SerializerMethodField()
 
     avatar_url = serializers.SerializerMethodField()
     online_status = serializers.SerializerMethodField()
@@ -820,8 +821,55 @@ class UserListSerializer(serializers.ModelSerializer):
             'department',
             'department_info',
             'position',
+            'tenant_info',
             'online_status'
         ]
+
+    def get_department_info(self, obj):
+        """主部门：优先组织架构主部门，回退旧版部门"""
+        relations = []
+        try:
+            relations = list(obj.department_relations.all())
+        except Exception:
+            relations = []
+        primary = next((r for r in relations if r.department_id and r.is_primary), None)
+        if primary is None:
+            primary = next((r for r in relations if r.department_id), None)
+        if primary is not None:
+            return {
+                'id': primary.department_id,
+                'name': primary.department.name if primary.department else '',
+                'type': 'org',
+                'position': primary.position or '',
+            }
+        if obj.department_id:
+            return {
+                'id': obj.department_id,
+                'name': obj.department.name if obj.department else '',
+                'type': 'legacy',
+                'position': '',
+            }
+        return None
+
+    def get_tenant_info(self, obj):
+        """当前所属企业（激活企业优先，其次默认/首个有效成员关系）"""
+        tenant = obj.active_tenant
+        if tenant is None:
+            memberships = []
+            try:
+                memberships = list(obj.tenant_memberships.all())
+            except Exception:
+                memberships = []
+            active = [m for m in memberships if m.is_active]
+            chosen = next((m for m in active if m.is_default), None) or (active[0] if active else None)
+            tenant = chosen.tenant if chosen else None
+        if tenant is None:
+            return None
+        return {
+            'id': tenant.id,
+            'name': tenant.name,
+            'short_name': tenant.short_name or '',
+        }
 
     def get_avatar_url(self, obj):
         """获取头像URL"""

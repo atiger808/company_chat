@@ -1526,7 +1526,11 @@ class WorkSummaryApp {
         }
     }
     async _fetchExportPdfBlob(id) {
-        const resp = await fetch(WS_API + '/' + id + '/export-pdf/', {headers: TokenManager.getHeaders()});
+        const resp = await fetch(WS_API + '/' + id + '/export-pdf/', {
+            method: 'POST',
+            headers: Object.assign({}, TokenManager.getHeaders(), {'Content-Type': 'application/json'}),
+            body: JSON.stringify({})
+        });
         if (!resp.ok) {
             const b = await resp.json().catch(() => ({}));
             throw new Error(b.error || '导出 PDF 失败');

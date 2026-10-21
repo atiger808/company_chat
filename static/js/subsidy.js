@@ -2005,16 +2005,30 @@ class SubsidyApp {
     _doExportSelected(ids, selectedFields) {
         const token = localStorage.getItem('access_token');
         if (!token) { this._handleAuthError(); return; }
-        const parts = this._adminFilterParts();
-        parts.push('record_ids=' + ids.join(','));
-        parts.push('fields=' + selectedFields.join(','));
-        const url = SUBSIDY_API + '/export/?' + parts.join('&');
+        const getv = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+        const payload = {
+            record_ids: ids,
+            fields: selectedFields,
+            search: getv('adminSearchInput'),
+            status: getv('adminStatusFilter'),
+            invoice_type: getv('adminTypeFilter'),
+            invoice_number: getv('adminInvNumberInput'),
+            date_from: getv('adminDateFrom'),
+            date_to: getv('adminDateTo'),
+            min_amount: getv('adminMinAmount'),
+            max_amount: getv('adminMaxAmount')
+        };
+        const url = SUBSIDY_API + '/export/';
         const now = new Date();
         const dateStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
         const timeStr = String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
         const filename = '普惠补贴申领_' + dateStr + '_' + timeStr + '.xlsx';
         this.showToast('正在导出 Excel，请稍候...', false);
-        fetch(url, {headers: TokenManager.getHeaders()}).then(function (resp) {
+        fetch(url, {
+            method: 'POST',
+            headers: Object.assign({}, TokenManager.getHeaders(), {'Content-Type': 'application/json'}),
+            body: JSON.stringify(payload)
+        }).then(function (resp) {
             if (!resp.ok) throw new Error('导出失败 ' + resp.status);
             return resp.blob();
         }).then(function (blob) {

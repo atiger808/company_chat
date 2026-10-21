@@ -37,6 +37,11 @@ class ChatRoomSerializer(serializers.ModelSerializer):
     # 🔧 群公告：是否有当前用户的未读群公告（未读时群聊顶部显示入口）
     has_unread_announcement = serializers.SerializerMethodField()
 
+    # 聊天室所属企业名称（历史数据可能没有 tenant，回退到创建人/当前用户的企业）
+    tenant_name = serializers.SerializerMethodField()
+    # 实际写入的企业 ID（无回退），管理端据此判断聊天室是否已归属企业
+    tenant_id = serializers.IntegerField(read_only=True)
+
     class Meta:
         model = ChatRoom
         fields = [
@@ -44,8 +49,21 @@ class ChatRoomSerializer(serializers.ModelSerializer):
             'last_message', 'unread_count', 'is_pinned', 'is_muted',
             'creator', 'creator_info', 'created_at', 'updated_at',
             'is_deleted', 'deleted_at', 'has_unread_mention', 'has_mention_all',
-            'has_unread_announcement',
+            'has_unread_announcement', 'tenant_name', 'tenant_id',
         ]
+
+    def get_tenant_name(self, obj):
+        tenant = obj.tenant
+        if tenant is None:
+            request = self.context.get('request')
+            user = getattr(request, 'user', None) if request else None
+            if user is not None and getattr(user, 'is_authenticated', False):
+                tenant = user.get_active_tenant()
+            if tenant is None and obj.creator_id:
+                tenant = obj.creator.get_active_tenant()
+        if tenant is None:
+            return ''
+        return tenant.short_name or tenant.name
 
     def get_has_unread_announcement(self, obj):
         rooms = self.context.get('unread_announcement_rooms')

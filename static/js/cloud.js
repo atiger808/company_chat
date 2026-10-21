@@ -228,69 +228,46 @@ class ChunkedUploader {
     }
 
     /**
-     * 并发上传分片
+     * 上传分片（带并发上限；必须等待所有分片真正完成后才返回）
+     *
+     * 🔧 关键修复：旧实现只「启动」上传、没有 await，队列一空就返回，
+     * 此时可能仍有分片在途 → 立刻合并会得到「还有 N 个分片未上传」的 400。
+     * 现改为每个 worker 内 await 分片上传，只有全部分片落定后才返回结果。
      */
     async _uploadChunksConcurrently(chunkIndices) {
-        // 🔧🔧🔧 关键修复：过滤无效索引
-        const validIndices = chunkIndices.filter(idx => {
-            const num = Number(idx);
-            return idx !== undefined && idx !== null && !isNaN(num) && num >= 0;
-        }).map(idx => Number(idx));
+        // 过滤无效索引并去重
+        const queue = [...new Set((chunkIndices || [])
+            .map(idx => Number(idx))
+            .filter(n => Number.isInteger(n) && n >= 0))];
 
-        if (validIndices.length === 0) {
+        if (queue.length === 0) {
             console.log('⚠️ 没有有效的分片需要上传');
             return [];
         }
 
-        console.log(`📦 开始并发上传 ${validIndices.length} 个分片:`, validIndices.slice(0, 10), '...');
+        const workerCount = Math.max(1, Math.min(this.concurrent || 1, queue.length));
+        console.log(`📦 开始上传 ${queue.length} 个分片（并发 ${workerCount}）`);
 
-
-        const queue = [...chunkIndices];
-        const inProgress = new Set();
         const results = [];
-
-        const processNext = async () => {
+        const worker = async () => {
             while (queue.length > 0 && !this.isCancelled) {
-                // 等待并发限制
-                while (inProgress.size >= this.concurrent && !this.isCancelled) {
-                    await new Promise(resolve => setTimeout(resolve, 50));
-                }
-
-                if (this.isCancelled) break;
                 if (this.isPaused) {
-                    await new Promise(resolve => setTimeout(resolve, 500));
+                    await new Promise(resolve => setTimeout(resolve, 300));
                     continue;
                 }
-
                 const chunkIndex = queue.shift();
-
-                // 🔧🔧🔧 二次校验：防止 shift 返回异常值
-                if (chunkIndex === undefined || chunkIndex === null) {
-                    console.warn('⚠️ queue.shift() 返回空值，跳过');
-                    continue;
+                if (chunkIndex === undefined || chunkIndex === null) break;
+                try {
+                    // ← 必须 await：确保该分片真正写完、服务端记录成功后才继续
+                    const result = await this._uploadChunk(chunkIndex);
+                    results.push({chunkIndex, success: true, result});
+                } catch (error) {
+                    results.push({chunkIndex, success: false, error});
                 }
-
-                inProgress.add(chunkIndex);
-
-                this._uploadChunk(chunkIndex)
-                    .then(result => {
-                        results.push({chunkIndex, success: true, result});
-                    })
-                    .catch(error => {
-                        results.push({chunkIndex, success: false, error});
-                    })
-                    .finally(() => {
-                        inProgress.delete(chunkIndex);
-                    });
             }
         };
 
-        // 启动并发任务
-        const workers = Array(Math.min(this.concurrent, chunkIndices.length))
-            .fill(null)
-            .map(() => processNext());
-
-        await Promise.all(workers);
+        await Promise.all(Array.from({length: workerCount}, () => worker()));
 
         if (this.isCancelled) {
             throw new Error('Upload cancelled');
@@ -303,41 +280,58 @@ class ChunkedUploader {
      * 合并分片完成上传
      */
     async mergeChunks(folderId = null, description = null, tags = null) {
+        const body = JSON.stringify({
+            session_id: this.sessionId,
+            folder: folderId,
+            description: description || null,  // 🔧 null 会被 DRF 正确处理
+            tags: tags || null
+        });
+        const postMerge = () => fetch('/api/cloud/files/merge_chunks/', {
+            method: 'POST',
+            headers: {
+                ...TokenManager.getHeaders(),
+                'Content-Type': 'application/json'
+            },
+            body
+        });
+
         try {
+            // 合并前最多校验/补传 3 轮：确保所有分片都已真正落库，避免「还有 N 个分片未上传」
+            for (let attempt = 0; attempt < 3; attempt++) {
+                const sessionCheck = await this.checkSession();
+                const missing = (sessionCheck && Array.isArray(sessionCheck.missingChunks))
+                    ? sessionCheck.missingChunks : [];
+                if (missing.length === 0) break;
 
-            // 🔧 关键修复：合并前先检查会话状态
-            const sessionCheck = await this.checkSession();
-            if (sessionCheck && sessionCheck.missingChunks?.length > 0) {
-                console.warn(`⚠️ 合并前检查：还有 ${sessionCheck.missingChunks.length} 个分片未上传，尝试补传...`);
-
-                const results = await this._uploadChunksConcurrently(sessionCheck.missingChunks);
+                console.warn(`⚠️ 合并前检查：还有 ${missing.length} 个分片未上传，补传第 ${attempt + 1} 轮...`);
+                const results = await this._uploadChunksConcurrently(missing);
                 const failed = results.filter(r => !r.success);
                 if (failed.length > 0) {
                     throw new Error(`${failed.length} 个分片补传失败`);
                 }
+                // 给服务端一点落库时间后再复查
+                await new Promise(resolve => setTimeout(resolve, 150));
             }
 
+            let response = await postMerge();
+            let data = await response.json().catch(() => ({}));
 
-            const response = await fetch('/api/cloud/files/merge_chunks/', {
-                method: 'POST',
-                headers: {
-                    ...TokenManager.getHeaders(),
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    session_id: this.sessionId,
-                    folder: folderId,
-                    description: description || null,  // 🔧 确保传递 null 而非空字符串  // null 会被 DRF 正确处理
-                    tags: tags || null
-                })
-            });
+            // 极端情况下服务端仍报缺分片（落库延迟）→ 按返回的缺失索引补传后重试合并一次
+            if (!response.ok && response.status === 400
+                && Array.isArray(data.missing_chunks) && data.missing_chunks.length > 0) {
+                console.warn('⚠️ 合并时服务端仍缺分片，补传后重试:', data.missing_chunks);
+                const results = await this._uploadChunksConcurrently(data.missing_chunks);
+                const failed = results.filter(r => !r.success);
+                if (failed.length > 0) throw new Error(`${failed.length} 个分片补传失败`);
+                await new Promise(resolve => setTimeout(resolve, 250));
+                response = await postMerge();
+                data = await response.json().catch(() => ({}));
+            }
 
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.error || '合并分片失败');
+                throw new Error(data.error || '合并分片失败');
             }
 
-            const data = await response.json();
             this.isCompleted = true;
             this.onComplete(data.file);
 
@@ -611,12 +605,133 @@ class CloudApp {
             this.setupContextMenu();
             this._setupGlobalClickHandler();
 
+            // 7. 列表视图：初始化列宽拖拽调整
+            this.initListColumnResizers();
+
             console.log('✅ CloudApp 初始化完成');
 
         } catch (error) {
             console.error('❌ 初始化失败:', error);
             this.showError('初始化失败', error.message);
             this.handleAuthError();
+        }
+    }
+
+    // ==================== 列表视图：列宽拖拽调整 ====================
+
+    /**
+     * 为「全部文件」列表视图的表头添加可拖动列宽手柄。
+     * - 列宽通过 CSS 变量作用在 #fileListView 上（表头与行共用同一套列宽）
+     * - 宽度持久化到 localStorage，双击手柄可恢复默认
+     */
+    initListColumnResizers() {
+        const list = document.getElementById('fileListView');
+        if (!list) return;
+        const header = list.querySelector('.file-list-header');
+        if (!header) return;
+
+        const COLS = ['name', 'size', 'date', 'actions'];
+        const MIN = {name: 140, size: 70, date: 90, actions: 140};
+        const STORAGE_KEY = 'cloud_list_col_widths';
+        const GAP = 10;
+        const PADDING = 40;   // 表头左右内边距合计
+
+        let widths = {};
+        try { widths = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') || {}; } catch (e) { widths = {}; }
+        Object.keys(widths).forEach(k => {
+            if (COLS.indexOf(k) === -1 || !(widths[k] > 0)) delete widths[k];
+        });
+
+        const applyAll = () => {
+            COLS.forEach(c => {
+                if (widths[c]) list.style.setProperty('--fl-' + c, widths[c] + 'px');
+            });
+        };
+
+        const cellFor = (col) => {
+            const idx = COLS.indexOf(col);
+            return idx >= 0 ? header.querySelectorAll('.file-col')[idx] : null;
+        };
+        const currentWidth = (col) => {
+            if (widths[col]) return widths[col];
+            const cell = cellFor(col);
+            return cell ? Math.round(cell.getBoundingClientRect().width) : 0;
+        };
+        const maxNameWidth = () => {
+            const total = list.clientWidth - PADDING;
+            const other = currentWidth('size') + currentWidth('date') + currentWidth('actions');
+            return Math.max(MIN.name, total - GAP * (COLS.length - 1) - other);
+        };
+
+        // 应用已有配置，并按当前可用宽度夹取名称列
+        applyAll();
+        if (widths.name) {
+            widths.name = Math.min(widths.name, maxNameWidth());
+            applyAll();
+        }
+
+        const cells = header.querySelectorAll('.file-col');
+        cells.forEach((cell, idx) => {
+            const col = COLS[idx];
+            if (!col || cell.querySelector('.col-resizer')) return;
+            cell.classList.add('resizable');
+
+            const handle = document.createElement('span');
+            handle.className = 'col-resizer';
+            handle.title = '拖动调整列宽（双击恢复默认）';
+            handle.dataset.col = col;
+            cell.appendChild(handle);
+
+            handle.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const startX = e.clientX;
+                const startW = currentWidth(col);
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+
+                const onMove = (ev) => {
+                    let w = startW + (ev.clientX - startX);
+                    if (col === 'name') {
+                        w = Math.max(MIN.name, Math.min(w, maxNameWidth()));
+                    } else {
+                        w = Math.max(MIN[col], Math.min(w, 420));
+                    }
+                    widths[col] = Math.round(w);
+                    list.style.setProperty('--fl-' + col, widths[col] + 'px');
+                };
+                const onUp = () => {
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+                    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(widths)); } catch (err) { }
+                };
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+
+            // 双击恢复默认列宽
+            handle.addEventListener('dblclick', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                widths = {};
+                COLS.forEach(c => list.style.removeProperty('--fl-' + c));
+                try { localStorage.removeItem(STORAGE_KEY); } catch (err) { }
+            });
+        });
+
+        // 窗口尺寸变化时，保证名称列不会把其它列挤出可视区
+        if (!this._listResizeBound) {
+            this._listResizeBound = true;
+            window.addEventListener('resize', () => {
+                if (!widths.name) return;
+                const capped = Math.min(widths.name, maxNameWidth());
+                if (capped !== widths.name) {
+                    widths.name = capped;
+                    list.style.setProperty('--fl-name', capped + 'px');
+                }
+            });
         }
     }
 
@@ -1748,6 +1863,9 @@ class CloudApp {
             const data = await response.json();
             const folders = data.folders || [];
 
+            // 🔧 批量移动时同样置灰「被移动的文件夹自身及其子文件夹」
+            const forbidden = this._collectForbiddenMoveTargets(folders, this.batchMoveIds || []);
+
             // 🔧 递归渲染树状结构
             const renderTree = (nodes, level = 0) => {
                 let html = '';
@@ -1756,14 +1874,16 @@ class CloudApp {
                     const indent = level * 20;
                     const hasChildren = node.children && node.children.length > 0;
                     const isSharedFolder = node.is_shared_folder || false;
-                    console.log('isSharedFolder:', isSharedFolder);
+                    const isForbidden = forbidden.has(String(node.id));
                     html += `
-                        <div class="folder-tree-item" 
-                             data-folder-id="${node.id}" 
+                        <div class="folder-tree-item${isForbidden ? ' disabled' : ''}"
+                             data-folder-id="${node.id}"
                              data-folder-name="${this.escapeHtml(node.name)}"
+                             ${isForbidden ? 'data-forbidden="1" title="不可选择：它是被移动文件夹自身或其子文件夹"' : ''}
                              style="padding-left: ${indent + 15}px;">
                             <i class="fas fa-folder${hasChildren ? '-open' : ''}"></i>
                             <span class="folder-name">${this.escapeHtml(node.name)}</span>
+                            ${isForbidden ? '<span class="badge badge-forbidden" title="不可选择"><i class="fas fa-ban"></i></span>' : ''}
                             ${isSharedFolder ? '<span class="badge" title="共享文件夹"><i class="fas fa-folder-open"></i></span>' : ''}
                         </div>
                     `;
@@ -1777,7 +1897,12 @@ class CloudApp {
                 return html;
             };
 
-            let html = `
+            let html = '';
+            if (forbidden.size > 0) {
+                html += '<div class="folder-tree-hint"><i class="fas fa-info-circle"></i> '
+                    + '灰色文件夹不可选择（被移动文件夹自身或其子文件夹）</div>';
+            }
+            html += `
                 <div class="folder-tree-item" data-folder-id="" data-folder-name="根目录">
                     <i class="fas fa-folder"></i>
                     <span class="folder-name">根目录</span>
@@ -1793,6 +1918,10 @@ class CloudApp {
             // 🔧 绑定选择事件
             container.querySelectorAll('.folder-tree-item').forEach(item => {
                 item.addEventListener('click', () => {
+                    if (item.dataset.forbidden === '1') {
+                        this.showToast('该文件夹不可选择：它是被移动文件夹自身或其子文件夹', 'error');
+                        return;
+                    }
                     // 移除其他选中状态
                     container.querySelectorAll('.folder-tree-item').forEach(i =>
                         i.classList.remove('selected')
@@ -3934,6 +4063,7 @@ class CloudApp {
 
         // 🔧 显示上传进度对话框
         const uploadDialog = this.showUploadDialog(file.name);
+        let sessionId = null;
 
         try {
             // 🔧 1. 计算文件 MD5（大文件使用 Worker）
@@ -3997,34 +4127,32 @@ class CloudApp {
                     this.loadFiles(this.currentFolderId);
                 },
 
-                // 🔧 错误回调
+                // 🔧 错误回调：只关闭进度框并清理；具体提示统一由下面的 catch 给出，避免重复弹窗
                 onError: (error) => {
                     uploadDialog.close();
-                    // 🔧 清理上传追踪器
                     this.clearUploadTracker(file.name);
-                    this.showError('上传失败', error.message || '未知错误');
+                    console.warn('上传出错:', file.name, error);
                 }
             });
 
             // 🔧 4. 存储上传任务（支持取消）
-            const sessionId = `upload_${Date.now()}_${file.name}`;
+            sessionId = `upload_${Date.now()}_${file.name}`;
             this.chunkedUploaders.set(sessionId, uploader);
 
-            // 🔧 5. 执行上传
+            // 🔧 5. 执行上传（内部会等待所有分片真正上传完成后才合并）
             await uploader.upload(folderId, description, tags);
-
-            // 🔧 6. 清理上传任务
-            this.chunkedUploaders.delete(sessionId);
 
             return {success: true, fileInfo: uploader.fileInfo};
 
         } catch (error) {
             console.error('文件上传失败:', error);
             uploadDialog.close();
-            // 🔧 异常时也要清理追踪器
             this.clearUploadTracker(file.name);
-            this.showError('上传失败', error.message);
+            this.showError('上传失败', `${file.name}：${error.message || '未知错误'}`);
             return null;
+        } finally {
+            // 🔧 6. 无论成功失败都清理上传任务，避免残留
+            if (sessionId) this.chunkedUploaders.delete(sessionId);
         }
     }
 
@@ -4035,43 +4163,51 @@ class CloudApp {
      * @param {string|null} folderId - 目标文件夹 ID
      */
     async uploadMultipleFiles(files, folderId = null) {
-        if (!files || files.length === 0) {
+        const fileList = Array.from(files || []);
+        if (fileList.length === 0) {
             this.showError('上传失败', '请选择文件');
             return;
         }
 
-        const totalFiles = files.length;
-        let successCount = 0;
-        let failCount = 0;
+        const totalFiles = fileList.length;
+        const failedFiles = [];
+        const batchDialog = this.showBatchUploadDialog(totalFiles, fileList);
 
-        // 🔧 显示批量上传进度
-        const batchDialog = this.showBatchUploadDialog(totalFiles);
-
-        // 🔧 关键修复：串行上传，避免分片会话冲突
-        for (let i = 0; i < files.length; i++) {
-            const file = files[i];
+        // 🔧 严格串行：一个文件完整上传（含全部分片上传 + 合并完成）后再上传下一个，
+        // 避免多文件并发导致分片/上传会话互相干扰，保证每个文件完整无缺失。
+        for (let i = 0; i < fileList.length; i++) {
+            const file = fileList[i];
             batchDialog.updateFileProgress(i + 1, totalFiles, file.name);
+            batchDialog.setFileStatus(i, 'uploading');
 
-            try {
-                // 🔧 等待当前文件上传完成
-                await this.uploadFile(file, folderId);
-                successCount++;
-            } catch (error) {
-                console.error(`文件 ${file.name} 上传失败:`, error);
-                failCount++;
+            // uploadFile 失败时返回 null（并已弹出该文件的错误提示）
+            const result = await this.uploadFile(file, folderId);
+            if (result && result.success) {
+                batchDialog.setFileStatus(i, 'success');
+            } else {
+                batchDialog.setFileStatus(i, 'failed', '上传失败');
+                failedFiles.push(file.name);
             }
         }
 
-        batchDialog.close();
-        this.showSuccess('批量上传完成',
-            `成功 ${successCount} 个，失败 ${failCount} 个`);
+        const successCount = totalFiles - failedFiles.length;
+        if (failedFiles.length === 0) {
+            batchDialog.close();
+            this.showSuccess('批量上传完成', `成功上传 ${successCount} 个文件`);
+        } else {
+            // 有失败时保留进度框，方便用户查看具体哪些文件失败了
+            this.showError('批量上传部分失败',
+                `成功 ${successCount} 个，失败 ${failedFiles.length} 个：`
+                + failedFiles.slice(0, 3).join('、')
+                + (failedFiles.length > 3 ? ' 等' : ''));
+        }
         await this.loadFiles(this.currentFolderId);
     }
 
     /**
      * 🔧 显示批量上传进度对话框
      */
-    showBatchUploadDialog(totalFiles) {
+    showBatchUploadDialog(totalFiles, files) {
         let dialog = document.getElementById('batchUploadProgressDialog');
 
         if (!dialog) {
@@ -4095,11 +4231,43 @@ class CloudApp {
                         </div>
                     </div>
                     <div class="current-file" id="currentFileName">准备上传...</div>
+                    <div class="batch-file-list" id="batchFileList"></div>
                 </div>
             </div>
         `;
             document.body.appendChild(dialog);
+        } else {
+            // 复用已有对话框时，重置总体进度
+            const text = document.getElementById('batchProgressText');
+            if (text) text.textContent = `0/${totalFiles}`;
+            const bar = document.getElementById('batchProgressBar');
+            if (bar) bar.style.width = '0%';
         }
+
+        // 每个文件的状态：pending / uploading / success / failed
+        const items = Array.from(files || []).map(f => ({
+            name: (f && f.name) || '未命名文件',
+            status: 'pending',
+            message: ''
+        }));
+        const self = this;
+        const renderList = () => {
+            const box = document.getElementById('batchFileList');
+            if (!box) return;
+            box.innerHTML = items.map(it => {
+                const icon = it.status === 'uploading' ? 'fa-spinner fa-spin'
+                    : it.status === 'success' ? 'fa-check-circle'
+                        : it.status === 'failed' ? 'fa-times-circle' : 'fa-clock';
+                const msg = it.message
+                    ? `<span class="batch-file-msg">${self.escapeHtml(it.message)}</span>` : '';
+                return `<div class="batch-file-item ${it.status}">
+                    <i class="fas ${icon}"></i>
+                    <span class="batch-file-name" title="${self.escapeHtml(it.name)}">${self.escapeHtml(it.name)}</span>
+                    ${msg}
+                </div>`;
+            }).join('');
+        };
+        renderList();
 
         dialog.classList.add('show');
 
@@ -4108,11 +4276,17 @@ class CloudApp {
                 const bar = document.getElementById('batchProgressBar');
                 const text = document.getElementById('batchProgressText');
                 const file = document.getElementById('currentFileName');
-                const percent = (current / total) * 100;
+                const percent = total > 0 ? (current / total) * 100 : 0;
 
                 if (bar) bar.style.width = `${percent}%`;
                 if (text) text.textContent = `${current}/${total}`;
                 if (file) file.textContent = `正在上传：${filename}`;
+            },
+            setFileStatus: (index, status, message) => {
+                if (!items[index]) return;
+                items[index].status = status;
+                items[index].message = message || '';
+                renderList();
             },
             close: () => {
                 dialog.classList.remove('show');
@@ -5568,6 +5742,31 @@ class CloudApp {
 
 
     /**
+     * 计算移动时「不可选择」的文件夹集合：被移动的文件夹自身 + 其所有子孙文件夹。
+     * 用于在移动树的 UI 上直接置灰，避免用户选中非法目标后再被后端拒绝（提升体验）。
+     * @param {Array} nodes 文件夹树节点（含 children）
+     * @param {Array} movingIds 正在移动的 ID 列表（文件 ID 不会命中树节点，自动忽略）
+     * @returns {Set<string>}
+     */
+    _collectForbiddenMoveTargets(nodes, movingIds) {
+        const movingSet = new Set((movingIds || []).map(id => String(id)));
+        const forbidden = new Set();
+        const markSubtree = (node) => {
+            if (!node) return;
+            forbidden.add(String(node.id));
+            (node.children || []).forEach(markSubtree);
+        };
+        const walk = (list) => {
+            (list || []).forEach(node => {
+                if (movingSet.has(String(node.id))) markSubtree(node);
+                if (node.children && node.children.length) walk(node.children);
+            });
+        };
+        walk(nodes);
+        return forbidden;
+    }
+
+    /**
      * 🔧 关键修复：移动文件/文件夹
      * @param {Array} itemIds - 要移动的 ID 列表
      * @param {boolean} isFolder - 是否为文件夹
@@ -5602,6 +5801,11 @@ class CloudApp {
             const data = await response.json();
             const treeContainer = document.getElementById('folderTree');
 
+            // 🔧 计算不可选择的文件夹：被移动的文件夹自身 + 其所有子文件夹。
+            // 直接置灰不可选，比让用户选中后再报错更友好（后端仍保留循环引用校验作为兜底）。
+            const movingFolderIds = (this.currentMoveType === 'folder') ? (this.currentMoveIds || []) : [];
+            const forbidden = this._collectForbiddenMoveTargets(data.folders || [], movingFolderIds);
+
             // 🔧 递归渲染树状结构
             const renderTree = (nodes, level = 0) => {
                 let html = '';
@@ -5611,16 +5815,20 @@ class CloudApp {
                     const hasChildren = node.children && node.children.length > 0;
                     const isSharedFolder = node.is_shared_folder;
                     const isCurrentFolder = node.id === this.currentFolderId;
+                    const isForbidden = forbidden.has(String(node.id));
                     const backgroundColor = isCurrentFolder ? '#f0f0f0' : '';
                     const iconColor = isSharedFolder ? '#E6A23C' : '#409EFF';
                     const avatar = node.owner?.avatar || '/static/images/default-avatar.png';
                     const ownerName = node.owner?.real_name || node.owner?.username || '未知';
+                    const itemTitle = isForbidden
+                        ? '不可选择：它是被移动文件夹自身或其子文件夹'
+                        : (isSharedFolder ? '共享文件夹 - ' + node.name : '我的文件夹 - ' + node.name);
 
                     html += `
-                        <div class="folder-tree-item" title="${isSharedFolder ? '共享文件夹 - ' + node.name : '我的文件夹 - ' + node.name}" data-folder-id="${node.id}" style="padding-left: ${indent + 15}px; background-color: ${backgroundColor};">
+                        <div class="folder-tree-item${isForbidden ? ' disabled' : ''}" title="${this.escapeHtml(itemTitle)}" data-folder-id="${node.id}" ${isForbidden ? 'data-forbidden="1"' : ''} style="padding-left: ${indent + 15}px; background-color: ${backgroundColor};">
                             <i class="fas fa-folder${hasChildren ? '-open' : ''}" style="color: ${iconColor}"></i>
                             <span>${node.name}</span>
-                            
+                            ${isForbidden ? '<span class="badge badge-forbidden" title="不可选择"><i class="fas fa-ban"></i></span>' : ''}
                             ${isSharedFolder ? `<div class="badge" title="共享文件夹 - ${ownerName}"><img src="${avatar}" alt="${ownerName}" class="owner-avatar"></div>` : ''}
                             ${isCurrentFolder ? '<span class="badge badge-current" title="当前文件夹" style="color: lightseagreen; font-size:12px">当前文件夹</span>' : ''}
                         </div>
@@ -5635,7 +5843,12 @@ class CloudApp {
                 return html;
             };
 
-            let html = `
+            let html = '';
+            if (forbidden.size > 0) {
+                html += '<div class="folder-tree-hint"><i class="fas fa-info-circle"></i> '
+                    + '灰色文件夹不可选择（被移动文件夹自身或其子文件夹）</div>';
+            }
+            html += `
                 <div class="folder-tree-item" data-folder-id="">
                     <i class="fas fa-folder" style="color: #409EFF"></i>
                     <span>根目录</span>
@@ -5651,6 +5864,11 @@ class CloudApp {
             // 绑定选择事件
             treeContainer.querySelectorAll('.folder-tree-item').forEach(item => {
                 item.addEventListener('click', () => {
+                    // 自身/子文件夹不可选：给出明确提示，而不是让用户选中后再报错
+                    if (item.dataset.forbidden === '1') {
+                        this.showToast('该文件夹不可选择：它是被移动文件夹自身或其子文件夹', 'error');
+                        return;
+                    }
                     treeContainer.querySelectorAll('.folder-tree-item').forEach(i =>
                         i.classList.remove('selected')
                     );
@@ -7499,6 +7717,10 @@ class CloudApp {
             const titleEl = modal.querySelector('.modal-title');
             if (titleEl && sourceName && modalId === 'moveModal') {
                 titleEl.innerHTML = `<i class="fas fa-cut"></i> 移动：<strong>${sourceName}</strong> 到`;
+            }
+            if (titleEl && modalId === 'uploadModal') {
+                var currentFolderName = this.pathStack.length > 0 ? this.pathStack[this.pathStack.length -1]?.name + '目录' || '当前目录' : '当前目录'
+                titleEl.innerHTML = `<i class="fas fa-upload"></i> <strong>上传文件</strong> 到 ${currentFolderName}`;
             }
         }
     }

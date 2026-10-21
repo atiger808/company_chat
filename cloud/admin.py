@@ -10,8 +10,8 @@ from .models import Folder, CloudFile, UploadSession, FileShare, FileComment, Fi
 @admin.register(Folder)
 class FolderAdmin(admin.ModelAdmin):
     """文件夹管理"""
-    list_display = ('id', 'name', 'parent', 'owner', 'is_shared_folder', 'is_public', 'is_shared', 'deleted_at', 'created_at', 'updated_at')
-    list_filter = ('is_shared_folder', 'is_public', 'is_shared')
+    list_display = ('id', 'name', 'parent', 'owner', 'tenant', 'is_shared_folder', 'is_public', 'is_shared', 'deleted_at', 'created_at', 'updated_at')
+    list_filter = ('is_shared_folder', 'is_public', 'is_shared', 'tenant')
     search_fields = ('name', 'id', 'owner__username', 'owner__real_name')
     list_per_page = 20
 
@@ -19,9 +19,9 @@ class FolderAdmin(admin.ModelAdmin):
 @admin.register(CloudFile)
 class CloudFileAdmin(admin.ModelAdmin):
     """云文件管理"""
-    list_display = ('id', 'name', 'md5', 'is_document', 'owner', 'reference_count', 'current_version', 'deleted_at',
+    list_display = ('id', 'name', 'md5', 'is_document', 'owner', 'tenant', 'reference_count', 'current_version', 'deleted_at',
                     'description', 'tags', 'is_starred', 'download_count', 'deleted_at', 'created_at', 'updated_at')
-    list_filter = ('owner', 'is_document', 'tags')
+    list_filter = ('owner', 'is_document', 'tags', 'tenant')
     search_fields = ('name', 'original_name', 'id', 'md5', 'owner__username', 'owner__real_name')
     list_per_page = 20
 
@@ -39,9 +39,9 @@ class UploadSessionAdmin(admin.ModelAdmin):
 @admin.register(FileShare)
 class FileShareAdmin(admin.ModelAdmin):
     """文件分享管理"""
-    list_display = ('id', 'owner', 'file', 'folder', 'share_type', 'share_code', 'share_type', 'max_downloads', 'download_count',
+    list_display = ('id', 'owner', 'tenant', 'file', 'folder', 'share_type', 'share_code', 'share_type', 'max_downloads', 'download_count',
                     'expires_at', 'is_active', 'created_at')
-    list_filter = ('share_type', 'is_active')
+    list_filter = ('share_type', 'is_active', 'tenant')
     search_fields = ('id', 'share_code', 'owner__username', 'owner__real_name')
     list_per_page = 20
 
@@ -57,8 +57,8 @@ class FileCommentAdmin(admin.ModelAdmin):
 @admin.register(FileOperationLog)
 class FileOperationLogAdmin(admin.ModelAdmin):
     """文件操作日志管理"""
-    list_display = ('id', 'file', 'user', 'operation', 'description', 'ip_address', 'created_at')
-    list_filter = ('operation', 'user_agent',)
+    list_display = ('id', 'file', 'user', 'tenant', 'operation', 'description', 'ip_address', 'created_at')
+    list_filter = ('operation', 'user_agent', 'tenant')
     search_fields = ('id', 'description', 'user__username', 'user__real_name', 'file__name', 'ip_address')
     list_per_page = 20
 
@@ -101,8 +101,8 @@ class DocumentVersionAdmin(admin.ModelAdmin):
 @admin.register(DocumentEditLock)
 class DocumentEditLockAdmin(admin.ModelAdmin):
     """文档编辑锁管理"""
-    list_display = ('id', 'file', 'user', 'locked_at', 'expires_at', 'is_active')
-    list_filter = ('file', 'user', 'is_active')
+    list_display = ('id', 'file', 'user', 'lock_type', 'locked_at', 'expires_at', 'is_active')
+    list_filter = ('lock_type', 'is_active')
     search_fields = ('id', 'user__username', 'user__real_name', 'file__name')
     list_per_page = 20
 
@@ -111,16 +111,16 @@ class DocumentEditLockAdmin(admin.ModelAdmin):
 class DocumentCollaborationAdmin(admin.ModelAdmin):
     """文档协作记录管理"""
     list_display = ('id', 'file', 'user', 'status', 'joined_at', 'left_at', 'last_activity')
-    list_filter = ('file', 'user', 'status')
+    list_filter = ('status', )
     search_fields = ('id', 'user__username', 'user__real_name', 'file__name')
     list_per_page = 20
 
 
 @admin.register(CloudSystemConfig)
 class CloudSystemConfigAdmin(admin.ModelAdmin):
-    list_display = ('id', 'key', 'name', 'value', 'value_type', 'category', 'description', 'is_public', 'created_at',
+    list_display = ('id', 'tenant', 'key', 'name', 'value', 'value_type', 'category', 'description', 'is_public', 'created_at',
                     'updated_at', 'updated_by')
-    list_filter = ('is_public',)
+    list_filter = ('is_public', 'tenant')
     search_fields = ('key', 'name', 'id', 'description')
     list_per_page = 20
 

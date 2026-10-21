@@ -11,6 +11,8 @@ from rest_framework import permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from utils.encrypt_aes import encrypt_data
+
 
 def is_admin_user(user):
     """是否为管理员 / 超级管理员（管理控制台权限）。
@@ -189,4 +191,51 @@ class KnowledgeCatalogView(APIView):
             'restricted_count': restricted,   # 需登录后可见的内部文档数量（供前端提示）
             'generated_at': timezone.now().isoformat(),
         })
+
+
+# ==================== 企业/租户数据隔离开关（仅超级管理员） ====================
+
+class TenantIsolationConfigView(APIView):
+    """企业/租户数据隔离开关。
+
+    - GET  ：读取当前开关（默认关闭）
+    - POST ：仅超级管理员可保存；保存后清除缓存，立即生效
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    @staticmethod
+    def _is_super_admin(user):
+        return bool(getattr(user, 'is_superuser', False)
+                    or getattr(user, 'user_type', '') == 'super_admin')
+
+    @staticmethod
+    def _payload(enabled):
+        return {'encrypt': True, 'data': encrypt_data({
+            'enabled': bool(enabled),
+            'default': False,
+        })}
+
+    def get(self, request):
+        from org.filters import is_tenant_isolation_enabled
+        return Response(self._payload(is_tenant_isolation_enabled()))
+
+    def post(self, request):
+        if not self._is_super_admin(request.user):
+            return Response({'error': '仅超级管理员可配置'}, status=403)
+
+        from chat.models import SystemConfig
+        from org.filters import ISOLATION_CONFIG_KEY, clear_tenant_isolation_cache
+
+        enabled = bool(request.data.get('enabled'))
+        SystemConfig.set_config(
+            ISOLATION_CONFIG_KEY,
+            'true' if enabled else 'false',
+            name='企业/租户数据隔离',
+            description='开启后未归属企业的历史账号将看不到任何带企业的数据；关闭则保持共享。',
+            value_type='boolean',
+            category='security',
+        )
+        clear_tenant_isolation_cache()
+        return Response(self._payload(enabled))
 
