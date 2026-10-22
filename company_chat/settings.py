@@ -253,10 +253,10 @@ CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 from celery.schedules import crontab as _crontab  # noqa: E402
 
 CELERY_BEAT_SCHEDULE = {
-    # 每日 03:17 执行审批生命周期治理：已通过超期自动归档、撤回/草稿超期前通知并删除
+    # 每日 09:17 执行审批生命周期治理：已通过超期自动归档、撤回/草稿超期前通知并删除
     'approval-lifecycle-daily': {
         'task': 'oa.tasks.approval_lifecycle_task',
-        'schedule': _crontab(minute=17, hour=3),
+        'schedule': _crontab(minute=17, hour=9),
     },
     # 每日 03:41 执行集团公告自动归档：发布满期限（默认 1 天）的公告标记归档，之后不可编辑/删除
     'announcement-archive-daily': {
@@ -438,7 +438,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20261021-6252cb2'
+STATIC_VERSION = '20261021-9cfaad0'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -715,6 +715,7 @@ API_MODEL_MAP = {
     "/api/oa/work-summary/<int:pk>/": "每日总结详情",
     "/api/oa/work-summary/<int:pk>/analyze/": "每日总结重新分析",
     "/api/oa/work-summary/<int:pk>/share/": "每日总结分享私聊",
+    "/api/oa/work-summary/<int:pk>/export/": "每日总结导出文件",
     "/api/oa/work-summary/<int:pk>/export-pdf/": "每日总结导出PDF",
     "/api/oa/work-summary/<int:pk>/like/": "每日总结点赞",
     "/api/oa/work-summary/<int:pk>/comments/": "每日总结评论列表",

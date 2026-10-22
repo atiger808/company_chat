@@ -661,7 +661,7 @@
                 var rp = await fetch(OA + '/approval/report-pdf/', {
                     method: 'POST',
                     headers: Object.assign({}, authHeaders(), { 'Content-Type': 'application/json' }),
-                    body: JSON.stringify({ title: base, subtitle: reportSubtitle(), filename: name, blocks: blocks })
+                    body: JSON.stringify({dest: dest, export_format: format,  title: base, subtitle: reportSubtitle(), filename: name, blocks: blocks })
                 });
                 if (!rp.ok) {
                     var ep = await rp.json().catch(function () { return {}; });
@@ -671,8 +671,9 @@
             } else {
                 // 导出改为 POST（GET 不记录操作日志），参数放在请求体
                 var payload = {
-                    kind: state.tab,
+                    dest: dest,
                     export_format: format,
+                    kind: state.tab,
                     start: state.start,
                     end: state.end,
                     user_id: state.userId || ''

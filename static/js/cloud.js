@@ -620,60 +620,134 @@ class CloudApp {
     // ==================== 列表视图：列宽拖拽调整 ====================
 
     /**
-     * 为「全部文件」列表视图的表头添加可拖动列宽手柄。
-     * - 列宽通过 CSS 变量作用在 #fileListView 上（表头与行共用同一套列宽）
-     * - 宽度持久化到 localStorage，双击手柄可恢复默认
+     * 为全部文件 / 协作文档 / 共享文件夹 / 回收站的列表视图添加列宽拖拽手柄。
+     * - 鼠标、触控笔、手指触摸统一使用 Pointer Events
+     * - 表头与行共用 --list-columns 变量，列宽实时同步
+     * - 宽度按列表持久化到 localStorage，双击（触屏双击）手柄恢复默认
      */
     initListColumnResizers() {
-        const list = document.getElementById('fileListView');
+        const configurations = [
+            {
+                listId: 'fileListView',
+                storageKey: 'cloud_list_col_widths',
+                columns: [
+                    {key: 'name', min: 140, track: 'minmax(200px, 1fr)'},
+                    {key: 'size', min: 70, track: '110px'},
+                    {key: 'date', min: 90, track: '160px'},
+                    {key: 'actions', min: 140, track: '300px'}
+                ]
+            },
+            {
+                listId: 'collabListView',
+                storageKey: 'cloud_collab_col_widths',
+                columns: [
+                    {key: 'name', min: 140, track: 'minmax(180px, 1fr)'},
+                    {key: 'type', min: 70, track: '110px'},
+                    {key: 'collaborators', min: 80, track: '110px'},
+                    {key: 'date', min: 90, track: '160px'},
+                    {key: 'actions', min: 100, track: '220px'}
+                ]
+            },
+            {
+                listId: 'sharedFoldersListView',
+                storageKey: 'cloud_shared_folder_col_widths',
+                columns: [
+                    {key: 'name', min: 140, track: 'minmax(180px, 1fr)'},
+                    {key: 'size', min: 100, track: '170px'},
+                    {key: 'owner', min: 100, track: '160px'},
+                    {key: 'date', min: 90, track: '160px'},
+                    {key: 'actions', min: 90, track: '140px'}
+                ]
+            },
+            {
+                listId: 'trashListView',
+                storageKey: 'cloud_trash_col_widths',
+                columns: [
+                    {key: 'name', min: 140, track: 'minmax(200px, 1fr)'},
+                    {key: 'size', min: 70, track: '110px'},
+                    {key: 'date', min: 90, track: '160px'},
+                    {key: 'actions', min: 90, track: '160px'}
+                ]
+            }
+        ];
+
+        configurations.forEach(config => this._initColumnResizer(config));
+    }
+
+    _initColumnResizer({listId, storageKey, columns}) {
+        const list = document.getElementById(listId);
         if (!list) return;
         const header = list.querySelector('.file-list-header');
         if (!header) return;
 
-        const COLS = ['name', 'size', 'date', 'actions'];
-        const MIN = {name: 140, size: 70, date: 90, actions: 140};
-        const STORAGE_KEY = 'cloud_list_col_widths';
-        const GAP = 10;
-        const PADDING = 40;   // 表头左右内边距合计
-
-        let widths = {};
-        try { widths = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') || {}; } catch (e) { widths = {}; }
-        Object.keys(widths).forEach(k => {
-            if (COLS.indexOf(k) === -1 || !(widths[k] > 0)) delete widths[k];
+        const cols = columns.map(c => c.key);
+        const minWidths = {};
+        const defaultTracks = {};
+        columns.forEach(c => {
+            minWidths[c.key] = c.min;
+            defaultTracks[c.key] = c.track;
         });
 
-        const applyAll = () => {
-            COLS.forEach(c => {
-                if (widths[c]) list.style.setProperty('--fl-' + c, widths[c] + 'px');
-            });
-        };
+        let widths = {};
+        try { widths = JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; } catch (e) { widths = {}; }
+        Object.keys(widths).forEach(k => {
+            if (cols.indexOf(k) === -1 || !(widths[k] > 0)) delete widths[k];
+        });
 
+        list.classList.add('col-resizable-list');
+
+        const applyTemplate = () => {
+            const template = columns
+                .map(c => widths[c.key] ? Math.round(widths[c.key]) + 'px' : defaultTracks[c.key])
+                .join(' ');
+            list.style.setProperty('--list-columns', template);
+        };
+        applyTemplate();
+
+        const cells = Array.from(header.querySelectorAll('.file-col'));
         const cellFor = (col) => {
-            const idx = COLS.indexOf(col);
-            return idx >= 0 ? header.querySelectorAll('.file-col')[idx] : null;
+            const idx = cols.indexOf(col);
+            return idx >= 0 ? cells[idx] : null;
         };
         const currentWidth = (col) => {
             if (widths[col]) return widths[col];
             const cell = cellFor(col);
             return cell ? Math.round(cell.getBoundingClientRect().width) : 0;
         };
-        const maxNameWidth = () => {
-            const total = list.clientWidth - PADDING;
-            const other = currentWidth('size') + currentWidth('date') + currentWidth('actions');
-            return Math.max(MIN.name, total - GAP * (COLS.length - 1) - other);
+        const layoutMetrics = () => {
+            const style = getComputedStyle(header);
+            const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+            const gap = parseFloat(style.columnGap || style.gap) || 0;
+            return {inner: Math.max(0, list.clientWidth - padding), gap};
+        };
+        const maxWidthFor = (col) => {
+            const {inner, gap} = layoutMetrics();
+            const gaps = gap * (columns.length - 1);
+            let used = 0;
+            columns.forEach(c => {
+                if (c.key === col) return;
+                // 名称列若为自适应宽度，按最小宽度预留，拖动其它列时名称列自动收缩
+                if (c.key === 'name' && col !== 'name') {
+                    used += widths.name || minWidths.name;
+                } else {
+                    used += currentWidth(c.key);
+                }
+            });
+            return Math.max(minWidths[col], Math.round(inner - gaps - used));
         };
 
-        // 应用已有配置，并按当前可用宽度夹取名称列
-        applyAll();
-        if (widths.name) {
-            widths.name = Math.min(widths.name, maxNameWidth());
-            applyAll();
-        }
+        const resetWidths = () => {
+            widths = {};
+            applyTemplate();
+            try { localStorage.removeItem(storageKey); } catch (err) { }
+        };
 
-        const cells = header.querySelectorAll('.file-col');
         cells.forEach((cell, idx) => {
-            const col = COLS[idx];
-            if (!col || cell.querySelector('.col-resizer')) return;
+            const col = cols[idx];
+            if (!col) return;
+
+            const oldHandle = cell.querySelector('.col-resizer');
+            if (oldHandle) oldHandle.remove();
             cell.classList.add('resizable');
 
             const handle = document.createElement('span');
@@ -682,54 +756,80 @@ class CloudApp {
             handle.dataset.col = col;
             cell.appendChild(handle);
 
-            handle.addEventListener('mousedown', (e) => {
+            let lastTap = 0;
+            let lastTapMoved = false;
+
+            handle.addEventListener('pointerdown', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                if (e.button !== undefined && e.button !== 0) return;
+
+                // 双击（含触屏双击）恢复默认列宽；上一手势需为原地点击，避免连续拖动误触
+                const now = Date.now();
+                if (now - lastTap < 320 && !lastTapMoved) {
+                    lastTap = 0;
+                    resetWidths();
+                    return;
+                }
+                lastTap = now;
+                lastTapMoved = false;
+
                 const startX = e.clientX;
                 const startW = currentWidth(col);
+                const maxW = maxWidthFor(col);
+                const ceiling = col === 'name' ? maxW : Math.min(maxW, 480);
+                const pointerId = e.pointerId;
+
                 document.body.style.cursor = 'col-resize';
                 document.body.style.userSelect = 'none';
+                list.classList.add('column-resizing');
+                try { handle.setPointerCapture(pointerId); } catch (err) { }
+
+                let moved = false;
 
                 const onMove = (ev) => {
-                    let w = startW + (ev.clientX - startX);
-                    if (col === 'name') {
-                        w = Math.max(MIN.name, Math.min(w, maxNameWidth()));
-                    } else {
-                        w = Math.max(MIN[col], Math.min(w, 420));
-                    }
+                    if (pointerId !== undefined && ev.pointerId !== undefined && ev.pointerId !== pointerId) return;
+                    const delta = ev.clientX - startX;
+                    if (Math.abs(delta) > 2) moved = true;
+                    const w = Math.max(minWidths[col], Math.min(startW + delta, ceiling));
                     widths[col] = Math.round(w);
-                    list.style.setProperty('--fl-' + col, widths[col] + 'px');
+                    applyTemplate();
                 };
-                const onUp = () => {
-                    document.removeEventListener('mousemove', onMove);
-                    document.removeEventListener('mouseup', onUp);
+                const finish = () => {
+                    document.removeEventListener('pointermove', onMove);
+                    document.removeEventListener('pointerup', finish);
+                    document.removeEventListener('pointercancel', finish);
                     document.body.style.cursor = '';
                     document.body.style.userSelect = '';
-                    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(widths)); } catch (err) { }
+                    list.classList.remove('column-resizing');
+                    lastTapMoved = moved;
+                    try { handle.releasePointerCapture(pointerId); } catch (err) { }
+                    try { localStorage.setItem(storageKey, JSON.stringify(widths)); } catch (err) { }
                 };
-                document.addEventListener('mousemove', onMove);
-                document.addEventListener('mouseup', onUp);
+
+                document.addEventListener('pointermove', onMove);
+                document.addEventListener('pointerup', finish);
+                document.addEventListener('pointercancel', finish);
             });
 
-            // 双击恢复默认列宽
+            // 鼠标双击恢复默认列宽
             handle.addEventListener('dblclick', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                widths = {};
-                COLS.forEach(c => list.style.removeProperty('--fl-' + c));
-                try { localStorage.removeItem(STORAGE_KEY); } catch (err) { }
+                resetWidths();
             });
         });
 
-        // 窗口尺寸变化时，保证名称列不会把其它列挤出可视区
-        if (!this._listResizeBound) {
-            this._listResizeBound = true;
+        // 窗口尺寸变化时，避免已手动加宽的名称列把其它列挤出可视区
+        if (!list._colResizeWindowBound) {
+            list._colResizeWindowBound = true;
             window.addEventListener('resize', () => {
-                if (!widths.name) return;
-                const capped = Math.min(widths.name, maxNameWidth());
-                if (capped !== widths.name) {
+                // 隐藏视图的 clientWidth 为 0，不能用它来夹取已保存的列宽
+                if (!list.clientWidth || !widths.name) return;
+                const capped = Math.max(minWidths.name, Math.min(widths.name, maxWidthFor('name')));
+                if (capped !== Math.round(widths.name)) {
                     widths.name = capped;
-                    list.style.setProperty('--fl-name', capped + 'px');
+                    applyTemplate();
                 }
             });
         }
@@ -6173,23 +6273,45 @@ class CloudApp {
     }
 
     renderLogPagination(data, container) {
-        if (!data.total_pages || data.total_pages <= 1) {
+        const page = data.page || 1;
+        const total = data.total_pages || 0;
+        this._logPagination = {page, total};
+
+        if (!total || total <= 1) {
             container.style.display = 'none';
             return;
         }
         container.style.display = 'flex';
-        const page = data.page || 1;
-        const total = data.total_pages;
-        let html = `<div class="pagination-wrapper"><div class="pagination-info">共 ${data.count} 条</div><div class="pagination-controls">`;
-        html += `<button class="pagination-btn" onclick="cloudApp.loadOperationLogs(${page - 1})" ${page <= 1 ? 'disabled' : ''}><i class="fas fa-chevron-left"></i></button>`;
+        let html = `<div class="pagination-wrapper"><div class="pagination-info">共 ${data.count} 条，第 ${page}/${total} 页</div><div class="pagination-controls">`;
+        html += `<button class="pagination-btn" title="首页" onclick="cloudApp.loadOperationLogs(1)" ${page <= 1 ? 'disabled' : ''}><i class="fas fa-angle-double-left"></i></button>`;
+        html += `<button class="pagination-btn" title="上一页" onclick="cloudApp.loadOperationLogs(${page - 1})" ${page <= 1 ? 'disabled' : ''}><i class="fas fa-angle-left"></i></button>`;
         const startPage = Math.max(1, page - 2);
         const endPage = Math.min(total, page + 2);
+        if (startPage > 1) {
+            html += `<button class="pagination-btn" onclick="cloudApp.loadOperationLogs(1)">1</button>`;
+            if (startPage > 2) html += `<span class="pagination-ellipsis">...</span>`;
+        }
         for (let i = startPage; i <= endPage; i++) {
             html += `<button class="pagination-btn ${i === page ? 'active' : ''}" onclick="cloudApp.loadOperationLogs(${i})">${i}</button>`;
         }
-        html += `<button class="pagination-btn" onclick="cloudApp.loadOperationLogs(${page + 1})" ${page >= total ? 'disabled' : ''}><i class="fas fa-chevron-right"></i></button>`;
+        if (endPage < total) {
+            if (endPage < total - 1) html += `<span class="pagination-ellipsis">...</span>`;
+            html += `<button class="pagination-btn" onclick="cloudApp.loadOperationLogs(${total})">${total}</button>`;
+        }
+        html += `<button class="pagination-btn" title="下一页" onclick="cloudApp.loadOperationLogs(${page + 1})" ${page >= total ? 'disabled' : ''}><i class="fas fa-angle-right"></i></button>`;
+        html += `<button class="pagination-btn" title="末页" onclick="cloudApp.loadOperationLogs(${total})" ${page >= total ? 'disabled' : ''}><i class="fas fa-angle-double-right"></i></button>`;
+        html += `<span class="pagination-jump">跳至 <input type="number" min="1" max="${total}" value="${page}" id="logPageJumpInput" onkeydown="if(event.key==='Enter'){event.preventDefault();cloudApp.jumpToLogPage(this.value);}"> 页`;
+        html += `<button class="pagination-btn" title="跳转" onclick="cloudApp.jumpToLogPage(document.getElementById('logPageJumpInput').value)">确定</button></span>`;
         html += '</div></div>';
         container.innerHTML = html;
+    }
+
+    jumpToLogPage(value) {
+        const pag = this._logPagination || {page: 1, total: 1};
+        let page = parseInt(value, 10);
+        if (!Number.isFinite(page)) return;
+        page = Math.max(1, Math.min(page, pag.total || 1));
+        this.loadOperationLogs(page);
     }
 
     searchLogs(keyword) {

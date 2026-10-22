@@ -176,6 +176,7 @@ urlpatterns = [
     path('work-summary/<int:pk>/', DailyWorkSummaryViewSet.as_view({'get': 'retrieve', 'delete': 'destroy'}), name='work-summary-detail'),
     path('work-summary/<int:pk>/analyze/', DailyWorkSummaryViewSet.as_view({'post': 'analyze'}), name='work-summary-analyze'),
     path('work-summary/<int:pk>/share/', DailyWorkSummaryViewSet.as_view({'post': 'share'}), name='work-summary-share'),
+    path('work-summary/<int:pk>/export/', DailyWorkSummaryViewSet.as_view({'post': 'export_file'}), name='work-summary-export'),
     path('work-summary/<int:pk>/export-pdf/', DailyWorkSummaryViewSet.as_view({'post': 'export_pdf'}), name='work-summary-export-pdf'),
     path('work-summary/<int:pk>/like/', DailyWorkSummaryViewSet.as_view({'post': 'like', 'delete': 'like'}), name='work-summary-like'),
     path('work-summary/<int:pk>/comments/', DailyWorkSummaryViewSet.as_view({'get': 'comments'}), name='work-summary-comments'),

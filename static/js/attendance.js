@@ -1568,6 +1568,7 @@ class AttendanceApp {
         var url = OA_API_URL + '/attendance/export/';
         var ids = Array.from(this._getSelectedIds());
         var payload = {
+            target: target,
             record_ids: ids,
             fields: selectedFields || [],
             start: (this.state && this.state.start) || '',

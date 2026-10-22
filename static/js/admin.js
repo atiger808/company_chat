@@ -545,7 +545,7 @@ class AdminConsole {
             if (!select) return;
 
             // 清除之前的提示
-            var parent = select.parentNode;
+            var parent = select.parentNode.parentNode;
             var oldHint = parent.querySelector('.tenant-dept-hint');
             if (oldHint) oldHint.remove();
 
@@ -602,7 +602,8 @@ class AdminConsole {
                 var hint = document.createElement('div');
                 hint.className = 'tenant-dept-hint';
                 hint.style.cssText = 'font-size:12px;color:var(--text-light,#909399);padding:4px 0 0;';
-                hint.textContent = '已选择企业「' + tenantName + '」，用户将自动加入该企业';
+                // hint.textContent = '已选择企业「' + tenantName + '」，用户将自动加入该企业';
+                hint.innerHTML = `<i class="fas fa-info-circle"></i> 已选择企业「${tenantName}」，用户将自动加入该企业`
                 parent.appendChild(hint);
             } else {
                 // 未选择企业 → 只加载没有所属企业的部门
@@ -889,6 +890,11 @@ class AdminConsole {
         } catch (error) {
             console.error('加载用户失败:', error);
             this.showError('加载失败', error);
+            var tbody = document.getElementById('usersTableBody');
+            if (tbody) {
+                tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:40px;color:#909399;">加载用户失败: ' + this._escape(error.message || error.error || error) + '</td></tr>';
+            };
+
             if (this.statusCode === 401) {
                 this.handleAuthError();
             }
@@ -1196,6 +1202,7 @@ class AdminConsole {
 
     // ==================== 创建用户 ====================
     async openCreateUserModal() {
+        this.showLoading()
         // 重置表单
         document.getElementById('createUserForm').reset();
 
@@ -1243,7 +1250,7 @@ class AdminConsole {
 
         // 渲染好友选择界面（初始无好友）
         this.renderFriendSelection_create('friendGridCreate', [], 'friendSearchCreate');
-
+        this.hideLoading()
         this.openModal('createUserModal');
     }
 
@@ -1798,6 +1805,7 @@ class AdminConsole {
     // ==================== 编辑用户 ====================
     async openEditUserModal(userId) {
         try {
+            this.showLoading()
             const user = this.users.find(u => u.id === userId);
             if (!user) {
                 this.showError('错误', '用户不存在');
@@ -1812,7 +1820,7 @@ class AdminConsole {
             }
 
             // 渲染当前编辑的用户
-            document.getElementById('editCurrentUser').textContent = `${user.username}（${user.real_name || '-'}）`;
+            document.getElementById('editCurrentUser').innerHTML = `${user.username}（${user.real_name || '-'}）`;
             // 填充表单
             document.getElementById('editUserId').value = user.id;
             document.getElementById('editUsername').value = user.username;
@@ -1880,6 +1888,8 @@ class AdminConsole {
         } catch (error) {
             console.error('加载用户信息失败:', error);
             this.showError('加载失败', '加载用户信息失败');
+        } finally {
+            this.hideLoading();
         }
     }
 
@@ -2756,6 +2766,17 @@ class AdminConsole {
         return Utils.escapeHtml ? Utils.escapeHtml(text) : String(text || '').replace(/[&<>"]/g, function (c) {
             return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c];
         });
+    }
+
+    toggleMaximize(btn) {
+        var mc = btn.closest('.modal-content');
+        if (!mc) return;
+        var isMax = mc.classList.toggle('maximized');
+        var icon = btn.querySelector('i');
+        if (icon) {
+            icon.className = isMax ? 'fas fa-compress' : 'fas fa-expand';
+        }
+        btn.title = isMax ? '恢复' : '最大化';
     }
 
 

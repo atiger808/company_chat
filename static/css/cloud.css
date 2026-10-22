@@ -3627,6 +3627,45 @@ body {
     font-size: 13px;
 }
 
+/* 操作日志：跳转到指定页 */
+.pagination-jump {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 6px;
+    font-size: 13px;
+    color: #606266;
+    white-space: nowrap;
+}
+
+.pagination-jump input {
+    width: 52px;
+    height: 32px;
+    padding: 0 6px;
+    border: 1px solid #dcdfe6;
+    border-radius: 4px;
+    text-align: center;
+    font-size: 13px;
+    color: #606266;
+    background: #fff;
+    outline: none;
+    transition: border-color .2s;
+}
+
+.pagination-jump input:focus {
+    border-color: var(--primary-color, #409eff);
+}
+
+[data-theme="dark"] .pagination-jump {
+    color: #b0b3b8;
+}
+
+[data-theme="dark"] .pagination-jump input {
+    background: #1f2026;
+    border-color: #3a3d45;
+    color: #e5e7eb;
+}
+
 /* 🔧 移动端适配 */
 @media (max-width: 768px) {
     .pagination-container {
@@ -3638,6 +3677,11 @@ body {
     .pagination-controls {
         width: 100%;
         justify-content: center;
+        flex-wrap: wrap;
+    }
+
+    .pagination-jump {
+        margin-left: 0;
     }
 }
 
@@ -4468,62 +4512,78 @@ body {
     background: #26272d !important;
 }
 
-/* ==================== 列表视图：可拖拽调整列宽（全部文件） ==================== */
-#fileListView .col-resizer { display: none; }
+/* ==================== 列表视图：可拖拽调整列宽 ==================== */
+/* 全部文件 / 协作文档 / 共享文件夹 / 回收站共用；具体列宽由 JS 写入 --list-columns */
+.file-list.col-resizable-list .file-list-header,
+.file-list.col-resizable-list .file-item {
+    grid-template-columns: var(--list-columns, 40px 1fr 120px 150px 100px);
+}
 
-@media (min-width: 769px) {
-    /* 4 列与行内 .file-col 一一对应；名称列可拖动加宽以显示完整文件名 */
-    #fileListView .file-list-header,
-    #fileListView .file-item {
-        grid-template-columns:
-            var(--fl-name, minmax(200px, 1fr))
-            var(--fl-size, 110px)
-            var(--fl-date, 160px)
-            var(--fl-actions, 300px);
+.file-list.col-resizable-list .file-list-header .file-col {
+    position: relative;
+    overflow: visible;   /* 允许拖拽手柄溢出显示 */
+    min-width: 0;
+}
+
+.file-list.col-resizable-list .file-item .file-col {
+    min-width: 0;
+}
+
+.file-list.col-resizable-list .file-list-header .file-col.resizable {
+    padding-right: 6px;
+}
+
+.file-list.col-resizable-list .col-resizer {
+    display: block;
+    position: absolute;
+    top: 0;
+    right: -5px;
+    width: 10px;
+    height: 100%;
+    cursor: col-resize;
+    touch-action: none;   /* 触屏拖动时禁止页面滚动 */
+    -webkit-tap-highlight-color: transparent;
+    z-index: 6;
+}
+
+.file-list.col-resizable-list .col-resizer::after {
+    content: '';
+    position: absolute;
+    top: 18%;
+    bottom: 18%;
+    left: 50%;
+    width: 2px;
+    transform: translateX(-50%);
+    background: #c9cfda;
+    border-radius: 1px;
+    transition: background .15s, width .15s;
+}
+
+.file-list.col-resizable-list .col-resizer:hover::after,
+.file-list.col-resizable-list .col-resizer:active::after {
+    width: 3px;
+    background: var(--primary-color, #409eff);
+}
+
+@media (pointer: coarse) {
+    .file-list.col-resizable-list .col-resizer {
+        width: 20px;
+        right: -10px;
     }
 
-    #fileListView .file-list-header .file-col {
-        position: relative;
-        overflow: visible;   /* 允许拖拽手柄溢出显示 */
-        min-width: 0;
+    .file-list.col-resizable-list .col-resizer::after {
+        width: 3px;
+        background: #b8bfcc;
     }
+}
 
-    #fileListView .file-item .file-col {
-        min-width: 0;
-    }
+[data-theme="dark"] .file-list.col-resizable-list .col-resizer::after {
+    background: #555b66;
+}
 
-    #fileListView .file-col.resizable {
-        padding-right: 6px;
-    }
-
-    #fileListView .col-resizer {
-        display: block;
-        position: absolute;
-        top: 0;
-        right: -5px;
-        width: 10px;
-        height: 100%;
-        cursor: col-resize;
-        z-index: 6;
-    }
-
-    #fileListView .col-resizer::after {
-        content: '';
-        position: absolute;
-        top: 20%;
-        bottom: 20%;
-        left: 50%;
-        width: 2px;
-        transform: translateX(-50%);
-        background: transparent;
-        border-radius: 1px;
-        transition: background .15s;
-    }
-
-    #fileListView .col-resizer:hover::after,
-    #fileListView .col-resizer:active::after {
-        background: var(--primary-color, #409eff);
-    }
+[data-theme="dark"] .file-list.col-resizable-list .col-resizer:hover::after,
+[data-theme="dark"] .file-list.col-resizable-list .col-resizer:active::after {
+    background: var(--primary-color, #409eff);
 }
 
 

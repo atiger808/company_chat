@@ -849,7 +849,7 @@ class Utils {
     }
 
 
-    _showTip(msg) {
+    static _showTip(msg) {
         var tip = document.getElementById('_showTip');
         if (!tip) {
             tip = document.createElement('div');
@@ -861,6 +861,18 @@ class Utils {
         tip.style.opacity = '1';
         clearTimeout(tip._t);
         tip._t = setTimeout(function() { tip.style.opacity = '0'; }, 1500);
+    }
+
+
+    static toggleMaximize(btn) {
+        var mc = btn.closest('.modal-content');
+        if (!mc) return;
+        var isMax = mc.classList.toggle('maximized');
+        var icon = btn.querySelector('i');
+        if (icon) {
+            icon.className = isMax ? 'fas fa-compress' : 'fas fa-expand';
+        }
+        btn.title = isMax ? '恢复' : '最大化';
     }
 
 }

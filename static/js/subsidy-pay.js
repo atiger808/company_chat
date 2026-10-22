@@ -341,6 +341,7 @@ class SubsidyPayApp {
         const token = localStorage.getItem('access_token');
         if (!token) { this._handleAuthError(); return; }
         const payload = {
+            target: target,
             status: (document.getElementById('pStatus') || {}).value || '',
             search: (document.getElementById('pSearch') || {}).value || '',
             record_ids: ids,

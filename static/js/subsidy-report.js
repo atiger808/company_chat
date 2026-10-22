@@ -553,7 +553,7 @@
                 var rp = await fetch(OA + '/subsidy/report-pdf/', {
                     method: 'POST',
                     headers: Object.assign({}, authHeaders(), { 'Content-Type': 'application/json' }),
-                    body: JSON.stringify({ title: '普惠补贴-报表与数据分析', subtitle: reportSubtitle(), filename: name, blocks: blocks })
+                    body: JSON.stringify({ dest: dest, export_format: format,  title: '普惠补贴-报表与数据分析', subtitle: reportSubtitle(), filename: name, blocks: blocks })
                 });
                 if (!rp.ok) {
                     var ep = await rp.json().catch(function () { return {}; });
@@ -563,6 +563,7 @@
             } else {
                 // 导出改为 POST（GET 不记录操作日志），参数放在请求体
                 var payload = {
+                    dest: dest,
                     export_format: format,
                     start: state.start,
                     end: state.end,

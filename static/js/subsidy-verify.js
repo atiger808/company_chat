@@ -303,6 +303,7 @@ class SubsidyVerifyApp {
         if (!token) { this._handleAuthError(); return; }
         const get = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
         const payload = {
+            target: target,
             record_ids: ids,
             fields: selectedFields,
             search: get('vSearch'),

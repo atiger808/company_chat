@@ -10,7 +10,7 @@
     <!-- 基础样式 -->
     <link rel="stylesheet" href="{% static 'css/cloud.css' %}?v={{ static_version|default:'' }}">
 <!--    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">-->
-    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261021-6252cb2">
+    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261021-9cfaad0">
 
     <link rel="icon" type="image/svg+xml" href="/media/avatars/cloud-green.svg?v=20260305-1">
 
@@ -25,13 +25,13 @@
 
     <!-- 项目静态文件 -->
 
-    <script src="/static/js/utils.js?v=20261021-6252cb2"></script>
-    <script src="/static/js/api.js?v=20261021-6252cb2"></script>
-    <script src="/static/js/cloud_editor.js?v=20261021-6252cb2"></script>
+    <script src="/static/js/utils.js?v=20261021-9cfaad0"></script>
+    <script src="/static/js/api.js?v=20261021-9cfaad0"></script>
+    <script src="/static/js/cloud_editor.js?v=20261021-9cfaad0"></script>
     <!-- 🔧 加密依赖：水印配置响应为加密包，需要 EncryptUtils 解密（缺此则水印静默不显示） -->
-    <script src="/static/js/dist/crypto-js.min.js?v=20261021-6252cb2"></script>
-    <script src="/static/js/dist/sm4.min.js?v=20261021-6252cb2"></script>
-    <script src="/static/js/encrypts.js?v=20261021-6252cb2"></script>
+    <script src="/static/js/dist/crypto-js.min.js?v=20261021-9cfaad0"></script>
+    <script src="/static/js/dist/sm4.min.js?v=20261021-9cfaad0"></script>
+    <script src="/static/js/encrypts.js?v=20261021-9cfaad0"></script>
 
 
     <!-- 协同编辑专用样式 -->
@@ -923,7 +923,7 @@
         <div class="editor-actions">
             <!-- 🔧 新增：当前用户信息标签 -->
             <div class="current-user-info" id="currentUserInfo" title="当前登录用户">
-                <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20261021-6252cb2" alt="avatar"
+                <img id="currentUserAvatar" src="/static/images/default-avatar.png?v=20261021-9cfaad0" alt="avatar"
                      class="current-user-avatar">
                 <span id="currentUserName" class="current-user-name">加载中...</span>
             </div>
@@ -1152,9 +1152,9 @@
 </div>
 
 
-<script src="/static/js/watermark.js?v=20261021-6252cb2"></script>
+<script src="/static/js/watermark.js?v=20261021-9cfaad0"></script>
 <script>WatermarkManager.init();</script>
-<script src="/static/js/agent.js?v=20261021-6252cb2"></script>
+<script src="/static/js/agent.js?v=20261021-9cfaad0"></script>
 <script>AgentManager.init();</script>
 </body>
 </html>

@@ -2385,3 +2385,12 @@
     同理也监测审批类型为任务卡片的聊天消息，主要监测对应任务状态不是已完成，或者不是以归档的任务，也同步更新任务卡片聊天消息里面的任务状态，其消息内容是类似下面的json字符串：
     {"id": 12, "title": "[文件]", "description": "[文件]", "status": "in_progress", "priority": "medium", "order": 0.0, "creator_info": {"id": 5, "username": "root", "real_name": "大王808", "avatar_url": "/media/avatars/5761c4ed38f04dc68b11c588fc56eb45tplv-tt-cs0_360_360_zUkZi71.jpeg"}, "assignee_info": {"id": 9, "username": "guest", "real_name": "小美-测试", "avatar_url": "/media/avatars/default-avatar_kw5NRXU.png"}, "due_date": "2026-06-30T13:26:00+08:00", "related_chat_room": {"id": 122, "name": "", "room_type": "private"}, "comments": [], "source_chat_room_name": "小美-测试 - 大王808", "source_message_content": "[文件]", "source_message_type": "file", "source_file_info": null, "source_message_id": 14031, "created_at": "2026-06-29T13:26:48.408375+08:00", "updated_at": "2026-08-15T20:07:51.822280+08:00"}
     按照以上要求实现celery定时任务。
+
+
+    企业为网盘页面做如下完善：
+    1.企业网盘列表视图模式下要支持表格列鼠标拖动或者手指触摸动态调整列宽（双击恢复默认），包括全部文件栏，协作文档栏，共享文件夹栏，回收站栏下面的列表视图，标头列与列交汇处要有可拖动调整列宽的标识，方便用户明白可进行该操作，方便用户查看列表视图下面的数据；
+    2.操作日志栏主内容区域底部翻页功能增加直达首页和最后一页图标按钮，同时提供跳转到指定页的输入框；
+
+
+    导出/打印留痕改造:
+    参考其他导出功能，将每日工作总结里面的导出接口由GET方式改为POST方式

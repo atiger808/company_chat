@@ -7296,6 +7296,145 @@ class PrintLogViewSet(viewsets.ViewSet):
         return Response({'encrypt': True, 'data': encrypt_data({'ok': True, 'allowed': bool(allowed)})})
 
 
+def _build_summary_markdown(s, dept_name):
+    """生成每日工作总结 Markdown 内容（与前端打印/历史导出保持一致）"""
+    lines = [
+        '# 每日工作总结', '',
+        f'- 员工：{s.user.real_name or s.user.username}',
+        f'- 所属部门：{dept_name}',
+        f'- 职位：{s.position}',
+        f'- 日期：{s.summary_date}',
+        f'- 状态：{s.get_status_display()}', '',
+        '## 当日工作总结', '',
+        s.content or '（未填写总结文字）', '',
+        '## 大模型分析建议', '',
+        s.analysis_result or '（模型未返回内容）', ''
+    ]
+    return '\n'.join(lines)
+
+
+def _summary_md_inline(text):
+    """Markdown 行内语法转换（先转义再替换，防 XSS）"""
+    import html as _html
+    import re
+    t = _html.escape(text or '')
+    t = re.sub(r'`([^`]+)`', r'<code>\1</code>', t)
+    t = re.sub(r'\*\*([^*\n]+)\*\*', r'<strong>\1</strong>', t)
+    t = re.sub(r'(^|[^*])\*([^*\s][^*\n]*[^*\s])\*(?!\*)', r'\1<em>\2</em>', t)
+    t = re.sub(
+        r'\[([^\]]+)\]\((https?://[^\s)]+|mailto:[^\s)]+|/[^\s)]*)\)',
+        r'<a href="\2">\1</a>', t)
+    return t
+
+
+def _render_summary_markdown_html(text):
+    """轻量 Markdown → HTML（覆盖标题/列表/引用/代码块/段落，Word 导出用）"""
+    import html as _html
+    import re
+    lines = str(text or '').replace('\r\n', '\n').split('\n')
+    parts = []
+    i = 0
+    list_type = None
+    list_items = []
+    in_code = False
+    code_buf = []
+
+    def flush_list():
+        nonlocal list_type, list_items
+        if list_items:
+            parts.append(f'<{list_type}>' + ''.join(list_items) + f'</{list_type}>')
+            list_items = []
+        list_type = None
+
+    while i < len(lines):
+        line = lines[i]
+        if in_code:
+            if line.startswith('```'):
+                in_code = False
+                parts.append('<pre><code>' + _html.escape('\n'.join(code_buf)) + '</code></pre>')
+                code_buf = []
+            else:
+                code_buf.append(line)
+            i += 1
+            continue
+        if line.startswith('```'):
+            flush_list()
+            in_code = True
+            code_buf = []
+            i += 1
+            continue
+        m = re.match(r'^(#{1,4})\s+(.*)$', line)
+        if m:
+            flush_list()
+            lvl = min(6, len(m.group(1)) + 1)
+            parts.append(f'<h{lvl}>' + _summary_md_inline(m.group(2)) + f'</h{lvl}>')
+            i += 1
+            continue
+        if re.match(r'^---+$', line):
+            flush_list()
+            parts.append('<hr>')
+            i += 1
+            continue
+        if re.match(r'^\s*[-*]\s+', line):
+            if list_type and list_type != 'ul':
+                flush_list()
+            list_type = 'ul'
+            list_items.append(
+                '<li>' + _summary_md_inline(re.sub(r'^\s*[-*]\s+', '', line)) + '</li>')
+            i += 1
+            continue
+        if re.match(r'^\s*\d+[.)]\s+', line):
+            if list_type and list_type != 'ol':
+                flush_list()
+            list_type = 'ol'
+            list_items.append(
+                '<li>' + _summary_md_inline(re.sub(r'^\s*\d+[.)]\s+', '', line)) + '</li>')
+            i += 1
+            continue
+        if re.match(r'^>\s?', line):
+            flush_list()
+            quote_lines = []
+            while i < len(lines) and re.match(r'^>\s?', lines[i]):
+                quote_lines.append(_summary_md_inline(re.sub(r'^>\s?', '', lines[i])))
+                i += 1
+            parts.append('<blockquote>' + '<br>'.join(quote_lines) + '</blockquote>')
+            continue
+        if not line.strip():
+            flush_list()
+            i += 1
+            continue
+        flush_list()
+        para = [line]
+        i += 1
+        while i < len(lines):
+            nx = lines[i]
+            if (not nx.strip() or nx.startswith('```') or re.match(r'^#{1,4}\s', nx)
+                    or re.match(r'^\s*[-*]\s+', nx) or re.match(r'^\s*\d+[.)]\s+', nx)
+                    or re.match(r'^>\s?', nx) or re.match(r'^---+$', nx)):
+                break
+            para.append(nx)
+            i += 1
+        parts.append('<p>' + '<br>'.join(_summary_md_inline(x) for x in para) + '</p>')
+
+    flush_list()
+    if in_code:
+        parts.append('<pre><code>' + _html.escape('\n'.join(code_buf)) + '</code></pre>')
+    return ''.join(parts)
+
+
+def _build_summary_doc_html(s, dept_name):
+    """生成 Word 兼容的 HTML 文档"""
+    body = _render_summary_markdown_html(_build_summary_markdown(s, dept_name))
+    return (
+        '<html xmlns:o="urn:schemas-microsoft-com:office:office" '
+        'xmlns:w="urn:schemas-microsoft-com:office:word">'
+        '<head><meta charset="utf-8"><title>每日工作总结</title>'
+        '<style>body{font-family:"SimSun","Microsoft YaHei",sans-serif;line-height:1.7;}'
+        'h2,h3,h4{color:#303133;}</style></head>'
+        f'<body>{body}</body></html>'
+    )
+
+
 def _build_summary_pdf(s, dept_name):
     """生成每日工作总结真实 PDF 文件（优先 reportlab 内置中文 CID 字体，可正确渲染中文）"""
     import html as _html
@@ -7922,23 +8061,50 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
         )
         return Response({'encrypt': True, 'data': encrypt_data({'success': True, 'message': '已分享'})})
 
-    @action(detail=True, methods=['get'])
-    def export_pdf(self, request, pk=None):
-        """将工作总结及分析结果导出为真实 PDF 文件（非打印）"""
-        from django.http import HttpResponse
-        from urllib.parse import quote
+    def _export_summary_file(self, request, pk, fmt):
+        from io import BytesIO
+        from django.http import FileResponse
         s = DailyWorkSummary.objects.select_related('user').filter(id=pk).first()
         if not s:
             return Response({'error': '工作总结不存在'}, status=404)
         if not self._can_view_summary(request.user, s):
             return Response({'error': '无权导出该工作总结'}, status=403)
-        pdf_bytes = _build_summary_pdf(s, self._primary_dept_name(s.user))
-        if isinstance(pdf_bytes, dict) and pdf_bytes.get('error'):
-            return Response(pdf_bytes, status=500)
-        filename = f"每日工作总结_{s.summary_date}_{s.user.real_name or s.user.username}.pdf"
-        resp = HttpResponse(pdf_bytes, content_type='application/pdf')
-        resp['Content-Disposition'] = f'attachment; filename*=UTF-8\'\'{quote(filename)}'
-        return resp
+
+        fmt = str(fmt or 'pdf').strip().lower()
+        if fmt not in ('md', 'doc', 'pdf'):
+            return Response({'error': '不支持的导出格式'}, status=400)
+
+        dept_name = self._primary_dept_name(s.user)
+        if fmt == 'md':
+            content = _build_summary_markdown(s, dept_name).encode('utf-8')
+            content_type = 'text/markdown; charset=utf-8'
+        elif fmt == 'doc':
+            content = _build_summary_doc_html(s, dept_name).encode('utf-8')
+            content_type = 'application/msword'
+        else:
+            content = _build_summary_pdf(s, dept_name)
+            if isinstance(content, dict) and content.get('error'):
+                return Response(content, status=500)
+            content_type = 'application/pdf'
+
+        filename = (
+            f"每日工作总结_{s.summary_date}_{s.user.real_name or s.user.username}.{fmt}")
+        return FileResponse(
+            BytesIO(content), as_attachment=True, filename=filename,
+            content_type=content_type)
+
+    @action(detail=True, methods=['post'])
+    def export_file(self, request, pk=None):
+        """导出每日工作总结文件（Markdown / Word / PDF）。
+
+        POST 方式便于操作日志中间件统一记录导出行为。
+        """
+        return self._export_summary_file(
+            request, pk, request.data.get('format') or 'pdf')
+
+    def export_pdf(self, request, pk=None):
+        """兼容旧导出入口：统一走 PDF 分支"""
+        return self._export_summary_file(request, pk, 'pdf')
 
     def _config_data(self, request, cfg):
         from utils.ark_llm import ARK_MODEL_PRESETS

@@ -1504,59 +1504,38 @@ class WorkSummaryApp {
             d.analysis_result || '（模型未返回内容）', ''
         ].join('\n');
     }
-    _downloadBlob(text, filename, mime) {
-        const blob = new Blob([text], {type: (mime || 'text/plain') + ';charset=utf-8'});
+    _downloadExportBlob(blob, d, ext) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = filename;
+        a.download = this._exportFilename(d, ext);
         document.body.appendChild(a);
         a.click();
         setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 150);
     }
-    async _saveBlobToCloud(text, d, ext, mime) {
-        const file = new File([new Blob([text], {type: (mime || 'text/plain') + ';charset=utf-8'})], this._exportFilename(d, ext), {type: mime || 'text/plain'});
+    async _saveExportBlobToCloud(blob, d, ext, mime) {
+        const file = new File([blob], this._exportFilename(d, ext), {type: mime});
         try {
             // 自动创建/复用「文档（来自每日工作总结）」文件夹，与上传到网盘保持一致
             const folderId = await this._resolveCloudFolderId('文档（来自每日工作总结）');
-            const r = await Utils.uploadToCloud(file, folderId, '每日工作总结导出', '');
+            await Utils.uploadToCloud(file, folderId, '每日工作总结导出', '');
             this.toast('已保存到我的网盘 → 文档（来自每日工作总结）（' + this._exportFilename(d, ext) + '）', false);
         } catch (e) {
             this.toast('保存到网盘失败：' + (e.message || ''), true);
         }
     }
-    async _fetchExportPdfBlob(id) {
-        const resp = await fetch(WS_API + '/' + id + '/export-pdf/', {
+    async _fetchExportBlob(id, fmt) {
+        // 统一使用 POST 导出接口，便于后端操作日志记录导出行为
+        const resp = await fetch(WS_API + '/' + id + '/export/', {
             method: 'POST',
             headers: Object.assign({}, TokenManager.getHeaders(), {'Content-Type': 'application/json'}),
-            body: JSON.stringify({})
+            body: JSON.stringify({format: fmt})
         });
         if (!resp.ok) {
             const b = await resp.json().catch(() => ({}));
-            throw new Error(b.error || '导出 PDF 失败');
+            throw new Error(b.error || '导出失败');
         }
         return await resp.blob();
-    }
-    async _downloadExportPdf(id, d) {
-        const blob = await this._fetchExportPdfBlob(id);
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = this._exportFilename(d, 'pdf');
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 150);
-    }
-    async _savePdfBlobToCloud(blob, d) {
-        const file = new File([blob], this._exportFilename(d, 'pdf'), {type: 'application/pdf'});
-        try {
-            // 自动创建/复用「文档（来自每日工作总结）」文件夹，与上传到网盘保持一致
-            const folderId = await this._resolveCloudFolderId('文档（来自每日工作总结）');
-            await Utils.uploadToCloud(file, folderId, '每日工作总结导出', '');
-            this.toast('PDF 已保存到我的网盘 → 文档（来自每日工作总结）', false);
-        } catch (e) {
-            this.toast('保存到网盘失败：' + (e.message || ''), true);
-        }
     }
 
     // 取或建「文档（来自每日工作总结）」文件夹并返回 folder id（与 saveFileToCloud 上传到网盘保持一致）
@@ -1634,28 +1613,19 @@ class WorkSummaryApp {
         const id = this._exportId;
         const fmt = document.getElementById('wsExportFormat').value;
         const dest = document.getElementById('wsExportDest').value;
+        const mimeMap = {md: 'text/markdown', doc: 'application/msword', pdf: 'application/pdf'};
+        const labelMap = {md: 'Markdown 文件', doc: 'Word 文档', pdf: 'PDF 文件'};
         try {
             const d = await this.apiGet(WS_API + '/' + id + '/');
             if (!d) return;
-            const md = this._buildExportMarkdown(d);
-            if (fmt === 'md') {
-                if (dest === 'cloud') await this._saveBlobToCloud(md, d, 'md', 'text/markdown');
-                else { this._downloadBlob(md, this._exportFilename(d, 'md'), 'text/markdown'); this.toast('已导出 Markdown 文件', false); }
-            } else if (fmt === 'doc') {
-                // Word 兼容格式：HTML 内容存为 .doc，可在 Word/WPS 打开
-                const html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>每日工作总结</title></head><body>'
-                    + this._renderMarkdown(md) + '</body></html>';
-                if (dest === 'cloud') await this._saveBlobToCloud(html, d, 'doc', 'application/msword');
-                else { this._downloadBlob(html, this._exportFilename(d, 'doc'), 'application/msword'); this.toast('已导出 Word 文档', false); }
-            } else if (fmt === 'pdf') {
-                // 真实 PDF 文件导出（后端生成，不经过打印对话框）
-                if (dest === 'cloud') {
-                    const blob = await this._fetchExportPdfBlob(id);
-                    if (blob) await this._savePdfBlobToCloud(blob, d);
-                } else {
-                    await this._downloadExportPdf(id, d);
-                    this.toast('已导出 PDF 文件', false);
-                }
+            // 三种格式统一由后端 POST 接口生成并返回文件
+            const blob = await this._fetchExportBlob(id, fmt);
+            if (!blob) throw new Error('导出内容为空');
+            if (dest === 'cloud') {
+                await this._saveExportBlobToCloud(blob, d, fmt, mimeMap[fmt]);
+            } else {
+                this._downloadExportBlob(blob, d, fmt);
+                this.toast('已导出 ' + (labelMap[fmt] || '文件'), false);
             }
             this.closeExportModal();
         } catch (e) {
