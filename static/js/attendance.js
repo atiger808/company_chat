@@ -717,7 +717,7 @@ class AttendanceApp {
             this._renderPagination(data, pagination);
         } catch (e) {
             if (token !== this._recordsReqToken) return;
-            tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:40px;color:#909399;">加载失败: ' + this._escape(e.message) + '</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" style="text-align:left;padding:40px;color:#909399;">加载失败: ' + this._escape(e.message) + '</td></tr>';
             pagination.style.display = 'none';
         }
     }
@@ -743,7 +743,7 @@ class AttendanceApp {
         this._rowCache = {};
         rows.forEach(function(r) { attendanceApp._rowCache[String(r.id)] = r; });
         if (!rows.length) {
-            tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:40px;color:#909399;">暂无打卡记录</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" style="text-align:left;padding:40px;color:#909399;">暂无打卡记录</td></tr>';
             this._updateExportPrintButtons();
             return;
         }
@@ -781,9 +781,19 @@ class AttendanceApp {
     }
 
     // 申诉/补卡申请（联动 OA 审批，审批通过后自动恢复为正常考勤）
-    openAppeal(date, clockType, anomalyType) {
+    async openAppeal(date, clockType, anomalyType) {
         var labels = {late: '迟到', early_leave: '早退', missing_clock: '缺卡', absent: '缺勤', location_abnormal: '地点异常'};
         var label = labels[anomalyType] || anomalyType;
+        // 同日期同时段已发起过申诉/补卡申请时直接提示，不再重复发起
+        try {
+            var check = await this.apiGet(OA_API_URL + '/attendance/appeal-status/?date='
+                + encodeURIComponent(date || '') + '&clock_type=' + encodeURIComponent(clockType || 'day'));
+            if (check && check.exists) {
+                this.showToast('该日期该时段的申诉/补卡申请已发起（' + (check.status_display || '处理中') + '），请勿重复提交', true);
+                return;
+            }
+        } catch (e) { /* 查询失败不阻断，后端提交时仍会做唯一性校验 */ }
+
         var overlay = document.createElement('div');
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
         overlay.innerHTML = '<div style="background:var(--bg-primary,#fff);border-radius:12px;max-width:460px;width:90%;box-shadow:0 12px 48px rgba(0,0,0,.2);">'
@@ -798,9 +808,12 @@ class AttendanceApp {
         overlay.querySelector('[data-act="cancel"]').onclick = close;
         overlay.addEventListener('click', function(e) { if (e.target === overlay) close(); });
         var self = this;
+        var submitting = false;
         overlay.querySelector('[data-act="submit"]').onclick = async function() {
+            if (submitting) return;
             var reason = (document.getElementById('appealReasonInput').value || '').trim();
             if (!reason) { self.showToast('请填写申诉说明', true); return; }
+            var submitBtn = overlay.querySelector('[data-act="submit"]');
             var payload = {
                 approval_type: 'attendance_appeal',
                 title: '考勤申诉：' + date + ' ' + label,
@@ -812,10 +825,14 @@ class AttendanceApp {
                     clock_type: clockType || 'day',
                     anomaly_type: anomalyType,
                     reason: reason
-                },
-                sign_type: 'countersign',
-                approval_mode: 'sequential'
+                }
+                // 审批方式/模式与审批链由后端读取「考勤申诉/补卡申请」类型配置生成
             };
+            submitting = true;
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 提交中...';
+            }
             try {
                 var resp = await fetch(OA_API_URL + '/approval/', {
                     method: 'POST',
@@ -828,6 +845,11 @@ class AttendanceApp {
                 close();
                 self.showToast('申诉已提交，等待审批通过后自动恢复考勤', false);
             } catch (e) {
+                submitting = false;
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> 提交申诉';
+                }
                 self.showToast((e && e.message) || '提交失败', true);
             }
         };

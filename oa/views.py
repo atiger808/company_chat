@@ -842,6 +842,32 @@ class AttendanceViewSet(viewsets.ViewSet):
         return Response({'encrypt': True, 'data': encrypt_data(data)}, status=201)
 
     @action(detail=False, methods=['get'])
+    def appeal_status(self, request):
+        """查询某日期某打卡时段是否已发起申诉/补卡审批（用于点击时提示，避免重复发起）。"""
+        date_str = (request.query_params.get('date') or '').strip()
+        clock_type = (request.query_params.get('clock_type') or 'day').strip() or 'day'
+        try:
+            appeal_date = _date.fromisoformat(date_str[:10])
+        except (ValueError, TypeError):
+            return Response({'error': '日期格式错误，请使用 YYYY-MM-DD'}, status=400)
+
+        existing = ApprovalRequest.objects.filter(
+            applicant=request.user,
+            approval_type='attendance_appeal',
+            start_date=appeal_date,
+        ).exclude(status__in=('rejected', 'cancelled')).order_by('-id').only(
+            'id', 'form_data', 'status')
+        for item in existing:
+            if str((item.form_data or {}).get('clock_type') or 'day') == clock_type:
+                return Response({'encrypt': True, 'data': encrypt_data({
+                    'exists': True,
+                    'approval_id': item.id,
+                    'status': item.status,
+                    'status_display': item.get_status_display(),
+                })})
+        return Response({'encrypt': True, 'data': encrypt_data({'exists': False})})
+
+    @action(detail=False, methods=['get'])
     def today(self, request):
         today = timezone.localtime(timezone.now()).date()
         records = AttendanceRecord.objects.filter(user=request.user, date=today).order_by('clock_time')
@@ -3353,6 +3379,49 @@ class ApprovalViewSet(viewsets.ViewSet):
             }
         return self._snapshot_default_payment(user)
 
+    def _resolve_appeal_department_id(self, user, tenant):
+        """考勤申诉默认取申请人主部门（同企业优先），用于解析审批类型配置和审批链。"""
+        try:
+            from org.models import UserDepartment
+            qs = UserDepartment.objects.filter(user=user).select_related('department')
+            if tenant:
+                qs = qs.filter(department__tenant=tenant)
+            ud = qs.order_by('-is_primary', 'id').first()
+            if ud and ud.department_id:
+                return ud.department_id
+        except Exception as e:
+            logger.warning(f'解析考勤申诉部门失败: {e}')
+        dept = getattr(user, 'department', None)
+        return dept.id if dept else None
+
+    def _check_duplicate_attendance_appeal(self, user, validated_data, form_data):
+        """同一日期 + 同一打卡时段只允许存在一条未驳回/未撤回的申诉/补卡申请。"""
+        appeal_date = validated_data.get('start_date')
+        if not appeal_date:
+            raw = (form_data or {}).get('date')
+            if raw:
+                try:
+                    appeal_date = _date.fromisoformat(str(raw)[:10])
+                except ValueError:
+                    appeal_date = None
+        if not appeal_date:
+            return None
+
+        clock_type = str((form_data or {}).get('clock_type') or 'day')
+        labels = {'clock_in': '上班卡', 'clock_out': '下班卡', 'day': '全天'}
+        existing = ApprovalRequest.objects.filter(
+            applicant=user,
+            approval_type='attendance_appeal',
+            start_date=appeal_date,
+        ).exclude(status__in=('rejected', 'cancelled')).only('id', 'form_data')
+        for item in existing:
+            if str((item.form_data or {}).get('clock_type') or 'day') == clock_type:
+                return (
+                    f'该日期（{appeal_date} · {labels.get(clock_type, clock_type)}）的'
+                    '申诉/补卡申请已发起，请勿重复提交'
+                )
+        return None
+
     def create(self, request):
         # 确保内置审批类型已播种（含「考勤申诉/补卡申请」等新增类型）
         ensure_builtin_types()
@@ -3362,6 +3431,12 @@ class ApprovalViewSet(viewsets.ViewSet):
         approval_type = serializer.validated_data['approval_type']
         department_id = serializer.validated_data.get('department_id')
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+
+        # 考勤申诉由考勤页直接发起，未选择所属部门：按申请人主部门读取审批类型配置
+        if approval_type == 'attendance_appeal' and not department_id:
+            department_id = self._resolve_appeal_department_id(request.user, tenant)
+            if department_id:
+                serializer.validated_data['department_id'] = department_id
 
         # 统一 form_data：内置类型镜像 legacy 字段，自定义类型按 schema 校验
         form_data = collect_form_data(
@@ -3388,6 +3463,23 @@ class ApprovalViewSet(viewsets.ViewSet):
                                              department_id=department_id)
         if _inv_err:
             return Response({'error': _inv_err}, status=400)
+
+        # 考勤申诉去重：同日期 + 同时段已发起且未驳回/撤回的申请不允许重复提交
+        if approval_type == 'attendance_appeal':
+            dup_msg = self._check_duplicate_attendance_appeal(
+                request.user, serializer.validated_data, form_data)
+            if dup_msg:
+                return Response({'error': dup_msg}, status=400)
+
+        # 审批方式/模式：考勤申诉由考勤页直接发起，统一读取该审批类型配置
+        sign_type = serializer.validated_data.get('sign_type', 'countersign')
+        approval_mode = serializer.validated_data.get('approval_mode', 'sequential')
+        if approval_type == 'attendance_appeal':
+            appeal_config = self._get_config_for_tenant(
+                tenant, approval_type, department_id=department_id)
+            if appeal_config:
+                sign_type = appeal_config.default_sign_type or sign_type
+                approval_mode = appeal_config.default_approval_mode or approval_mode
 
         # 审批人自动根据所选部门和审批类型生成
         approver_nodes = serializer.validated_data.get('approver_nodes', [])
@@ -3487,8 +3579,8 @@ class ApprovalViewSet(viewsets.ViewSet):
                 leave_type=leave_type,
                 trip_data=trip_data,
                 form_data=form_data,
-                sign_type=serializer.validated_data.get('sign_type', 'countersign'),
-                approval_mode=serializer.validated_data.get('approval_mode', 'sequential'),
+                sign_type=sign_type,
+                approval_mode=approval_mode,
                 payment_method=payment_method,
             )
             # 物资单据：创建业务记录 + 自动生成单据号（失败则回滚整单）；金额镜像到审批金额字段以支持阈值审批
@@ -3590,8 +3682,8 @@ class ApprovalViewSet(viewsets.ViewSet):
             approval.related_approvals.set(related_ids)
 
         # 加载默认配置中的抄送（按配置优先级：公司级部门/子公司/集团默认）
-        if request.tenant and approval.approval_type:
-            config = self._get_config_for_tenant(request.tenant, approval.approval_type,
+        if tenant and approval.approval_type:
+            config = self._get_config_for_tenant(tenant, approval.approval_type,
                                                  department_id=approval.department_id)
             if config:
                 if config.cc_users:

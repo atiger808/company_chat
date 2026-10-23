@@ -26,6 +26,7 @@ urlpatterns = [
     path('attendance/clock-in/', AttendanceViewSet.as_view({'post': 'clock_in'}), name='attendance-clock-in'),
     path('attendance/clock-out/', AttendanceViewSet.as_view({'post': 'clock_out'}), name='attendance-clock-out'),
     path('attendance/makeup/', AttendanceViewSet.as_view({'post': 'makeup'}), name='attendance-makeup'),
+    path('attendance/appeal-status/', AttendanceViewSet.as_view({'get': 'appeal_status'}), name='attendance-appeal-status'),
     path('attendance/today/', AttendanceViewSet.as_view({'get': 'today'}), name='attendance-today'),
     path('attendance/statistics/', AttendanceViewSet.as_view({'get': 'statistics'}), name='attendance-statistics'),
     path('attendance/export/', AttendanceViewSet.as_view({'post': 'export'}), name='attendance-export'),
