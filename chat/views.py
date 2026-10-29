@@ -49,6 +49,28 @@ from utils.encrypt_aes import encrypt_data, decrypt_data
 
 
 
+def _read_text_file(path):
+    """容错读取 UTF-8 文本文件，避免 SFTP 同步产生半截 UTF-8 字节时接口 500。
+
+    正常按 UTF-8（含 BOM）读取；文件被截断或混入非法字节时，
+    用替换字符读取，保留其余可读内容。
+    """
+    try:
+        with open(path, 'r', encoding='utf-8-sig') as f:
+            return f.read()
+    except UnicodeDecodeError as e:
+        logger.warning(f'读取文件 {path} UTF-8 解码失败，将替换非法字节: {e}')
+    except OSError as e:
+        logger.warning(f'读取文件 {path} 失败: {e}')
+        return ''
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            return f.read()
+    except OSError as e:
+        logger.warning(f'读取文件 {path} 失败: {e}')
+        return ''
+
+
 class VersionView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -63,8 +85,7 @@ class VersionView(APIView):
 
         version_log_file = os.path.join(settings.BASE_DIR, 'version_log.log')
         if static_version and os.path.exists(version_log_file):
-            with open(version_log_file, 'r', encoding='utf-8') as f:
-                log_lines = f.readlines()
+            log_lines = _read_text_file(version_log_file).splitlines()
             for line in log_lines:
                 if static_version in line:
                     try:
@@ -80,9 +101,9 @@ class VersionView(APIView):
         update_message = ""
         update_msg_file = os.path.join(settings.BASE_DIR, 'VERSION_MESSAGE.txt')
         if os.path.exists(update_msg_file):
-            with open(update_msg_file, 'r', encoding='utf-8') as f:
-                update_message = '<br>'.join([i for i in f.readlines() if i.strip()])
-                build_time = str(datetime.fromtimestamp(os.path.getmtime(update_msg_file)))[:19]
+            update_message = '<br>'.join(
+                [i for i in _read_text_file(update_msg_file).splitlines() if i.strip()])
+            build_time = str(datetime.fromtimestamp(os.path.getmtime(update_msg_file)))[:19]
 
         # 版本提示自动关闭时长（管理控制台「系统设置-聊天设置」可配置，默认 120 秒）
         try:

@@ -229,9 +229,9 @@ def compute_user_work_summary(user, tenant=None):
         is_night = False
         try:
             from .views import AttendanceViewSet
-            from org.models import UserDepartment
-            primary = UserDepartment.objects.filter(user=user, is_primary=True).select_related('department').first()
-            cfg = AttendanceViewSet()._get_attendance_config(tenant, primary.department_id if primary else None, user)
+            view = AttendanceViewSet()
+            cfg = view._get_attendance_config(
+                tenant, view._primary_department_id(user, tenant), user)
             if cfg:
                 if cfg.clock_in_enabled and cfg.clock_in_time:
                     clock_in_limit = cfg.clock_in_time

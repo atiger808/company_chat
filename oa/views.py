@@ -141,6 +141,44 @@ def send_work_notification(user_id, title, content, notification_type='system', 
         return None
 
 
+def _primary_department_leaders(user, tenant):
+    """获取用户在当前企业「主部门」的负责人与副负责人。
+
+    返回 (department, [User])：仅当前企业、仅主部门（无主部门时取该企业内最近的
+    部门关系），排除本人、已禁用用户并去重。供每日总结/迟到早退通知复用。
+    """
+    if not user or not tenant:
+        return None, []
+    try:
+        from org.models import UserDepartment
+        rels = UserDepartment.objects.filter(
+            user=user, department__tenant=tenant, department__is_active=True
+        ).select_related('department', 'department__manager').prefetch_related(
+            'department__deputy_managers')
+        rel = rels.filter(is_primary=True).order_by('id').first() \
+            or rels.order_by('-is_primary', 'id').first()
+    except Exception as e:
+        logger.warning(f'解析用户主部门负责人失败: user={getattr(user, "id", None)} {e}')
+        return None, []
+    if not rel or not rel.department:
+        return None, []
+    dept = rel.department
+    leaders = []
+    if dept.manager_id and dept.manager_id != user.id:
+        leaders.append(dept.manager)
+    for deputy in dept.deputy_managers.all():
+        if deputy.id != user.id:
+            leaders.append(deputy)
+    seen = set()
+    result = []
+    for leader in leaders:
+        if not leader or not leader.is_active or leader.id in seen:
+            continue
+        seen.add(leader.id)
+        result.append(leader)
+    return dept, result
+
+
 def _store_cloud_file_copy(request, cloud_id, dest_prefix, month=False):
     """把当前用户「我的网盘」中的文件流式复制到模块存储（OA/每日总结共用）。
     返回 (info|None, error)。"""
@@ -321,16 +359,37 @@ class AttendanceViewSet(viewsets.ViewSet):
         return qs.distinct().select_related('department', 'active_tenant').prefetch_related(
             'department_relations__department')[:2000]
 
+    @staticmethod
+    def _primary_department_id(user, tenant=None):
+        """解析用于考勤配置的部门：当前企业下的主部门 > 其它企业主部门 >
+        当前企业任意部门 > user.department。
+
+        避免用户跨企业时误读其它企业的部门配置，同时兼容只有
+        CustomUser.department、没有 UserDepartment 关系的历史账号。
+        """
+        try:
+            from org.models import UserDepartment
+            qs = UserDepartment.objects.filter(user=user).select_related('department')
+            if tenant:
+                matched = qs.filter(
+                    department__tenant=tenant).order_by('-is_primary', 'id').first()
+                if matched and matched.department_id:
+                    return matched.department_id
+            primary = qs.order_by('-is_primary', 'id').first()
+            if primary and primary.department_id:
+                return primary.department_id
+        except Exception:
+            pass
+        dept = getattr(user, 'department', None)
+        return dept.id if dept else None
+
     def _config_for_user(self, tenant, user, cache):
         if user.id in cache:
             return cache[user.id]
         cfg = None
         try:
-            from org.models import UserDepartment
-            primary = UserDepartment.objects.filter(
-                user=user, is_primary=True).select_related('department').first()
-            dept_id = primary.department_id if primary else None
-            cfg = self._get_attendance_config(tenant, dept_id, user)
+            cfg = self._effective_attendance_config(
+                tenant, self._primary_department_id(user, tenant), user)
         except Exception:
             cfg = None
         cache[user.id] = cfg
@@ -339,6 +398,20 @@ class AttendanceViewSet(viewsets.ViewSet):
     @staticmethod
     def _virtual_key(uid, d, status, clock_type):
         return f'v:{uid}:{d.isoformat()}:{status}:{clock_type}'
+
+    @staticmethod
+    def _shift_end_deadline(d, config):
+        """该考勤日对应的下班时间点：白班为当日 clock_out_time，夜班为次日 clock_out_time。"""
+        from datetime import datetime as _dt, time as _tm, timedelta as _td
+        out_time = config.clock_out_time if config and config.clock_out_time else _tm(18, 0)
+        end_date = d + _td(days=1) if (config and config.shift_type == 'night') else d
+        naive = _dt.combine(end_date, out_time)
+        tz = timezone.get_current_timezone()
+        return timezone.make_aware(naive, tz) if timezone.is_naive(naive) else naive
+
+    @classmethod
+    def _shift_end_passed(cls, d, config, now):
+        return now >= cls._shift_end_deadline(d, config)
 
     @staticmethod
     def _user_presentation(user):
@@ -424,6 +497,9 @@ class AttendanceViewSet(viewsets.ViewSet):
             pass
 
         today = timezone.localdate()
+        now = timezone.localtime(timezone.now())
+        cfg_cache = {}
+        rest_cache = {}
         rows = []
         day_count = (end_d - start_d).days + 1
         for u in users:
@@ -446,8 +522,11 @@ class AttendanceViewSet(viewsets.ViewSet):
                             u, d, 'missing_clock', ct, '缺卡（上班）', '缺少上班打卡', pres))
                     elif not has_out:
                         ct = 'clock_out'
-                        rows.append(self._virtual_row(
-                            u, d, 'missing_clock', ct, '缺卡（下班）', '缺少下班打卡', pres))
+                        # 尚未到下班时间（夜班为次日下班时间）时不判缺卡
+                        cfg = self._config_for_user(tenant, u, cfg_cache)
+                        if self._shift_end_passed(d, cfg, now):
+                            rows.append(self._virtual_row(
+                                u, d, 'missing_clock', ct, '缺卡（下班）', '缺少下班打卡', pres))
                     continue
                 leave_label = leave_map.get((u.id, d))
                 trip_label = trip_map.get((u.id, d))
@@ -457,13 +536,17 @@ class AttendanceViewSet(viewsets.ViewSet):
                 elif trip_label:
                     rows.append(self._virtual_row(
                         u, d, 'trip', 'day', f'出差（{trip_label}）', trip_label, pres))
-                elif is_rest_day(d):
-                    rows.append(self._virtual_row(u, d, 'rest', 'day', '休息', '非工作日', pres))
-                elif d == today:
-                    # 今天尚未打卡不判缺勤
-                    continue
                 else:
-                    rows.append(self._virtual_row(u, d, 'absent', 'day', '缺勤', '当日无打卡记录', pres))
+                    # 休息日按日期缓存，避免为每个用户重复计算节假日
+                    if d not in rest_cache:
+                        rest_cache[d] = is_rest_day(d)
+                    if rest_cache[d]:
+                        rows.append(self._virtual_row(u, d, 'rest', 'day', '休息', '非工作日', pres))
+                    elif d == today:
+                        # 今天尚未打卡不判缺勤
+                        continue
+                    else:
+                        rows.append(self._virtual_row(u, d, 'absent', 'day', '缺勤', '当日无打卡记录', pres))
         return rows
 
     def _merged_attendance_rows(self, request, start_d, end_d, tenant, params=None, user_ids=None):
@@ -482,42 +565,51 @@ class AttendanceViewSet(viewsets.ViewSet):
             'user__department_relations__department').order_by('-clock_time')
         actual = list(AttendanceRecordSerializer(
             records, many=True, context={'request': request}).data)
-        cfg_cache = {}
-        user_by_id = {u.id: u for u in users}
-        geo_cache = {}
         for row in actual:
             row['record_key'] = str(row.get('id'))
             row['is_virtual'] = False
-            u = user_by_id.get(row.get('user'))
-            cfg = self._config_for_user(tenant, u, cfg_cache) if u else None
-            if not u or not cfg:
-                continue
-            dept_id = None
-            try:
-                rels = list(u.department_relations.all())
-                primary = next((r for r in rels if r.is_primary and r.department), None) \
-                    or next((r for r in rels if r.department), None)
-                dept_id = primary.department_id if primary else None
-            except Exception:
-                pass
-            if u.id not in geo_cache:
-                geo_cache[u.id] = self._attendance_geo_config(tenant, dept_id, u)
-            required, ranges, _src = geo_cache[u.id]
-            abnormal = False
-            if required:
-                if row.get('latitude') is None or row.get('longitude') is None:
-                    abnormal = True
-                elif ranges:
-                    try:
-                        from utils.coord_transform import distance_to_ranges_m
-                        _dist, hit = distance_to_ranges_m(
-                            row.get('latitude'), row.get('longitude'), ranges)
-                        abnormal = hit is None
-                    except Exception:
-                        abnormal = False
-            if abnormal:
-                row['status'] = 'location_abnormal'
-                row['status_display'] = '地点异常'
+
+        # 只有集团层开启「指定区域打卡」时，才需要逐用户解析打卡范围。
+        # 关闭时直接跳过，避免每个用户执行多次配置链查询（列表加载的主要瓶颈之一）。
+        group_cfg = self._group_default_config(tenant)
+        if group_cfg and group_cfg.location_required:
+            user_by_id = {u.id: u for u in users}
+            geo_cache = {}
+            for row in actual:
+                u = user_by_id.get(row.get('user'))
+                if not u:
+                    continue
+                dept_id = None
+                try:
+                    # 使用预取关系避免 N+1；部门配置优先取当前企业下的主部门
+                    rels = [r for r in u.department_relations.all() if r.department]
+                    if tenant:
+                        in_tenant = [r for r in rels if r.department.tenant_id == tenant.id]
+                        if in_tenant:
+                            rels = in_tenant
+                    primary = next((r for r in rels if r.is_primary), None) \
+                        or (rels[0] if rels else None)
+                    dept_id = primary.department_id if primary else getattr(u, 'department_id', None)
+                except Exception:
+                    dept_id = getattr(u, 'department_id', None)
+                if u.id not in geo_cache:
+                    geo_cache[u.id] = self._attendance_geo_config(tenant, dept_id, u)
+                required, ranges, _src = geo_cache[u.id]
+                abnormal = False
+                if required:
+                    if row.get('latitude') is None or row.get('longitude') is None:
+                        abnormal = True
+                    elif ranges:
+                        try:
+                            from utils.coord_transform import distance_to_ranges_m
+                            _dist, hit = distance_to_ranges_m(
+                                row.get('latitude'), row.get('longitude'), ranges)
+                            abnormal = hit is None
+                        except Exception:
+                            abnormal = False
+                if abnormal:
+                    row['status'] = 'location_abnormal'
+                    row['status_display'] = '地点异常'
         # 只筛选实际打卡状态（正常/迟到/早退/地点异常）时无需生成虚拟行，显著提速
         actual_only = status_filter in ('normal', 'late', 'early_leave', 'location_abnormal')
         virtual = [] if actual_only else self._virtual_rows(users, start_d, end_d, tenant)
@@ -576,10 +668,8 @@ class AttendanceViewSet(viewsets.ViewSet):
         today = now.date()
         # 检查考勤配置（含用户主部门）
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
-        from org.models import UserDepartment
-        primary_dept = UserDepartment.objects.filter(user=request.user, is_primary=True).select_related('department').first()
-        dept_id = primary_dept.department_id if primary_dept else None
-        config = self._get_attendance_config(tenant, dept_id, request.user)
+        dept_id = self._primary_department_id(request.user, tenant)
+        config = self._effective_attendance_config(tenant, dept_id, request.user)
         if config and not config.clock_in_enabled:
             return Response({'error': '该时段无需打卡（已配置为不打卡）', 'skip': True}, status=200)
         # 指定区域打卡：不在范围内（或拿不到定位）直接拒绝打卡
@@ -591,11 +681,12 @@ class AttendanceViewSet(viewsets.ViewSet):
         if existing:
             data = AttendanceRecordSerializer(existing, context={'request': request}).data
             return Response({'encrypt': True, 'data': encrypt_data(data)})
-        # 使用配置时间或默认 9:00
-        if config and config.clock_in_time:
-            deadline = now.replace(hour=config.clock_in_time.hour, minute=config.clock_in_time.minute, second=59, microsecond=0)
-        else:
-            deadline = now.replace(hour=9, minute=0, second=59, microsecond=0)
+        # 上班打卡截止时间 = 配置时间 + 59 秒：
+        # HH:MM:59（含）之前不算迟到，之后算迟到；未配置时默认 09:00:59。
+        clock_in_time = (config.clock_in_time if config else None) or _time(9, 0)
+        deadline = now.replace(
+            hour=clock_in_time.hour, minute=clock_in_time.minute,
+            second=59, microsecond=0)
         status_val = 'late' if now > deadline else 'normal'
         logger.info(f'{request.user} 上班打卡 now: {now} deadline: {deadline} status: {status_val}')
         record = AttendanceRecord.objects.create(
@@ -624,52 +715,24 @@ class AttendanceViewSet(viewsets.ViewSet):
             related_url='/oa/attendance/',
             extra_data={'status': status_val, 'date': str(today)},
         )
-        # 管理员上班打卡通知 - 通知部门负责人和所属企业超级管理员
+        # 迟到提醒：通知当前企业主部门的主负责人与副负责人
         if status_val == 'late':
             tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
-            if tenant:
-                from accounts.models import CustomUser
-                notified_ids = set()
+            dept, leaders = _primary_department_leaders(request.user, tenant)
+            dept_name = dept.name if dept else ''
+            for leader in leaders:
                 try:
-                    # 通知部门负责人：只取「当前激活企业下该用户的主部门」的负责人，
-                    # 避免把迟到消息发给该员工在其它企业/其它部门（含子公司）的负责人（多企业隔离）
-                    from org.models import UserDepartment
-                    mgr_rel = UserDepartment.objects.filter(
-                        user=request.user, is_primary=True, department__tenant=tenant
-                    ).select_related('department__manager').first()
-                    if mgr_rel is None:
-                        mgr_rel = UserDepartment.objects.filter(
-                            user=request.user, department__tenant=tenant
-                        ).select_related('department__manager').order_by('-is_primary', 'id').first()
-                    mgr = mgr_rel.department.manager if (mgr_rel and mgr_rel.department) else None
-                    if mgr and mgr.id not in notified_ids and mgr.id != request.user.id:
-                        notified_ids.add(mgr.id)
-                        dept_name = mgr_rel.department.name if mgr_rel.department else ''
-                        send_work_notification(
-                            user_id=mgr.id,
-                            title='迟到提醒',
-                            content=f'{request.user.real_name or request.user.username} 今日上班打卡迟到'
-                                    + (f'（部门：{dept_name}）' if dept_name else ''),
-                            notification_type='attendance',
-                            related_url='/oa/attendance/',
-                            extra_data={'user_id': request.user.id, 'status': 'late', 'date': str(today)},
-                        )
+                    send_work_notification(
+                        user_id=leader.id,
+                        title='迟到提醒',
+                        content=f'{request.user.real_name or request.user.username} 今日上班打卡迟到'
+                                + (f'（部门：{dept_name}）' if dept_name else ''),
+                        notification_type='attendance',
+                        related_url='/oa/attendance/',
+                        extra_data={'user_id': request.user.id, 'status': 'late', 'date': str(today)},
+                    )
                 except Exception as e:
-                    logger.warning(f'迟到提醒通知部门负责人失败: {e}')
-                # 通知企业超级管理员
-                # admins = CustomUser.objects.filter(
-                #     Q(user_type='super_admin') & Q(tenant_memberships__tenant=tenant, tenant_memberships__is_active=True)
-                # ).exclude(id=request.user.id).distinct()
-                # for admin in admins:
-                #     if admin.id not in notified_ids:
-                #         send_work_notification(
-                #             user_id=admin.id,
-                #             title='迟到提醒',
-                #             content=f'{request.user.real_name or request.user.username} 今日上班打卡迟到',
-                #             notification_type='attendance',
-                #             related_url='/oa/attendance/',
-                #             extra_data={'user_id': request.user.id, 'status': 'late', 'date': str(today)},
-                #         )
+                    logger.warning(f'迟到提醒通知部门负责人失败: {leader.id} {e}')
         data = AttendanceRecordSerializer(record, context={'request': request}).data
         return Response({'encrypt': True, 'data': encrypt_data(data)}, status=201)
 
@@ -681,10 +744,8 @@ class AttendanceViewSet(viewsets.ViewSet):
         today = now.date()
         # 检查考勤配置（含用户主部门）
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
-        from org.models import UserDepartment
-        primary_dept = UserDepartment.objects.filter(user=request.user, is_primary=True).select_related('department').first()
-        dept_id = primary_dept.department_id if primary_dept else None
-        config = self._get_attendance_config(tenant, dept_id, request.user)
+        dept_id = self._primary_department_id(request.user, tenant)
+        config = self._effective_attendance_config(tenant, dept_id, request.user)
         if config and not config.clock_out_enabled:
             return Response({'error': '该时段无需打卡（已配置为不打卡）', 'skip': True}, status=200)
         # 指定区域打卡：不在范围内（或拿不到定位）直接拒绝打卡
@@ -748,6 +809,25 @@ class AttendanceViewSet(viewsets.ViewSet):
             related_url='/oa/attendance/',
             extra_data={'status': status_val, 'date': str(today)},
         )
+        # 早退提醒：通知当前企业主部门的主负责人与副负责人（同一天只提醒一次，
+        # 下班卡允许重复打卡，避免每次早退打卡都重复通知）
+        if status_val == 'early_leave' and today_out_count == 0:
+            tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+            dept, leaders = _primary_department_leaders(request.user, tenant)
+            dept_name = dept.name if dept else ''
+            for leader in leaders:
+                try:
+                    send_work_notification(
+                        user_id=leader.id,
+                        title='早退提醒',
+                        content=f'{request.user.real_name or request.user.username} 今日下班打卡早退'
+                                + (f'（部门：{dept_name}）' if dept_name else ''),
+                        notification_type='attendance',
+                        related_url='/oa/attendance/',
+                        extra_data={'user_id': request.user.id, 'status': 'early_leave', 'date': str(today)},
+                    )
+                except Exception as e:
+                    logger.warning(f'早退提醒通知部门负责人失败: {leader.id} {e}')
         data = AttendanceRecordSerializer(record, context={'request': request}).data
         data['clock_out_count'] = today_out_count + 1
         data['clock_out_limit'] = out_limit
@@ -757,6 +837,15 @@ class AttendanceViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'])
     def makeup(self, request):
         """补卡：仅可补当月漏打的上班/下班卡，次数上限由考勤配置 makeup_allowance 控制"""
+        # 补卡只能操作本人考勤，管理员也不能代其他成员补卡
+        target_uid = request.data.get('user_id') or request.data.get('target_user_id')
+        if target_uid not in (None, ''):
+            try:
+                target_uid = int(target_uid)
+            except (TypeError, ValueError):
+                return Response({'error': '目标成员参数无效'}, status=400)
+            if target_uid != request.user.id:
+                return Response({'error': '只能为本人补卡，不能为其他成员操作'}, status=403)
         from datetime import datetime as dt_datetime, time as dt_time
         clock_type = request.data.get('clock_type', '')
         date_str = request.data.get('date', '')
@@ -774,10 +863,8 @@ class AttendanceViewSet(viewsets.ViewSet):
             return Response({'error': '仅支持补当月漏打的打卡记录'}, status=400)
 
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
-        from org.models import UserDepartment
-        primary_dept = UserDepartment.objects.filter(user=request.user, is_primary=True).select_related('department').first()
-        dept_id = primary_dept.department_id if primary_dept else None
-        config = self._get_attendance_config(tenant, dept_id, request.user)
+        dept_id = self._primary_department_id(request.user, tenant)
+        config = self._effective_attendance_config(tenant, dept_id, request.user)
         allowance = config.makeup_allowance if config and config.makeup_allowance is not None else 3
         if allowance <= 0:
             return Response({'error': '当前考勤未开启补卡功能（每月补卡次数为0）'}, status=400)
@@ -844,6 +931,14 @@ class AttendanceViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def appeal_status(self, request):
         """查询某日期某打卡时段是否已发起申诉/补卡审批（用于点击时提示，避免重复发起）。"""
+        target_uid = request.query_params.get('user_id')
+        if target_uid:
+            try:
+                target_uid = int(target_uid)
+            except (TypeError, ValueError):
+                return Response({'error': '目标成员参数无效'}, status=400)
+            if target_uid != request.user.id:
+                return Response({'error': '只能查看本人考勤的申诉状态'}, status=403)
         date_str = (request.query_params.get('date') or '').strip()
         clock_type = (request.query_params.get('clock_type') or 'day').strip() or 'day'
         try:
@@ -875,10 +970,8 @@ class AttendanceViewSet(viewsets.ViewSet):
         clock_out = records.filter(clock_type='clock_out').first()
         clock_out_count = records.filter(clock_type='clock_out').count()
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
-        from org.models import UserDepartment
-        primary_dept = UserDepartment.objects.filter(user=request.user, is_primary=True).select_related('department').first()
-        dept_id = primary_dept.department_id if primary_dept else None
-        config = self._get_attendance_config(tenant, dept_id, request.user)
+        dept_id = self._primary_department_id(request.user, tenant)
+        config = self._effective_attendance_config(tenant, dept_id, request.user)
         shift_type = config.shift_type if config else 'day'
         out_limit = config.clock_out_limit if config and config.clock_out_limit else 3
         if out_limit < 1:
@@ -1213,6 +1306,10 @@ class AttendanceViewSet(viewsets.ViewSet):
         except Exception:
             pass
 
+        # 目标成员生效考勤配置（用于判断当天下班时间是否已过、以及补卡时间提示）
+        _dept_id = self._primary_department_id(target_user, tenant)
+        _cfg = self._effective_attendance_config(tenant, _dept_id, target_user)
+
         # 构建每日状态
         result = []
         for d in range(1, days_in_month + 1):
@@ -1252,8 +1349,13 @@ class AttendanceViewSet(viewsets.ViewSet):
                     day_status = 'normal'
                     day_label = '正常'
             elif ci and not co:
-                day_status = 'miss_clock'
-                day_label = '缺卡'
+                # 未到下班时间（夜班为次日下班时间）不显示缺卡
+                if self._shift_end_passed(dt, _cfg, now):
+                    day_status = 'miss_clock'
+                    day_label = '缺卡'
+                else:
+                    day_status = 'none'
+                    day_label = ''
             elif not ci and dt < today:
                 day_status = 'absent'
                 day_label = '缺勤'
@@ -1276,10 +1378,6 @@ class AttendanceViewSet(viewsets.ViewSet):
             'rest': sum(1 for e in result if e['day_status'] == 'rest'),
         }
         # 目标成员生效考勤配置的打卡时间（补卡日历据此判断「今日」漏卡是否可补、并提示将按配置时间补卡）
-        from org.models import UserDepartment as _UD
-        _primary = _UD.objects.filter(user=target_user, is_primary=True).select_related('department').first()
-        _dept_id = _primary.department_id if _primary else None
-        _cfg = self._get_attendance_config(tenant, _dept_id, target_user)
         _cfg_time = {
             'clock_in': _cfg.clock_in_time.strftime('%H:%M') if _cfg and _cfg.clock_in_time else '09:00',
             'clock_out': _cfg.clock_out_time.strftime('%H:%M') if _cfg and _cfg.clock_out_time else '18:00',
@@ -1441,6 +1539,34 @@ class AttendanceViewSet(viewsets.ViewSet):
         """按优先级获取考勤配置：个人配置 > 部门配置 > 子企业配置 > 企业默认 > 父级回溯"""
         chain = self._attendance_config_chain(tenant, department_id, user)
         return chain[0][1] if chain else None
+
+    def _effective_attendance_config(self, tenant, department_id=None, user=None):
+        """按配置链逐字段解析生效值：个人 > 部门 > 子公司 > 企业默认 > 集团默认。
+
+        高优先级配置未填写某个时间字段（如个人配置只改了班次，未填上下班时间）时，
+        该字段继续向下一级配置取值，避免错误回退到硬编码的 09:00/18:00。
+        """
+        from types import SimpleNamespace
+        chain = self._attendance_config_chain(tenant, department_id, user)
+        if not chain:
+            return None
+
+        def pick(attr, default=None):
+            for _label, cfg in chain:
+                val = getattr(cfg, attr, None)
+                if val is not None:
+                    return val
+            return default
+
+        return SimpleNamespace(
+            clock_in_enabled=pick('clock_in_enabled', True),
+            clock_in_time=pick('clock_in_time'),
+            clock_out_enabled=pick('clock_out_enabled', True),
+            clock_out_time=pick('clock_out_time'),
+            shift_type=pick('shift_type', 'day'),
+            makeup_allowance=pick('makeup_allowance', 3),
+            clock_out_limit=pick('clock_out_limit', 3),
+        )
 
     def _group_default_config(self, tenant):
         """该企业所属「集团最顶层」的默认考勤配置（无父级时即自身默认）。
@@ -1747,16 +1873,22 @@ class AttendanceViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def resolve_my_config(self, request):
         """获取当前用户的考勤配置（按优先级解析）"""
-        from org.models import UserDepartment
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
-        primary_dept = UserDepartment.objects.filter(user=request.user, is_primary=True).select_related('department').first()
-        dept_id = primary_dept.department_id if primary_dept else None
+        dept_id = self._primary_department_id(request.user, tenant)
         config = self._get_attendance_config(tenant, dept_id, request.user)
-        # 返回配置和当前企业的默认时间
+        effective = self._effective_attendance_config(tenant, dept_id, request.user)
+        # 返回配置和当前企业的默认时间（附逐字段合并后的生效值，供前端展示）
         result = {
             'config': config,
             'default_clock_in_time': '09:00',
             'default_clock_out_time': '18:00',
+            'effective_clock_in_time': (
+                effective.clock_in_time.strftime('%H:%M')
+                if effective and effective.clock_in_time else '09:00'),
+            'effective_clock_out_time': (
+                effective.clock_out_time.strftime('%H:%M')
+                if effective and effective.clock_out_time else '18:00'),
+            'effective_shift_type': (effective.shift_type if effective else 'day'),
             'geo': self._my_geo_payload(tenant, dept_id, request.user),
         }
         if config:
@@ -1864,7 +1996,26 @@ class AttendanceViewSet(viewsets.ViewSet):
             'position': u.position or '',
             'department_name': dept_map.get(u.id) or '',
         } for u in qs]
-        return Response({'results': results})
+        # 本人信息单独返回：成员列表最多 100 条，本人不一定在结果中，
+        # 但日历“查看成员”下拉需要稳定展示本人的头像/职位/所属部门。
+        self_rel = UserDepartment.objects.filter(
+            user=request.user, is_primary=True).select_related('department').first()
+        self_dept_name = ''
+        if self_rel and self_rel.department:
+            self_dept_name = self_rel.department.name
+        elif getattr(request.user, 'department', None):
+            self_dept_name = request.user.department.name
+        return Response({
+            'results': results,
+            'self': {
+                'id': request.user.id,
+                'name': request.user.real_name or request.user.username,
+                'avatar': request.user.get_avatar_url()
+                if hasattr(request.user, 'get_avatar_url') else '',
+                'position': request.user.position or '',
+                'department_name': self_dept_name,
+            },
+        })
 
     @action(detail=False, methods=['get'])
     def user_attendance_configs(self, request):
@@ -2210,6 +2361,38 @@ class ApprovalViewSet(viewsets.ViewSet):
         except Exception:
             return False
 
+    def _todo_request_ids(self, user):
+        """「待我审批」：返回当前用户仍需处理的审批 ID 集合。
+
+        规则与审批操作权限保持一致：
+        - 顺序审批：只算当前节点（current_node_order）；并行审批：所有节点同时激活；
+        - 只统计自己仍有待审批/暂缓/办理中记录的节点；
+        - 节点已被他人完成（或签他人已通过、会签未轮到自己但节点已结束）时不再计入；
+        - 已通过/已驳回/已撤回的审批不计入。
+        """
+        assignees = ApprovalAssignee.objects.filter(
+            user=user, status__in=('pending', 'deferred', 'processing'),
+            node__request__status__in=('pending', 'deferred', 'processing'),
+        ).select_related('node', 'node__request').prefetch_related('node__assignees')
+
+        request_ids = set()
+        for asgn in assignees:
+            node = asgn.node
+            req = node.request
+            if req.approval_mode == 'sequential' and node.order != req.current_node_order:
+                continue
+            statuses = [a.status for a in node.assignees.all()]
+            if not statuses:
+                continue
+            if req.sign_type == 'orsign':
+                completed = ('approved' in statuses) or ('rejected' in statuses)
+            else:
+                completed = ('rejected' in statuses) or all(s == 'approved' for s in statuses)
+            if completed:
+                continue
+            request_ids.add(req.id)
+        return request_ids
+
     def list(self, request):
         user = request.user
         page = int(request.query_params.get('page', 1))
@@ -2321,12 +2504,9 @@ class ApprovalViewSet(viewsets.ViewSet):
                 pass
             qs = qs.filter(Q(id__in=cc_user_ids) | Q(id__in=cc_dept_ids))
         elif scope_filter == 'todo':
-            # 待我审批：我仍有未处理（待审批）的审批人节点（仅统计已到达/当前节点，排除顺序审批中尚未到达的后续节点）
-            todo_ids = ApprovalAssignee.objects.filter(
-                user=user, status='pending',
-                node__order__lte=models.F('node__request__current_node_order')
-            ).values_list('node__request_id', flat=True).distinct()
-            qs = qs.filter(id__in=todo_ids)
+            # 待我审批：自己仍有需要处理的节点（并行审批全部节点；顺序审批仅当前节点），
+            # 且该节点尚未被其他审批人完成（修复并行审批下 current_node_order=0 导致列表为空）
+            qs = qs.filter(id__in=self._todo_request_ids(user))
         elif scope_filter == 'done':
             # 我已审批：我已处理过（通过/驳回/暂缓/办理中）的审批人节点
             done_ids = ApprovalAssignee.objects.filter(
@@ -3394,6 +3574,34 @@ class ApprovalViewSet(viewsets.ViewSet):
         dept = getattr(user, 'department', None)
         return dept.id if dept else None
 
+    def _check_foreign_appeal_target(self, request, form_data):
+        """考勤申诉只能针对本人：拒绝任何指向其他成员的目标用户参数。"""
+        for raw in (
+            request.data.get('user_id'),
+            request.data.get('target_user_id'),
+            (form_data or {}).get('user_id'),
+            (form_data or {}).get('target_user_id'),
+        ):
+            if raw in (None, ''):
+                continue
+            try:
+                target_uid = int(raw)
+            except (TypeError, ValueError):
+                return '目标成员参数无效'
+            if target_uid != request.user.id:
+                return '只能为本人考勤发起申诉/补卡申请'
+        return None
+
+    def _resolve_sign_mode(self, tenant, approval_type, department_id,
+                           sign_type='countersign', approval_mode='sequential'):
+        """审批方式/模式以审批类型配置为准；未配置时沿用传入值（默认会签/顺序）。"""
+        config = self._get_config_for_tenant(
+            tenant, approval_type, department_id=department_id)
+        if config:
+            sign_type = config.default_sign_type or sign_type
+            approval_mode = config.default_approval_mode or approval_mode
+        return sign_type, approval_mode
+
     def _check_duplicate_attendance_appeal(self, user, validated_data, form_data):
         """同一日期 + 同一打卡时段只允许存在一条未驳回/未撤回的申诉/补卡申请。"""
         appeal_date = validated_data.get('start_date')
@@ -3464,22 +3672,21 @@ class ApprovalViewSet(viewsets.ViewSet):
         if _inv_err:
             return Response({'error': _inv_err}, status=400)
 
-        # 考勤申诉去重：同日期 + 同时段已发起且未驳回/撤回的申请不允许重复提交
+        # 考勤申诉：仅允许本人发起 + 同日期同时段去重
         if approval_type == 'attendance_appeal':
+            foreign_err = self._check_foreign_appeal_target(request, form_data)
+            if foreign_err:
+                return Response({'error': foreign_err}, status=403)
             dup_msg = self._check_duplicate_attendance_appeal(
                 request.user, serializer.validated_data, form_data)
             if dup_msg:
                 return Response({'error': dup_msg}, status=400)
 
-        # 审批方式/模式：考勤申诉由考勤页直接发起，统一读取该审批类型配置
-        sign_type = serializer.validated_data.get('sign_type', 'countersign')
-        approval_mode = serializer.validated_data.get('approval_mode', 'sequential')
-        if approval_type == 'attendance_appeal':
-            appeal_config = self._get_config_for_tenant(
-                tenant, approval_type, department_id=department_id)
-            if appeal_config:
-                sign_type = appeal_config.default_sign_type or sign_type
-                approval_mode = appeal_config.default_approval_mode or approval_mode
+        # 审批方式/模式统一读取审批类型配置（无配置时沿用默认/传入值）
+        sign_type, approval_mode = self._resolve_sign_mode(
+            tenant, approval_type, department_id,
+            serializer.validated_data.get('sign_type', 'countersign'),
+            serializer.validated_data.get('approval_mode', 'sequential'))
 
         # 审批人自动根据所选部门和审批类型生成
         approver_nodes = serializer.validated_data.get('approver_nodes', [])
@@ -3655,7 +3862,7 @@ class ApprovalViewSet(viewsets.ViewSet):
                 approval.current_node_order = 1
                 approval.save()
 
-        # 通知审批人（顺序审批仅通知第一个节点）
+        # 通知审批人：顺序审批仅通知第一个节点（后续节点推进时再通知）；并行审批全部节点同时通知
         from accounts.models import CustomUser
         assignee_qs = ApprovalAssignee.objects.filter(node__request=approval, status='pending')
         if approval.approval_mode == 'sequential':
@@ -4217,14 +4424,25 @@ class ApprovalViewSet(viewsets.ViewSet):
         return all_approvers
 
     def _check_user_can_approve(self, approval, user):
-        """检查用户是否有权限审批当前节点（待审批/暂缓/办理中均可操作）"""
+        """检查用户是否有权限审批当前可操作节点（待审批/暂缓/办理中均可操作）。
+
+        并行/或签场景下，某节点可能已被其他审批人完成，此时该节点剩余审批人
+        不允许再操作；只对「尚未完成且自己仍有待处理记录」的节点放行。
+        """
         if approval.approval_mode == 'sequential':
             nodes = approval.approval_nodes.filter(order=approval.current_node_order)
         else:
             nodes = approval.approval_nodes.all()
-        return ApprovalAssignee.objects.filter(
-            node__in=nodes, user=user, status__in=('pending', 'deferred', 'processing')
-        ).exists()
+        for node in nodes:
+            completed, _result = self._check_node_completed(node)
+            if completed:
+                continue
+            if ApprovalAssignee.objects.filter(
+                node=node, user=user,
+                status__in=('pending', 'deferred', 'processing')
+            ).exists():
+                return True
+        return False
 
     def _check_user_can_view(self, approval, user):
         """检查用户是否有权限查看审批（不限制审批状态）"""
@@ -4249,6 +4467,7 @@ class ApprovalViewSet(viewsets.ViewSet):
         if not assignee:
             return False
         if approval.approval_mode == 'parallel':
+            # 并行审批：全部节点同时激活，审批人可查看
             return True
         if approval.status == 'approved':
             return True
@@ -4297,6 +4516,12 @@ class ApprovalViewSet(viewsets.ViewSet):
             attachments=attachments or [],
             signature=signature or '',
         )
+
+        # 任何审批操作都应刷新审批主记录的更新时间。
+        # 并行/会签下节点尚未全部完成时不一定触发 approval.save()，
+        # 这里显式写入，避免 updated_at 停留在审批发起时间。
+        approval.updated_at = now
+        ApprovalRequest.objects.filter(pk=approval.pk).update(updated_at=now)
 
         return True
 
@@ -4461,11 +4686,8 @@ class ApprovalViewSet(viewsets.ViewSet):
 
         # 复用考勤配置解析（个人 > 部门 > 子公司 > 企业）
         try:
-            from org.models import UserDepartment
-            primary = UserDepartment.objects.filter(
-                user=target_user, is_primary=True).select_related('department').first()
-            dept_id = primary.department_id if primary else None
-            config = AttendanceViewSet()._get_attendance_config(tenant, dept_id, target_user)
+            dept_id = AttendanceViewSet()._primary_department_id(target_user, tenant)
+            config = AttendanceViewSet()._effective_attendance_config(tenant, dept_id, target_user)
         except Exception:
             config = None
         cfg_in = config.clock_in_time if config and config.clock_in_time else _t(9, 0)
@@ -4541,6 +4763,10 @@ class ApprovalViewSet(viewsets.ViewSet):
 
             processed = False
             for node in nodes:
+                # 已完成节点（或签已被他人完成/会签已全部通过）不再接受操作
+                completed, _ = self._check_node_completed(node)
+                if completed:
+                    continue
                 if self._process_node_approval(approval, node, 'approve', request.user, comment, attachments, signature):
                     processed = True
                     break
@@ -4548,33 +4774,40 @@ class ApprovalViewSet(viewsets.ViewSet):
             if not processed:
                 return Response({'error': '您已审批过，无需重复操作'}, status=400)
 
-            # 检查当前节点是否完成
+            # 顺序审批：当前节点完成后推进到下一个未完成节点（自动跳过空节点/已完成节点）
+            if approval.approval_mode == 'sequential':
+                while True:
+                    current_node = approval.approval_nodes.filter(
+                        order=approval.current_node_order).first()
+                    if not current_node:
+                        break
+                    completed, _ = self._check_node_completed(current_node)
+                    if not completed:
+                        break
+                    next_order = approval.current_node_order + 1
+                    if not approval.approval_nodes.filter(order=next_order).exists():
+                        break
+                    approval.current_node_order = next_order
+                    approval.save(update_fields=['current_node_order', 'updated_at'])
+
+            # 重新检查全部节点，决定审批整体是否完成
             all_finished = True
-            for node in nodes:
-                completed, result = self._check_node_completed(node)
+            for node in approval.approval_nodes.all():
+                completed, _ = self._check_node_completed(node)
                 if not completed:
                     all_finished = False
-                if completed and approval.approval_mode == 'sequential':
-                    # 顺序审批：进入下一节点
-                    next_order = approval.current_node_order + 1
-                    if approval.approval_nodes.filter(order=next_order).exists():
-                        approval.current_node_order = next_order
-                        approval.save()
                     break
 
             if all_finished:
-                # 所有相关节点完成：调用收尾逻辑（通过/驳回/仍有未完成节点则保持待审批）
+                # 所有节点完成：调用收尾逻辑
                 finished = self._finalize_approval(approval)
-                if not finished:
-                    # 节点完成但整体审批未完成（如还有后续节点/并行未完成）→ 恢复待审批
-                    if approval.status in ('deferred', 'processing'):
-                        approval.status = 'pending'
-                        approval.save(update_fields=['status'])
-            else:
-                # 当前节点通过但还有待审批的节点/审批人 → 恢复待审批
-                if approval.status in ('deferred', 'processing'):
+                if not finished and approval.status in ('deferred', 'processing'):
                     approval.status = 'pending'
-                    approval.save(update_fields=['status'])
+                    approval.save(update_fields=['status', 'updated_at'])
+            elif approval.status in ('deferred', 'processing'):
+                # 当前节点通过但还有待审批的节点/审批人 → 恢复待审批
+                approval.status = 'pending'
+                approval.save(update_fields=['status', 'updated_at'])
 
         # 通知申请人
         timestamp = timezone.localtime(timezone.now()).strftime('%m-%d %H:%M')
@@ -4685,6 +4918,9 @@ class ApprovalViewSet(viewsets.ViewSet):
             processed = False
             rejected_node_order = None
             for node in nodes:
+                completed, _ = self._check_node_completed(node)
+                if completed:
+                    continue
                 if self._process_node_approval(approval, node, 'reject', request.user, comment, attachments, signature):
                     processed = True
                     rejected_node_order = node.order
@@ -4732,6 +4968,10 @@ class ApprovalViewSet(viewsets.ViewSet):
         except ApprovalRequest.DoesNotExist:
             return Response({'error': '审批不存在'}, status=404)
 
+        # 已通过/已驳回/已撤回的审批不允许再被其它并行审批人改成暂缓/办理中
+        if approval.status not in ('pending', 'deferred', 'processing'):
+            return Response({'error': '该审批已处理'}, status=400)
+
         can_approve = self._check_user_can_approve(approval, request.user)
         if not can_approve:
             return Response({'error': '您不在当前审批节点中'}, status=403)
@@ -4750,6 +4990,9 @@ class ApprovalViewSet(viewsets.ViewSet):
 
             processed = False
             for node in nodes:
+                completed, _ = self._check_node_completed(node)
+                if completed:
+                    continue
                 if self._process_node_approval(approval, node, action, request.user, comment, attachments, signature):
                     processed = True
                     break
@@ -4760,7 +5003,7 @@ class ApprovalViewSet(viewsets.ViewSet):
             # 更新审批整体状态为暂缓/办理中
             if action in ('deferred', 'processing'):
                 approval.status = action
-                approval.save(update_fields=['status'])
+                approval.save(update_fields=['status', 'updated_at'])
 
         # 通知申请人
         timestamp = timezone.localtime(timezone.now()).strftime('%m-%d %H:%M')
@@ -4811,6 +5054,10 @@ class ApprovalViewSet(viewsets.ViewSet):
             if fd_pm:
                 _pm = fd_pm
         payment_method = self._resolve_payment_method_for_draft(request.user, _pm, approval_type) if isinstance(_pm, dict) and _pm.get('type') else {}
+        sign_type, approval_mode = self._resolve_sign_mode(
+            tenant, approval_type, getattr(department, 'id', None),
+            serializer.validated_data.get('sign_type', 'countersign'),
+            serializer.validated_data.get('approval_mode', 'sequential'))
         approval = ApprovalRequest.objects.create(
             applicant=request.user,
             tenant=tenant,
@@ -4833,8 +5080,8 @@ class ApprovalViewSet(viewsets.ViewSet):
             trip_data=serializer.validated_data.get('trip_data', {}) or {},
             payment_method=payment_method,
             form_data=form_data,
-            sign_type=serializer.validated_data.get('sign_type', 'countersign'),
-            approval_mode=serializer.validated_data.get('approval_mode', 'sequential'),
+            sign_type=sign_type,
+            approval_mode=approval_mode,
         )
         # 保存审批人节点（草稿也保留配置）
         approver_nodes = serializer.validated_data.get('approver_nodes', [])
@@ -5003,6 +5250,12 @@ class ApprovalViewSet(viewsets.ViewSet):
             val = serializer.validated_data.get(field)
             if val is not None:
                 setattr(approval, field, val)
+        # 审批方式/模式始终以当前审批类型配置为准
+        approval.sign_type, approval.approval_mode = self._resolve_sign_mode(
+            request.tenant or request.user.get_active_tenant(),
+            approval.approval_type, approval.department_id,
+            approval.sign_type or 'countersign',
+            approval.approval_mode or 'sequential')
         if serializer.validated_data.get('attachments') is not None:
             approval.attachments = serializer.validated_data['attachments']
         if serializer.validated_data.get('recruit_data') is not None:
@@ -5143,6 +5396,15 @@ class ApprovalViewSet(viewsets.ViewSet):
                     pass
         # 若配置了最终审批人，标记对应节点
         self._mark_final_approver_node(approval, request)
+        # 审批链可能因配置/审批人变化而改变：驳回节点不存在或已无审批人时，
+        # 不能直接跳到该节点（否则无人可审、审批卡死），回退为从第一节点重新审批。
+        if resume_order:
+            resume_node = approval.approval_nodes.filter(order=resume_order).first()
+            if not resume_node or not resume_node.assignees.exists():
+                logger.warning(
+                    f'驳回节点无法续审，重新从第一节点开始: approval={approval.id} '
+                    f'resume_order={resume_order}')
+                resume_order = None
         # 被驳回后重新提交：从驳回节点继续审批，之前已通过的节点不再重新审批。
         # - 直接重新提交（未存草稿）：当前链中驳回节点之前的已通过节点仍在，校验审批人一致后保持通过；
         # - 驳回→存草稿→再提交：update_draft 已重建审批链并清空状态，此时顺序审批下驳回节点之前的节点必然已通过，直接保持通过。
@@ -5190,7 +5452,7 @@ class ApprovalViewSet(viewsets.ViewSet):
             comment='重新提交审批申请',
         )
 
-        # 通知审批人（顺序审批仅通知当前活动节点；被驳回后继续审批时即驳回节点）
+        # 通知审批人：顺序审批仅通知当前活动节点（被驳回后继续审批时即驳回节点）；并行审批全部节点
         from accounts.models import CustomUser, Department
         assignee_qs = ApprovalAssignee.objects.filter(node__request=approval, status='pending')
         if approval.approval_mode == 'sequential':
@@ -5308,6 +5570,12 @@ class ApprovalViewSet(viewsets.ViewSet):
         _inv_err = self._check_invoice_count(approval.approval_type, _tobj, request.tenant, form_data)
         if _inv_err:
             return Response({'error': _inv_err}, status=400)
+        # 审批方式/模式始终以当前审批类型配置为准
+        approval.sign_type, approval.approval_mode = self._resolve_sign_mode(
+            request.tenant or request.user.get_active_tenant(),
+            approval.approval_type, approval.department_id,
+            approval.sign_type or 'countersign',
+            approval.approval_mode or 'sequential')
         # 重新编辑时保存为草稿
         if approval.status in ('cancelled', 'rejected'):
             approval.status = 'draft'
@@ -6397,12 +6665,9 @@ class ApprovalViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def my_pending(self, request):
-        """获取当前用户待审批的列表"""
-        assignee_ids = ApprovalAssignee.objects.filter(
-            user=request.user, status='pending'
-        ).values_list('node__request_id', flat=True).distinct()
+        """获取当前用户待审批的列表（与「待我审批」筛选规则一致）"""
         qs = ApprovalRequest.objects.filter(
-            id__in=assignee_ids, status='pending'
+            id__in=self._todo_request_ids(request.user), status='pending'
         ).select_related('applicant').order_by('-created_at')
         results = ApprovalListSerializer(qs, many=True, context={'request': request}).data
         return Response({'results': results, 'count': len(results)})
@@ -7730,52 +7995,26 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
         return False
 
     def _notify_summary_managers(self, s):
-        """总结提交后，通知提交人所在部门（含向上最近一级）的主负责人与副负责人"""
-        try:
-            from org.models import UserDepartment
-            from accounts.models import Department, CustomUser
-        except Exception:
-            return
-        try:
-            user = s.user
-            dept_ids = list(UserDepartment.objects.filter(user=user).values_list('department_id', flat=True))
-            if not dept_ids and user.department_id:
-                dept_ids = [user.department_id]
-            if not dept_ids:
-                return
-            leader_ids = set()
-            dept_map = {d.id: d for d in Department.objects.filter(id__in=dept_ids)}
-            for did in dept_ids:
-                cur = dept_map.get(did)
-                seen_cycle = set()
-                while cur and cur.id not in seen_cycle:
-                    seen_cycle.add(cur.id)
-                    if cur.manager_id or cur.deputy_managers.exists():
-                        if cur.manager_id:
-                            leader_ids.add(cur.manager_id)
-                        leader_ids.update(cur.deputy_managers.all().values_list('id', flat=True))
-                        break
-                    cur = cur.parent
-            leader_ids.discard(user.id)
-        except Exception:
-            return
-        if not leader_ids:
-            return
-        recipients = list(CustomUser.objects.filter(id__in=leader_ids, is_active=True).values_list('id', flat=True))
-        if not recipients:
+        """总结提交后，通知提交人当前企业主部门的主负责人与副负责人"""
+        user = s.user
+        tenant = s.tenant or user.get_active_tenant()
+        dept, leaders = _primary_department_leaders(user, tenant)
+        if not leaders:
             return
         name = user.real_name or user.username
         url = f'/oa/work-summary/?id={s.id}'
-        for mid in recipients:
+        dept_part = f'（部门：{dept.name}）' if dept else ''
+        for leader in leaders:
             try:
                 send_work_notification(
-                    user_id=mid, title='每日工作总结',
-                    content=f'{name} 提交了 {s.summary_date} 的每日工作总结',
+                    user_id=leader.id, title='每日工作总结',
+                    content=f'{name} 提交了 {s.summary_date} 的每日工作总结{dept_part}',
                     notification_type='work_summary', related_url=url,
                     extra_data={'summary_id': s.id, 'summary_date': str(s.summary_date),
-                                'submitter': user.id, 'kind': 'submit'})
-            except Exception:
-                continue
+                                'submitter': user.id, 'kind': 'submit',
+                                'department_id': dept.id if dept else None})
+            except Exception as e:
+                logger.warning(f'每日工作总结通知部门负责人失败: {leader.id} {e}')
 
     @action(detail=True, methods=['post', 'delete'])
     def like(self, request, pk=None):

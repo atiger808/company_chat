@@ -5292,6 +5292,23 @@ class ApprovalApp {
             if (d.approval_mode === 'sequential') modeLabel += ' · 顺序审批';
             else modeLabel += ' · 并行审批';
 
+            // 审批方式/模式醒目提示：避免审批人误以为所有审批都是顺序审批
+            var modeDescMap = {
+                'countersign-sequential': '按节点依次审批：每个节点的全部审批人都通过后，才进入下一节点；任一节点有人驳回则整体驳回。',
+                'countersign-parallel': '所有节点同时进行：每个节点需该节点全部审批人通过，全部节点完成后审批结束。',
+                'orsign-sequential': '按节点依次审批：每个节点任一审批人通过即进入下一节点；任一节点有人驳回则整体驳回。',
+                'orsign-parallel': '所有节点同时进行：每个节点任一审批人通过即完成，全部节点完成后审批结束。'
+            };
+            var modeKey = (d.sign_type === 'countersign' ? 'countersign' : 'orsign') + '-'
+                + (d.approval_mode === 'sequential' ? 'sequential' : 'parallel');
+            var modeColor = d.approval_mode === 'parallel' ? '#9b59b6' : '#409eff';
+            var modeBanner = '<div style="display:flex;align-items:flex-start;gap:10px;padding:12px 14px;background:linear-gradient(90deg,#ecf5ff,#f0f9eb);border:1px solid #c6e2ff;border-left:4px solid ' + modeColor + ';border-radius:8px;margin-bottom:12px;">'
+                + '<i class="fas fa-sitemap" style="color:' + modeColor + ';font-size:16px;margin-top:2px;flex-shrink:0;"></i>'
+                + '<div style="flex:1;min-width:0;">'
+                + '<div style="font-size:14px;font-weight:700;color:#303133;margin-bottom:2px;">当前审批方式：' + modeLabel + '</div>'
+                + '<div style="font-size:12.5px;color:#606266;line-height:1.7;">' + (modeDescMap[modeKey] || '') + '</div>'
+                + '</div></div>';
+
             // 已撤回的审批在顶部给出醒目提示（从工作通知/聊天跳转过来时尤其重要）
             var cancelledBanner = d.status === 'cancelled'
                 ? '<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:#fdf0ef;border:1px solid #f8d0cd;border-radius:8px;color:#c0392b;font-size:13px;margin-bottom:12px;"><i class="fas fa-ban" style="flex-shrink:0;"></i> <span>该审批已被发起人撤回（撤销），无需继续处理。</span></div>'
@@ -5329,7 +5346,7 @@ class ApprovalApp {
                     + '如需保留请在到期前修改并重新提交。</span></div>'
                 : '';
 
-            let html = cancelledBanner + archivedBanner + lifecycleBanner + idBanner + '<div class="detail-grid">'
+            let html = modeBanner + cancelledBanner + archivedBanner + lifecycleBanner + idBanner + '<div class="detail-grid">'
                 + '<div class="detail-item" style="grid-column:1/-1;"><label><i class="fas fa-user-circle" style="color:var(--primary-color,#409eff);"></i> 申请人</label><span style="display:flex;align-items:center;gap:8px;"><img src="' + (d.applicant_avatar || defAv) + '" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">' + (d.applicant === currentUserId ? '我' : this._escape(d.applicant_name || '')) + '</span></div>'
                 + '<div class="detail-item"><label><i class="fas fa-tag" style="color:#409eff;"></i> 审批标题</label><span>' + this._escape(d.title) + '</span></div>'
                 + '<div class="detail-item"><label><i class="fas fa-list" style="color:#67c23a;"></i> 审批类型</label><span><span class="type-icon-badge type-' + d.approval_type + '" style="background:' + this._hexA((d.approval_type_color || this._getTypeColor(d.approval_type)), 0.14) + ';color:' + (d.approval_type_color || this._getTypeColor(d.approval_type)) + ';"><i class="fas ' + (d.approval_type_icon || this._getTypeIcon(d.approval_type)) + '"></i> ' + this._escape(d.approval_type_name || d.approval_type_display || d.approval_type) + '</span></span></div>'
@@ -5571,7 +5588,9 @@ class ApprovalApp {
                     var icon = isFinal ? 'fa-user-shield' : (node.node_type === 'department' ? 'fa-building' : (node.node_type === 'initiator' ? 'fa-play-circle' : 'fa-user-check'));
                     var label = node.user_name || node.department_name || ('节点' + (ni + 1));
                     if (node.user_name && node.user_position) label += ', ' + node.user_position;
-                    var typeLabel = isFinal ? '最终审批人' : (node.node_type === 'department' ? '部门审批' : (node.node_type === 'initiator' ? '发起人' : (ni === 0 ? '直属上级' : '上级审批')));
+                    var typeLabel = isFinal
+                        ? '最终审批人'
+                        : (node.node_type === 'department' ? '部门审批' : (node.node_type === 'initiator' ? '发起人' : (ni === 0 ? '直属上级' : '上级审批')));
                     var borderColor = isFinal ? '#9b59b6' : (node.node_type === 'initiator' ? 'var(--primary-color,#409eff)' : '#67c23a');
                     var iconColor = isFinal ? '#9b59b6' : (node.node_type === 'initiator' ? 'var(--primary-color,#409eff)' : '#67c23a');
                     var badgeBg = isFinal ? '#f3e8ff' : '#fff';
@@ -5589,7 +5608,7 @@ class ApprovalApp {
                             + '<img src="' + av + '" style="width:28px;height:28px;border-radius:50%;object-fit:cover;">'
                             + '<span style="flex:1;font-size:13px;">' + (as.user === currentUserId ? '我' : (as.user_name || '')) + (as.user_position ? '<span style="font-size:11px;color:#909399;margin-left:4px;">' + as.user_position + '</span>' : '') + (as.user_department ? '<span style="font-size:11px;color:#a0a0a0;margin-left:4px;">(' + approvalApp._escape(as.user_department) + ')</span>' : '') + '</span>'
                             + '<span class="' + stCls + '" style="font-size:11px;">' + stTxt + '</span>'
-                            + (as.comment ? '<span style="font-size:12px;color:var(--text-light);">: ' + as.comment + '</span>' : '')
+                            + (as.comment ? '<span style="flex:1;font-size:12px;color:var(--text-light);">: ' + as.comment + '</span>' : '')
                             // 发起人查看自己发起的审批时，对"待审批且节点已到达"的审批人提供"发送私聊"提醒
                             + (d.applicant === currentUserId && d.status === 'pending' && as.status === 'pending' && as.user !== currentUserId
                                 && (d.approval_mode === 'parallel' || node.order <= (d.current_node_order || 0) || node.node_type === 'initiator')
@@ -5678,10 +5697,8 @@ class ApprovalApp {
                 subEl.textContent = titleText.length > 30 ? titleText.substring(0, 27) + '...' : titleText;
             }
 
-            // 权限判断
-            var userType = localStorage.getItem('user_type');
+            // 权限判断：仅当前到达节点的审批人可操作（超管不因身份获得审批按钮）
             var isApplicant = d.applicant === currentUserId;
-            var isSuperAdmin = userType === 'super_admin';
             var isApprover = false;
             var isActiveApprover = false;
             if (d.approval_nodes) {
@@ -5692,9 +5709,13 @@ class ApprovalApp {
                     var isNodeActive = (d.approval_mode !== 'sequential') || (node.order === d.current_node_order);
                     if (node.assignees) {
                         for (var ai = 0; ai < node.assignees.length; ai++) {
-                            if (node.assignees[ai].user === currentUserId) {
+                            var asg = node.assignees[ai];
+                            if (asg.user === currentUserId) {
                                 isApprover = true;
-                                if (isNodeActive) isActiveApprover = true;
+                                // 仅待审批/暂缓/办理中的节点审批人可操作（已通过/驳回不显示）
+                                if (isNodeActive && (asg.status === 'pending' || asg.status === 'deferred' || asg.status === 'processing')) {
+                                    isActiveApprover = true;
+                                }
                                 break;
                             }
                         }
@@ -5706,7 +5727,7 @@ class ApprovalApp {
             const footer = detailContainer ? detailContainer.querySelector('.modal-footer') : null;
             if (d.status === 'pending') {
                 var btns = '';
-                if (isActiveApprover || isSuperAdmin) {
+                if (isActiveApprover) {
                     btns += '<button class="btn btn-primary" onclick="approvalApp._openActionModal(' + d.id + ',\'approve\',\'审批通过\')"><i class="fas fa-check"></i> 通过</button>'
                         + ' <button class="btn btn-danger" onclick="approvalApp._openActionModal(' + d.id + ',\'reject\',\'驳回审批\')"><i class="fas fa-times"></i> 驳回</button>'
                         + ' <button class="btn btn-secondary" onclick="approvalApp._openActionModal(' + d.id + ',\'deferred\',\'暂缓审批\')" style="border-color:#e6a23c;color:#e67e22;"><i class="fas fa-pause-circle"></i> 暂缓</button>'
@@ -5727,7 +5748,7 @@ class ApprovalApp {
                 footer.innerHTML = btns;
             } else if (d.status === 'deferred' || d.status === 'processing') {
                 var btns = '';
-                if (isActiveApprover || isSuperAdmin) {
+                if (isActiveApprover) {
                     btns += '<button class="btn btn-primary" onclick="approvalApp._openActionModal(' + d.id + ',\'approve\',\'审批通过\')"><i class="fas fa-check"></i> 通过</button>'
                         + ' <button class="btn btn-danger" onclick="approvalApp._openActionModal(' + d.id + ',\'reject\',\'驳回审批\')"><i class="fas fa-times"></i> 驳回</button>'
                         + ' <button class="btn btn-secondary" onclick="approvalApp._openActionModal(' + d.id + ',\'deferred\',\'暂缓审批\')" style="border-color:#e6a23c;color:#e67e22;"><i class="fas fa-pause-circle"></i> 暂缓</button>'

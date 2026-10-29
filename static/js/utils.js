@@ -174,6 +174,7 @@ class Utils {
         'image/dng',
         'application/pdf',
         'text/plain',
+        'text/html',
         'application/vnd.ms-excel',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
         'text/csv',
@@ -202,6 +203,9 @@ class Utils {
         return allowedTypes.includes(file.type) ||
             file.name.toLowerCase().endsWith('.pdf') ||
             file.name.toLowerCase().endsWith('.txt') ||
+            file.name.toLowerCase().endsWith('.html') ||
+            file.name.toLowerCase().endsWith('.js') ||
+            file.name.toLowerCase().endsWith('.py') ||
             file.name.toLowerCase().endsWith('.xls') ||
             file.name.toLowerCase().endsWith('.xlsx') ||
             file.name.toLowerCase().endsWith('.doc') ||

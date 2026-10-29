@@ -557,24 +557,17 @@ class AdminConsole {
             select.appendChild(firstOpt);
 
             if (tenantId) {
-                // 选择了企业 → 加载该企业的组织架构部门
-                var tenantName = '';
-                var tenantSelect = document.getElementById(selectId === 'newDepartment' ? 'newTenant' : 'editTenant');
-                if (tenantSelect && tenantSelect._tenantData) {
-                    for (var ti = 0; ti < tenantSelect._tenantData.length; ti++) {
-                        if (tenantSelect._tenantData[ti].id == tenantId) {
-                            tenantName = tenantSelect._tenantData[ti].short_name || tenantSelect._tenantData[ti].name;
-                            break;
-                        }
-                    }
-                }
+                // 选择了企业 → 加载该企业的组织架构部门（排除隐藏部门）
                 try {
-                    var orgResp = await fetch('/api/org/departments/?tenant_id=' + tenantId, {
+                    // 管理控制台选择部门时不得出现「隐藏」可见范围的部门
+                    var orgResp = await fetch('/api/org/departments/?tenant_id=' + tenantId + '&exclude_hidden=1', {
                         headers: TokenManager.getHeaders()
                     });
                     if (orgResp.ok) {
                         var orgData = await orgResp.json();
-                        var orgDepts = orgData.results || orgData || [];
+                        var orgDepts = (orgData.results || orgData || []).filter(function (d) {
+                            return d.visibility !== 'hidden';
+                        });
                         // Build tree: group by parent
                         var byParent = {};
                         orgDepts.forEach(function(d) {
@@ -588,6 +581,7 @@ class AdminConsole {
                                 var opt = document.createElement('option');
                                 opt.value = 'org:' + d.id;
                                 opt.setAttribute('data-dept-id', d.id);
+                                opt.dataset.name = d.name;
                                 var prefix = '';
                                 for (var k = 0; k < depth; k++) prefix += '— ';
                                 opt.textContent = (depth > 0 ? prefix : '') + d.name;
@@ -598,13 +592,6 @@ class AdminConsole {
                         appendChildren('root', 0);
                     }
                 } catch (e) { console.error('加载组织部门失败:', e); }
-
-                var hint = document.createElement('div');
-                hint.className = 'tenant-dept-hint';
-                hint.style.cssText = 'font-size:12px;color:var(--text-light,#909399);padding:4px 0 0;';
-                // hint.textContent = '已选择企业「' + tenantName + '」，用户将自动加入该企业';
-                hint.innerHTML = `<i class="fas fa-info-circle"></i> 已选择企业「${tenantName}」，用户将自动加入该企业`
-                parent.appendChild(hint);
             } else {
                 // 未选择企业 → 只加载没有所属企业的部门
                 try {
@@ -623,8 +610,69 @@ class AdminConsole {
                 } catch (e) { console.error('加载部门失败:', e); }
             }
 
+            // 部门选择提示：已选部门将自动设为主部门
+            if (!select._deptHintBound) {
+                select._deptHintBound = true;
+                select.addEventListener('change', () => this.updateDepartmentHint(selectId));
+            }
+            this.updateDepartmentHint(selectId);
+
         } catch (error) {
             console.error('加载部门失败:', error);
+        }
+    }
+
+    /** 显示「已选择企业」提示 */
+    updateTenantHint(prefix) {
+        var sel = document.getElementById(prefix + 'Tenant');
+        var hintId = prefix === 'new' ? 'createTenantHint' : 'editTenantHint';
+        var hint = document.getElementById(hintId);
+        if (!sel || !hint) return;
+        var name = '';
+        if (sel.value) {
+            var opt = sel.options[sel.selectedIndex];
+            if (opt) name = opt.textContent.trim();
+            if (!name && sel._tenantData) {
+                for (var i = 0; i < sel._tenantData.length; i++) {
+                    if (String(sel._tenantData[i].id) === String(sel.value)) {
+                        name = sel._tenantData[i].short_name || sel._tenantData[i].name;
+                        break;
+                    }
+                }
+            }
+        }
+        if (name) {
+            hint.innerHTML = '<i class="fas fa-info-circle"></i> 已选择企业「' + this.escapeHtml(name) + '」，用户将自动加入该企业';
+            hint.style.display = 'block';
+        } else {
+            hint.style.display = 'none';
+        }
+    }
+
+    /** 显示「已选择部门」提示（自动设为主部门） */
+    updateDepartmentHint(selectId) {
+        var select = document.getElementById(selectId);
+        if (!select || !select.parentNode || !select.parentNode.parentNode) return;
+        var parent = select.parentNode.parentNode;
+        var hint = parent.querySelector('.dept-selected-hint');
+        if (!hint) {
+            hint = document.createElement('small');
+            hint.className = 'form-hint dept-selected-hint';
+            hint.style.cssText = 'display:none;margin-top:4px;';
+            parent.appendChild(hint);
+        }
+        var name = '';
+        if (select.value) {
+            var opt = select.options[select.selectedIndex];
+            if (opt) {
+                name = opt.dataset.name || opt.textContent.replace(/^(—\s*)+/, '').trim();
+            }
+        }
+        if (name) {
+            hint.innerHTML = '<i class="fas fa-info-circle"></i> 已选择部门「' + this.escapeHtml(name) + '」，自动将该部门设为用户的主部门';
+            hint.style.display = 'block';
+        } else {
+            hint.style.display = 'none';
         }
     }
 
@@ -1233,6 +1281,7 @@ class AdminConsole {
                     deptSelect.value = this.currentUser.department_info.name;
                 }
             }
+            this.updateDepartmentHint('newDepartment');
         }
 
 
@@ -1243,6 +1292,7 @@ class AdminConsole {
             await this._loadTenantsSelect(tenantSelect);
             var tenantGroup = document.getElementById('createTenantGroup');
             if (tenantGroup) tenantGroup.style.display = this.isSuperAdmin ? '' : 'none';
+            this.updateTenantHint('new');
         }
 
         // 加载所有用户用于好友分配
@@ -1389,7 +1439,7 @@ class AdminConsole {
                     await fetch(addUrl, {
                         method: 'POST',
                         headers: TokenManager.getHeaders(),
-                        body: JSON.stringify({ user_ids: [newUser.id] })
+                        body: JSON.stringify({ user_ids: [newUser.id], set_primary: true })
                     });
                 } catch (e) {
                     console.error('分配组织部门失败:', e);
@@ -1503,7 +1553,7 @@ class AdminConsole {
                     await fetch(addUrl, {
                         method: 'POST',
                         headers: TokenManager.getHeaders(),
-                        body: JSON.stringify({ user_ids: [userId] })
+                        body: JSON.stringify({ user_ids: [userId], set_primary: true })
                     });
                 } catch (e) {
                     console.error('分配组织部门失败:', e);
@@ -1848,6 +1898,7 @@ class AdminConsole {
                 }
                 var editTenantGroup = document.getElementById('editTenantGroup');
                 if (editTenantGroup) editTenantGroup.style.display = this.isSuperAdmin ? '' : 'none';
+                this.updateTenantHint('edit');
             }
 
             if (!this.isSuperAdmin) {
@@ -2968,6 +3019,7 @@ class AdminConsole {
     onTenantChange(prefix) {
         var tenantId = document.getElementById(prefix + 'Tenant').value;
         var deptSelectId = prefix === 'new' ? 'newDepartment' : 'editDepartment';
+        this.updateTenantHint(prefix);
         this.loadDepartments(deptSelectId, null, tenantId || null);
     }
 

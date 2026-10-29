@@ -3646,6 +3646,76 @@ class ChatClient {
         }
     }
 
+    // 支持把本地文件/图片拖拽到聊天区域（含输入框）直接发送
+    setupDragDropUpload() {
+        const chatMain = document.querySelector('.chat-main');
+        const overlay = document.getElementById('chatDropOverlay');
+        if (!chatMain || !overlay) return;
+
+        let dragDepth = 0;
+
+        const isFileDrag = (e) => {
+            const dt = e.dataTransfer;
+            if (!dt) return false;
+            const types = dt.types || [];
+            for (let i = 0; i < types.length; i++) {
+                if (types[i] === 'Files') return true;
+            }
+            if (dt.items) {
+                for (let i = 0; i < dt.items.length; i++) {
+                    if (dt.items[i].kind === 'file') return true;
+                }
+            }
+            return false;
+        };
+
+        const hideOverlay = () => {
+            dragDepth = 0;
+            overlay.classList.remove('show');
+        };
+
+        chatMain.addEventListener('dragenter', (e) => {
+            if (!isFileDrag(e)) return;
+            e.preventDefault();
+            dragDepth++;
+            if (this.currentRoomId) overlay.classList.add('show');
+        });
+
+        chatMain.addEventListener('dragover', (e) => {
+            if (!isFileDrag(e)) return;
+            // 必须阻止默认行为，否则浏览器会直接打开拖入的文件
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.dataTransfer && 'dropEffect' in e.dataTransfer) {
+                e.dataTransfer.dropEffect = 'copy';
+            }
+            if (this.currentRoomId) overlay.classList.add('show');
+        });
+
+        chatMain.addEventListener('dragleave', (e) => {
+            dragDepth = Math.max(0, dragDepth - 1);
+            if (dragDepth === 0 || e.relatedTarget === null) hideOverlay();
+        });
+
+        chatMain.addEventListener('drop', (e) => {
+            if (!isFileDrag(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            hideOverlay();
+            if (!this.currentRoomId) {
+                this.showError('请先选择一个聊天对象');
+                return;
+            }
+            const files = e.dataTransfer ? Array.from(e.dataTransfer.files || []) : [];
+            if (files.length) this.sendImageOrFileMessage(files);
+        });
+
+        // 拖出窗口 / 松手在窗口外时兜底隐藏遮罩
+        window.addEventListener('drop', () => hideOverlay());
+        window.addEventListener('dragend', () => hideOverlay());
+        window.addEventListener('blur', () => hideOverlay());
+    }
+
     // 发送文本消息统一加密
     async sendMessage(content = null, targetRoomId = null) {
         // 🔧 关键修复 1: 使用传入的 roomId 或当前的 currentRoomId
@@ -8791,6 +8861,9 @@ class ChatClient {
                 e.target.value = '';
             });
         }
+
+        // 拖拽文件/图片到聊天区域直接发送
+        this.setupDragDropUpload();
 
 
         // 表情按钮事件

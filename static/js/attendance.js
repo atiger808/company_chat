@@ -697,7 +697,7 @@ class AttendanceApp {
         if (!tbody) return;
         var token = ++this._recordsReqToken;
         // 只更新表格区域，不影响上方打卡按钮的正常使用
-        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:36px;color:#909399;">'
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:left;padding:36px;color:#909399;">'
             + '<i class="fas fa-spinner fa-spin" style="margin-right:6px;"></i>正在加载打卡记录...</td></tr>';
         try {
             let url = OA_API_URL + '/attendance/?page=' + page + '&page_size=' + this.pageSize;
@@ -760,9 +760,9 @@ class AttendanceApp {
             const avatar = r.avatar_url || defaultAvatar;
             const key = String(r.id);
             const checked = attendanceApp._selectedRecordIds && attendanceApp._selectedRecordIds.has(key) ? 'checked' : '';
-            const canAppeal = (r.user === selfId) && appealable[st];
+            const canAppeal = (Number(r.user) === selfId) && appealable[st];
             const appealBtn = canAppeal
-                ? '<button class="action-btn" onclick="event.stopPropagation();attendanceApp.openAppeal(\'' + (r.date || '') + '\',\'' + (r.clock_type || 'day') + '\',\'' + st + '\')" title="申诉/补卡申请" style="color:#e6a23c;"><i class="fas fa-balance-scale"></i></button>'
+                ? '<button class="action-btn" onclick="event.stopPropagation();attendanceApp.openAppeal(\'' + (r.date || '') + '\',\'' + (r.clock_type || 'day') + '\',\'' + st + '\',' + Number(r.user) + ')" title="申诉/补卡申请" style="color:#e6a23c;"><i class="fas fa-balance-scale"></i></button>'
                 : '';
             return '<tr style="cursor:pointer;">'
                 + '<td><input type="checkbox" class="record-cb" data-id="' + key + '" ' + checked + ' onchange="event.stopPropagation();attendanceApp._toggleRecord(this.dataset.id, this.checked)"></td>'
@@ -781,7 +781,14 @@ class AttendanceApp {
     }
 
     // 申诉/补卡申请（联动 OA 审批，审批通过后自动恢复为正常考勤）
-    async openAppeal(date, clockType, anomalyType) {
+    async openAppeal(date, clockType, anomalyType, targetUserId) {
+        // 仅允许本人对本人考勤发起申诉/补卡，管理员也不能代其他成员操作
+        var selfId = parseInt(localStorage.getItem('user_id'));
+        if (targetUserId !== undefined && targetUserId !== null && targetUserId !== ''
+            && parseInt(targetUserId) !== selfId) {
+            this.showToast('只能对本人考勤发起申诉/补卡申请', true);
+            return;
+        }
         var labels = {late: '迟到', early_leave: '早退', missing_clock: '缺卡', absent: '缺勤', location_abnormal: '地点异常'};
         var label = labels[anomalyType] || anomalyType;
         // 同日期同时段已发起过申诉/补卡申请时直接提示，不再重复发起
@@ -951,8 +958,10 @@ class AttendanceApp {
             + '<div class="detail-item"><label>状态</label><span class="status-badge ' + this._escape(st) + '">' + this._escape(r.status_display || statusMap[st] || st) + '</span></div>'
             + '<div class="detail-item"><label>说明</label><span>' + this._escape(r.remark || '-') + '</span></div>'
             + '</div><div style="margin-top:10px;font-size:12px;color:#909399;"><i class="fas fa-info-circle"></i> 该记录为系统按考勤规则自动生成的状态记录（非实际打卡）。</div>';
-        if (['late', 'early_leave', 'missing_clock', 'absent', 'location_abnormal'].indexOf(st) !== -1) {
-            html += '<div style="margin-top:12px;text-align:right;"><button class="btn btn-primary btn-sm" onclick="attendanceApp.openAppeal(\'' + (r.date || parts[2] || '') + '\',\'' + (r.clock_type || parts[4] || 'day') + '\',\'' + st + '\')"><i class="fas fa-balance-scale"></i> 申诉/补卡申请</button></div>';
+        var selfId = parseInt(localStorage.getItem('user_id'));
+        var isSelf = r.user !== undefined && r.user !== null && Number(r.user) === selfId;
+        if (isSelf && ['late', 'early_leave', 'missing_clock', 'absent', 'location_abnormal'].indexOf(st) !== -1) {
+            html += '<div style="margin-top:12px;text-align:right;"><button class="btn btn-primary btn-sm" onclick="attendanceApp.openAppeal(\'' + (r.date || parts[2] || '') + '\',\'' + (r.clock_type || parts[4] || 'day') + '\',\'' + st + '\',' + Number(r.user) + ')"><i class="fas fa-balance-scale"></i> 申诉/补卡申请</button></div>';
         }
         this.showAlert('考勤状态详情', html);
     }
@@ -1025,45 +1034,82 @@ class AttendanceApp {
         }
     }
 
+    // 定位进行中提示：部分用户未开启定位权限时，浏览器迟迟不回调，
+    // 仅靠按钮文案容易让用户误以为卡死；这里弹出明确的「正在获取定位」提示。
+    _showLocatingOverlay() {
+        if (document.getElementById('attendanceLocatingOverlay')) return;
+        var overlay = document.createElement('div');
+        overlay.id = 'attendanceLocatingOverlay';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:99998;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.35);padding:20px;';
+        overlay.innerHTML = '<div style="background:#fff;border-radius:12px;padding:22px 26px;max-width:320px;width:100%;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,0.25);">'
+            + '<i class="fas fa-location-crosshairs fa-spin" style="font-size:30px;color:#409eff;"></i>'
+            + '<div style="margin-top:10px;font-size:15px;font-weight:600;color:#303133;">正在获取定位…</div>'
+            + '<div style="margin-top:6px;font-size:12.5px;color:#909399;line-height:1.7;">请允许浏览器使用定位权限；若长时间无反应，请检查系统定位是否开启，或稍后重试。</div>'
+            + '</div>';
+        document.body.appendChild(overlay);
+    }
+
+    _hideLocatingOverlay() {
+        var overlay = document.getElementById('attendanceLocatingOverlay');
+        if (overlay) overlay.remove();
+    }
+
     // 获取打卡位置：自动请求定位权限，失败时给出清晰提示（权限被拒→引导去设置；无法定位→可重试或继续无位置打卡）
     async _fetchLocation() {
+        this._showLocatingOverlay();
+        try {
+            return await this._fetchLocationInner();
+        } finally {
+            this._hideLocatingOverlay();
+        }
+    }
+
+    async _fetchLocationInner() {
         var result = { ok: true, abort: false, skip: false, latitude: null, longitude: null, location: '', reverse_geocoding: null };
         var pos = null;
-        try {
-            pos = await PermUtils.getLocation();
-        } catch (err) {
-            // 定位权限被拒绝 → 引导用户去系统设置开启
-            if (err.code === 'PERMISSION_DENIED') {
-                PermUtils.showPermissionGuide('location', '考勤打卡需要获取位置信息。');
-                result.ok = false; result.abort = true; result.code = err.code; result.message = err.message;
-                return result;
-            }
-            // 无法定位/超时 → 给出提示，可重试或继续无位置打卡
-            var choice = await new Promise(function (resolve) {
-                var overlay = document.createElement('div');
-                overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);padding:20px;';
-                overlay.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:340px;width:100%;box-shadow:0 12px 40px rgba(0,0,0,0.25);overflow:hidden;">'
-                    + '<div style="display:flex;align-items:center;gap:8px;padding:14px 18px;background:#fdf6ec;border-bottom:1px solid #f5e6c8;font-size:15px;font-weight:600;color:#b88230;"><i class="fas fa-map-marker-alt" style="color:#e6a23c;"></i> 无法获取位置</div>'
-                    + '<div style="padding:16px 18px;font-size:14px;color:#606266;line-height:1.7;">' + (err.message || '定位失败') + '。请检查手机系统定位服务是否开启，或移动到信号较好的位置后重试。</div>'
-                    + '<div style="padding:12px 18px;border-top:1px solid #ebeef5;text-align:right;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">'
-                    + '<button data-act="retry" style="padding:8px 16px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;">重试</button>'
-                    + '<button data-act="skip" style="padding:8px 16px;background:#fff;color:#606266;border:1px solid #dcdfe6;border-radius:6px;cursor:pointer;font-size:14px;">继续打卡（无位置）</button>'
-                    + '</div></div>';
-                document.body.appendChild(overlay);
-                overlay.querySelector('[data-act="retry"]').onclick = function () { overlay.remove(); resolve('retry'); };
-                overlay.querySelector('[data-act="skip"]').onclick = function () { overlay.remove(); resolve('skip'); };
-                overlay.addEventListener('click', function (e) { if (e.target === overlay) { overlay.remove(); resolve('skip'); } });
-            });
-            if (choice === 'skip') {
-                result.ok = true; result.skip = true;
-                return result;
-            }
-            // 重试一次
+        // 定位失败必须由用户明确选择「重试」或「继续打卡（无位置）」：
+        // 重试后仍失败会继续弹出提示，避免弹框关闭让用户误以为已经打卡成功。
+        while (!pos) {
             try {
                 pos = await PermUtils.getLocation();
-            } catch (err2) {
-                result.ok = false; result.abort = true; result.code = err2.code; result.message = err2.message;
-                return result;
+                break;
+            } catch (err) {
+                // 定位权限被拒绝 → 引导用户去系统设置开启
+                if (err.code === 'PERMISSION_DENIED') {
+                    PermUtils.showPermissionGuide('location', '考勤打卡需要获取位置信息。');
+                    result.ok = false; result.abort = true; result.code = err.code; result.message = err.message;
+                    return result;
+                }
+                var choice = await new Promise(function (resolve) {
+                    var overlay = document.createElement('div');
+                    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);padding:20px;';
+                    overlay.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:340px;width:100%;box-shadow:0 12px 40px rgba(0,0,0,0.25);overflow:hidden;">'
+                        + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 18px;background:#fdf6ec;border-bottom:1px solid #f5e6c8;font-size:15px;font-weight:600;color:#b88230;">'
+                        + '<span style="display:flex;align-items:center;gap:8px;"><i class="fas fa-map-marker-alt" style="color:#e6a23c;"></i> 无法获取位置</span>'
+                        + '<button data-act="close" title="关闭" style="width:28px;height:28px;border:none;background:transparent;color:#b88230;font-size:20px;line-height:1;cursor:pointer;border-radius:50%;flex-shrink:0;">&times;</button>'
+                        + '</div>'
+                        + '<div style="padding:16px 18px;font-size:14px;color:#606266;line-height:1.7;">' + (err.message || '定位失败') + '。请检查手机系统定位服务是否开启，或移动到信号较好的位置后重试。</div>'
+                        + '<div style="padding:12px 18px;border-top:1px solid #ebeef5;text-align:right;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">'
+                        + '<button data-act="retry" style="padding:8px 16px;background:#409eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;">重试</button>'
+                        + '<button data-act="skip" style="padding:8px 16px;background:#fff;color:#606266;border:1px solid #dcdfe6;border-radius:6px;cursor:pointer;font-size:14px;">继续打卡（无位置）</button>'
+                        + '</div></div>';
+                    document.body.appendChild(overlay);
+                    // 必须明确点击按钮；点击遮罩不关闭、不继续打卡，避免误触
+                    overlay.querySelector('[data-act="retry"]').onclick = function () { overlay.remove(); resolve('retry'); };
+                    overlay.querySelector('[data-act="skip"]').onclick = function () { overlay.remove(); resolve('skip'); };
+                    overlay.querySelector('[data-act="close"]').onclick = function () { overlay.remove(); resolve('cancel'); };
+                });
+                if (choice === 'skip') {
+                    result.ok = true; result.skip = true;
+                    return result;
+                }
+                if (choice === 'cancel') {
+                    // 关闭视为取消本次打卡：不带着无位置继续提交，并明确提示未记录考勤
+                    result.ok = false; result.abort = true; result.cancelled = true;
+                    this.showToast('已取消打卡，未记录考勤', false);
+                    return result;
+                }
+                // 选择重试 → 继续循环；若仍失败会再次弹出提示
             }
         }
         if (pos) {
@@ -1096,10 +1142,11 @@ class AttendanceApp {
         const btn = document.getElementById('clockInBtn');
         if (btn.disabled) return;
         btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 打卡中...';
+        btn.innerHTML = '<i class="fas fa-location-crosshairs fa-spin"></i> 正在获取定位...';
         try {
             var loc = await this._fetchLocation();
             if (loc.abort) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sign-in-alt"></i> 上班打卡'; return; }
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 打卡中...';
             var info = this._getClientInfo();
             var data = { device: this._getDeviceInfo(), user_agent: info.userAgent };
             if (loc.latitude) data.latitude = loc.latitude;
@@ -1129,10 +1176,11 @@ class AttendanceApp {
         const btn = document.getElementById('clockOutBtn');
         if (btn.disabled) return;
         btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 打卡中...';
+        btn.innerHTML = '<i class="fas fa-location-crosshairs fa-spin"></i> 正在获取定位...';
         try {
             var loc = await this._fetchLocation();
             if (loc.abort) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sign-out-alt"></i> 下班打卡'; return; }
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 打卡中...';
             var info = this._getClientInfo();
             var data = { device: this._getDeviceInfo(), user_agent: info.userAgent };
             if (loc.latitude) data.latitude = loc.latitude;
@@ -3348,33 +3396,70 @@ class AttendanceApp {
         btn.style.display = 'none';
         dd.style.display = 'none';
         dd.innerHTML = '';
+        if (this._calMembersLoading) return;
+        this._calMembersLoading = true;
         var self = this;
         var selfId = parseInt(localStorage.getItem('user_id'));
         fetch(OA_API_URL + '/attendance/members/', {headers: TokenManager.getHeaders()})
             .then(function(r) { return r.ok ? r.json() : {results: []}; })
             .then(function(data) {
                 var list = data.results || [];
+                // 本人信息优先取接口返回的 self，兜底从成员列表匹配，避免头像/职位/部门为空
+                var selfItem = data.self || list.filter(function(u) { return u.id === selfId; })[0] || {};
                 var others = list.filter(function(u) { return u.id !== selfId; });
                 if (!others.length) return;
-                var items = [{id: '', name: '本人', position: '', department_name: '', avatar: ''}].concat(others);
+                var items = [{
+                    id: '',
+                    name: '本人',
+                    position: selfItem.position || '',
+                    department_name: selfItem.department_name || '',
+                    avatar: selfItem.avatar || ''
+                }].concat(others);
                 self._calMembers = items;
-                dd.innerHTML = items.map(function(u) {
-                    var uid = u.id === '' ? '' : String(u.id);
-                    var avatar = u.avatar || '/static/images/default-avatar.png';
-                    var meta = [u.position, u.department_name].filter(Boolean).join(' · ') || '—';
-                    return '<div data-uid="' + uid + '" style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-color,#f0f2f5);">'
-                        + '<img src="' + avatar + '" style="width:34px;height:34px;border-radius:50%;object-fit:cover;flex-shrink:0;background:#f5f7fa;">'
-                        + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;color:var(--text-primary,#303133);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape(u.name || u.username || '') + '</div>'
-                        + '<div style="font-size:11px;color:#909399;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape(meta) + '</div></div>'
-                        + '</div>';
-                }).join('');
-                dd.querySelectorAll('[data-uid]').forEach(function(it) {
-                    it.addEventListener('click', function() { self._pickCalMember(it.getAttribute('data-uid')); });
-                });
+                dd.innerHTML = '<div style="position:sticky;top:0;z-index:2;background:var(--bg-primary,#fff);padding:8px;border-bottom:1px solid var(--border-color,#ebeef5);">'
+                    + '<div style="position:relative;"><i class="fas fa-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:12px;color:#c0c4cc;"></i>'
+                    + '<input id="calMemberSearchInput" type="text" placeholder="搜索姓名、职位或部门..." oninput="attendanceApp._filterCalMembers(this.value)" style="width:100%;box-sizing:border-box;padding:7px 10px 7px 28px;border:1px solid var(--border-color,#dcdfe6);border-radius:6px;font-size:12px;outline:none;background:var(--bg-primary,#fff);color:var(--text-primary,#303133);"></div>'
+                    + '</div><div id="calMemberList" style="padding:6px 0;"></div>';
+                self._renderCalMemberList('');
                 self._setCalMemberButton('');
                 btn.style.display = 'inline-flex';
             })
-            .catch(function() {});
+            .catch(function() {})
+            .then(function() { self._calMembersLoading = false; });
+    }
+
+    _renderCalMemberList(keyword) {
+        var listEl = document.getElementById('calMemberList');
+        if (!listEl) return;
+        var kw = String(keyword || '').trim().toLowerCase();
+        var items = this._calMembers || [];
+        var filtered = kw ? items.filter(function(u) {
+            return [u.name, u.username, u.position, u.department_name].some(function(v) {
+                return String(v || '').toLowerCase().indexOf(kw) !== -1;
+            });
+        }) : items;
+        if (!filtered.length) {
+            listEl.innerHTML = '<div style="padding:18px 12px;text-align:center;font-size:12px;color:#909399;">未找到匹配成员</div>';
+            return;
+        }
+        var self = this;
+        listEl.innerHTML = filtered.map(function(u) {
+            var uid = u.id === '' ? '' : String(u.id);
+            var avatar = u.avatar || '/static/images/default-avatar.png';
+            var meta = [u.position, u.department_name].filter(Boolean).join(' · ') || '—';
+            return '<div data-uid="' + uid + '" style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-color,#f0f2f5);">'
+                + '<img src="' + avatar + '" style="width:34px;height:34px;border-radius:50%;object-fit:cover;flex-shrink:0;background:#f5f7fa;">'
+                + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;color:var(--text-primary,#303133);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape(u.name || u.username || '') + '</div>'
+                + '<div style="font-size:11px;color:#909399;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self._escape(meta) + '</div></div>'
+                + '</div>';
+        }).join('');
+        listEl.querySelectorAll('[data-uid]').forEach(function(it) {
+            it.addEventListener('click', function() { self._pickCalMember(it.getAttribute('data-uid')); });
+        });
+    }
+
+    _filterCalMembers(keyword) {
+        this._renderCalMemberList(keyword);
     }
 
     _setCalMemberButton(uid) {
@@ -3396,7 +3481,12 @@ class AttendanceApp {
     _toggleCalMemberDropdown(e) {
         if (e && e.stopPropagation) e.stopPropagation();
         var dd = document.getElementById('calMemberDropdown');
-        if (dd) dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+        if (!dd) return;
+        dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+        if (dd.style.display === 'block') {
+            var input = document.getElementById('calMemberSearchInput');
+            if (input) setTimeout(function() { input.focus(); }, 0);
+        }
     }
 
     _pickCalMember(uid) {

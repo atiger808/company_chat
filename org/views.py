@@ -34,6 +34,43 @@ def _resolve_tenant(request):
     return tenant
 
 
+def ensure_primary_department(user, tenant, preferred_department_id=None, force=False):
+    """保证用户在当前企业内恰好有一个主部门，且主部门不是隐藏部门。
+
+    - force=True 且指定了可见部门：将该部门设为主部门（管理员显式选择部门时使用）；
+    - 否则保留当前企业已有可见主部门；
+    - 当前企业没有主部门时：选择最近加入（join_date / id 最新）的非隐藏部门；
+    - 同时清理该企业内其它 is_primary 标记，保证唯一。
+    不同企业的 UserDepartment 互不影响。
+    """
+    if not tenant or not user:
+        return None
+    rels = list(UserDepartment.objects.filter(
+        user=user, department__tenant=tenant, department__is_active=True
+    ).select_related('department'))
+    visible = [r for r in rels if r.department.visibility != 'hidden']
+
+    target = None
+    if preferred_department_id:
+        target = next(
+            (r for r in visible if r.department_id == preferred_department_id), None)
+    if target is None and not force:
+        target = next((r for r in visible if r.is_primary), None)
+    if target is None and visible:
+        target = max(visible, key=lambda r: (r.join_date, r.id))
+
+    clear_ids = [
+        r.id for r in rels
+        if r.is_primary and (target is None or r.id != target.id)
+    ]
+    if clear_ids:
+        UserDepartment.objects.filter(id__in=clear_ids).update(is_primary=False)
+    if target is not None and not target.is_primary:
+        UserDepartment.objects.filter(id=target.id).update(is_primary=True)
+        target.is_primary = True
+    return target
+
+
 def rebuild_report_relations(tenant):
     """
     根据企业组织架构自动重建汇报关系（钉钉模式）：
@@ -403,12 +440,19 @@ class TenantViewSet(viewsets.ModelViewSet):
                 from accounts.models import Department as DeptModel
                 try:
                     dept = DeptModel.objects.get(id=primary_department_id, tenant=tenant, is_active=True)
-                    UserDepartment.objects.filter(user_id=user_id, is_primary=True).update(is_primary=False)
+                    if dept.visibility == 'hidden':
+                        return Response({'error': '隐藏部门不能设为主部门'}, status=400)
+                    # 只调整当前企业内的主部门，避免影响用户在其他企业的主部门
+                    UserDepartment.objects.filter(
+                        user_id=user_id, is_primary=True,
+                        department__tenant=tenant).update(is_primary=False)
                     UserDepartment.objects.filter(user_id=user_id, department_id=dept.id).update(is_primary=True)
                 except DeptModel.DoesNotExist:
                     pass
             else:
-                UserDepartment.objects.filter(user_id=user_id, is_primary=True).update(is_primary=False)
+                UserDepartment.objects.filter(
+                    user_id=user_id, is_primary=True,
+                    department__tenant=tenant).update(is_primary=False)
         # 设置默认企业（用户下次登录时的默认企业）
         if default_tenant_id is not None:
             from accounts.models import CustomUser
@@ -548,6 +592,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
         # 支持 tenant_id 查询参数（管理员跨企业查询用）
         tenant_id = self.request.query_params.get('tenant_id')
         include_sub = self.request.query_params.get('include_subtenants', '').lower() in ('1', 'true')
+        exclude_hidden = self.request.query_params.get('exclude_hidden', '').lower() in ('1', 'true', 'yes')
         if tenant_id:
             qs = Department.objects.filter(
                 tenant_id=tenant_id, is_active=True
@@ -564,6 +609,8 @@ class DepartmentViewSet(viewsets.ModelViewSet):
                         ).select_related('parent', 'manager')
                 except Exception:
                     pass
+            if exclude_hidden:
+                qs = qs.exclude(visibility='hidden')
             return qs
         tenant = _resolve_tenant(self.request)
         if not tenant:
@@ -978,7 +1025,9 @@ class DepartmentViewSet(viewsets.ModelViewSet):
         user_ids = request.data.get('user_ids', [])
         if not user_ids:
             return Response({'error': '请选择成员'}, status=400)
-        tenant = request.tenant
+        # 以部门所属企业为准，避免超级管理员跨企业操作时用到当前激活企业
+        tenant = department.tenant or _resolve_tenant(request)
+        set_primary = str(request.data.get('set_primary', '')).lower() in ('1', 'true', 'yes')
         logger.info(f'tenant: {tenant}, user_ids: {user_ids}')
         # 自动邀请不在当前企业中的用户加入企业
         existing_members = TenantMembership.objects.filter(
@@ -1010,6 +1059,14 @@ class DepartmentViewSet(viewsets.ModelViewSet):
             if created:
                 added += 1
                 added_ids.append(uid)
+        # 保证每个用户在当前企业内恰好一个主部门：
+        # 管理员显式选择部门时强制设为主部门；否则仅在无主部门时自动选择最近加入的非隐藏部门
+        for u in CustomUser.objects.filter(id__in=user_ids):
+            ensure_primary_department(
+                u, tenant,
+                preferred_department_id=department.id if set_primary else None,
+                force=set_primary,
+            )
         if department.auto_sync_members and department.department_group:
             # 部门群只同步「未禁用」的成员（禁用/离职用户不应出现在群聊中）
             users = CustomUser.objects.filter(id__in=user_ids, is_active=True)
@@ -1044,12 +1101,16 @@ class DepartmentViewSet(viewsets.ModelViewSet):
         user_ids = request.data.get('user_ids', [])
         if not user_ids:
             return Response({'error': '请选择成员'}, status=400)
+        tenant = department.tenant or _resolve_tenant(request)
         UserDepartment.objects.filter(
             department=department, user_id__in=user_ids).delete()
+        # 移出部门后若用户在当前企业已无主部门，自动选择剩余部门中最近加入的非隐藏部门
+        for u in CustomUser.objects.filter(id__in=user_ids):
+            ensure_primary_department(u, tenant)
         if department.auto_sync_members and department.department_group:
             department.department_group.members.remove(*user_ids)
         OrgChangeLog.objects.create(
-            tenant=request.tenant, action='remove_member',
+            tenant=tenant or request.tenant, action='remove_member',
             department=department, operator=request.user,
             detail={'user_ids': user_ids})
         self._rebuild_report_relations(request.tenant)
@@ -1463,7 +1524,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
     def sync_all_members(self, request, pk=None):
         """将企业未禁用的所有成员同步到该部门（一键同步）"""
         department = self.get_object()
-        tenant = request.tenant
+        tenant = department.tenant or _resolve_tenant(request)
         members = TenantMembership.objects.filter(
             tenant=tenant, is_active=True
         ).select_related('user')
@@ -1480,6 +1541,8 @@ class DepartmentViewSet(viewsets.ModelViewSet):
                 if created:
                     added += 1
                     added_ids.append(m.user.id)
+        for u in CustomUser.objects.filter(id__in=added_ids):
+            ensure_primary_department(u, tenant)
         if added and department.auto_sync_members and department.department_group:
             all_users = [m.user for m in members if m.user.is_active]
             department.department_group.members.add(*all_users)
@@ -1596,10 +1659,17 @@ class UserDepartmentViewSet(viewsets.GenericViewSet):
         dept_id = request.data.get('department_id')
         if not dept_id:
             return Response({'error': '缺少部门ID'}, status=400)
-        UserDepartment.objects.filter(user=user, is_primary=True).update(
-            is_primary=False)
+        rel = UserDepartment.objects.filter(
+            user=user, department_id=dept_id).select_related('department').first()
+        if not rel:
+            return Response({'error': '该用户不在此部门'}, status=404)
+        if rel.department.visibility == 'hidden':
+            return Response({'error': '隐藏部门不能设为主部门'}, status=400)
+        # 仅调整该部门所属企业内的主部门，保证企业内唯一
         UserDepartment.objects.filter(
-            user=user, department_id=dept_id).update(is_primary=True)
+            user=user, is_primary=True,
+            department__tenant_id=rel.department.tenant_id).update(is_primary=False)
+        UserDepartment.objects.filter(id=rel.id).update(is_primary=True)
         return Response({'message': '主部门已设置'})
 
     @action(detail=True, methods=['get'])

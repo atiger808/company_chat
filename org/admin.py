@@ -7,7 +7,7 @@ from .models import UserDepartment, ReportRelation, OrgChangeLog
 class UserDepartmentAdmin(admin.ModelAdmin):
     list_display = ('id', 'user', 'department', 'is_primary', 'position', 'join_date')
     list_filter = ('is_primary',)
-    search_fields = ('user__username', 'department__name', 'position')
+    search_fields = ('user__username', 'user__real_name', 'department__name', 'position')
     list_per_page = 20
 
 
@@ -15,7 +15,7 @@ class UserDepartmentAdmin(admin.ModelAdmin):
 class ReportRelationAdmin(admin.ModelAdmin):
     list_display = ('id', 'user', 'tenant', 'supervisor', 'department', 'is_direct')
     list_filter = ('is_direct', 'tenant')
-    search_fields = ('user__username', 'supervisor__username')
+    search_fields = ('user__username', 'user__real_name', 'supervisor__username', 'supervisor__real_name')
     list_per_page = 20
 
 
@@ -23,5 +23,5 @@ class ReportRelationAdmin(admin.ModelAdmin):
 class OrgChangeLogAdmin(admin.ModelAdmin):
     list_display = ('id', 'action', 'tenant', 'department', 'operator', 'created_at')
     list_filter = ('action', 'tenant')
-    search_fields = ('department__name', 'operator__username')
+    search_fields = ('department__name', 'operator__username', 'operator__real_name')
     list_per_page = 20
