@@ -1,0 +1,19 @@
+[Unit]
+Description=Worker celery for company_chat
+After=network.target
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=/www/yue/company_chat
+ExecStart=/www/miniconda3/envs/companychat/bin/celery -A company_chat.celery_app worker --loglevel=INFO --concurrency=4
+
+
+Restart=on-failure
+RestartSec=10
+
+StandardOutput=append:/var/log/celery/out-company_chat_worker.log
+StandardError=append:/var/log/celery/err-company_chat_worker.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,5 +1,5 @@
 [Unit]
-Description=Gunicorn for company_chat
+Description=Daphne for company_chat
 After=network.target
 
 [Service]

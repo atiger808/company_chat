@@ -3957,12 +3957,33 @@ class ChatClient {
     }
 
     handlePaste(e) {
+        const clipboardData = e.clipboardData || window.clipboardData;
+
         if (!this.currentRoomId) {
             this.showError('请先选择一个聊天对象');
             return;
         }
 
-        const clipboardData = e.clipboardData || window.clipboardData;
+        // 1) 站内复制的图片/视频/语音/文件消息：直接按原消息类型发送（不再变成链接文本）
+        const copiedPayload = this._readCopiedMessageMarker(clipboardData);
+        if (copiedPayload) {
+            e.preventDefault();
+            this.sendExistingFileMessage(copiedPayload);
+            return;
+        }
+        // 2) 非 HTTPS / 剪贴板不支持富格式时：按最近一次复制文本精确匹配
+        try {
+            const cached = this._copiedMessage;
+            if (cached && cached.payload && Date.now() - cached.at < 5 * 60 * 1000) {
+                const pastedText = (clipboardData && clipboardData.getData
+                    ? clipboardData.getData('text/plain') : '') || '';
+                if (pastedText.trim() && pastedText.trim() === cached.text) {
+                    e.preventDefault();
+                    this.sendExistingFileMessage(cached.payload);
+                    return;
+                }
+            }
+        } catch (err) { /* 继续按默认粘贴处理 */ }
 
         // 只处理图片，其他内容交给浏览器默认处理
         if (clipboardData?.items) {
@@ -12426,6 +12447,8 @@ class ChatClient {
 
         if (menu) {
             let menuHtml = `
+            <div class="menu-item" onclick="chatClient.copySelectedItem()"><i class="fas fa-copy"></i> 复制</div>
+            <div class="menu-divider"></div>
             <div class="menu-item" onclick="chatClient.quoteSelectedItem()"><i class="fas fa-quote-left"></i> 引用</div>
             <div class="menu-item" onclick="chatClient.forwardSelectedItem()"><i class="fas fa-share"></i> 转发</div>
         `;
@@ -12755,6 +12778,331 @@ class ChatClient {
             this.setQuoteMessage(message);
         }
         this.hideContextMenu();
+    }
+
+    // 复制右键选中的消息（文本走系统剪贴板；文件/图片/视频/语音同时写入结构化标记，
+    // 在聊天输入框粘贴时可直接按原消息类型发送，而不是变成一条链接文本）
+    copySelectedItem() {
+        const message = this.contextTarget;
+        this.hideContextMenu();
+        if (!message) return;
+        const text = this.getMessageCopyText(message);
+        if (!text) {
+            this.showInfo('该消息暂无可复制的内容');
+            return;
+        }
+        const payload = this.getStructuredCopyPayload(message);
+        // 兼容非 HTTPS / 不支持 ClipboardItem 的环境：记住本次复制内容，粘贴时按文本匹配
+        this._copiedMessage = payload
+            ? { text: text.trim(), payload: payload, at: Date.now() }
+            : null;
+
+        this.copyMessageToClipboard(text, payload, message).then(() => {
+            this.showSuccess(payload ? '已复制，可在输入框直接粘贴发送' : '已复制到剪贴板');
+        }).catch(() => {
+            this.copyTextToClipboard(text).then((ok) => {
+                if (ok) this.showSuccess(payload ? '已复制，可在输入框直接粘贴发送' : '已复制到剪贴板');
+                else this.showError('复制失败，请手动选择内容复制');
+            });
+        });
+    }
+
+    // 可结构化复制的消息（图片/视频/语音/音频/文件），优先复用 file_id 免二次上传
+    getStructuredCopyPayload(message) {
+        const types = ['image', 'video', 'voice', 'audio', 'file'];
+        if (!message || types.indexOf(message.message_type) === -1) return null;
+        if (!message.file_id && !(message.file_info && message.file_info.id)) return null;
+        const fi = message.file_info || {};
+        return {
+            t: message.message_type,
+            id: message.file_id || fi.id,
+            c: message.content || '',
+            f: {
+                id: message.file_id || fi.id,
+                name: fi.name || '',
+                size: fi.size || 0,
+                url: fi.url || '',
+                mime_type: fi.mime_type || '',
+                duration: fi.duration || 0,
+                mp3_url: fi.mp3_url || '',
+            },
+            v: message.voice_duration || fi.duration || 0,
+        };
+    }
+
+    // 写入富格式剪贴板：text/plain（外部粘贴为文字/链接）+ text/html（内嵌可识别标记）
+    // + 图片消息尽量附带 image/png（外部应用可直接粘贴图片）
+    copyMessageToClipboard(text, payload, message) {
+        return new Promise((resolve, reject) => {
+            if (!navigator.clipboard || !navigator.clipboard.write
+                || !window.isSecureContext || typeof window.ClipboardItem === 'undefined') {
+                reject(new Error('clipboard unsupported'));
+                return;
+            }
+            let html = this.escapeHtml(text).replace(/\n/g, '<br>');
+            if (payload) {
+                let b64 = '';
+                try {
+                    const bytes = new TextEncoder().encode(JSON.stringify(payload));
+                    b64 = btoa(String.fromCharCode.apply(null, bytes));
+                } catch (e) { b64 = ''; }
+                if (b64) html += '<!--ZQMSG:' + b64 + '-->';
+            }
+            const baseTypes = {
+                'text/plain': new Blob([text], {type: 'text/plain'}),
+                'text/html': new Blob([html], {type: 'text/html'}),
+            };
+            const write = (types) => navigator.clipboard.write([new window.ClipboardItem(types)]);
+
+            const doWrite = (extra) => {
+                const types = Object.assign({}, baseTypes, extra || {});
+                write(types).then(resolve).catch(() => {
+                    // 部分浏览器不支持多类型组合：逐步降级为纯文本
+                    const t2 = Object.assign({}, baseTypes);
+                    delete t2['image/png'];
+                    write(t2).then(resolve).catch(() => {
+                        write({'text/plain': baseTypes['text/plain']}).then(resolve).catch(reject);
+                    });
+                });
+            };
+
+            if (payload && payload.t === 'image' && payload.f && payload.f.url) {
+                this._fetchClipboardImageBlob(payload.f.url).then((blob) => {
+                    doWrite(blob ? {'image/png': blob} : null);
+                }).catch(() => doWrite(null));
+            } else {
+                doWrite(null);
+            }
+        });
+    }
+
+    // 拉取图片并转成 PNG Blob（剪贴板图片仅稳定支持 image/png）
+    _fetchClipboardImageBlob(url) {
+        return fetch(url, {credentials: 'same-origin'}).then((resp) => {
+            if (!resp.ok) throw new Error('fetch image failed');
+            return resp.blob();
+        }).then((blob) => {
+            if (blob.type === 'image/png') return blob;
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                const objUrl = URL.createObjectURL(blob);
+                img.onload = () => {
+                    try {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = img.naturalWidth;
+                        canvas.height = img.naturalHeight;
+                        canvas.getContext('2d').drawImage(img, 0, 0);
+                        canvas.toBlob((png) => {
+                            URL.revokeObjectURL(objUrl);
+                            if (png) resolve(png); else reject(new Error('toBlob failed'));
+                        }, 'image/png');
+                    } catch (e) {
+                        URL.revokeObjectURL(objUrl);
+                        reject(e);
+                    }
+                };
+                img.onerror = () => { URL.revokeObjectURL(objUrl); reject(new Error('image load failed')); };
+                img.src = objUrl;
+            });
+        });
+    }
+
+    // 解析剪贴板中的站内消息标记
+    _readCopiedMessageMarker(clipboardData) {
+        try {
+            const html = clipboardData && clipboardData.getData ? clipboardData.getData('text/html') : '';
+            const m = /<!--ZQMSG:([A-Za-z0-9+/=]+)-->/.exec(html || '');
+            if (!m) return null;
+            const bytes = Uint8Array.from(atob(m[1]), (c) => c.charCodeAt(0));
+            const p = JSON.parse(new TextDecoder().decode(bytes));
+            const allowed = ['image', 'video', 'voice', 'audio', 'file'];
+            if (!p || allowed.indexOf(p.t) === -1 || !p.id) return null;
+            return p;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // 粘贴已复制的文件/图片/视频/语音消息：复用原 file_id，直接按原类型发送
+    sendExistingFileMessage(payload) {
+        const roomId = parseInt(this.currentRoomId);
+        if (!roomId || !payload || !payload.id) {
+            this.showError('请先选择一个聊天对象');
+            return;
+        }
+        const tempMessageId = Date.now();
+        const messageType = payload.t || 'file';
+        const fileInfo = Object.assign({}, payload.f || {});
+        if (payload.v) fileInfo.duration = payload.v;
+        const messageData = {
+            id: tempMessageId,
+            temp_id: tempMessageId,
+            sender_id: this.currentUser.id,
+            sender_name: this.currentUser.username,
+            sender: this.currentUser,
+            content: payload.c || this.getFileMessageContent(messageType),
+            timestamp: new Date().toISOString(),
+            is_read: true,
+            chat_room: roomId,
+            message_type: messageType,
+            file_id: payload.id,
+            file_info: fileInfo,
+            voice_duration: payload.v || undefined,
+            is_temp: true,
+        };
+        this.messages.push(messageData);
+        this.renderMessage(messageData, 'sent');
+        Utils.scrollToBottom(document.getElementById('messagesList'));
+
+        const wsReady = this.ws && this.ws.readyState === WebSocket.OPEN &&
+            parseInt(this.ws._roomId) === roomId;
+        if (wsReady) {
+            this.ws.send(JSON.stringify(this.encryptPacket({
+                type: 'chat_message',
+                ...messageData,
+            })));
+            this.updateChatRoomLastMessage(roomId, messageData.content, messageData.timestamp);
+            const label = {image: '图片', video: '视频', voice: '语音', audio: '音频', file: '文件'}[messageType] || '消息';
+            this.showSuccess('已粘贴发送' + label);
+        } else {
+            this.messageQueue.push(messageData);
+            this.showError('网络连接不稳定，消息将在连接恢复后发送');
+        }
+    }
+
+    // 不同消息类型 → 可复制的文本
+    getMessageCopyText(message) {
+        if (!message) return '';
+        const self = this;
+        const absoluteUrl = function (u) {
+            if (!u) return '';
+            if (/^(https?:)?\/\//i.test(u) || /^data:/i.test(u)) return u;
+            return window.location.origin + (u.charAt(0) === '/' ? '' : '/') + u;
+        };
+        const fileUrl = message.file_info && message.file_info.url
+            ? absoluteUrl(message.file_info.url) : '';
+        const plain = function () { return self.htmlToPlainText(message.content || '').trim(); };
+
+        switch (message.message_type) {
+            case 'text':
+            case 'emoji':
+            case 'announcement':
+            case 'system':
+                return plain();
+            case 'image':
+            case 'video':
+            case 'audio':
+            case 'voice':
+            case 'location':
+                return fileUrl || plain();
+            case 'file': {
+                const name = (message.file_info && message.file_info.name) || '';
+                return [name, fileUrl].filter(Boolean).join('\n');
+            }
+            case 'task_card': {
+                const d = this.parseMessageContentData(message, 'task_data');
+                if (!d) return plain();
+                const statusMap = {todo: '待处理', in_progress: '进行中', done: '已完成', overdue: '已逾期'};
+                const status = statusMap[d.status] || d.status || '';
+                const assignee = d.assignee_info
+                    ? (d.assignee_info.real_name || d.assignee_info.username || '')
+                    : (d.assignee_name || '');
+                let out = '任务：' + (d.title || d.task_title || '');
+                if (status) out += '（' + status + '）';
+                if (assignee) out += '\n执行人：' + assignee;
+                if (d.id) out += '\n' + window.location.origin + '/tasks/?task_id=' + d.id;
+                return out.trim();
+            }
+            case 'approval_card': {
+                const d = this.parseMessageContentData(message, 'approval_data');
+                if (!d) return plain();
+                let out = '审批：' + (d.type_name ? d.type_name + ' - ' : '') + (d.title || '');
+                if (d.status_display) out += '（' + d.status_display + '）';
+                if (d.applicant_name) out += '\n发起人：' + d.applicant_name;
+                if (d.approval_id) out += '\n' + window.location.origin + '/oa/approval/?approval_id=' + d.approval_id;
+                return out.trim();
+            }
+            case 'work_summary_card': {
+                const d = this.parseMessageContentData(message, 'work_summary_data');
+                if (!d) return plain();
+                let out = ('每日工作总结：' + (d.summary_date || '') + ' ' + (d.user_name || '')).trim();
+                if (d.summary_id) out += '\n' + window.location.origin + '/oa/work-summary/?id=' + d.summary_id;
+                return out;
+            }
+            case 'collab_card': {
+                const d = this.parseMessageContentData(message, 'collab_data');
+                if (!d) return plain();
+                let out = ('协作邀请：' + (d.title || d.target_name || '')).trim();
+                if (d.inviter_name) out += '\n邀请人：' + d.inviter_name;
+                if (d.url) out += '\n' + absoluteUrl(d.url);
+                return out;
+            }
+            case 'call_audio':
+            case 'call_video': {
+                const sec = Number((message.file_info && message.file_info.call_duration) || 0);
+                const label = message.message_type === 'call_video' ? '视频通话' : '语音通话';
+                const dur = sec >= 60 ? (Math.floor(sec / 60) + '分' + (sec % 60) + '秒') : (sec + '秒');
+                return label + '：' + dur;
+            }
+            default:
+                return plain();
+        }
+    }
+
+    // 卡片消息数据兼容 content JSON 与 *_data 字段
+    parseMessageContentData(message, field) {
+        const direct = message && message[field];
+        if (direct && typeof direct === 'object') return direct;
+        if (message && typeof message.content === 'string') {
+            try {
+                const parsed = JSON.parse(message.content);
+                return (parsed && typeof parsed === 'object') ? parsed : null;
+            } catch (e) { /* 非 JSON 内容 */ }
+        }
+        return null;
+    }
+
+    // 消息正文可能是 HTML（@提及、表情等），复制时转为纯文本
+    htmlToPlainText(html) {
+        if (!html) return '';
+        let s = String(html);
+        if (s.indexOf('<') === -1 && s.indexOf('&') === -1) return s;
+        s = s.replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<\/(p|div|li)>/gi, '\n')
+            .replace(/<[^>]*>/g, '');
+        const ta = document.createElement('textarea');
+        ta.innerHTML = s;
+        return ta.value.replace(/\n{3,}/g, '\n\n');
+    }
+
+    // 复制到剪贴板：优先 Clipboard API，失败/非安全上下文时回退 execCommand
+    copyTextToClipboard(text) {
+        return new Promise((resolve) => {
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text)
+                    .then(() => resolve(true))
+                    .catch(() => resolve(this.copyTextFallback(text)));
+            } else {
+                resolve(this.copyTextFallback(text));
+            }
+        });
+    }
+
+    copyTextFallback(text) {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+            document.body.appendChild(ta);
+            ta.select();
+            ta.setSelectionRange(0, ta.value.length);
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            return ok;
+        } catch (e) {
+            return false;
+        }
     }
 
 

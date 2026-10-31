@@ -61,8 +61,8 @@ def _find_service_worker():
 def knowledge_base_view(request):
     """知识库（在线文档）页面壳。
 
-    公开页面：为方便企业智能体（AI 助手）检索，未登录用户也可直接打开，
-    页面内容接口 /api/docs/catalog/ 同为 AllowAny，仅暴露 docs/ 白名单内的文档。
+    公开页面：未登录用户也可打开，但目录接口仅返回「员工使用手册」；
+    其余知识库文档仅超级管理员可见（由 /api/docs/catalog/ 后端过滤）。
     """
     return render(request, 'docs/knowledge.html')
 
@@ -98,7 +98,8 @@ KNOWLEDGE_DOCS = [
                 'title': '员工使用手册',
                 'desc': '各模块使用说明、限制速查与常见问题',
                 'file': '浙企钉-员工使用手册.md',
-                'public': True,
+                # 唯一对全员开放的知识库文档
+                'all_users': True,
             },
         ],
     },
@@ -111,14 +112,14 @@ KNOWLEDGE_DOCS = [
                 'title': '项目结构文档',
                 'desc': '目录结构、模块职责、数据库模型与 API 汇总',
                 'file': '浙企钉-企业协同办公平台 · 项目结构文档.md',
-                'public': False,
+                'all_users': False,
             },
             {
                 'slug': 'auto-backup',
                 'title': '项目文件自动备份功能',
                 'desc': '增量备份系统与定时任务说明',
                 'file': '项目文件自动备份功能.md',
-                'public': False,
+                'all_users': False,
             },
         ],
     },
@@ -131,7 +132,7 @@ KNOWLEDGE_DOCS = [
                 'title': '百度增值税发票验真接口',
                 'desc': '验真接口的请求参数与返回结构',
                 'file': '百度增值税发票验真接口文档.md',
-                'public': True,
+                'all_users': False,
             },
         ],
     },
@@ -141,24 +142,29 @@ KNOWLEDGE_DOCS = [
 class KnowledgeCatalogView(APIView):
     """知识库目录 + 文档内容（一次性返回，前端本地做树/锚点/全文搜索）。
 
-    公开可读（AllowAny）：为方便企业智能体（AI 助手）检索知识库内容，
-    未登录用户也能访问该接口与知识库页面；仅暴露 docs/ 白名单内的文档，
-    不涉及任何业务数据。
+    权限：仅「员工使用手册」（all_users=True）对所有访问者开放；
+    其余文档仅超级管理员可查看（未登录用户、普通用户、管理员均不可见）。
+    接口仍保持 AllowAny，便于未登录用户与智能体读取员工使用手册。
     """
 
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
         docs_dir = settings.BASE_DIR / 'docs'
-        is_authed = bool(getattr(request.user, 'is_authenticated', False))
+        user = getattr(request, 'user', None)
+        is_super_admin = bool(
+            getattr(user, 'is_superuser', False)
+            or (getattr(user, 'is_authenticated', False)
+                and getattr(user, 'user_type', '') == 'super_admin')
+        )
         groups = []
         total = 0
         restricted = 0
         for group in KNOWLEDGE_DOCS:
             docs = []
             for item in group['docs']:
-                # 架构 / 内部类文档需登录后查看；未登录只返回标记为 public 的文档
-                if not is_authed and not item.get('public', False):
+                # 员工使用手册对全员开放；其余文档仅超级管理员可见
+                if not is_super_admin and not item.get('all_users', False):
                     restricted += 1
                     continue
                 doc = {
@@ -188,7 +194,7 @@ class KnowledgeCatalogView(APIView):
         return Response({
             'groups': groups,
             'doc_count': total,
-            'restricted_count': restricted,   # 需登录后可见的内部文档数量（供前端提示）
+            'restricted_count': restricted,   # 仅超级管理员可见的文档数量（供前端提示）
             'generated_at': timezone.now().isoformat(),
         })
 

@@ -179,7 +179,7 @@
             if (lastGroup !== null) html += '</div>';
             if (this.restricted > 0) {
                 html += '<div class="kb-locked-hint"><i class="fas fa-lock"></i> 另有 '
-                    + this.restricted + ' 篇内部文档需 <a href="/login/">登录</a> 后查看</div>';
+                    + this.restricted + ' 篇文档仅超级管理员可查看</div>';
             }
             tree.innerHTML = html || '<div class="kb-error">暂无文档</div>';
             this.syncTreeActive();
