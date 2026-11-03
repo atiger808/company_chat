@@ -5409,7 +5409,7 @@ class ApprovalApp {
                 html += '<div class="detail-item full-width"><label><i class="fas fa-eye" style="color:#9b59b6;"></i> 抄送人</label><div style="display:flex;flex-wrap:wrap;gap:6px;">';
                 d.cc_users.forEach(function (cc) {
                     if (cc.cc_type === 'department') {
-                        html += '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px 3px 4px;background:#e8f4fd;border-radius:14px;font-size:12px;" title="部门抄送">'
+                        html += '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px 3px 4px;background:#e8f4fd;border-radius:14px;font-size:12px;" title="部门抄送：该部门全部成员均可查看">'
                             + '<i class="fas fa-building" style="font-size:12px;color:#409eff;"></i>'
                             + approvalApp._escape(cc.name)
                             + (cc.manager_name ? ' <span style="font-size:10px;color:#909399;">(' + approvalApp._escape(cc.manager_name) + ')</span>' : '')

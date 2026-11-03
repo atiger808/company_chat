@@ -452,16 +452,23 @@
         </div>
         <div class="modal-body">
             <p style="font-size:13px;color:var(--text-secondary,#606266);margin:0 0 12px;"><i
-                    class="fas fa-info-circle" style="color:#409eff;"></i> 仅可补本月漏打或迟到/早退的上班/下班卡，补卡后记录按正常统计并记录补卡时间。</p>
+                    class="fas fa-info-circle" style="color:#409eff;"></i> 仅可补本月漏打或迟到/早退的上班/下班卡；默认展示全部需补卡日期，点击日期后系统自动识别补卡类型，补卡后记录按正常统计并记录补卡时间。</p>
             <div class="form-group">
-                <label><i class="fas fa-edit" style="color:#409eff;"></i> 补卡类型</label>
-                <select id="makeupClockType" class="form-select" onchange="attendanceApp.renderMakeupCalendar()">
-                    <option value="clock_in">补上班卡</option>
-                    <option value="clock_out">补下班卡</option>
-                </select>
+                <label><i class="fas fa-edit" style="color:#409eff;"></i> 补卡类型（系统自动识别）</label>
+                <input type="hidden" id="makeupClockType" value="">
+                <div id="makeupTypeAuto"
+                     style="padding:9px 12px;border:1px solid var(--border-color,#dcdfe6);border-radius:8px;background:var(--bg-secondary,#f5f7fa);font-size:13px;color:var(--text-secondary,#606266);">
+                    请选择补卡日期，系统将自动识别需补上班卡或下班卡
+                </div>
+                <div id="makeupTypeChooser" style="display:none;gap:8px;margin-top:8px;">
+                    <button type="button" class="btn btn-secondary makeup-type-btn" data-type="clock_in"
+                            onclick="attendanceApp.chooseMakeupType('clock_in')">补上班卡</button>
+                    <button type="button" class="btn btn-secondary makeup-type-btn" data-type="clock_out"
+                            onclick="attendanceApp.chooseMakeupType('clock_out')">补下班卡</button>
+                </div>
             </div>
             <div class="form-group" style="margin-top:12px;">
-                <label><i class="fas fa-calendar" style="color:#409eff;"></i> 补卡日期（迟到/早退与漏卡日期已高亮，点击选择）</label>
+                <label><i class="fas fa-calendar" style="color:#409eff;"></i> 补卡日期（全部需补卡日期已高亮，点击选择）</label>
                 <input type="hidden" id="makeupDate">
                 <div id="makeupCalGrid"
                      style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:6px;"></div>
@@ -860,7 +867,7 @@
 <script src="/static/js/utils.js?v=20261027-569eee9"></script>
 <script src="/static/js/api.js?v=20261027-569eee9"></script>
 <script src="/static/js/tenant.js?v=20261027-569eee9"></script>
-<script src="/static/js/attendance.js?v=20261028-locating01"></script>
+<script src="/static/js/attendance.js?v=20261028-makeupauto01"></script>
 <script src="/static/js/notifications.js?v=20261027-569eee9"></script>
 
 <script>

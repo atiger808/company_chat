@@ -8108,7 +8108,7 @@ class CloudSystemSettingsViewSet(viewsets.GenericViewSet):
             'description': '单个文件允许的最大上传大小（MB）',
             'category': 'upload',
             'is_public': True,
-            'validation': {'min': 1, 'max': 10240}
+            'validation': {'min': 1, 'max': 20240}
         },
         'upload.image_max_size_mb': {
             'name': '图片大小上限',

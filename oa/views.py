@@ -847,10 +847,8 @@ class AttendanceViewSet(viewsets.ViewSet):
             if target_uid != request.user.id:
                 return Response({'error': '只能为本人补卡，不能为其他成员操作'}, status=403)
         from datetime import datetime as dt_datetime, time as dt_time
-        clock_type = request.data.get('clock_type', '')
+        clock_type = (request.data.get('clock_type') or '').strip()
         date_str = request.data.get('date', '')
-        if clock_type not in ('clock_in', 'clock_out'):
-            return Response({'error': '请选择补卡类型（上班卡/下班卡）'}, status=400)
         try:
             makeup_date = dt_datetime.strptime(date_str, '%Y-%m-%d').date()
         except (ValueError, TypeError):
@@ -861,6 +859,31 @@ class AttendanceViewSet(viewsets.ViewSet):
             return Response({'error': '不能为未来日期补卡'}, status=400)
         if makeup_date.year != today.year or makeup_date.month != today.month:
             return Response({'error': '仅支持补当月漏打的打卡记录'}, status=400)
+
+        # 未指定补卡类型时自动识别：漏打卡或迟到/早退的卡种。
+        # 同日两种卡都需补时返回 needs_choice，由前端让用户明确选择，避免漏补。
+        if clock_type in ('', 'auto'):
+            existing_types = {
+                r.clock_type: r
+                for r in AttendanceRecord.objects.filter(user=request.user, date=makeup_date)
+            }
+            candidates = []
+            for t in ('clock_in', 'clock_out'):
+                rec = existing_types.get(t)
+                if not rec or rec.status in ('late', 'early_leave'):
+                    candidates.append(t)
+            if len(candidates) == 1:
+                clock_type = candidates[0]
+            elif len(candidates) == 2:
+                return Response({
+                    'error': '该日期上班卡和下班卡均需补卡，请选择补卡类型',
+                    'needs_choice': True,
+                    'options': candidates,
+                }, status=400)
+            else:
+                return Response({'error': '该日期无需补卡'}, status=400)
+        if clock_type not in ('clock_in', 'clock_out'):
+            return Response({'error': '请选择补卡类型（上班卡/下班卡）'}, status=400)
 
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
         dept_id = self._primary_department_id(request.user, tenant)
@@ -2361,6 +2384,35 @@ class ApprovalViewSet(viewsets.ViewSet):
         except Exception:
             return False
 
+    @staticmethod
+    def _cc_department_ids(user):
+        """用户可作为「抄送部门」查看的部门 ID：所属部门 + 负责/副负责的部门。"""
+        from org.models import UserDepartment
+        from accounts.models import Department
+        dept_ids = set(UserDepartment.objects.filter(user=user).values_list('department_id', flat=True))
+        dept_ids.update(Department.objects.filter(
+            Q(manager=user) | Q(deputy_managers=user)
+        ).values_list('id', flat=True))
+        return dept_ids
+
+    def _cc_visible_request_ids(self, user):
+        """抄送可见的审批 ID（仅审批结束后：已通过/已驳回）。
+
+        - 指定抄送人本人；
+        - 抄送部门的全部成员（UserDepartment）以及部门负责人/副负责人。
+        列表与详情共用该规则，避免列表可见但详情 403。
+        """
+        statuses = ['approved', 'rejected']
+        ids = set(ApprovalCarbonCopy.objects.filter(
+            cc_user=user, request__status__in=statuses
+        ).values_list('request_id', flat=True))
+        dept_ids = self._cc_department_ids(user)
+        if dept_ids:
+            ids.update(ApprovalCarbonCopy.objects.filter(
+                cc_department_id__in=dept_ids, request__status__in=statuses
+            ).values_list('request_id', flat=True))
+        return ids
+
     def _todo_request_ids(self, user):
         """「待我审批」：返回当前用户仍需处理的审批 ID 集合。
 
@@ -2452,30 +2504,12 @@ class ApprovalViewSet(viewsets.ViewSet):
                 )
             ).values_list('node__request_id', flat=True).distinct()
 
-            # 抄送人：仅在整个审核完成后（已通过/已驳回）才能看到
-            cc_ids = ApprovalCarbonCopy.objects.filter(
-                cc_user=user, request__status__in=['approved', 'rejected']
-            ).values_list('request_id', flat=True).distinct()
-            # 抄送部门负责人/副负责人：同样审核完成后可见
-            cc_dept_ids = []
-            try:
-                from org.models import UserDepartment
-                user_dept_ids = list(UserDepartment.objects.filter(user=user).values_list('department_id', flat=True))
-                from accounts.models import Department
-                managed_dept_ids = list(Department.objects.filter(
-                    Q(manager=user) | Q(deputy_managers=user)
-                ).values_list('id', flat=True))
-                all_dept_ids = list(set(user_dept_ids + managed_dept_ids))
-                if all_dept_ids:
-                    cc_dept_ids = list(ApprovalCarbonCopy.objects.filter(
-                        cc_department_id__in=all_dept_ids, request__status__in=['approved', 'rejected']
-                    ).values_list('request_id', flat=True).distinct())
-            except Exception:
-                pass
+            # 抄送人 / 抄送部门成员：仅在整个审核结束后（已通过/已驳回）可见
+            cc_ids = self._cc_visible_request_ids(user)
 
             qs = ApprovalRequest.objects.select_related('applicant', 'department').filter(
                 Q(id__in=my_approval_ids) | Q(id__in=active_assignee_ids) |
-                Q(id__in=cc_ids) | Q(id__in=cc_dept_ids)
+                Q(id__in=cc_ids)
             )
 
         scope_filter = request.query_params.get('scope', '')
@@ -2483,26 +2517,8 @@ class ApprovalViewSet(viewsets.ViewSet):
             # 我发起的：仅本人发起的审批
             qs = qs.filter(applicant=user)
         elif scope_filter == 'cc':
-            # 抄送我的：审批结束后（已通过/已驳回）的抄送记录（含部门抄送）
-            cc_user_ids = list(ApprovalCarbonCopy.objects.filter(
-                cc_user=user, request__status__in=['approved', 'rejected']
-            ).values_list('request_id', flat=True).distinct())
-            cc_dept_ids = []
-            try:
-                from org.models import UserDepartment
-                from accounts.models import Department
-                user_dept_ids = list(UserDepartment.objects.filter(user=user).values_list('department_id', flat=True))
-                managed_dept_ids = list(Department.objects.filter(
-                    Q(manager=user) | Q(deputy_managers=user)
-                ).values_list('id', flat=True))
-                all_dept_ids = list(set(user_dept_ids + managed_dept_ids))
-                if all_dept_ids:
-                    cc_dept_ids = list(ApprovalCarbonCopy.objects.filter(
-                        cc_department_id__in=all_dept_ids, request__status__in=['approved', 'rejected']
-                    ).values_list('request_id', flat=True).distinct())
-            except Exception:
-                pass
-            qs = qs.filter(Q(id__in=cc_user_ids) | Q(id__in=cc_dept_ids))
+            # 抄送我的：审批结束后（已通过/已驳回）的抄送记录（含抄送部门全部成员）
+            qs = qs.filter(id__in=self._cc_visible_request_ids(user))
         elif scope_filter == 'todo':
             # 待我审批：自己仍有需要处理的节点（并行审批全部节点；顺序审批仅当前节点），
             # 且该节点尚未被其他审批人完成（修复并行审批下 current_node_order=0 导致列表为空）
@@ -2560,17 +2576,13 @@ class ApprovalViewSet(viewsets.ViewSet):
                 'applicant', 'approver', 'department'
             ).prefetch_related('logs__operator', 'approval_nodes__assignees__user').get(id=pk)
             # 权限：仅超级管理员可查看全部；申请人可见自己发起；
-            # 审批人：节点到达自己且审批进行中可见，或自己已通过/驳回过该审批可见；抄送人仅审核完成后可见。
-            is_cc = approval.carbon_copies.filter(
-                Q(cc_user=request.user) | Q(cc_department__manager=request.user) | Q(cc_department__deputy_managers=request.user)
-            ).exists()
-            # 可查看规则：①超管全量；②发起人全流程；③审批人到达自己节点（含后续流程）即可查看；
-            # ④抄送人仅在审批结束后（已通过/已驳回）可查看。
+            # 审批人按节点到达/处理结果可见；抄送人及抄送部门全部成员在审批结束后可见。
+            # 与列表使用同一套抄送可见规则，避免「列表可见、详情 403」。
             can_view = (
                 request.user.user_type == 'super_admin'
                 or approval.applicant == request.user
                 or self._is_approver_reached(approval, request.user)
-                or (is_cc and approval.status in ('approved', 'rejected'))
+                or approval.id in self._cc_visible_request_ids(request.user)
             )
             if not can_view:
                 # 审批人是该审批的经办节点但未到当前节点（顺序审批时后续节点）→ 提示未到达节点
@@ -4237,35 +4249,46 @@ class ApprovalViewSet(viewsets.ViewSet):
                 )
 
     def _notify_cc_after_end(self, approval):
-        """审批结束后（已通过/已驳回）才向抄送人发送抄送通知"""
+        """审批通过后向抄送对象发送抄送通知。
+
+        抄送对象与「抄送可见」规则保持一致：
+        - 指定抄送人本人；
+        - 抄送部门的全部在职成员，以及部门负责人/副负责人（即使没有 UserDepartment 关系）；
+        - 按用户去重，排除申请人本人与已禁用账号。
+        """
+        from org.models import UserDepartment
+
         applicant_name = approval.applicant.real_name or approval.applicant.username if approval.applicant else ''
         status_label = approval.get_status_display()
-        for cc in approval.carbon_copies.all():
-            if cc.cc_type == 'user' and cc.cc_user and cc.cc_user.id != approval.applicant_id:
-                send_work_notification(
-                    user_id=cc.cc_user.id,
-                    title='审批抄送通知',
-                    content=f'{applicant_name} 的{_approval_type_label(approval)}申请“{approval.title}”已完成（{status_label}），请知悉',
-                    notification_type='approval',
-                    related_url=f'/oa/approval/?approval_id={approval.id}',
-                    extra_data={'approval_id': approval.id, 'action': 'cc'},
-                )
+        targets = {}  # user_id -> 抄送部门名称（可为空）
+
+        for cc in approval.carbon_copies.select_related('cc_user', 'cc_department').all():
+            if cc.cc_type == 'user' and cc.cc_user:
+                if cc.cc_user.id != approval.applicant_id and cc.cc_user.is_active:
+                    targets.setdefault(cc.cc_user.id, None)
             elif cc.cc_type == 'department' and cc.cc_department:
-                targets = []
-                if cc.cc_department.manager and cc.cc_department.manager.id != approval.applicant_id:
-                    targets.append(cc.cc_department.manager)
-                for dm in cc.cc_department.deputy_managers.all():
-                    if dm.id != approval.applicant_id:
-                        targets.append(dm)
-                for mgr in targets:
-                    send_work_notification(
-                        user_id=mgr.id,
-                        title='审批抄送通知',
-                        content=f'{applicant_name} 的{_approval_type_label(approval)}申请“{approval.title}”已完成（{status_label}，抄送部门：{cc.cc_department.name}），请知悉',
-                        notification_type='approval',
-                        related_url=f'/oa/approval/?approval_id={approval.id}',
-                        extra_data={'approval_id': approval.id, 'action': 'cc'},
-                    )
+                dept = cc.cc_department
+                member_ids = set(UserDepartment.objects.filter(
+                    department=dept, user__is_active=True
+                ).values_list('user_id', flat=True))
+                if dept.manager_id:
+                    member_ids.add(dept.manager_id)
+                member_ids.update(dept.deputy_managers.filter(
+                    is_active=True).values_list('id', flat=True))
+                member_ids.discard(approval.applicant_id)
+                for uid in member_ids:
+                    targets.setdefault(uid, dept.name)
+
+        for uid, dept_name in targets.items():
+            suffix = f'，抄送部门：{dept_name}' if dept_name else ''
+            send_work_notification(
+                user_id=uid,
+                title='审批抄送通知',
+                content=f'{applicant_name} 的{_approval_type_label(approval)}申请“{approval.title}”已完成（{status_label}{suffix}），请知悉',
+                notification_type='approval',
+                related_url=f'/oa/approval/?approval_id={approval.id}',
+                extra_data={'approval_id': approval.id, 'action': 'cc'},
+            )
 
     def _auto_determine_approvers(self, user, tenant, approval_type=None, department_id=None,
                                    threshold_values=None):
@@ -4466,18 +4489,21 @@ class ApprovalViewSet(viewsets.ViewSet):
         ).select_related('node').first()
         if not assignee:
             return False
-        if approval.approval_mode == 'parallel':
-            # 并行审批：全部节点同时激活，审批人可查看
-            return True
+        # 规则与列表 active_assignee_ids 保持一致
         if approval.status == 'approved':
+            # 曾为该审批审批人的均可查看
             return True
         if approval.status == 'rejected':
             # 仅驳回该审批的审批人可查看
             return assignee.status == 'rejected'
         if approval.status == 'cancelled':
-            # 审批到达自己节点时被发起人撤回
+            if approval.approval_mode == 'parallel':
+                return True
+            # 顺序审批：审批到达自己节点时被发起人撤回
             return assignee.node.order <= (approval.current_node_order or 0)
-        # 进行中（pending/deferred/processing）：已到达自己节点
+        # 进行中（pending/deferred/processing）：并行全部节点、顺序当前及已到达节点
+        if approval.approval_mode == 'parallel':
+            return True
         return assignee.node.order <= (approval.current_node_order or 0)
 
     def _check_user_processed(self, approval, user):

@@ -1209,52 +1209,94 @@ class AttendanceApp {
         var now = new Date();
         this._mkYear = now.getFullYear();
         this._mkMonth = now.getMonth() + 1;
+        this._mkSelectedDate = null;
+        this._mkSelectedType = '';
+        this._mkEligibleTypes = {};
+        this._mkDays = [];
+        this._mkCfgTime = null;
         var dateHidden = document.getElementById('makeupDate');
         if (dateHidden) dateHidden.value = '';
-        this._mkSelectedDate = null;
-        this._mkDays = [];
-        // 加载本月考勤日历，用于高亮迟到/早退与漏卡日期
+        var typeHidden = document.getElementById('makeupClockType');
+        if (typeHidden) typeHidden.value = '';
+        await this._loadMakeupCalendarData();
+        this.renderMakeupCalendar();
+        this._renderMakeupRemainingTip();
+        var modal = document.getElementById('attendanceMakeupModal');
+        if (modal) {
+            modal.style.display = 'flex';
+            setTimeout(function () { modal.classList.add('show'); }, 10);
+        }
+    }
+
+    // 加载本月考勤日历（补卡高亮用）
+    async _loadMakeupCalendarData() {
         try {
             var cdata = await this.apiGet(OA_API_URL + '/attendance/calendar-stats/?year=' + this._mkYear + '&month=' + this._mkMonth);
             this._mkDays = (cdata && cdata.days) || [];
             this._mkCfgTime = (cdata && cdata.config_time) || null;  // {clock_in, clock_out, shift_type}
         } catch (e) { /* 高亮加载失败不影响补卡 */ }
-        this.renderMakeupCalendar();
+    }
+
+    _renderMakeupRemainingTip() {
         var used = this._makeupUsed || 0;
         var allowance = (this._makeupAllowance != null) ? this._makeupAllowance : 3;
         var tip = document.getElementById('makeupRemainingTip');
         if (tip) {
             tip.innerHTML = '<i class="fas fa-info-circle"></i> 本月已用补卡 <b>' + used + '</b> / ' + allowance + ' 次，剩余 <b>' + Math.max(0, allowance - used) + '</b> 次';
         }
-        document.getElementById('attendanceMakeupModal').style.display = 'flex';
-        setTimeout(function () {
-            document.getElementById('attendanceMakeupModal').classList.add('show');
-        }, 10);
     }
 
-    // 渲染补卡日历：仅当日及之前「迟到/早退（琥珀）」「漏卡（红）」可点选；
-    // 正常打卡/未来/休息日/节假日/请假日不可选；未获取到考勤数据时全部置灰并提示。
+    // 自动识别某日期需要补哪些卡（漏卡 / 迟到 / 早退），返回 ['clock_in' | 'clock_out']
+    _makeupEligibleTypes(info, ds) {
+        if (!info || !info.day_status) return [];
+        if (info.day_status === 'future' || info.day_status === 'rest' || info.day_status === 'leave') return [];
+        var cfgT = this._mkCfgTime || {};
+        var now = new Date();
+        var todayStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+        var nowHM = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+        var shiftNight = cfgT.shift_type === 'night';
+        var types = [];
+        ['clock_in', 'clock_out'].forEach(function (t) {
+            var rec = info[t] || null;
+            if (!rec) {
+                if (ds === todayStr) {
+                    // 今日漏卡：需过该卡配置时间才可补；夜班下班卡属次日，不在今日补
+                    if (shiftNight && t === 'clock_out') return;
+                    var typeTime = t === 'clock_in' ? (cfgT.clock_in || '09:00') : (cfgT.clock_out || '18:00');
+                    if (nowHM < typeTime) return;
+                }
+                types.push(t);
+            } else if (rec.status === 'late' || rec.status === 'early_leave') {
+                types.push(t);
+            }
+        });
+        return types;
+    }
+
+    _hasMakeupNeeds() {
+        var self = this;
+        return (this._mkDays || []).some(function (info) {
+            return self._makeupEligibleTypes(info, info.date).length > 0;
+        });
+    }
+
+    // 渲染补卡日历：默认同时展示上班卡/下班卡的全部需补卡日期
     renderMakeupCalendar() {
+        var self = this;
         var grid = document.getElementById('makeupCalGrid');
         var legend = document.getElementById('makeupCalLegend');
         var hint = document.getElementById('makeupCalHint');
         if (!grid) return;
-        var ct = document.getElementById('makeupClockType') ? document.getElementById('makeupClockType').value : 'clock_in';
         var y = this._mkYear, month = this._mkMonth;
-        var now = new Date();
-        var todayStr = y + '-' + String(month).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
         var dataOk = !!(this._mkDays && this._mkDays.length);
         var cfgT = this._mkCfgTime || {};
-        var shiftNight = cfgT.shift_type === 'night';
-        var nowHM = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-        var typeTime = ct === 'clock_in' ? (cfgT.clock_in || '09:00') : (cfgT.clock_out || '18:00');
         if (hint) {
             if (!dataOk) {
                 hint.innerHTML = '<i class="fas fa-exclamation-triangle"></i> 未获取到考勤数据，暂无法选择补卡日期，请刷新后重试';
                 hint.style.background = '#fdf6ec';
                 hint.style.color = '#e6a23c';
             } else {
-                hint.innerHTML = '<i class="fas fa-info-circle"></i> 可选择今日及之前的「迟到/早退」或「漏卡」日期（休息日/节假日/请假日除外）；今日漏打的' + (ct === 'clock_in' ? '上班卡' : '下班卡') + '在打卡时间 ' + typeTime + ' 过后也可补，点击高亮日期选择';
+                hint.innerHTML = '<i class="fas fa-info-circle"></i> 已展示全部需补卡日期：点击日期后自动识别补上班卡/下班卡；若同日两张卡都需补，会提示选择补哪一张。';
                 hint.style.background = '#ecf5ff';
                 hint.style.color = '#409eff';
             }
@@ -1266,36 +1308,34 @@ class AttendanceApp {
         var firstDay = new Date(y, month - 1, 1).getDay();
         var dim = new Date(y, month, 0).getDate();
         for (var i = 0; i < firstDay; i++) html += '<div></div>';
+        this._mkEligibleTypes = {};
         for (var day = 1; day <= dim; day++) {
             var ds = y + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
             var info = {};
             (this._mkDays || []).forEach(function (x) { if (x.date === ds) info = x; });
-            var rec = ct === 'clock_in' ? (info.clock_in || null) : (info.clock_out || null);
-            var recStatus = rec ? rec.status : '';
-            var isFuture = info.day_status === 'future';
-            var isRest = info.day_status === 'rest' || info.day_status === 'leave';
-            // 今日漏卡：该卡配置打卡时间已过才可补（夜班下班卡属次日，不在今日补）
-            var todayMissOk = (ds === todayStr) && !rec
-                && !(shiftNight && ct === 'clock_out')
-                && (nowHM >= typeTime);
-            // 严格按规则判定：必须有考勤数据且为迟到/早退或漏卡才可选择，其余日期一律不可选
-            var hasInfo = !!info.day_status;
-            var eligible = false, kind = '';
-            if (dataOk && hasInfo && !isFuture && !isRest) {
-                if (!rec) { eligible = ds === todayStr ? todayMissOk : true; kind = 'miss'; }
-                else if (recStatus === 'late' || recStatus === 'early_leave') { eligible = true; kind = 'late'; }
-            }
+            var types = this._makeupEligibleTypes(info, ds);
+            this._mkEligibleTypes[ds] = types;
+            var eligible = types.length > 0;
+            var hasMiss = types.some(function (t) { return !info[t]; });
+            var kind = eligible ? (hasMiss ? 'miss' : 'late') : '';
+            var typeLabels = types.map(function (t) { return t === 'clock_in' ? '上班卡' : '下班卡'; });
             var isSel = this._mkSelectedDate === ds;
             var bg = eligible ? (kind === 'late' ? '#fdf6ec' : '#fef0f0') : '#f5f7fa';
-            var color = eligible ? '#303133' : (isFuture ? '#c0c4cc' : '#909399');
+            var color = eligible ? '#303133' : (info.day_status === 'future' ? '#c0c4cc' : '#909399');
             var border = isSel ? '2px solid #409eff' : '1px solid #ebeef5';
             var cursor = eligible ? 'pointer' : 'not-allowed';
             var mark = '';
-            if (eligible && kind === 'late') mark = '<i class="fas fa-edit" style="font-size:8px;color:#e6a23c;display:block;line-height:1;"></i>';
-            else if (eligible && kind === 'miss') mark = '<i class="fas fa-exclamation" style="font-size:8px;color:#f56c6c;display:block;line-height:1;"></i>';
+            if (eligible) {
+                var markColor = kind === 'late' ? '#e6a23c' : '#f56c6c';
+                var markIcon = kind === 'late' ? 'fa-edit' : 'fa-exclamation';
+                var markText = types.length === 2 ? '上/下' : (types[0] === 'clock_in' ? '上' : '下');
+                mark = '<i class="fas ' + markIcon + '" style="font-size:8px;color:' + markColor + ';display:block;line-height:1;"></i>'
+                    + '<span style="font-size:8px;color:' + markColor + ';line-height:1.2;">' + markText + '</span>';
+            }
+            var title = eligible ? (ds + '：可补' + typeLabels.join('、')) : '不可补卡';
             html += '<div class="makeup-day' + (isSel ? ' selected' : '') + '" data-date="' + ds + '"'
                 + (eligible ? ' onclick="attendanceApp.selectMakeupDate(\'' + ds + '\')"' : '')
-                + ' title="' + (eligible ? (kind === 'late' ? '迟到/早退，可补卡' : '漏卡，可补卡') : '不可补卡') + '"'
+                + ' title="' + title + '"'
                 + ' style="cursor:' + cursor + ';border-radius:6px;padding:5px 2px;text-align:center;font-size:12px;border:' + border + ';background:' + bg + ';color:' + color + ';">'
                 + day + mark
                 + '</div>';
@@ -1304,15 +1344,54 @@ class AttendanceApp {
         if (legend) {
             legend.innerHTML = '<span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#fef0f0;border:1px solid #fde2e2;vertical-align:-2px;margin-right:3px;"></span>漏卡可补</span>'
                 + '<span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#fdf6ec;border:1px solid #f5dab1;vertical-align:-2px;margin-right:3px;"></span>迟到/早退可补</span>'
-                + '<span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#f5f7fa;vertical-align:-2px;margin-right:3px;"></span>正常/不可补</span>';
+                + '<span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#f5f7fa;vertical-align:-2px;margin-right:3px;"></span>正常/不可补</span>'
+                + '<span>格内「上/下」表示需补的卡种</span>';
+        }
+        // 自动识别结果 / 双卡种选择
+        var autoEl = document.getElementById('makeupTypeAuto');
+        var chooser = document.getElementById('makeupTypeChooser');
+        var selTypes = (this._mkSelectedDate && this._mkEligibleTypes[this._mkSelectedDate]) || [];
+        if (autoEl) {
+            if (!this._mkSelectedDate) {
+                autoEl.innerHTML = '请选择补卡日期，系统将自动识别需补上班卡或下班卡';
+                autoEl.style.color = 'var(--text-secondary,#606266)';
+            } else if (selTypes.length === 1) {
+                autoEl.innerHTML = '<i class="fas fa-check-circle" style="color:#67c23a;"></i> 已自动识别：' + (selTypes[0] === 'clock_in' ? '补上班卡' : '补下班卡');
+                autoEl.style.color = '#303133';
+            } else if (!this._mkSelectedType) {
+                autoEl.innerHTML = '<i class="fas fa-exclamation-circle" style="color:#e6a23c;"></i> 该日期上班卡和下班卡均需补卡，请选择要补的卡类型';
+                autoEl.style.color = '#b88230';
+            } else {
+                autoEl.innerHTML = '<i class="fas fa-check-circle" style="color:#67c23a;"></i> 当前选择：' + (this._mkSelectedType === 'clock_in' ? '补上班卡' : '补下班卡');
+                autoEl.style.color = '#303133';
+            }
+        }
+        if (chooser) {
+            chooser.style.display = selTypes.length === 2 ? 'flex' : 'none';
+            chooser.querySelectorAll('.makeup-type-btn').forEach(function (btn) {
+                var t = btn.getAttribute('data-type');
+                var active = self._mkSelectedType === t;
+                btn.style.borderColor = active ? '#409eff' : '';
+                btn.style.color = active ? '#409eff' : '';
+                btn.style.background = active ? '#ecf5ff' : '';
+            });
         }
         // 已选日期提示：将按考勤配置时间补卡
         var tipEl = document.getElementById('makeupTimeTip');
         if (tipEl) {
             if (this._mkSelectedDate) {
-                var tipT = ct === 'clock_in' ? (cfgT.clock_in || '09:00') : (cfgT.clock_out || '18:00');
-                tipEl.innerHTML = '<i class="fas fa-clock" style="margin-right:4px;"></i> 将按考勤配置时间 <b>' + tipT + '</b> 补' + (ct === 'clock_in' ? '上班' : '下班') + '卡（' + this._mkSelectedDate + '）';
-                tipEl.style.display = 'block';
+                if (!this._mkSelectedType) {
+                    tipEl.innerHTML = '<i class="fas fa-info-circle"></i> 该日期上班卡和下班卡均需补卡，请先选择补上班卡或补下班卡';
+                    tipEl.style.display = 'block';
+                    tipEl.style.background = '#fdf6ec';
+                    tipEl.style.color = '#b88230';
+                } else {
+                    var tipT = this._mkSelectedType === 'clock_in' ? (cfgT.clock_in || '09:00') : (cfgT.clock_out || '18:00');
+                    tipEl.innerHTML = '<i class="fas fa-clock" style="margin-right:4px;"></i> 将按考勤配置时间 <b>' + tipT + '</b> 补' + (this._mkSelectedType === 'clock_in' ? '上班' : '下班') + '卡（' + this._mkSelectedDate + '）';
+                    tipEl.style.display = 'block';
+                    tipEl.style.background = '#f0f9eb';
+                    tipEl.style.color = '#67c23a';
+                }
             } else {
                 tipEl.style.display = 'none';
             }
@@ -1320,9 +1399,25 @@ class AttendanceApp {
     }
 
     selectMakeupDate(ds) {
+        var types = (this._mkEligibleTypes && this._mkEligibleTypes[ds]) || [];
+        if (!types.length) return;
         this._mkSelectedDate = ds;
         var dateHidden = document.getElementById('makeupDate');
         if (dateHidden) dateHidden.value = ds;
+        // 单一卡种直接自动选中；两种卡都需补时由用户明确选择，避免漏补
+        this._mkSelectedType = types.length === 1 ? types[0] : '';
+        var typeHidden = document.getElementById('makeupClockType');
+        if (typeHidden) typeHidden.value = this._mkSelectedType;
+        this.renderMakeupCalendar();
+    }
+
+    chooseMakeupType(type) {
+        if (!this._mkSelectedDate) { this.showToast('请先选择补卡日期', true); return; }
+        var types = (this._mkEligibleTypes && this._mkEligibleTypes[this._mkSelectedDate]) || [];
+        if (types.indexOf(type) === -1) return;
+        this._mkSelectedType = type;
+        var typeHidden = document.getElementById('makeupClockType');
+        if (typeHidden) typeHidden.value = type;
         this.renderMakeupCalendar();
     }
 
@@ -1336,14 +1431,33 @@ class AttendanceApp {
 
     async submitMakeup() {
         var dateStr = document.getElementById('makeupDate') ? document.getElementById('makeupDate').value : '';
-        var clockType = document.getElementById('makeupClockType') ? document.getElementById('makeupClockType').value : 'clock_in';
+        var clockType = this._mkSelectedType || (document.getElementById('makeupClockType') ? document.getElementById('makeupClockType').value : '');
         if (!dateStr) { this.showToast('请选择补卡日期', true); return; }
+        if (!clockType) { this.showToast('该日期上班卡和下班卡均需补卡，请先选择补卡类型', true); return; }
         var btn = document.querySelector('#attendanceMakeupModal .btn-primary');
         if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 提交中...'; }
         try {
-            await this.apiPost(OA_API_URL + '/attendance/makeup/', { date: dateStr, clock_type: clockType });
-            this.showToast('补卡成功', false);
-            this.closeMakeupModal();
+            var res = await this.apiPost(OA_API_URL + '/attendance/makeup/', { date: dateStr, clock_type: clockType });
+            if (res && res.makeup_used != null) {
+                this._makeupUsed = res.makeup_used;
+                if (res.makeup_allowance != null) this._makeupAllowance = res.makeup_allowance;
+            }
+            // 清空选择并重新加载；仍有需补卡日期时保持弹窗，避免漏补另一张卡
+            this._mkSelectedDate = null;
+            this._mkSelectedType = '';
+            var dateHidden = document.getElementById('makeupDate');
+            if (dateHidden) dateHidden.value = '';
+            var typeHidden = document.getElementById('makeupClockType');
+            if (typeHidden) typeHidden.value = '';
+            await this._loadMakeupCalendarData();
+            this.renderMakeupCalendar();
+            this._renderMakeupRemainingTip();
+            if (this._hasMakeupNeeds()) {
+                this.showToast('补卡成功，仍有需补卡的日期，请继续处理', false);
+            } else {
+                this.showToast('补卡成功', false);
+                this.closeMakeupModal();
+            }
             await this.loadToday();
             await this.loadStats();
             await this.loadRecords(1);
