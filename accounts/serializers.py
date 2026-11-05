@@ -589,23 +589,46 @@ class UserDetailSerializer(serializers.ModelSerializer):
             'last_seen': obj.last_seen.isoformat() if obj.last_seen else None
         }
 
-    def get_department_info(self, obj):
-        """获取用户部门信息（优先组织架构部门，降级为旧版 department）"""
-        # 降级：返回组织架构主部门
+    def _get_context_tenant(self, obj):
+        """当前查看上下文所属企业：request.tenant > 请求用户激活企业 > 目标用户激活企业"""
+        request = self.context.get('request')
+        tenant = getattr(request, 'tenant', None) if request is not None else None
+        if tenant is None and request is not None:
+            req_user = getattr(request, 'user', None)
+            if req_user is not None and getattr(req_user, 'is_authenticated', False):
+                try:
+                    tenant = req_user.get_active_tenant()
+                except Exception:
+                    tenant = None
+        if tenant is None:
+            try:
+                tenant = obj.get_active_tenant()
+            except Exception:
+                tenant = None
+        return tenant
+
+    def _get_primary_department_relation(self, obj, tenant=None):
+        """用户在当前企业的主部门关系（主部门优先，其余按加入顺序）"""
         try:
             from org.models import UserDepartment
-            primary = UserDepartment.objects.filter(
-                user=obj, is_primary=True
-            ).select_related('department').first()
-            if primary:
-                return {
-                    'id': primary.department.id,
-                    'name': primary.department.name,
-                    'type': 'org',
-                    'position': primary.position,
-                }
+            qs = UserDepartment.objects.filter(user=obj).select_related('department')
+            if tenant is not None:
+                return qs.filter(department__tenant=tenant).order_by('-is_primary', 'id').first()
+            return qs.order_by('-is_primary', 'id').first()
         except Exception:
-            pass
+            return None
+
+    def get_department_info(self, obj):
+        """获取用户部门信息（优先当前企业下的组织架构主部门，降级为旧版 department）"""
+        tenant = self._get_context_tenant(obj)
+        primary = self._get_primary_department_relation(obj, tenant)
+        if primary and primary.department:
+            return {
+                'id': primary.department.id,
+                'name': primary.department.name,
+                'type': 'org',
+                'position': primary.position,
+            }
 
         if obj.department:
             return {
@@ -633,19 +656,70 @@ class UserDetailSerializer(serializers.ModelSerializer):
             return []
 
     def get_supervisor(self, obj):
-        """获取用户的直属主管信息"""
+        """获取用户的直属主管信息。
+
+        用户可能在同一企业多个部门任职，以「当前企业主部门」为准：
+        1. 优先取主部门的直接汇报关系；
+        2. 没有汇报关系时取主部门负责人；
+        3. 若用户本人就是主部门负责人（没有更上级的直属汇报），
+           则沿上级部门逐级向上查找负责人（主负责人优先，其次副负责人），直到找到为止；
+        4. 没有组织架构部门时兼容旧版 CustomUser.department。
+        """
         try:
             from org.models import ReportRelation
-            rel = ReportRelation.objects.filter(
-                user=obj, is_direct=True
-            ).select_related('supervisor').first()
-            if rel and rel.supervisor:
+            tenant = self._get_context_tenant(obj)
+            primary_rel = self._get_primary_department_relation(obj, tenant)
+            primary_dept = primary_rel.department if primary_rel else None
+            if primary_dept is None:
+                # 兼容只有 CustomUser.department、没有组织架构关系的历史账号
+                primary_dept = getattr(obj, 'department', None)
+
+            qs = ReportRelation.objects.filter(user=obj, is_direct=True)
+            if tenant is not None:
+                qs = qs.filter(tenant=tenant)
+            qs = qs.select_related('supervisor')
+
+            rel = None
+            if primary_dept is not None:
+                # 主部门有汇报关系时只认该部门，避免串到其它任职部门的上级
+                rel = qs.filter(department=primary_dept).first()
+            else:
+                rel = qs.order_by('id').first()
+
+            supervisor = None
+            if rel and rel.supervisor and rel.supervisor_id != obj.id:
+                supervisor = rel.supervisor
+
+            if supervisor is None and primary_dept is not None:
+                # 没有直接汇报关系时：取主部门负责人（本人除外）
+                if primary_dept.manager_id and primary_dept.manager_id != obj.id and primary_dept.manager.is_active:
+                    supervisor = primary_dept.manager
+                else:
+                    # 本人就是主部门负责人（或主部门无负责人）→ 逐级向上找上级部门负责人
+                    dept = primary_dept.parent
+                    guard = 0
+                    while dept is not None and guard < 30:
+                        candidate = None
+                        if dept.manager_id and dept.manager.id != obj.id and dept.manager.is_active:
+                            candidate = dept.manager
+                        if candidate is None:
+                            for dm in dept.deputy_managers.all():
+                                if dm.id != obj.id and dm.is_active:
+                                    candidate = dm
+                                    break
+                        if candidate is not None:
+                            supervisor = candidate
+                            break
+                        dept = dept.parent
+                        guard += 1
+
+            if supervisor is not None:
                 return {
-                    'id': rel.supervisor.id,
-                    'username': rel.supervisor.username,
-                    'real_name': rel.supervisor.real_name or '',
-                    'avatar': rel.supervisor.get_avatar_url(),
-                    'position': rel.supervisor.position or '',
+                    'id': supervisor.id,
+                    'username': supervisor.username,
+                    'real_name': supervisor.real_name or '',
+                    'avatar': supervisor.get_avatar_url(),
+                    'position': supervisor.position or '',
                 }
         except Exception:
             pass

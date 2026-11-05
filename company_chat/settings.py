@@ -80,8 +80,10 @@ MIDDLEWARE = [
     # 'chat.middleware.SystemConfigCacheMiddleware',  # 🔧 添加配置缓存中间件
 ]
 
-INSTALLED_APPS += ['debug_toolbar']
-MIDDLEWARE.insert(0, 'debug_toolbar.middleware.DebugToolbarMiddleware')
+# 开发调试工具仅在 DEBUG 时加载，避免生产启动时额外导入 debug_toolbar / django.test 等模块
+if DEBUG:
+    INSTALLED_APPS += ['debug_toolbar']
+    MIDDLEWARE.insert(0, 'debug_toolbar.middleware.DebugToolbarMiddleware')
 
 ROOT_URLCONF = 'company_chat.urls'
 

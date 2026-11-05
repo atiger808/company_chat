@@ -28,8 +28,8 @@ from .models import (
 
 @admin.register(AttendanceRecord)
 class AttendanceRecordAdmin(admin.ModelAdmin):
-    list_display = ['id', 'user', 'tenant', 'clock_type', 'clock_time', 'date', 'status', 'location']
-    list_filter = ['clock_type', 'status', 'date', 'tenant']
+    list_display = ['id', 'user', 'tenant', 'clock_type', 'clock_time', 'makeup_at', 'device', 'status', 'location']
+    list_filter = ['clock_type', 'status', 'date', 'device', 'tenant']
     search_fields = ['id', 'user__username', 'user__real_name', 'location']
     list_per_page = 20
 

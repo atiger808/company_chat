@@ -3607,8 +3607,9 @@ body {
 }
 
 .pagination-btn:hover:not(:disabled):not(.active) {
-    color: #409eff;
-    border-color: #409eff;
+    color: #fff;
+    border-color: #409EFF;
+    font-weight: 500;
 }
 
 .pagination-btn:disabled {

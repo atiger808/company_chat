@@ -8,8 +8,15 @@ Group=root
 WorkingDirectory=/www/yue/company_chat
 ExecStart=/www/miniconda3/envs/companychat/bin/daphne -b 0.0.0.0 -p 10900 company_chat.asgi:application
 
+
+# 停止最多等 15 秒，仍未退出则强制结束，避免默认 90 秒等待
+TimeoutStopSec=15
+KillSignal=SIGTERM
+KillMode=mixed
+SendSIGKILL=yes
+
 Restart=on-failure
-RestartSec=10
+RestartSec=3
 
 StandardOutput=append:/var/log/daphne/out-company_chat.log
 StandardError=append:/var/log/daphne/err-company_chat.log

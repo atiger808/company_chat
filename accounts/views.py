@@ -1129,7 +1129,7 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     @action(detail=True, methods=['get'])
-    def get_user_profile(self, request, pk=None):
+    def get_user_profile_old(self, request, pk=None):
         """获取指定用户的详细信息"""
         try:
             user = CustomUser.objects.get(pk=pk)
@@ -1156,6 +1156,19 @@ class UserViewSet(viewsets.ModelViewSet):
                 }
                 return Response(limited_data)
 
+            return Response(serializer.data)
+        except CustomUser.DoesNotExist:
+            return Response({'error': '用户不存在'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f'获取用户信息错误：{e}', exc_info=True)
+            return Response({'error': '获取用户信息错误'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['get'])
+    def get_user_profile(self, request, pk=None):
+        """获取指定用户的详细信息"""
+        try:
+            user = CustomUser.objects.get(pk=pk)
+            serializer = UserDetailSerializer(user, context={'request': request})
             return Response(serializer.data)
         except CustomUser.DoesNotExist:
             return Response({'error': '用户不存在'}, status=status.HTTP_404_NOT_FOUND)
