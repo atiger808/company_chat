@@ -8,8 +8,17 @@
     let ws = null;
     let unreadCount = 0;
     let wsReconnectTimer = null;
+    let wsReconnectDelay = 5000;      // WebSocket 重连退避（5s 起，最长 60s）
+    const WS_RECONNECT_MAX = 60000;
     let pollTimer = null;
     let initialized = false;
+
+    function wsOpen() {
+        if (ws && ws.readyState === WebSocket.OPEN) return true;
+        // 聊天页由 chatClient 维护通知 WebSocket，同样视为实时连接可用
+        var chatWs = window.chatClient && window.chatClient.globalWs;
+        return !!(chatWs && chatWs.readyState === WebSocket.OPEN);
+    }
 
     // 右上角弹窗（集团公告等）：{notification_type: bool} + 停留时长，来自后端配置接口
     let popupCfg = { enabled_types: { announcement: true }, duration_seconds: 10 };
@@ -530,6 +539,17 @@
         },
 
         refreshCount: fetchUnreadCount,
+
+        // 供聊天页的全局 WebSocket 复用：收到工作通知时刷新未读数、弹窗与桌面通知
+        onPush(n) {
+            fetchUnreadCount();
+            if (n) showPopup(n);
+            if (n && n.title && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+                try {
+                    new Notification(n.title, {body: n.content || '', icon: '/static/images/logo.png'});
+                } catch (e) {}
+            }
+        },
     };
 
     // 初始化
@@ -562,8 +582,26 @@
         // 通知弹窗配置（哪些类型弹窗 / 弹多久），拿到后补弹最近的未读通知
         fetchPopupConfig().then(popupRecentUnread);
 
-        // 轮询
-        pollTimer = setInterval(fetchUnreadCount, 1000*60);
+        // 轮询：WebSocket 已连接时由服务端实时推送，不再轮询；
+        // 页面在后台时也跳过，避免重启后所有页面同时打接口。
+        pollTimer = setInterval(function () {
+            if (document.hidden || wsOpen()) return;
+            fetchUnreadCount();
+        }, 1000 * 60);
+
+        // 回到前台/网络恢复：刷新一次未读数，并立即尝试恢复 WebSocket
+        document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState !== 'visible') return;
+            fetchUnreadCount();
+            if (!wsOpen()) {
+                wsReconnectDelay = 5000;
+                connectWs();
+            }
+        });
+        window.addEventListener('online', function () {
+            wsReconnectDelay = 5000;
+            if (!wsOpen()) connectWs();
+        });
 
         // WebSocket 连接
         connectWs();
@@ -578,9 +616,21 @@
 
     function connectWs() {
         try {
+            // 聊天页已由 chatClient 维护同一条 /ws/notifications/ 连接，
+            // 这里不再重复建连，避免每个聊天标签页同时开两条通知 WebSocket。
+            if (window.chatClient && typeof window.chatClient.connectGlobalWebSocket === 'function') {
+                return;
+            }
             var token = getAccessToken();
-            if (!token) return;
+            if (!token || !navigator.onLine) return;
+            if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
             ws = new WebSocket((location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws/notifications/?token=' + token);
+            ws.onopen = function() {
+                // 连接成功后重置退避，并补一次未读数
+                wsReconnectDelay = 5000;
+                fetchUnreadCount();
+            };
             ws.onmessage = function(e) {
                 try {
                     var data = JSON.parse(e.data);
@@ -607,10 +657,18 @@
                 } catch(err) {}
             };
             ws.onclose = function() {
+                ws = null;
+                // 登录失效或断网时不盲目重连，等待 online / 可见性事件
+                if (!getAccessToken() || !navigator.onLine) return;
                 clearTimeout(wsReconnectTimer);
-                wsReconnectTimer = setTimeout(connectWs, 5000);
+                // 指数退避 + 随机抖动，避免服务重启后所有页面在同一秒集中重连
+                var base = Math.max(5000, wsReconnectDelay);
+                var delay = Math.round(base * (0.6 + Math.random() * 0.8));
+                if (document.hidden) delay = Math.min(WS_RECONNECT_MAX * 2, delay * 2);
+                wsReconnectDelay = Math.min(WS_RECONNECT_MAX, Math.round(base * 1.8));
+                wsReconnectTimer = setTimeout(connectWs, Math.max(5000, delay));
             };
-            ws.onerror = function() { ws.close(); };
+            ws.onerror = function() { try { ws.close(); } catch(e) {} };
         } catch(e) {}
     }
 

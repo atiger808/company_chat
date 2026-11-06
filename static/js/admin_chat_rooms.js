@@ -21,6 +21,7 @@ class AdminChatRoomsClient {
         this.chatRoomsHasMore = true;
         this.chatRoomsLoading = false;
         this.lastScrollRoomId = null;   // 记录最后看到的聊天室 ID 用于位置恢复
+        this.adminContentScrollTop = 0; // 聊天室列表滚动偏移量
 
         // 🔧 新增：语音播放器状态管理
         this.voicePlayers = new Map(); // 存储音频播放器实例 { messageId: audioElement }
@@ -440,6 +441,8 @@ class AdminChatRoomsClient {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const roomId = e.currentTarget.dataset.roomId;
+                const adminContent = document.querySelector('.admin-content');
+                this.adminContentScrollTop = adminContent ? adminContent.scrollTop : 0;
                 this.showRoomHistory(roomId);
             });
         });
@@ -1817,6 +1820,11 @@ class AdminChatRoomsClient {
 
         // 移除历史消息的滚动监听，避免干扰列表
         this.removeInfiniteScrollListener();
+
+        const adminContent = document.querySelector('.admin-content')
+        if (adminContent) {
+            adminContent.scrollTop = this.adminContentScrollTop
+        }
 
         // this.loadChatRooms();
     }

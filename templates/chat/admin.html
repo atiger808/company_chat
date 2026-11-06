@@ -4,15 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理控制台 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/chat.css?v=20261027-569eee9">
-    <link rel="stylesheet" href="/static/css/admin.css?v=20261027-569eee9">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20261106-eea7c8b">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20261106-eea7c8b">
 <!--    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">-->
-    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261027-569eee9">
+    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261106-eea7c8b">
 
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260820-d0b2c3e">
     <!-- 🔧 新增：Chart.js 用于图表展示 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>-->
-    <script src="/static/js/dist/chart.min.js?v=20261027-569eee9"></script>
+    <script src="/static/js/dist/chart.min.js?v=20261106-eea7c8b"></script>
     <!-- 🔧 关键修复2: 添加 Chart.js 加载失败的回退方案 -->
     <script>
         // 检查 Chart.js 是否加载成功
@@ -202,7 +202,7 @@
                 </div>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="adminConsole.toggleUserDropdown(event)">
                     <span id="adminUsername" class="btn-text"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20261027-569eee9" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20261106-eea7c8b" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu show" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item"
@@ -830,11 +830,23 @@
                             <input type="tel" id="newPhone">
                         </div>
                     </div>
-                    <!--                    <div class="form-group" >-->
-                    <!--                        <label>部门</label>-->
-                    <!--                        <input type="text" id="newDepartment">-->
-                    <!--                    </div>-->
 
+                    <div class="form-group" id="createTenantGroup">
+                        <label>所属企业</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-building"></i>
+                            <select id="newTenant" class="form-select" onchange="adminConsole.onTenantChange('new')">
+                                <option value="">请选择企业</option>
+                                <!-- 动态加载 -->
+                            </select>
+                        </div>
+                        <small class="form-hint" id="createTenantHint" style="display:none;">
+                            <i class="fas fa-info-circle"></i> 选择企业后，用户将自动加入该企业
+                        </small>
+                    </div>
+
+                </div>
+                <div class="form-row">
                     <!-- 🔧 关键修复：部门字段添加权限控制 -->
                     <div class="form-group" id="createDepartmentGroup">
                         <label>部门</label>
@@ -851,8 +863,6 @@
                         </small>
                     </div>
 
-                </div>
-                <div class="form-row">
                     <div class="form-group">
                         <label>职位</label>
 
@@ -862,19 +872,6 @@
                         </div>
                     </div>
 
-                    <div class="form-group" id="createTenantGroup">
-                        <label>所属企业</label>
-                        <div class="input-with-icon">
-                            <i class="fas fa-building"></i>
-                            <select id="newTenant" class="form-select" onchange="adminConsole.onTenantChange('new')">
-                                <option value="">请选择企业</option>
-                                <!-- 动态加载 -->
-                            </select>
-                        </div>
-                        <small class="form-hint" id="createTenantHint" style="display:none;">
-                            <i class="fas fa-info-circle"></i> 选择企业后，用户将自动加入该企业
-                        </small>
-                    </div>
                 </div>
                 <div class="form-row">
                     <div class="form-group" id="createUserTypeGroup">
@@ -896,8 +893,6 @@
                 </div>
 
 
-                <!--                <div class="form-row">-->
-
                 <!-- 好友分配区域 -->
                 <div class="form-group">
                     <label><i class="fas fa-user-friends"></i> 分配好友</label>
@@ -911,7 +906,6 @@
                     <small class="form-hint">点击用户选择/取消好友，选中的用户将出现在该用户的通讯录中</small>
                 </div>
 
-                <!--                </div>-->
 
             </form>
         </div>
@@ -1004,10 +998,6 @@
                 </div>
                 <div class="form-row">
 
-                    <!--                    <div class="form-group">-->
-                    <!--                        <label>部门</label>-->
-                    <!--                        <input type="text" id="editDepartment">-->
-                    <!--                    </div>-->
 
                     <!-- 所属企业 -->
                     <div class="form-group" id="editTenantGroup">
@@ -1040,6 +1030,10 @@
                         </small>
                     </div>
 
+
+                </div>
+                <div class="form-row">
+
                     <div class="form-group">
                         <label>职位</label>
 
@@ -1048,8 +1042,6 @@
                             <input type="text" id="editPosition">
                         </div>
                     </div>
-                </div>
-                <div class="form-row">
 
                     <!-- 🔧 关键修复：用户类型字段添加权限控制 -->
                     <div class="form-group" id="editUserTypeGroup">
@@ -1154,18 +1146,18 @@
         <div class="spinner"></div>
     </div>
 </div>
-<script src="/static/js/dist/spark-md5.min.js?v=20261027-569eee9"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20261027-569eee9"></script>
-<script src="/static/js/dist/sm4.min.js?v=20261027-569eee9"></script>
-<script src="/static/js/encrypts.js?v=20261027-569eee9"></script>
-<script src="/static/js/utils.js?v=20261027-569eee9"></script>
-<script src="/static/js/api.js?v=20261027-569eee9"></script>
-<script src="/static/js/admin.js?v=20261027-569eee9"></script>
-<script src="/static/js/admin_chat_rooms.js?v=20261027-569eee9"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/dist/sm4.min.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/encrypts.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/utils.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/api.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/admin.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/admin_chat_rooms.js?v=20261106-eea7c8c"></script>
 <!-- 🔧 新增：数据统计和系统设置 JS -->
-<script src="/static/js/admin_statistics.js?v=20261027-569eee9"></script>
-<script src="/static/js/admin_settings.js?v=20261027-569eee9"></script>
-<script src="/static/js/notifications.js?v=20261027-569eee9"></script>
+<script src="/static/js/admin_statistics.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/admin_settings.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/notifications.js?v=20261106-eea7c8b"></script>
 
 
 <script>
@@ -1538,9 +1530,9 @@
     </div>
 </div>
 
-<script src="/static/js/watermark.js?v=20261027-569eee9"></script>
+<script src="/static/js/watermark.js?v=20261106-eea7c8b"></script>
 <script>WatermarkManager.init();</script>
-<script src="/static/js/agent.js?v=20261027-569eee9"></script>
+<script src="/static/js/agent.js?v=20261106-eea7c8b"></script>
 <script>AgentManager.init();</script>
 </body>
 </html>

@@ -27,7 +27,7 @@ class CustomUserAdmin(admin.ModelAdmin):
 class DepartmentAdmin(admin.ModelAdmin):
     list_display = ('id', 'name', 'code', 'tenant_name', 'parent_name', 'manager_name', 'member_count', 'is_active', 'updated_at')
     list_filter = ('is_active', 'tenant')
-    search_fields = ('name', 'code', 'full_path', 'tenant__name')
+    search_fields = ('id', 'name', 'code', 'full_path', 'tenant__name')
     list_per_page = 20
 
     def tenant_name(self, obj):

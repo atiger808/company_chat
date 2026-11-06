@@ -6,7 +6,7 @@ class VersionManager {
     constructor() {
         this.STORAGE_KEY = 'app_version_info';
         this.STATIC_KEY = 'static_version';
-        this.CHECK_INTERVAL = 5 * 60 * 1000; // 5分钟检查一次
+        this.CHECK_INTERVAL = 10 * 60 * 1000; // 10分钟检查一次（降低频率，避免大量页面同时请求版本接口）
         this.lastCheckTime = 0;
         this.isChecking = false;
         this.updateBanner = null;
@@ -618,6 +618,10 @@ class ChatClient {
         this.globalWs = null;  // 全局 WebSocket 连接
         this.roomWs = null;    // 当前聊天室 WebSocket 连接
         this.ws = null;
+        // WebSocket 重连退避（避免服务重启时所有页面每 3 秒集中重连）
+        this._globalWsReconnectDelay = 3000;
+        this._globalWsReconnectTimer = null;
+        this._roomWsReconnectDelay = 3000;
         this.statusCode = null;
         this.chat_login_url = '/login/';
         this.currentRoomId = null;
@@ -1082,6 +1086,29 @@ class ChatClient {
             // 连接全局 WebSocket
             this.connectGlobalWebSocket();
 
+            // 回到前台/网络恢复时立即恢复连接（通知 WS 由这里统一维护）
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState !== 'visible') return;
+                this._globalWsReconnectDelay = 3000;
+                this._roomWsReconnectDelay = 3000;
+                if (!this.globalWs || this.globalWs.readyState > WebSocket.OPEN) {
+                    this.connectGlobalWebSocket();
+                }
+                if (this.currentRoomId && (!this.ws || this.ws.readyState > WebSocket.OPEN)) {
+                    this.connectWebSocket(this.currentRoomId);
+                }
+            });
+            window.addEventListener('online', () => {
+                this._globalWsReconnectDelay = 3000;
+                this._roomWsReconnectDelay = 3000;
+                if (!this.globalWs || this.globalWs.readyState > WebSocket.OPEN) {
+                    this.connectGlobalWebSocket();
+                }
+                if (this.currentRoomId && (!this.ws || this.ws.readyState > WebSocket.OPEN)) {
+                    this.connectWebSocket(this.currentRoomId);
+                }
+            });
+
             // 获取聊天列表
             await this.loadChatRooms();
 
@@ -1328,6 +1355,7 @@ class ChatClient {
 
             this.globalWs.onopen = () => {
                 console.log('Global WebSocket connected');
+                this._globalWsReconnectDelay = 3000;  // 连接成功重置退避
                 // 🔧 打开/重连后查询是否有待接听的来电（后台/锁屏错过的，补发并弹接听框）
                 this._checkPendingCall();
             };
@@ -1344,7 +1372,7 @@ class ChatClient {
             this.globalWs.onclose = (event) => {
                 console.log('Global WebSocket disconnected');
                 if (event.code !== 1000) {
-                    setTimeout(() => this.connectGlobalWebSocket(), 3000);
+                    this._scheduleGlobalWsReconnect();
                 }
             };
 
@@ -1354,6 +1382,22 @@ class ChatClient {
         } catch (error) {
             console.error('Failed to create global WebSocket:', error);
         }
+    }
+
+    // 全局 WebSocket 重连：指数退避 + 随机抖动，避免服务重启后集中重连触发 WAF 限流
+    _scheduleGlobalWsReconnect() {
+        if (!navigator.onLine) return;
+        clearTimeout(this._globalWsReconnectTimer);
+        var base = Math.max(3000, this._globalWsReconnectDelay || 3000);
+        var delay = Math.round(base * (0.6 + Math.random() * 0.8));
+        if (document.hidden) delay = Math.min(120000, delay * 2);
+        this._globalWsReconnectDelay = Math.min(60000, Math.round(base * 1.8));
+        var self = this;
+        this._globalWsReconnectTimer = setTimeout(function () {
+            if (!self.globalWs || self.globalWs.readyState > WebSocket.OPEN) {
+                self.connectGlobalWebSocket();
+            }
+        }, Math.max(3000, delay));
     }
 
     // 查询待接听的来电：后台/锁屏期间错过的来电，回到前台时补发并弹出接听提示框
@@ -1410,8 +1454,12 @@ class ChatClient {
                 this.handleTaskNotification(data);
                 break;
             case 'work.notification':
-                if (data.event_type === 'new' && window.WorkNotif && window.WorkNotif.refreshCount) {
-                    window.WorkNotif.refreshCount();
+                if (data.event_type === 'new') {
+                    if (window.WorkNotif && window.WorkNotif.onPush) {
+                        window.WorkNotif.onPush(data.notification);
+                    } else if (window.WorkNotif && window.WorkNotif.refreshCount) {
+                        window.WorkNotif.refreshCount();
+                    }
                 }
                 break;
             case 'collaboration_invite':
@@ -1677,6 +1725,7 @@ class ChatClient {
                     return;
                 }
                 console.log('WebSocket connected successfully roomId: ', roomId);
+                this._roomWsReconnectDelay = 3000;  // 连接成功重置退避
                 this.isConnected = true;
                 this.updateConnectionStatus(true);
                 // 发送队列中的消息
@@ -1704,14 +1753,20 @@ class ChatClient {
                 this.updateConnectionStatus(false);
 
                 // 只有当前聊天室且连接被异常断开时才延时重连；
-                // 重连前再次校验序号，避免切换聊天室后旧的重连把 currentRoomId 改回旧房间
+                // 重连前再次校验序号，避免切换聊天室后旧的重连把 currentRoomId 改回旧房间。
+                // 采用指数退避 + 随机抖动，避免服务重启时所有页面每 3 秒集中重连。
                 if (parseInt(this.currentRoomId) === parseInt(roomId) && event.code !== 1000) {
-                    console.log('Attempting to reconnect in 3 seconds...');
-                    setTimeout(() => {
-                        if (this._wsSeq === seq) {
-                            this.connectWebSocket(roomId);
+                    var base = Math.max(3000, this._roomWsReconnectDelay || 3000);
+                    var delay = Math.round(base * (0.6 + Math.random() * 0.8));
+                    if (document.hidden) delay = Math.min(120000, delay * 2);
+                    this._roomWsReconnectDelay = Math.min(60000, Math.round(base * 1.8));
+                    var self = this;
+                    console.log('Attempting to reconnect in ' + Math.max(3000, delay) + 'ms...');
+                    setTimeout(function () {
+                        if (self._wsSeq === seq) {
+                            self.connectWebSocket(roomId);
                         }
-                    }, 3000);
+                    }, Math.max(3000, delay));
                 }
             };
 
@@ -8617,9 +8672,10 @@ class ChatClient {
             console.error('❌ 首次版本检查失败:', error);
         }
 
-        // 设置定期检查（每5分钟）
-        console.log('⏱️ 设置定期版本检查（每5分钟）');
+        // 设置定期检查（每 10 分钟；页面在后台时跳过，回到前台后的首次检查仍会执行）
+        console.log('⏱️ 设置定期版本检查（每10分钟）');
         setInterval(async () => {
+            if (document.hidden) return;
             try {
                 const updateInfo = await versionManager.checkForUpdates();
                 if (updateInfo && updateInfo.hasUpdate) {
