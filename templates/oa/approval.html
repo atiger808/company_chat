@@ -579,14 +579,18 @@
                     <div class="form-group" style="margin-bottom:0;">
                         <label id="startDateLabel"><i class="fas fa-calendar-alt"
                                                       style="color:var(--primary-color,#409eff);margin-right:4px;"></i>
-                            开始日期</label>
+                            开始日期
+                            <span class="required">*</span>
+                        </label>
                         <div class="date-input-wrap"><i class="fas fa-calendar-day date-input-icon"></i><input
                                 type="date" id="newStartDate" class="form-input date-styled"
                                 onchange="approvalApp.calcDays()"></div>
                     </div>
                     <div class="form-group" style="margin-bottom:0;">
                         <label id="endDateLabel"><i class="fas fa-calendar-check"
-                                                    style="color:#67c23a;margin-right:4px;"></i> 结束日期</label>
+                                                    style="color:#67c23a;margin-right:4px;"></i> 结束日期
+                            <span class="required">*</span>
+                        </label>
                         <div class="date-input-wrap"><i class="fas fa-calendar-day date-input-icon"></i><input
                                 type="date" id="newEndDate" class="form-input date-styled"
                                 onchange="approvalApp.calcDays()"></div>
@@ -762,6 +766,7 @@
                     <div style="margin-bottom:12px;font-size:15px;font-weight:600;color:#e67e22;border-bottom:2px solid #e67e22;padding-bottom:8px;">
                         <i class="fas fa-user-plus"></i> 招聘需求详情 <span
                             style="font-size:11px;font-weight:400;color:#909399;">（全部必填）</span>
+                        <span class="required">*</span>
                     </div>
 
                     <div style="margin-bottom:12px;">
@@ -1408,7 +1413,7 @@
 <script src="/static/js/utils.js?v=20261027-569eee9"></script>
 <script src="/static/js/api.js?v=20261027-569eee9"></script>
 <script src="/static/js/tenant.js?v=20261027-569eee9"></script>
-<script src="/static/js/approval.js?v=20261028-ccview01"></script>
+<script src="/static/js/approval.js?v=20261028-ccview05"></script>
 <script src="/static/js/notifications.js?v=20261027-569eee9"></script>
 <script src="/static/js/cloud-picker.js?v=20261027-569eee9"></script>
 <script src="/static/js/approval-report.js?v=20261027-569eee9"></script>

@@ -2307,8 +2307,8 @@ class ApprovalApp {
                     approvalApp.calcDays();
                 };
             }
-            if (startLabel) startLabel.innerHTML = '<i class="fas fa-play-circle" style="color:#e6a23c;margin-right:4px;"></i> 加班开始';
-            if (endLabel) endLabel.innerHTML = '<i class="fas fa-stop-circle" style="color:#e6a23c;margin-right:4px;"></i> 加班结束';
+            if (startLabel) startLabel.innerHTML = '<i class="fas fa-play-circle" style="color:#e6a23c;margin-right:4px;"></i> 加班开始 <span class="required">*</span>';
+            if (endLabel) endLabel.innerHTML = '<i class="fas fa-stop-circle" style="color:#e6a23c;margin-right:4px;"></i> 加班结束 <span class="required">*</span>';
             if (durLabel) durLabel.innerHTML = '<i class="fas fa-clock" style="color:#e6a23c;margin-right:4px;"></i> 时数';
             if (durUnit) durUnit.textContent = '小时';
             if (durInput) {
@@ -2329,8 +2329,8 @@ class ApprovalApp {
                     approvalApp.calcDays();
                 };
             }
-            if (startLabel) startLabel.innerHTML = '<i class="fas fa-calendar-alt" style="color:var(--primary-color,#409eff);margin-right:4px;"></i> 开始日期';
-            if (endLabel) endLabel.innerHTML = '<i class="fas fa-calendar-check" style="color:#67c23a;margin-right:4px;"></i> 结束日期';
+            if (startLabel) startLabel.innerHTML = '<i class="fas fa-calendar-alt" style="color:var(--primary-color,#409eff);margin-right:4px;"></i> 开始日期 <span class="required">*</span>';
+            if (endLabel) endLabel.innerHTML = '<i class="fas fa-calendar-check" style="color:#67c23a;margin-right:4px;"></i> 结束日期 <span class="required">*</span>';
             if (durLabel) durLabel.innerHTML = '<i class="fas fa-clock" style="color:#e6a23c;margin-right:4px;"></i> 天数';
             if (durUnit) durUnit.textContent = '天';
             if (durInput) {
@@ -2342,8 +2342,8 @@ class ApprovalApp {
         // 金额单位
         var amountUnit = document.querySelector('#amountGroup label');
         if (amountUnit) {
-            if (type === 'purchase') amountUnit.innerHTML = '<i class="fas fa-money-bill-wave" style="color:#e6a23c;margin-right:4px;"></i> 金额（¥）';
-            else if (isExpense) amountUnit.innerHTML = '<i class="fas fa-file-invoice-dollar" style="color:#67c23a;margin-right:4px;"></i> 金额（¥）';
+            if (type === 'purchase') amountUnit.innerHTML = '<i class="fas fa-money-bill-wave" style="color:#e6a23c;margin-right:4px;"></i> 金额（¥）<span class="required">*</span>';
+            else if (isExpense) amountUnit.innerHTML = '<i class="fas fa-file-invoice-dollar" style="color:#67c23a;margin-right:4px;"></i> 金额（¥）<span class="required">*</span>';
         }
 
         // 费用行：报销显示
@@ -3827,29 +3827,72 @@ class ApprovalApp {
 
         if (!type) {
             this.showAlert('提示', '请选择审批类型');
+            const typeEl = document.getElementById('newApprovalType');
+            if (typeEl) { try { typeEl.scrollIntoView({ block: 'center' }); typeEl.focus(); } catch (e) { /* ignore */ } }
             return;
         }
         if (!title) {
             this.showAlert('提示', '请输入审批标题');
+            const titleEl = document.getElementById('newApprovalTitle');
+            if (titleEl) { try { titleEl.scrollIntoView({ block: 'center' }); titleEl.focus(); } catch (e) { /* ignore */ } }
             return;
         }
         if (!departmentId) {
             this.showAlert('提示', '请选择所属部门');
+            const deEl = document.getElementById('newDepartmentSelect');
+            if (deEl) { try { deEl.scrollIntoView({ block: 'center' }); deEl.focus(); } catch (e) { /* ignore */ } }
             return;
         }
+        // 报销或者采购：金额必填
+        if (type === 'expense' || type === 'purchase') {
+            if (!amount) {
+                this.showToast('请输入金额', true);
+                // this.showAlert('提示', '请输入金额');
+                const amEl = document.getElementById('newAmount');
+                if (amEl) { try { amEl.scrollIntoView({ block: 'center' }); amEl.focus(); } catch (e) { /* ignore */ } }
+                return;
+            }
+        }
+
         // 报销：费用类型必填
         if (type === 'expense' && !expenseType) {
-            this.showToast('请选择费用类型', true);
+            // this.showToast('请选择费用类型', true);
+            this.showAlert('提示', '请选择费用类型');
             const etEl = document.getElementById('newExpenseType');
             if (etEl) { try { etEl.scrollIntoView({ block: 'center' }); etEl.focus(); } catch (e) { /* ignore */ } }
             return;
         }
+
+
         // 请假：请假类型必填
-        if (type === 'leave' && !this._collectLeaveType()) {
-            this.showToast('请选择请假类型', true);
-            const ltRow = document.getElementById('leaveTypeRow');
-            if (ltRow) { try { ltRow.scrollIntoView({ block: 'center' }); } catch (e) { /* ignore */ } }
-            return;
+        if (type === 'leave') {
+            if (!this._collectLeaveType()) {
+                // this.showToast('请选择请假类型', true);
+                this.showAlert('提示', '请选择请假类型');
+                const ltRow = document.getElementById('leaveTypeRow');
+                if (ltRow) { try { ltRow.scrollIntoView({ block: 'center' }); } catch (e) { /* ignore */ } }
+                return;
+            }
+            if (!startDate) {
+                this.showToast('请选择开始日期', true);
+                const sdEl = document.getElementById('newStartDate');
+                if (sdEl) { try { sdEl.scrollIntoView({ block: 'center' }); sdEl.focus(); } catch (e) { /* ignore */ } }
+                return;
+            }
+            if (!endDate) {
+                this.showToast('请选择结束日期', true);
+                const edEl = document.getElementById('newEndDate');
+                if (edEl) { try { edEl.scrollIntoView({ block: 'center' }); edEl.focus(); } catch (e) { /* ignore */ } }
+                return;
+            }
+
+            if (startDate > endDate) {
+                this.showToast('开始日期不能大于结束日期', true);
+                const sdEl = document.getElementById('newStartDate');
+                if (sdEl) { try { sdEl.scrollIntoView({ block: 'center' }); sdEl.focus(); } catch (e) { /* ignore */ } }
+                return;
+            }
+
         }
         // 物资领用单：领用数量不得超过剩余可领数量
         if (type === 'material_requisition') {
