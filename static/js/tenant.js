@@ -2,6 +2,34 @@
 
 const TENANT_API_URL = '/api/org';
 
+/**
+ * 组织架构接口加密请求：携带 X-Org-Encrypt: 1，后端返回 {encrypt:true,data:<密文>}。
+ * 页面加载了 encrypts.js 时才加密（否则保持原 JSON 调用，避免拿不到明文）。
+ * 返回与 fetch 一致的最小响应对象：ok / status / json() / text()。
+ */
+async function orgSecureFetch(url, options) {
+    options = options || {};
+    var encryptAvailable = !!(window.EncryptUtils && window.EncryptUtils.decryptPacket);
+    var headers = Object.assign({}, options.headers || {});
+    if (encryptAvailable) headers['X-Org-Encrypt'] = '1';
+    var resp = await window.fetch(url, Object.assign({}, options, {headers: headers}));
+    if (!encryptAvailable) return resp;
+
+    var text = '';
+    try { text = await resp.text(); } catch (e) { text = ''; }
+    var data = null;
+    try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
+    if (data && data.encrypt) {
+        try { data = window.EncryptUtils.decryptPacket(data); } catch (e) { /* 解密失败保留原始数据 */ }
+    }
+    return {
+        ok: resp.ok,
+        status: resp.status,
+        json: function () { return Promise.resolve(data); },
+        text: function () { return Promise.resolve(typeof data === 'string' ? data : JSON.stringify(data)); }
+    };
+}
+
 class TenantManager {
     constructor() {
         this.tenants = [];
@@ -40,7 +68,7 @@ class TenantManager {
 
     async loadTenants() {
         try {
-            const resp = await fetch(TENANT_API_URL + '/tenants/', {
+            const resp = await orgSecureFetch(TENANT_API_URL + '/tenants/', {
                 headers: TokenManager.getHeaders()
             });
             if (!resp.ok) return;
@@ -65,7 +93,7 @@ class TenantManager {
             // 显示加载状态
             var list = document.getElementById('tenantSwitchList');
             if (list) list.innerHTML = '<div style="text-align:center;padding:20px;"><i class="fas fa-spinner fa-spin" style="color:var(--primary-color,#409eff);"></i><p style="margin-top:8px;font-size:13px;color:var(--text-light);">切换中...</p></div>';
-            var resp = await fetch(TENANT_API_URL + '/tenants/' + tenantId + '/switch/', {
+            var resp = await orgSecureFetch(TENANT_API_URL + '/tenants/' + tenantId + '/switch/', {
                 method: 'POST',
                 headers: TokenManager.getHeaders()
             });
@@ -300,7 +328,7 @@ class TenantManager {
         var sel = document.getElementById('newTenantParent');
         if (!sel) return;
         try {
-            var resp = await fetch(TENANT_API_URL + '/tenants/', { headers: TokenManager.getHeaders() });
+            var resp = await orgSecureFetch(TENANT_API_URL + '/tenants/', { headers: TokenManager.getHeaders() });
             if (!resp.ok) return;
             var data = await resp.json();
             var tenants = data.results || data || [];
@@ -349,7 +377,7 @@ class TenantManager {
         if (parentId) data.parent = parseInt(parentId);
 
         try {
-            var resp = await fetch(TENANT_API_URL + '/tenants/', {
+            var resp = await orgSecureFetch(TENANT_API_URL + '/tenants/', {
                 method: 'POST',
                 headers: TokenManager.getHeaders(),
                 body: JSON.stringify(data)

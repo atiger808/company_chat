@@ -17,7 +17,37 @@ from .permissions import OrgPermission
 from .filters import TenantFilterBackend
 from accounts.middleware import set_current_tenant as _set_thread_tenant
 from oa.views import send_work_notification
+from utils.encrypt_aes import encrypt_data
 from loguru import logger
+
+
+class EncryptedResponseMixin:
+    """组织架构接口响应加密。
+
+    仅当请求头带有 X-Org-Encrypt: 1 时加密（组织架构页面统一携带），
+    返回 {encrypt: true, data: <cipher>}；聊天/考勤/管理控制台等页面对
+    组织架构接口的既有调用不带头，保持原 JSON 结构，避免影响其它模块。
+    """
+
+    def finalize_response(self, request, response, *args, **kwargs):
+        response = super().finalize_response(request, response, *args, **kwargs)
+        try:
+            meta = getattr(request, 'META', {}) or {}
+            if meta.get('HTTP_X_ORG_ENCRYPT') != '1':
+                return response
+            if getattr(response, 'streaming', False):
+                return response
+            data = getattr(response, 'data', None)
+            if data is None:
+                return response
+            if isinstance(data, dict) and data.get('encrypt') is True:
+                return response
+            encrypted = encrypt_data(data)
+            if encrypted:
+                response.data = {'encrypt': True, 'data': encrypted}
+        except Exception as e:
+            logger.warning(f'组织架构响应加密失败: {e}')
+        return response
 
 def _resolve_tenant(request):
     """尝试从用户成员关系解析 tenant（中间件未设置时的降级方案）"""
@@ -239,7 +269,7 @@ def _build_tree(department, depth=0, max_depth=15, user=None, user_dept_ids=None
     return data
 
 
-class TenantViewSet(viewsets.ModelViewSet):
+class TenantViewSet(EncryptedResponseMixin, viewsets.ModelViewSet):
     serializer_class = TenantSerializer
     permission_classes = [permissions.IsAuthenticated, OrgPermission]
 
@@ -579,7 +609,7 @@ class TenantViewSet(viewsets.ModelViewSet):
         return Response({'results': results})
 
 
-class DepartmentViewSet(viewsets.ModelViewSet):
+class DepartmentViewSet(EncryptedResponseMixin, viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, OrgPermission]
     filter_backends = [TenantFilterBackend]
 
@@ -1574,7 +1604,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
         })
 
 
-class OrgChartViewSet(viewsets.ViewSet):
+class OrgChartViewSet(EncryptedResponseMixin, viewsets.ViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def list(self, request):
@@ -1631,7 +1661,7 @@ class OrgChartViewSet(viewsets.ViewSet):
         return Response(result)
 
 
-class UserDepartmentViewSet(viewsets.GenericViewSet):
+class UserDepartmentViewSet(EncryptedResponseMixin, viewsets.GenericViewSet):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = UserDepartmentSerializer
 
@@ -1739,7 +1769,7 @@ class UserDepartmentViewSet(viewsets.GenericViewSet):
         return Response({'message': '直属上级已设置', 'created': created})
 
 
-class OrgChangeLogViewSet(viewsets.ReadOnlyModelViewSet):
+class OrgChangeLogViewSet(EncryptedResponseMixin, viewsets.ReadOnlyModelViewSet):
     serializer_class = OrgChangeLogSerializer
     permission_classes = [permissions.IsAuthenticated]
 

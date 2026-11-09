@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>组织架构 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/org.css?v=20261106-eea7c8b">
+    <link rel="stylesheet" href="/static/css/org.css?v=20261106-eea7c8c">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css?v=20261017-ea406b5">
 <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261106-eea7c8b">-->
 
@@ -85,8 +85,8 @@
 <script src="/static/js/encrypts.js?v=20261106-eea7c8b"></script>
 <script src="/static/js/utils.js?v=20261106-eea7c8b"></script>
 <script src="/static/js/api.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/tenant.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/org.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/tenant.js?v=20261107-orgsecure02"></script>
+<script src="/static/js/org.js?v=20261028-orgsecure01"></script>
 <script>
 var mobileStack = [];
 var mobileDepts = [];
@@ -103,7 +103,7 @@ async function loadMobileDepts(parentId) {
     var list = document.getElementById('mobileDeptList');
     var breadcrumb = document.getElementById('mobileBreadcrumb');
     try {
-        var resp = await fetch(ORG_API_URL+'/departments/', {headers: TokenManager.getHeaders()});
+        var resp = await orgFetch(ORG_API_URL+'/departments/', {headers: TokenManager.getHeaders()});
         if (!resp.ok) return;
         var data = await resp.json();
         mobileDepts = data.results || data || [];
@@ -161,9 +161,8 @@ function loadMobileRoot() {
 async function loadMobileMembers(deptId) {
     var list = document.getElementById('mobileDeptList');
     try {
-        var resp = await fetch(ORG_API_URL+'/departments/'+deptId+'/members/?page_size=50', {headers: TokenManager.getHeaders()});
-        if (!resp.ok) return;
-        var data = await resp.json();
+        var data = await fetchAllDeptMembers(deptId);
+        if (!data.ok) return;
         var members = data.results || [];
         var html = '<div style="padding:8px 16px;font-size:13px;color:var(--text-light,#909399);background:#fff;border-bottom:1px solid var(--border-color,#ebeef5);">部门成员（'+(data.count||0)+'人）</div>';
         members.forEach(function(m) {
@@ -187,7 +186,7 @@ async function loadMobileMembers(deptId) {
 async function loadMobileChart() {
     var container = document.getElementById('mobileChartContainer');
     try {
-        var resp = await fetch(ORG_API_URL+'/org-chart/', {headers: TokenManager.getHeaders()});
+        var resp = await orgFetch(ORG_API_URL+'/org-chart/', {headers: TokenManager.getHeaders()});
         if (!resp.ok) return;
         var data = await resp.json();
         var nodes = data.org_chart || [];

@@ -23,6 +23,7 @@ class UserDepartment(models.Model):
 
     class Meta:
         unique_together = ('user', 'department')
+        ordering = ['-join_date',]
         verbose_name = '员工部门关联'
         verbose_name_plural = '员工部门关联'
 

@@ -87,9 +87,25 @@ class AdminStatisticsClient {
             await this.loadDepartmentStats();
             await this.loadActiveUsersRanking();
             await this.loadChatRoomRanking();
+            await this.loadWordCloud();
 
             // 绑定事件监听
             this.setupEventListeners();
+
+            // 词云需要按容器宽度重新排布：窗口尺寸变化时重绘（节流）
+            if (!this._wordCloudResizeBound) {
+                this._wordCloudResizeBound = true;
+                let wcTimer = null;
+                window.addEventListener('resize', () => {
+                    clearTimeout(wcTimer);
+                    wcTimer = setTimeout(() => {
+                        if (this._wordCloudData) {
+                            this.renderWordCloud(this._wordCloudData, 'wordCloudChart');
+                        }
+                    }, 250);
+                });
+            }
+
             // 设置自动刷新（每 5 分钟）
             this.startAutoRefresh();
 
@@ -227,7 +243,7 @@ class AdminStatisticsClient {
                         fill: true
                     },
                     {
-                        label: '活跃用户',
+                        label: '活跃用户（发消息）',
                         data: data.trends.map(t => t.active_users),
                         borderColor: '#67C23A',
                         backgroundColor: 'rgba(103, 194, 58, 0.1)',
@@ -235,7 +251,7 @@ class AdminStatisticsClient {
                         fill: true
                     },
                     {
-                        label: '在线用户',
+                        label: '登录用户',
                         data: data.trends.map(t => t.online_users),
                         borderColor: '#E6A23C',
                         backgroundColor: 'rgba(230, 162, 60, 0.1)',
@@ -467,6 +483,146 @@ class AdminStatisticsClient {
         } catch (error) {
             console.error('加载部门统计失败:', error);
         }
+    }
+
+    // ==================== 聊天主题词云 ====================
+
+    // 加载当前企业的聊天高频词（仅超级管理员；后端同样做权限校验）
+    async loadWordCloud() {
+        try {
+            const response = await fetch(`/api/chat/admin/statistics/word_cloud/?days=${this.timeRange}`, {
+                headers: TokenManager.getHeaders()
+            });
+            if (!response.ok) throw new Error('加载词云失败');
+            const data = await response.json();
+            this.renderWordCloud(data, 'wordCloudChart');
+        } catch (error) {
+            console.error('加载词云失败:', error);
+            this.renderEmptyChart('wordCloudChart', '词云加载失败');
+        }
+    }
+
+    // 原生 canvas 词云：螺旋排布 + 碰撞检测 + 悬停提示，无需额外图表依赖
+    renderWordCloud(data, canvasId) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+
+        const box = canvas.closest('.chart-box');
+        const title = box ? box.querySelector('h4') : null;
+        const tenantName = (data && data.tenant_name) || '当前企业';
+        const days = (data && data.days) || this.timeRange;
+        const safeName = String(tenantName).replace(/[&<>"']/g, s => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[s]));
+        if (title) {
+            title.innerHTML = `<i class="fas fa-cloud"></i> 聊天主题词云（${safeName} · 近 ${days} 天）`;
+        }
+
+        const words = (data && data.words) || [];
+        const hint = document.getElementById('wordCloudHint');
+        if (hint) {
+            hint.textContent = words.length
+                ? `统计范围：近 ${days} 天 ${data.total_messages || 0} 条文本消息，展示 ${words.length} 个高频词`
+                : '';
+        }
+        this._wordCloudData = data || {};
+
+        if (!words.length) {
+            this.renderEmptyChart(canvasId, '暂无足够的聊天文本数据');
+            return;
+        }
+        const oldEmpty = box ? box.querySelector('.chart-empty') : null;
+        if (oldEmpty) oldEmpty.remove();
+
+        const wrap = canvas.parentElement;
+        const isMobile = window.innerWidth < 768;
+        const cssW = Math.max(280, (wrap ? wrap.clientWidth : 800) - 4);
+        const cssH = isMobile ? 260 : 360;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.floor(cssW * dpr);
+        canvas.height = Math.floor(cssH * dpr);
+        canvas.style.width = '100%';
+        canvas.style.height = cssH + 'px';
+
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, cssW, cssH);
+
+        const palette = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#7C4DFF', '#16A085',
+            '#D81B60', '#00ACC1', '#8E44AD', '#2E86DE', '#E67E22', '#27AE60'];
+        const items = words.slice(0, 100);
+        const values = items.map(w => w.value || 0);
+        const maxV = Math.max(1, ...values);
+        const minV = Math.min(...values);
+        const fontMin = isMobile ? 13 : 15;
+        const fontMax = isMobile ? 34 : 48;
+
+        const placed = [];
+        const hits = [];
+        const fits = (x, y, w, h) => {
+            if (x < 2 || y < 2 || x + w > cssW - 2 || y + h > cssH - 2) return false;
+            for (let i = 0; i < placed.length; i++) {
+                const r = placed[i];
+                if (!(x + w <= r.x || x >= r.x + r.w || y + h <= r.y || y >= r.y + r.h)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        items.forEach((item, idx) => {
+            const value = item.value || 0;
+            const ratio = maxV === minV ? 1 : (value - minV) / (maxV - minV);
+            const fontSize = Math.round(fontMin + Math.sqrt(Math.max(ratio, 0)) * (fontMax - fontMin));
+            ctx.font = `${idx < 8 ? '700' : '500'} ${fontSize}px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
+            const text = String(item.name || '');
+            const tw = Math.ceil(ctx.measureText(text).width) + 4;
+            const th = Math.ceil(fontSize * 1.25);
+
+            const baseX = cssW / 2 - tw / 2 + (Math.random() - 0.5) * 60;
+            const baseY = cssH / 2 - th / 2 + (Math.random() - 0.5) * 40;
+            let x = 0, y = 0, ok = false;
+            for (let i = 0; i < 1800; i++) {
+                const t = i * 0.23;
+                x = baseX + t * Math.cos(t) * 2.1;
+                y = baseY + t * Math.sin(t) * 1.35;
+                if (fits(x, y, tw, th)) { ok = true; break; }
+            }
+            if (!ok) return;
+
+            placed.push({x: x, y: y, w: tw, h: th});
+            hits.push({x: x, y: y, w: tw, h: th, name: text, value: value});
+            ctx.fillStyle = palette[idx % palette.length];
+            ctx.textBaseline = 'top';
+            ctx.fillText(text, x + 2, y + 1);
+        });
+
+        this._wordCloudHits = hits;
+        const tip = document.getElementById('wordCloudTip');
+        const self = this;
+        canvas.onmousemove = function (e) {
+            if (!tip) return;
+            const rect = canvas.getBoundingClientRect();
+            const px = (e.clientX - rect.left) * (cssW / Math.max(rect.width, 1));
+            const py = (e.clientY - rect.top) * (cssH / Math.max(rect.height, 1));
+            const hit = (self._wordCloudHits || []).find(h =>
+                px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h);
+            if (!hit) {
+                tip.style.display = 'none';
+                return;
+            }
+            tip.textContent = `${hit.name}：${hit.value} 次`;
+            tip.style.display = 'block';
+            const wrapRect = wrap.getBoundingClientRect();
+            let left = e.clientX - wrapRect.left + 12;
+            let top = e.clientY - wrapRect.top + 12;
+            left = Math.min(left, Math.max(2, wrapRect.width - tip.offsetWidth - 4));
+            tip.style.left = Math.max(2, left) + 'px';
+            tip.style.top = Math.max(2, top) + 'px';
+        };
+        canvas.onmouseleave = function () {
+            if (tip) tip.style.display = 'none';
+        };
     }
 
     // 渲染空数据占位
@@ -937,7 +1093,8 @@ class AdminStatisticsClient {
                 this.loadPeakHours(),
                 this.loadDepartmentStats(),
                 this.loadActiveUsersRanking(),
-                this.loadChatRoomRanking()
+                this.loadChatRoomRanking(),
+                this.loadWordCloud()
             ]);
             this.showSuccess('数据已刷新', '数据统计');
         } catch (error) {

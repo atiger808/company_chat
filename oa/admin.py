@@ -85,7 +85,7 @@ class ApprovalAssigneeAdmin(admin.ModelAdmin):
 class WorkNotificationAdmin(admin.ModelAdmin):
     list_display = ['id', 'recipient', 'notification_type', 'tenant', 'title', 'content', 'is_read', 'created_at']
     list_filter = ['notification_type', 'is_read', 'tenant']
-    search_fields = ['title', 'recipient__username', 'recipient__real_name', 'content']
+    search_fields = ['id', 'title', 'recipient__username', 'recipient__real_name', 'content']
     list_per_page = 20
 
 

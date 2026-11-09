@@ -2008,7 +2008,7 @@ class AttendanceViewSet(viewsets.ViewSet):
                 qs = qs.none()
         if keyword:
             qs = qs.filter(Q(real_name__icontains=keyword) | Q(username__icontains=keyword))
-        qs = qs.distinct().order_by('real_name', 'username')[:100]
+        qs = qs.distinct()[:500]
         ids = [u.id for u in qs]
         from org.models import UserDepartment
         dept_map = dict(UserDepartment.objects.filter(user_id__in=ids, is_primary=True).select_related('department').values_list('user_id', 'department__name'))

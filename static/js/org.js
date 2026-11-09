@@ -4,6 +4,53 @@
 const ORG_API_URL = '/api/org';
 
 /* ============================================================
+ * 组织架构接口：请求头声明加密响应，并统一解包
+ * 后端仅对携带 X-Org-Encrypt: 1 的请求返回 {encrypt:true,data:<cipher>}，
+ * 其它页面（聊天/考勤/管理控制台）对同一批接口的调用保持原 JSON 结构。
+ * ============================================================ */
+async function orgFetch(url, options) {
+    options = options || {};
+    var headers = Object.assign({}, options.headers || {}, {'X-Org-Encrypt': '1'});
+    var requestOptions = Object.assign({}, options, {headers: headers});
+    var resp = await window.fetch(url, requestOptions);
+    var text = '';
+    try { text = await resp.text(); } catch (e) { text = ''; }
+    var data = null;
+    try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
+    if (data && data.encrypt && window.EncryptUtils) {
+        try { data = window.EncryptUtils.decryptPacket(data); } catch (e) { /* 保留原始数据 */ }
+    }
+    return {
+        ok: resp.ok,
+        status: resp.status,
+        json: function () { return Promise.resolve(data); },
+        text: function () { return Promise.resolve(typeof data === 'string' ? data : JSON.stringify(data)); }
+    };
+}
+
+/* 拉取部门全部成员（自动翻页，避免只显示 50/100 条） */
+async function fetchAllDeptMembers(deptId) {
+    var all = [];
+    var page = 1;
+    var pageSize = 500;
+    var total = 0;
+    var ok = true;
+    while (true) {
+        var resp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/members/?page=' + page + '&page_size=' + pageSize, {
+            headers: TokenManager.getHeaders()
+        });
+        if (!resp.ok) { ok = false; break; }
+        var data = await resp.json();
+        var results = (data && data.results) || [];
+        all = all.concat(results);
+        total = (data && data.count) || all.length;
+        if (!results.length || all.length >= total || page >= 100) break;
+        page++;
+    }
+    return {ok: ok, results: all, count: total, page: 1, page_size: pageSize};
+}
+
+/* ============================================================
  * UserSelector — 用户选择器（可复用）
  * ============================================================ */
 class UserSelector {
@@ -134,7 +181,7 @@ class UserSelector {
             var self = this;
             var url = ORG_API_URL + '/tenants/search_all_users/';
             if (q) url += '?q=' + encodeURIComponent(q);
-            var resp = await fetch(url, { headers: TokenManager.getHeaders() });
+            var resp = await orgFetch(url, { headers: TokenManager.getHeaders() });
             // 如果已不是最新查询，丢弃结果
             if (seq !== this._seq) return;
             if (!resp.ok) {
@@ -347,7 +394,7 @@ class OrgApp {
             if (userType === 'super_admin' || userType === 'admin') {
                 url += '?include_subtenants=1';
             }
-            var resp = await fetch(url, {
+            var resp = await orgFetch(url, {
                 headers: TokenManager.getHeaders()
             });
             if (resp.status === 403) {
@@ -466,7 +513,7 @@ class OrgApp {
             return;
         }
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + deptId + '/path/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/path/', {
                 headers: TokenManager.getHeaders()
             });
             if (!resp.ok) return;
@@ -492,7 +539,7 @@ class OrgApp {
         if (!container) return;
         container.innerHTML = '<div style="text-align:center;padding:40px;"><i class="fas fa-spinner fa-spin" style="font-size:24px;color:var(--primary-color,#409eff);"></i></div>';
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + deptId + '/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/', {
                 headers: TokenManager.getHeaders()
             });
             if (!resp.ok) return;
@@ -540,7 +587,7 @@ class OrgApp {
             deputiesHtml += '</div></div>';
         }
         container.innerHTML = '<div class="dept-detail-card">'
-            + '<div class="dept-detail-header">'
+            + '<div class="dept-detail-header org-main-header">'
             + '<div class="dept-icon-large"><i class="fas fa-building"></i></div>'
             + '<div class="dept-detail-info">'
             + '<h2>' + this._escape(d.name) + '</h2>'
@@ -572,7 +619,7 @@ class OrgApp {
             + (d.description ? '<div class="dept-detail-item" style="grid-column:1/-1;"><label>描述</label><span>' + this._escape(d.description) + '</span></div>' : '')
             + '</div></div>'
             + '<div class="dept-detail-card" style="margin-top:16px;">'
-            + '<div class="dept-detail-header"><div class="dept-icon-large" style="background:linear-gradient(135deg,#67c23a,#a0d911);"><i class="fas fa-sitemap"></i></div>'
+            + '<div class="dept-detail-header org-main-header"><div class="dept-icon-large" style="background:linear-gradient(135deg,#67c23a,#a0d911);"><i class="fas fa-sitemap"></i></div>'
             + '<div class="dept-detail-info"><h2>汇报关系</h2>'
             + '<div class="dept-meta"><span><i class="fas fa-user-tie"></i> 根据组织架构自动生成</span></div></div>'
             + '<div style="display:flex;gap:6px;align-items:center;">'
@@ -595,7 +642,7 @@ class OrgApp {
         var confirmed = await this.showConfirmDialog('重建汇报关系', '根据当前组织架构自动重建汇报关系？<br><small style="color:var(--text-light);">系统将根据部门负责人和部门层级关系自动生成</small>', 'confirm');
         if (!confirmed) return;
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/rebuild_report_relations/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/rebuild_report_relations/', {
                 method: 'POST',
                 headers: TokenManager.getHeaders()
             });
@@ -617,7 +664,7 @@ class OrgApp {
         var confirmed = await this.showConfirmDialog('重构部门群', '根据当前部门信息自动创建或更新部门群？<br><small style="color:var(--text-light);">系统将同步部门名称、成员、负责人到部门群</small>', 'confirm');
         if (!confirmed) return;
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + deptId + '/rebuild_group/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/rebuild_group/', {
                 method: 'POST',
                 headers: TokenManager.getHeaders()
             });
@@ -640,7 +687,7 @@ class OrgApp {
             '将当前部门转换为独立的企业（子公司）？<br><small style="color:var(--text-light);">部门成员将自动加入新企业，部门负责人成为企业管理员。</small>', 'confirm');
         if (!confirmed) return;
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + deptId + '/convert_to_tenant/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/convert_to_tenant/', {
                 method: 'POST',
                 headers: TokenManager.getHeaders(),
                 body: JSON.stringify({})
@@ -671,7 +718,7 @@ class OrgApp {
             '将该子公司恢复为普通部门？<br><small style="color:var(--text-light);">对应的子公司企业将被标记为不可用，成员仍需在其他企业中访问。</small>', 'confirm');
         if (!confirmed) return;
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + deptId + '/revert_to_department/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/revert_to_department/', {
                 method: 'POST',
                 headers: TokenManager.getHeaders(),
                 body: JSON.stringify({})
@@ -701,8 +748,8 @@ class OrgApp {
             var self = this;
             // 并行获取部门成员和子部门
             var [membersData, chartData] = await Promise.all([
-                fetch(ORG_API_URL + '/departments/' + deptId + '/members/?page_size=100', { headers: TokenManager.getHeaders() }).then(function(r) { return r.ok ? r.json() : {results: []}; }),
-                fetch(ORG_API_URL + '/departments/' + deptId + '/org_chart/', { headers: TokenManager.getHeaders() }).then(function(r) { return r.ok ? r.json() : null; })
+                fetchAllDeptMembers(deptId),
+                orgFetch(ORG_API_URL + '/departments/' + deptId + '/org_chart/', { headers: TokenManager.getHeaders() }).then(function(r) { return r.ok ? r.json() : null; })
             ]);
             var members = membersData.results || [];
             var subTree = chartData; // may have children
@@ -987,13 +1034,13 @@ class OrgApp {
         if (!body) return;
         try {
             var [membersData, chartData] = await Promise.all([
-                fetch(ORG_API_URL + '/departments/' + deptId + '/members/?page_size=100', { headers: TokenManager.getHeaders() }).then(function(r) { return r.ok ? r.json() : {results: []}; }),
-                fetch(ORG_API_URL + '/departments/' + deptId + '/org_chart/', { headers: TokenManager.getHeaders() }).then(function(r) { return r.ok ? r.json() : null; })
+                fetchAllDeptMembers(deptId),
+                orgFetch(ORG_API_URL + '/departments/' + deptId + '/org_chart/', { headers: TokenManager.getHeaders() }).then(function(r) { return r.ok ? r.json() : null; })
             ]);
             var members = membersData.results || [];
             var subTree = chartData;
             // Get department detail for manager name
-            var deptResp = await fetch(ORG_API_URL + '/departments/' + deptId + '/', {
+            var deptResp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/', {
                 headers: TokenManager.getHeaders()
             });
             var deptData = deptResp.ok ? await deptResp.json() : {};
@@ -1164,19 +1211,17 @@ class OrgApp {
     }
 
     async loadMembers(deptId, page) {
-        if (page === undefined) page = this.membersPage;
         var container = document.getElementById('membersContainer');
         if (!container) return;
         container.innerHTML = '<div style="text-align:center;padding:40px;"><i class="fas fa-spinner fa-spin" style="font-size:24px;color:var(--primary-color,#409eff);"></i></div>';
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + deptId + '/members/?page=' + page + '&page_size=50', {
-                headers: TokenManager.getHeaders()
-            });
-            if (!resp.ok) return;
-            var data = await resp.json();
+            // 自动翻页拉取该部门全部成员，避免只显示 50 条
+            var data = await fetchAllDeptMembers(deptId);
+            if (!data.ok) return;
             this.currentMembers = data.results || [];
             this.membersTotal = data.count || 0;
-            this.membersPage = data.page || 1;
+            this.membersPage = 1;
+            this._memberFilter = '';
             this.renderMembers();
         } catch (e) {
             console.error('加载成员失败:', e);
@@ -1191,7 +1236,7 @@ class OrgApp {
 
         if (!this.currentMembers.length) {
             container.innerHTML = '<div class="members-section">'
-                + '<div class="members-header"><h3><i class="fas fa-users" style="color:var(--primary-color,#409eff);"></i> 部门成员</h3>'
+                + '<div class="members-header org-main-header"><h3><i class="fas fa-users" style="color:var(--primary-color,#409eff);"></i> 部门成员</h3>'
                 + (canEdit ? '<div style="display:flex;gap:6px;">'
                     + '<button class="btn btn-sm btn-primary" onclick="orgApp.showAddMembersModal(' + this.currentDeptId + ')"><i class="fas fa-plus"></i> 选择成员</button>'
                     + '<button class="btn btn-sm" onclick="orgApp.syncAllMembers(' + this.currentDeptId + ')" title="一键同步所有企业成员到此部门"><i class="fas fa-sync-alt"></i> 全部同步</button>'
@@ -1213,13 +1258,18 @@ class OrgApp {
         }
         var self = this;
         var html = '<div class="members-section">'
-            + '<div class="members-header">'
+            + '<div class="members-header org-main-header">'
             + '<h3><i class="fas fa-users" style="color:var(--primary-color,#409eff);"></i> 部门成员</h3>'
-            + '<div style="display:flex;align-items:center;gap:6px;">'
+            + '<div style="display:flex;align-items:center;gap:6px;flex:1;justify-content:flex-end;">'
+            + '<div style="position:relative;">'
+            + '<i class="fas fa-search" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--text-light,#909399);"></i>'
+            + '<input id="deptMemberSearchInput" type="text" placeholder="搜索成员..." oninput="orgApp.filterMembers(this.value)" style="width:180px;padding:6px 10px 6px 26px;border:1px solid var(--border-color,#dcdfe6);border-radius:6px;font-size:12px;outline:none;box-sizing:border-box;">'
+            + '</div>'
+            + '<button class="btn btn-sm" id="deptMembersRefreshBtn" onclick="orgApp.refreshMembers()" title="刷新成员列表" style="padding:3px 8px;font-size:12px;"><i class="fas fa-sync-alt"></i></button>'
             + '<button class="btn btn-sm" id="deptMembersToggleBtn_' + this.currentDeptId + '" onclick="orgApp._toggleDeptMembers(' + this.currentDeptId + ')" title="折叠成员" style="padding:3px 8px;font-size:12px;"><i class="fas fa-chevron-up"></i></button>'
             + '<span class="member-count">共 ' + this.membersTotal + ' 人</span>'
             + (canEdit ? '<button class="btn btn-sm btn-primary" onclick="orgApp.showAddMembersModal(' + this.currentDeptId + ')"><i class="fas fa-plus"></i> 添加成员</button>'
-                + '<button class="btn btn-sm" onclick="orgApp.syncAllMembers(' + this.currentDeptId + ')" title="一键同步所有企业成员到此部门"><i class="fas fa-sync-alt"></i></button>' : '')
+                + '<button class="btn btn-sm" onclick="orgApp.syncAllMembers(' + this.currentDeptId + ')" title="一键同步所有企业成员到此部门"><i class="fas fa-exchange"></i></button>' : '')
             + '</div></div>'
             + '<div class="members-grid" id="deptMembersGrid_' + this.currentDeptId + '">';
 
@@ -1235,7 +1285,8 @@ class OrgApp {
             var roleBadge = '';
             if (m.is_manager) { roleBadge = '<span class="role-badge manager">负责人</span>'; }
             else if (m.is_deputy) { roleBadge = '<span class="role-badge deputy">副负责人</span>'; }
-            html += '<div class="member-card">'
+            var searchText = [m.real_name, m.username, m.position, m.email].filter(Boolean).join(' ');
+            html += '<div class="member-card" data-member-search="' + self._escape(searchText) + '">'
                 + avatarHtml
                 + '<div class="member-info">'
                 + '<div class="member-name-row">'
@@ -1255,8 +1306,51 @@ class OrgApp {
                 + (canEdit ? '<button class="btn-icon-sm btn-remove" onclick="orgApp.removeMember(' + m.id + ')" title="移出部门"><i class="fas fa-times"></i></button>' : '')
                 + '</div>';
         });
+        html += '<div id="deptMembersFilterEmpty" style="display:none;grid-column:1/-1;text-align:center;padding:28px;color:var(--text-light,#909399);font-size:13px;"><i class="fas fa-search" style="margin-right:6px;"></i>未找到匹配成员</div>';
         html += '</div></div>';
         container.innerHTML = html;
+        if (this._memberFilter) {
+            this.filterMembers(this._memberFilter);
+            var inp = document.getElementById('deptMemberSearchInput');
+            if (inp) inp.value = this._memberFilter;
+        }
+    }
+
+    // 部门成员本地搜索（只在已加载的当前部门成员中过滤，不请求后端）
+    filterMembers(keyword) {
+        var q = (keyword || '').trim().toLowerCase();
+        this._memberFilter = q;
+        var grid = document.getElementById('deptMembersGrid_' + this.currentDeptId);
+        if (!grid) return;
+        var cards = grid.querySelectorAll('.member-card');
+        var visible = 0;
+        for (var i = 0; i < cards.length; i++) {
+            var text = (cards[i].getAttribute('data-member-search') || '').toLowerCase();
+            var show = !q || text.indexOf(q) !== -1;
+            cards[i].style.display = show ? '' : 'none';
+            if (show) visible++;
+        }
+        var emptyEl = document.getElementById('deptMembersFilterEmpty');
+        if (emptyEl) emptyEl.style.display = visible ? 'none' : 'block';
+    }
+
+    // 刷新当前部门成员列表（保留当前选中部门）
+    async refreshMembers() {
+        if (!this.currentDeptId) return;
+        var btn = document.getElementById('deptMembersRefreshBtn');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        }
+        try {
+            await this.loadMembers(this.currentDeptId);
+        } finally {
+            var freshBtn = document.getElementById('deptMembersRefreshBtn');
+            if (freshBtn) {
+                freshBtn.disabled = false;
+                freshBtn.innerHTML = '<i class="fas fa-sync-alt"></i>';
+            }
+        }
     }
 
     // ────────── 新建部门 ──────────
@@ -1348,7 +1442,7 @@ class OrgApp {
             sort_order: parseInt(document.getElementById('newDeptSort').value) || 0,
         };
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/', {
                 method: 'POST',
                 headers: TokenManager.getHeaders(),
                 body: JSON.stringify(data)
@@ -1444,7 +1538,7 @@ class OrgApp {
             manager_id: document.getElementById('newSubTenantManagerId').value || null,
         };
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/create_sub_tenant/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/create_sub_tenant/', {
                 method: 'POST',
                 headers: TokenManager.getHeaders(),
                 body: JSON.stringify(data)
@@ -1471,7 +1565,7 @@ class OrgApp {
 
     async showEditDeptModal(deptId) {
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + deptId + '/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/', {
                 headers: TokenManager.getHeaders()
             });
             if (!resp.ok) return;
@@ -1599,7 +1693,7 @@ class OrgApp {
             description: document.getElementById('editDeptDesc').value.trim() || '',
         };
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + deptId + '/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/', {
                 method: 'PUT',
                 headers: TokenManager.getHeaders(),
                 body: JSON.stringify(data)
@@ -1659,7 +1753,7 @@ class OrgApp {
         var deptId = this._deletingDeptId;
         if (!deptId) return;
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + deptId + '/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/', {
                 method: 'DELETE',
                 headers: TokenManager.getHeaders()
             });
@@ -1699,7 +1793,7 @@ class OrgApp {
         // 首次渲染：构建稳定的页面结构（搜索框不随结果刷新）
         if (!document.getElementById('enterpriseMembersContainer')) {
             detail.innerHTML = '<div class="dept-detail-card" id="enterpriseMembersContainer">'
-                + '<div class="dept-detail-header">'
+                + '<div class="dept-detail-header org-main-header">'
                 + '<div class="dept-icon-large" style="background:linear-gradient(135deg,#409eff,#337ecc);"><i class="fas fa-users"></i></div>'
                 + '<div class="dept-detail-info">'
                 + '<h2>企业成员管理</h2>'
@@ -1744,7 +1838,7 @@ class OrgApp {
             if (!tenantId) { resultsContainer.innerHTML = '<div class="empty-state"><i class="fas fa-building"></i><p>请先选择企业</p></div>'; return; }
             var url = ORG_API_URL + '/tenants/' + tenantId + '/members/?page=' + page + '&page_size=20';
             if (searchQ) url += '&q=' + encodeURIComponent(searchQ);
-            var resp = await fetch(url, {
+            var resp = await orgFetch(url, {
                 headers: TokenManager.getHeaders()
             });
             if (!resp.ok) { resultsContainer.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-triangle" style="color:#f56c6c;"></i><p>加载失败</p></div>'; return; }
@@ -1847,7 +1941,7 @@ class OrgApp {
         var errMsg = '';
         for (var i = 0; i < userIds.length; i++) {
             try {
-                var resp = await fetch(ORG_API_URL + '/tenants/' + tenantId + '/invite/', {
+                var resp = await orgFetch(ORG_API_URL + '/tenants/' + tenantId + '/invite/', {
                     method: 'POST',
                     headers: TokenManager.getHeaders(),
                     body: JSON.stringify({ user_id: userIds[i], role: 'member' })
@@ -1876,7 +1970,7 @@ class OrgApp {
         var tenantId = tenantManager.activeTenant ? tenantManager.activeTenant.id : null;
         if (!tenantId) return;
         try {
-            var resp = await fetch(ORG_API_URL + '/tenants/' + tenantId + '/remove_member/', {
+            var resp = await orgFetch(ORG_API_URL + '/tenants/' + tenantId + '/remove_member/', {
                 method: 'POST',
                 headers: TokenManager.getHeaders(),
                 body: JSON.stringify({ user_id: userId })
@@ -1962,7 +2056,7 @@ class OrgApp {
         if (!sel) return;
         var self = this;
         if (!tenantId) { sel.innerHTML = '<option value="">请先选择企业</option>'; return; }
-        fetch(ORG_API_URL + '/departments/?tenant_id=' + tenantId, {
+        orgFetch(ORG_API_URL + '/departments/?tenant_id=' + tenantId, {
             headers: TokenManager.getHeaders()
         }).then(function(r) { return r.ok ? r.json() : null; }).then(function(data) {
             if (!data) { sel.innerHTML = '<option value="">无法加载</option>'; return; }
@@ -2064,7 +2158,7 @@ class OrgApp {
         if (primaryDeptId) data.primary_department_id = parseInt(primaryDeptId);
         if (defaultTenantId) data.default_tenant_id = parseInt(defaultTenantId);
         try {
-            var resp = await fetch(ORG_API_URL + '/tenants/' + tenantId + '/update_member/', {
+            var resp = await orgFetch(ORG_API_URL + '/tenants/' + tenantId + '/update_member/', {
                 method: 'POST',
                 headers: TokenManager.getHeaders(),
                 body: JSON.stringify(data)
@@ -2108,7 +2202,7 @@ class OrgApp {
 
     async confirmAddMembers(deptId, userIds) {
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + deptId + '/add_members/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/add_members/', {
                 method: 'POST',
                 headers: TokenManager.getHeaders(),
                 body: JSON.stringify({ user_ids: userIds })
@@ -2128,7 +2222,7 @@ class OrgApp {
         var confirmed = await this.showConfirmDialog('同步全部成员', '将企业所有成员同步到此部门？<br><small style="color:var(--text-light);">不在部门的成员将被添加，已存在的成员不受影响</small>', 'confirm');
         if (!confirmed) return;
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + deptId + '/sync_all_members/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/sync_all_members/', {
                 method: 'POST',
                 headers: TokenManager.getHeaders()
             });
@@ -2149,7 +2243,7 @@ class OrgApp {
         var confirmed = await this.showConfirmDialog('移出部门', '确定要将该成员移出此部门吗？<br><small style="color:var(--text-light);">移出后该成员将不再属于此部门</small>', 'danger');
         if (!confirmed) return;
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + this.currentDeptId + '/remove_members/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/' + this.currentDeptId + '/remove_members/', {
                 method: 'POST',
                 headers: TokenManager.getHeaders(),
                 body: JSON.stringify({ user_ids: [userId] })
@@ -2224,7 +2318,7 @@ class OrgApp {
         var deptId = this.currentDeptId;
         if (!deptId) return;
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + deptId + '/update_member_position/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/update_member_position/', {
                 method: 'POST',
                 headers: TokenManager.getHeaders(),
                 body: JSON.stringify({ user_id: userId, position: position })
@@ -2286,7 +2380,7 @@ class OrgApp {
     async showDeptLeadersModal(deptId) {
         // 先获取当前负责人和副负责人
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + deptId + '/leaders/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/leaders/', {
                 headers: TokenManager.getHeaders()
             });
             if (!resp.ok) return;
@@ -2387,7 +2481,7 @@ class OrgApp {
         // 校验：主负责人和副负责人不能是当前部门的子部门负责人
         // 需要先验证子部门负责人是否包含被选中的用户
         try {
-            var checkResp = await fetch(ORG_API_URL + '/departments/' + deptId + '/org_chart/', {
+            var checkResp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/org_chart/', {
                 headers: TokenManager.getHeaders()
             });
             if (checkResp.ok) {
@@ -2410,7 +2504,7 @@ class OrgApp {
         } catch (e) {}
 
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + deptId + '/set_leaders/', {
+            var resp = await orgFetch(ORG_API_URL + '/departments/' + deptId + '/set_leaders/', {
                 method: 'POST',
                 headers: TokenManager.getHeaders(),
                 body: JSON.stringify({
@@ -2531,11 +2625,8 @@ class OrgApp {
         var body = document.getElementById('reportModalBody');
         if (!body) return;
         try {
-            var resp = await fetch(ORG_API_URL + '/departments/' + deptId + '/members/?page_size=100', {
-                headers: TokenManager.getHeaders()
-            });
-            if (!resp.ok) { body.innerHTML = '<div class="empty-state"><p>加载失败</p></div>'; return; }
-            var data = await resp.json();
+            var data = await fetchAllDeptMembers(deptId);
+            if (!data.ok) { body.innerHTML = '<div class="empty-state"><p>加载失败</p></div>'; return; }
             var members = data.results || [];
             var self = this;
             var html = '<div style="font-size:13px;color:var(--text-light,#909399);margin-bottom:12px;">为部门成员设置直属上级，形成组织汇报关系</div>';
@@ -2672,7 +2763,7 @@ class OrgApp {
 
     async _loadChartData() {
         try {
-            var resp = await fetch(ORG_API_URL + '/org-chart/', {
+            var resp = await orgFetch(ORG_API_URL + '/org-chart/', {
                 headers: TokenManager.getHeaders()
             });
             if (!resp.ok) return;
@@ -2819,7 +2910,7 @@ class OrgApp {
                     });
 
                     // Call backend search API
-                    fetch(ORG_API_URL + '/departments/search/?q=' + encodeURIComponent(q), {
+                    orgFetch(ORG_API_URL + '/departments/search/?q=' + encodeURIComponent(q), {
                         headers: TokenManager.getHeaders()
                     }).then(function(resp) {
                         return resp.json();

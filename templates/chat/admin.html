@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理控制台 - 企业聊天室</title>
     <link rel="stylesheet" href="/static/css/chat.css?v=20261106-eea7c8b">
-    <link rel="stylesheet" href="/static/css/admin.css?v=20261106-eea7c8b">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20261109-chatstats01">
 <!--    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">-->
     <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261106-eea7c8b">
 
@@ -411,6 +411,17 @@
                         </div>
                     </div>
 
+                    <!-- 聊天主题词云：仅超级管理员可见（随「数据统计」标签页展示） -->
+                    <div class="chart-row chart-row-full">
+                        <div class="chart-box chart-full">
+                            <h4><i class="fas fa-cloud"></i> 聊天主题词云（当前企业）</h4>
+                            <div class="wordcloud-wrap" id="wordCloudWrap">
+                                <canvas id="wordCloudChart"></canvas>
+                                <div class="wordcloud-tip" id="wordCloudTip"></div>
+                            </div>
+                            <div class="wordcloud-hint" id="wordCloudHint"></div>
+                        </div>
+                    </div>
 
                 </div>
             </div>
@@ -1155,7 +1166,7 @@
 <script src="/static/js/admin.js?v=20261106-eea7c8b"></script>
 <script src="/static/js/admin_chat_rooms.js?v=20261106-eea7c8c"></script>
 <!-- 🔧 新增：数据统计和系统设置 JS -->
-<script src="/static/js/admin_statistics.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/admin_statistics.js?v=20261109-chatstats01"></script>
 <script src="/static/js/admin_settings.js?v=20261106-eea7c8b"></script>
 <script src="/static/js/notifications.js?v=20261106-eea7c8b"></script>
 

@@ -2508,6 +2508,74 @@ class ChatRoomAdminViewSet(viewsets.ModelViewSet):
             )
 
 
+# ==================== 数据统计：词云分词（无需第三方分词库） ====================
+
+_WORDCLOUD_STOPWORDS = {
+    '我们', '你们', '他们', '她们', '它们', '这个', '那个', '这些', '那些', '什么', '怎么',
+    '怎样', '为何', '为什么', '可以', '没有', '不是', '就是', '还是', '因为', '所以', '但是',
+    '如果', '现在', '今天', '明天', '昨天', '好的', '收到', '谢谢', '麻烦', '一下', '已经',
+    '需要', '进行', '然后', '时候', '感觉', '知道', '觉得', '可能', '应该', '事情', '问题',
+    '东西', '地方', '时间', '大家', '自己', '多少', '还有', '并且', '而且', '或者', '以及',
+    '对于', '关于', '通过', '根据', '由于', '虽然', '不过', '这样', '那样', '这里', '那里',
+    '一起', '一直', '一点', '一些', '不会', '不能', '不用', '不要', '没关系', '没问题',
+    '哈哈', '呵呵', '嗯嗯', '好的好的', '行吧', '好吧', '是的', '对的', '真的', '有点',
+    '比较', '非常', '特别', '确实', '其实', '另外', '主要', '直接', '马上', '刚才', '刚刚',
+    '的话', '来说', '之后', '之前', '以后', '以前', '是否', '里面', '上面', '下面', '方面',
+}
+
+_WORDCLOUD_EN_STOPWORDS = {
+    'the', 'and', 'for', 'you', 'are', 'with', 'this', 'that', 'have', 'not', 'but', 'can',
+    'will', 'was', 'were', 'from', 'they', 'them', 'your', 'our', 'its', 'what', 'when',
+    'where', 'which', 'who', 'how', 'why', 'all', 'any', 'one', 'two', 'get', 'got', 'use',
+    'http', 'https', 'www', 'com', 'cn', 'ok', 'okay', 'yes', 'hi', 'hello', 'test', 'null',
+    'none', 'true', 'false', 'the', 'is', 'of', 'to', 'in', 'on', 'at', 'be', 'it', 'as',
+}
+
+
+def _wordcloud_tokens(content):
+    """从一条聊天文本中提取候选词：英文单词 + 中文 2~4 字片段（重叠切分）。
+
+    项目未引入 jieba 等分词库，这里用重叠 n-gram + 停用词过滤得到可用词云；
+    高频短词（如“客户”“项目”“发货”）会自然浮到前面，低频噪声由最小词频过滤。
+    """
+    import re
+
+    text = (content or '').strip()
+    if not text:
+        return
+    text = re.sub(r'https?://\S+', ' ', text)
+    text = re.sub(r'@\S+', ' ', text)
+
+    for m in re.finditer(r'[A-Za-z][A-Za-z0-9_+#.-]{1,}', text):
+        word = m.group(0).strip('.-_').lower()
+        if len(word) >= 2 and word not in _WORDCLOUD_EN_STOPWORDS:
+            yield word
+
+    for run in re.findall(r'[一-龥]{2,}', text):
+        run = run[:12]
+        n = len(run)
+        if n <= 4:
+            if run not in _WORDCLOUD_STOPWORDS:
+                yield run
+            continue
+        for size in (2, 3):
+            for i in range(0, n - size + 1):
+                word = run[i:i + size]
+                if word not in _WORDCLOUD_STOPWORDS:
+                    yield word
+        for i in range(0, n - 4 + 1, 3):
+            word = run[i:i + 4]
+            if word not in _WORDCLOUD_STOPWORDS:
+                yield word
+
+
+def _pct_growth(current, previous):
+    """环比增长率：上一周期为 0 时，本期有量记 100%，否则 0%"""
+    if previous and previous > 0:
+        return round((current - previous) / previous * 100, 2)
+    return 100.0 if current > 0 else 0.0
+
+
 class AdminStatisticsViewSet(viewsets.ViewSet):
     """管理控制台 - 数据统计视图集"""
     permission_classes = [permissions.IsAuthenticated, IsSuperAdmin]
@@ -2515,63 +2583,64 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def overview(self, request):
         """📊 概览统计（今日/昨日/本周/本月）"""
-        # now = timezone.now()
-        now = datetime.now()
+        now = timezone.localtime()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         yesterday_start = today_start - timedelta(days=1)
         week_start = today_start - timedelta(days=now.weekday())
         month_start = today_start.replace(day=1)
 
-        # 用户统计
+        live_messages = Message.objects.filter(is_deleted=False)
+
+        # 用户统计：今日活跃 = 今日登录过 或 今日发过消息（last_login 只记录登录，单看会漏）
         total_users = CustomUser.objects.count()
         active_users_today = CustomUser.objects.filter(
-            last_login__gte=today_start
-        ).count()
-        new_users_today = CustomUser.objects.filter(
-            date_joined__gte=today_start
+            Q(last_login__gte=today_start) |
+            Q(sent_messages__timestamp__gte=today_start, sent_messages__is_deleted=False)
+        ).distinct().count()
+        active_users_yesterday = CustomUser.objects.filter(
+            Q(last_login__gte=yesterday_start, last_login__lt=today_start) |
+            Q(sent_messages__timestamp__gte=yesterday_start,
+              sent_messages__timestamp__lt=today_start,
+              sent_messages__is_deleted=False)
+        ).distinct().count()
+        new_users_today = CustomUser.objects.filter(date_joined__gte=today_start).count()
+        new_users_yesterday = CustomUser.objects.filter(
+            date_joined__gte=yesterday_start, date_joined__lt=today_start
         ).count()
         online_users = CustomUser.objects.filter(is_online=True).count()
 
-        # 聊天室统计
-        total_rooms = ChatRoom.objects.count()
+        # 聊天室统计（排除已解散/删除的聊天室与已删除消息）
+        total_rooms = ChatRoom.objects.filter(is_deleted=False).count()
         active_rooms_today = ChatRoom.objects.filter(
-            messages__timestamp__gte=today_start
+            is_deleted=False,
+            messages__timestamp__gte=today_start,
+            messages__is_deleted=False,
         ).distinct().count()
 
         # 消息统计
-        messages_today = Message.objects.filter(
-            timestamp__gte=today_start
+        messages_today = live_messages.filter(timestamp__gte=today_start).count()
+        messages_yesterday = live_messages.filter(
+            timestamp__gte=yesterday_start, timestamp__lt=today_start
         ).count()
-        messages_yesterday = Message.objects.filter(
-            timestamp__gte=yesterday_start,
-            timestamp__lt=today_start
-        ).count()
-        messages_week = Message.objects.filter(
-            timestamp__gte=week_start
-        ).count()
-        messages_month = Message.objects.filter(
-            timestamp__gte=month_start
-        ).count()
+        messages_week = live_messages.filter(timestamp__gte=week_start).count()
+        messages_month = live_messages.filter(timestamp__gte=month_start).count()
 
         # 文件统计
-        files_today = FileUpload.objects.filter(
-            created_at__gte=today_start
-        ).count()
-        storage_used = FileUpload.objects.aggregate(
-            total=Sum('size')
-        )['total'] or 0
+        files_today = FileUpload.objects.filter(created_at__gte=today_start).count()
+        storage_used = FileUpload.objects.aggregate(total=Sum('size'))['total'] or 0
 
-        # 增长率计算
-        user_growth = ((active_users_today - new_users_today) / max(total_users - new_users_today, 1)) * 100
-        message_growth = ((messages_today - messages_yesterday) / max(messages_yesterday, 1)) * 100
+        # 增长率：今日活跃卡片对比“今日活跃 vs 昨日活跃”，消息按“今日 vs 昨日”
+        user_growth = _pct_growth(active_users_today, active_users_yesterday)
+        message_growth = _pct_growth(messages_today, messages_yesterday)
 
         return Response({
             'users': {
                 'total': total_users,
                 'active_today': active_users_today,
                 'new_today': new_users_today,
+                'new_yesterday': new_users_yesterday,
                 'online': online_users,
-                'growth_rate': round(user_growth, 2)
+                'growth_rate': user_growth
             },
             'chat_rooms': {
                 'total': total_rooms,
@@ -2582,7 +2651,7 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
                 'yesterday': messages_yesterday,
                 'week': messages_week,
                 'month': messages_month,
-                'growth_rate': round(message_growth, 2)
+                'growth_rate': message_growth
             },
             'files': {
                 'today': files_today,
@@ -2594,93 +2663,89 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def user_trends(self, request):
-        """📈 用户趋势统计 - 使用数据库聚合"""
-        days = min(int(request.query_params.get('days', 30)), 90)  # 限制最大 90 天
-        end_date = timezone.now().date()
-        start_date = end_date - timedelta(days=days)
+        """📈 用户趋势统计 - 使用数据库聚合
 
-        # 🔧 优化：使用 TruncDate 按天聚合（单次查询替代循环）
+        三条曲线口径：
+          new_users    新增用户（按注册时间）
+          active_users 活跃用户（当日发过消息的用户，去重）
+          online_users 登录用户（当日内有登录记录的用户，去重）
+        """
+        days = min(max(int(request.query_params.get('days', 30) or 30), 1), 90)
+        today_start = timezone.localtime().replace(hour=0, minute=0, second=0, microsecond=0)
+        start_dt = today_start - timedelta(days=days - 1)
+        end_dt = today_start + timedelta(days=1)
+
         from django.db.models.functions import TruncDate
         from django.db.models import Count
 
-        # 新用户趋势
         new_users_query = CustomUser.objects.filter(
-            date_joined__date__gte=start_date,
-            date_joined__date__lte=end_date
-        ).annotate(
-            date=TruncDate('date_joined')
-        ).values('date').annotate(
+            date_joined__gte=start_dt, date_joined__lt=end_dt
+        ).annotate(date=TruncDate('date_joined')).values('date').annotate(
             count=Count('id')
         ).order_by('date')
 
-        # 活跃用户趋势
-        active_query = CustomUser.objects.filter(
-            last_login__date__gte=start_date,
-            last_login__date__lte=end_date
-        ).annotate(
-            date=TruncDate('last_login')
-        ).values('date').annotate(
+        login_query = CustomUser.objects.filter(
+            last_login__gte=start_dt, last_login__lt=end_dt
+        ).annotate(date=TruncDate('last_login')).values('date').annotate(
             count=Count('id', distinct=True)
         ).order_by('date')
 
-        # 🔧 优化：在 Python 中合并结果（内存操作比数据库查询快）
+        active_query = Message.objects.filter(
+            timestamp__gte=start_dt, timestamp__lt=end_dt,
+            is_deleted=False, sender__isnull=False,
+        ).annotate(date=TruncDate('timestamp')).values('date').annotate(
+            count=Count('sender', distinct=True)
+        ).order_by('date')
+
         new_map = {item['date'].isoformat(): item['count'] for item in new_users_query}
+        login_map = {item['date'].isoformat(): item['count'] for item in login_query}
         active_map = {item['date'].isoformat(): item['count'] for item in active_query}
 
         trends = []
-        current = start_date
-        while current <= end_date:
-            date_str = current.isoformat()
+        current = start_dt
+        while current < end_dt:
+            date_str = current.date().isoformat()
             trends.append({
                 'date': date_str,
                 'new_users': new_map.get(date_str, 0),
                 'active_users': active_map.get(date_str, 0),
-                # online_users 需要实时查询，可考虑缓存
-                'online_users': CustomUser.objects.filter(
-                    is_online=True,
-                    last_seen__date=current
-                ).count()
+                'online_users': login_map.get(date_str, 0),
             })
             current += timedelta(days=1)
 
-        # 🔧 缓存趋势数据 5 分钟
-        cache_key = f"user_trends_{days}_{request.user.id}"
-        cache.set(cache_key, {'trends': trends, 'days': days}, 300)
         return Response({'trends': trends, 'days': days})
 
     @action(detail=False, methods=['get'])
     def message_trends(self, request):
-        """💬 消息趋势统计（近 30 天）"""
-        days = int(request.query_params.get('days', 30))
-        end_date = datetime.now().date()
-        start_date = end_date - timedelta(days=days)
+        """💬 消息趋势统计（按天聚合，排除已删除消息）"""
+        days = min(max(int(request.query_params.get('days', 30) or 30), 1), 90)
+        today_start = timezone.localtime().replace(hour=0, minute=0, second=0, microsecond=0)
+        start_dt = today_start - timedelta(days=days - 1)
+        end_dt = today_start + timedelta(days=1)
+
+        from django.db.models.functions import TruncDate
+
+        rows = Message.objects.filter(
+            timestamp__gte=start_dt, timestamp__lt=end_dt, is_deleted=False
+        ).annotate(date=TruncDate('timestamp')).values('date').annotate(
+            total=Count('id'),
+            text=Count('id', filter=Q(message_type='text')),
+            files=Count('id', filter=Q(message_type__in=['image', 'file', 'video', 'voice', 'audio'])),
+        ).order_by('date')
+        row_map = {item['date'].isoformat(): item for item in rows}
 
         trends = []
-        current_date = start_date
-        while current_date <= end_date:
-            next_date = current_date + timedelta(days=1)
-            total_messages = Message.objects.filter(
-                timestamp__gte=current_date,
-                timestamp__lt=next_date
-            ).count()
-            text_messages = Message.objects.filter(
-                message_type='text',
-                timestamp__gte=current_date,
-                timestamp__lt=next_date
-            ).count()
-            file_messages = Message.objects.filter(
-                message_type__in=['image', 'file', 'video', 'voice'],
-                timestamp__gte=current_date,
-                timestamp__lt=next_date
-            ).count()
-
+        current = start_dt
+        while current < end_dt:
+            date_str = current.date().isoformat()
+            item = row_map.get(date_str) or {}
             trends.append({
-                'date': current_date.isoformat(),
-                'total': total_messages,
-                'text': text_messages,
-                'files': file_messages
+                'date': date_str,
+                'total': item.get('total', 0),
+                'text': item.get('text', 0),
+                'files': item.get('files', 0),
             })
-            current_date = next_date
+            current += timedelta(days=1)
 
         return Response({'trends': trends, 'days': days})
 
@@ -2697,17 +2762,14 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
         start = timezone.now() - timedelta(days=days)
 
         # 基于组织架构部门关联（UserDepartment）统计，覆盖企业集团下所有部门
-        dept_qs = OrgUserDepartment.objects.values('department').annotate(
-            user_count=Count('user', distinct=True)
-        )
-        dept_map = {d['department']: d['user_count'] for d in dept_qs}
-
+        # 仅统计启用中的用户，避免离职/禁用账号长期虚增部门人数
         depts = Department.objects.filter(is_active=True).select_related('tenant')
         dept_ids = list(depts.values_list('id', flat=True))
 
         # 部门 -> 用户ID集合（同一用户可能归属多个部门，均计入）
         user_dept = {}
-        for ud in OrgUserDepartment.objects.filter(department_id__in=dept_ids):
+        for ud in OrgUserDepartment.objects.filter(
+                department_id__in=dept_ids, user__is_active=True):
             user_dept.setdefault(ud.department_id, set()).add(ud.user_id)
 
         # 时间范围内各用户消息数，发过消息的用户计为活跃
@@ -2749,18 +2811,22 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def active_users_ranking(self, request):
         """🏆 活跃用户排行榜（修复外键名称）"""
-        limit = int(request.query_params.get('limit', 10))
-        days = int(request.query_params.get('days', 7))
-        start_date = datetime.now() - timedelta(days=days)
+        limit = min(max(int(request.query_params.get('limit', 10) or 10), 1), 50)
+        days = min(max(int(request.query_params.get('days', 7) or 7), 1), 90)
+        start_date = timezone.now() - timedelta(days=days)
 
-        # 🔧 关键修复：使用正确的外键名称 'chat_rooms' 而不是 'chatroom_members'
-        # 同时使用 'sent_messages' 而不是 'messages'
-        users = CustomUser.objects.annotate(
-            message_count=Count('sent_messages', filter=Q(sent_messages__timestamp__gte=start_date)),
-            chat_room_count=Count('chat_rooms', distinct=True),  # ✅ 修复：chat_rooms
-        ).filter(
-            is_active=True
-        ).order_by('-message_count')[:limit]
+        # 只统计启用用户、时间范围内未删除消息；无发言用户不进入排行榜
+        users = CustomUser.objects.filter(is_active=True).annotate(
+            message_count=Count('sent_messages', distinct=True, filter=Q(
+                sent_messages__timestamp__gte=start_date,
+                sent_messages__is_deleted=False,
+            )),
+            chat_room_count=Count('chat_rooms', distinct=True),
+            last_message_at=Max('sent_messages__timestamp', filter=Q(
+                sent_messages__timestamp__gte=start_date,
+                sent_messages__is_deleted=False,
+            )),
+        ).filter(message_count__gt=0).order_by('-message_count', '-last_message_at')[:limit]
 
         ranking = []
         from org.models import UserDepartment as OrgUserDepartment
@@ -2787,7 +2853,8 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
                 'tenant_name': dept_info['tenant_name'] if dept_info else '',
                 'message_count': user.message_count,
                 'chat_room_count': user.chat_room_count,
-                'last_active': user.last_login.isoformat() if user.last_login else None
+                'last_active': (user.last_message_at or user.last_login).isoformat()
+                if (user.last_message_at or user.last_login) else None
             })
 
         return Response({'ranking': ranking, 'days': days, 'limit': limit})
@@ -2797,17 +2864,18 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def chat_room_ranking(self, request):
         """👥 热门聊天室排行榜"""
-        limit = int(request.query_params.get('limit', 10))
-        days = int(request.query_params.get('days', 7))
-        start_date = datetime.now() - timedelta(days=days)
+        limit = min(max(int(request.query_params.get('limit', 10) or 10), 1), 50)
+        days = min(max(int(request.query_params.get('days', 7) or 7), 1), 90)
+        start_date = timezone.now() - timedelta(days=days)
 
-        # ✅ 这里使用 'messages' 是正确的，因为 ChatRoom.messages 是正确的外键
-        rooms = ChatRoom.objects.annotate(
-            message_count=Count('messages', filter=Q(messages__timestamp__gte=start_date)),
+        # 排除已删除消息；只保留时间范围内有消息的聊天室
+        rooms = ChatRoom.objects.filter(is_deleted=False).annotate(
+            message_count=Count('messages', distinct=True, filter=Q(
+                messages__timestamp__gte=start_date,
+                messages__is_deleted=False,
+            )),
             member_count=Count('members', distinct=True)
-        ).filter(
-            is_deleted=False
-        ).order_by('-message_count')[:limit]
+        ).filter(message_count__gt=0).order_by('-message_count')[:limit]
 
         ranking = []
         for room in rooms:
@@ -2824,12 +2892,12 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def message_type_distribution(self, request):
-        """📊 消息类型分布"""
-        days = int(request.query_params.get('days', 30))
-        start_date = datetime.now() - timedelta(days=days)
+        """📊 消息类型分布（排除已删除消息）"""
+        days = min(max(int(request.query_params.get('days', 30) or 30), 1), 90)
+        start_date = timezone.now() - timedelta(days=days)
 
         distribution = Message.objects.filter(
-            timestamp__gte=start_date
+            timestamp__gte=start_date, is_deleted=False
         ).values('message_type').annotate(
             count=Count('id')
         ).order_by('-count')
@@ -2852,16 +2920,16 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def peak_hours(self, request):
-        """⏰ 活跃时段分析"""
-        days = int(request.query_params.get('days', 7))
-        start_date = datetime.now() - timedelta(days=days)
+        """⏰ 活跃时段分析（按本地时区的小时聚合，排除已删除消息）"""
+        days = min(max(int(request.query_params.get('days', 7) or 7), 1), 90)
+        start_date = timezone.now() - timedelta(days=days)
 
-        # 按小时统计消息数
+        # USE_TZ 下数据库存 UTC，必须显式按本地时区提取小时，否则峰值时段会整体偏移 8 小时
         from django.db.models.functions import ExtractHour
         hourly_stats = Message.objects.filter(
-            timestamp__gte=start_date
+            timestamp__gte=start_date, is_deleted=False
         ).annotate(
-            hour=ExtractHour('timestamp')
+            hour=ExtractHour('timestamp', tzinfo=timezone.get_current_timezone())
         ).values('hour').annotate(
             count=Count('id')
         ).order_by('hour')
@@ -2879,6 +2947,61 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
             'peak_count': hours_data[peak_hour],
             'days': days
         })
+
+    @action(detail=False, methods=['get'])
+    def word_cloud(self, request):
+        """☁️ 聊天主题词云（仅超级管理员）
+
+        统计当前租户/企业下最近 N 天的文本消息，提取高频词。
+        历史消息可能较多，取最近 8000 条并缓存 5 分钟，避免每次刷新都全量解析。
+        """
+        from collections import Counter
+        from org.filters import resolve_tenant_for_request
+
+        try:
+            days = min(max(int(request.query_params.get('days', 30) or 30), 1), 90)
+        except (TypeError, ValueError):
+            days = 30
+
+        tenant = resolve_tenant_for_request(request)
+        tenant_id = getattr(tenant, 'id', None)
+        cache_key = f'admin_wordcloud_{tenant_id or "all"}_{days}'
+        cached = cache.get(cache_key)
+        if cached:
+            return Response(cached)
+
+        start = timezone.now() - timedelta(days=days)
+        qs = Message.objects.filter(
+            timestamp__gte=start,
+            is_deleted=False,
+            message_type='text',
+        ).exclude(content='').exclude(content__isnull=True)
+        if tenant is not None:
+            qs = qs.filter(chat_room__tenant=tenant)
+
+        contents = list(qs.order_by('-timestamp').values_list('content', flat=True)[:8000])
+
+        counter = Counter()
+        for content in contents:
+            for token in _wordcloud_tokens(content[:300]):
+                counter[token] += 1
+
+        words = [(w, c) for w, c in counter.items() if c >= 2]
+        if len(words) < 12:
+            words = list(counter.items())
+        words.sort(key=lambda x: x[1], reverse=True)
+        top = words[:120]
+
+        payload = {
+            'words': [{'name': w, 'value': c} for w, c in top],
+            'total_messages': len(contents),
+            'word_count': len(top),
+            'days': days,
+            'tenant_id': tenant_id,
+            'tenant_name': (tenant.short_name or tenant.name) if tenant else '全部企业',
+        }
+        cache.set(cache_key, payload, 300)
+        return Response(payload)
 
     @action(detail=False, methods=['get'])
     def export_report(self, request):

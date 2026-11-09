@@ -243,7 +243,7 @@ class AnnouncementApp {
             var time = a.is_published ? (a.published_at || a.updated_at || '') : (a.updated_at || '');
             time = String(time).replace('T', ' ').slice(0, 16);
             return '<div class="ann-card" onclick="annApp.openDetail(' + a.id + ')">'
-                + '<div class="ann-head">' + pub + archTag + scopeTag
+                + '<div class="ann-head">' + pub + scopeTag
                 + '<div class="ann-title">' + self._escape(a.title) + '</div>'
                 + actions + '</div>'
                 + '<div class="ann-meta">'
@@ -910,7 +910,7 @@ class AnnouncementApp {
             var self = this;
             var isAuthor = parseInt(localStorage.getItem('user_id'), 10) === a.author;
             var pub = a.is_published ? '<span class="ann-badge" style="background:#67c23a;">已发布</span>' : '<span class="ann-badge" style="background:#e6a23c;">草稿</span>';
-            var archTag = a.is_archived
+            var archTag = (isAuthor && a.is_archived)
                 ? '<span class="ann-badge" style="background:#909399;"><i class="fas fa-box-archive"></i> 已归档</span>'
                 : '';
             // 已归档：不显示编辑/发布/删除

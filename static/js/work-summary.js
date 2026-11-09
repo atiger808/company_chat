@@ -74,7 +74,7 @@ class WorkSummaryApp {
             const cfg = await this.apiGet(WS_API + '/config/');
             this.config = cfg;
             const banner = document.getElementById('wsDisabledBanner');
-            if (banner) banner.style.display = (cfg && cfg.enabled === false) ? 'flex' : 'none';
+            if (banner) banner.style.display = (cfg && cfg.enabled === false && cfg.is_super_admin) ? 'flex' : 'none';
             const btn = document.getElementById('wsModelConfigBtn');
             if (btn) btn.style.display = (cfg && cfg.is_super_admin) ? '' : 'none';
             // 数据安全提示：脱敏开启时展示（默认开启）
