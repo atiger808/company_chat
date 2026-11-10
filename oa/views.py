@@ -12,6 +12,7 @@ from asgiref.sync import async_to_sync
 from loguru import logger
 import os
 import json
+import re
 import uuid
 import requests
 from datetime import date as _date, datetime as _dt, time as _time, timedelta
@@ -662,10 +663,8 @@ class AttendanceViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['post'])
     def clock_in(self, request):
-        serializer = AttendanceClockSerializer(data=request.data)
+        serializer = AttendanceClockSerializer(data=self._clock_payload(request))
         serializer.is_valid(raise_exception=True)
-        now = timezone.localtime(timezone.now())
-        today = now.date()
         # 检查考勤配置（含用户主部门）
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
         dept_id = self._primary_department_id(request.user, tenant)
@@ -676,6 +675,24 @@ class AttendanceViewSet(viewsets.ViewSet):
         loc_err, loc_hit, loc_dist = self._check_clock_location(request, tenant, dept_id, serializer)
         if loc_err:
             return loc_err
+
+        # 拍照打卡（集团级开关）：开启后必须上传抓拍照片
+        photo, photo_err = self._validate_clock_photo(request)
+        if photo_err:
+            return Response({'error': photo_err}, status=400)
+        if self._photo_clock_enabled(tenant) and not photo:
+            return Response({
+                'error': '当前企业已开启拍照打卡，请允许相机权限并拍摄打卡照片后重试',
+                'photo_required': True,
+            }, status=400)
+        # 相机设备校验（虚拟摄像头黑名单）
+        camera_info, camera_err = self._camera_info(request)
+        if camera_err:
+            return Response({'error': camera_err}, status=400)
+
+        # 拍照打卡时以照片上的时间戳作为打卡时间
+        now = self._resolve_clock_time(request, photo)
+        today = now.date()
 
         existing = AttendanceRecord.objects.filter(user=request.user, date=today, clock_type='clock_in').first()
         if existing:
@@ -700,7 +717,19 @@ class AttendanceViewSet(viewsets.ViewSet):
             reverse_geocoding=serializer.validated_data.get('reverse_geocoding'),
             ip_address=serializer.validated_data.get('ip_address', '') or get_request_ip(request),
             user_agent=serializer.validated_data.get('user_agent', '') or request.META.get('HTTP_USER_AGENT', ''),
+            camera_info=camera_info or {},
         )
+        if photo:
+            # clock_time 为 auto_now_add，创建后按照片时间戳回写（无有效时间戳时即服务器时间）
+            try:
+                AttendanceRecord.objects.filter(pk=record.pk).update(clock_time=now)
+                record.clock_time = now
+            except Exception as e:
+                logger.warning(f'回写上班打卡时间失败 record={record.id}: {e}')
+            try:
+                self._save_clock_photo(record, photo)
+            except Exception as e:
+                logger.warning(f'保存上班打卡照片失败 record={record.id}: {e}')
         location_text = serializer.validated_data.get('location', '')
         logger.info(f'{request.user} 上班打卡 {today} status={status_val}'
                     + (f' 命中打卡范围={loc_hit} 距离={int(loc_dist)}米' if loc_hit else ''))
@@ -738,10 +767,8 @@ class AttendanceViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['post'])
     def clock_out(self, request):
-        serializer = AttendanceClockSerializer(data=request.data)
+        serializer = AttendanceClockSerializer(data=self._clock_payload(request))
         serializer.is_valid(raise_exception=True)
-        now = timezone.localtime(timezone.now())
-        today = now.date()
         # 检查考勤配置（含用户主部门）
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
         dept_id = self._primary_department_id(request.user, tenant)
@@ -752,6 +779,23 @@ class AttendanceViewSet(viewsets.ViewSet):
         loc_err, _loc_hit, _loc_dist = self._check_clock_location(request, tenant, dept_id, serializer)
         if loc_err:
             return loc_err
+
+        # 拍照打卡（集团级开关）：开启后必须上传抓拍照片
+        photo, photo_err = self._validate_clock_photo(request)
+        if photo_err:
+            return Response({'error': photo_err}, status=400)
+        if self._photo_clock_enabled(tenant) and not photo:
+            return Response({
+                'error': '当前企业已开启拍照打卡，请允许相机权限并拍摄打卡照片后重试',
+                'photo_required': True,
+            }, status=400)
+        camera_info, camera_err = self._camera_info(request)
+        if camera_err:
+            return Response({'error': camera_err}, status=400)
+
+        # 拍照打卡时以照片上的时间戳作为打卡时间
+        now = self._resolve_clock_time(request, photo)
+        today = now.date()
 
         # 下班卡可重复打（防止误打下班卡），以最后一次打卡时间为准，上限由配置控制
         out_limit = config.clock_out_limit if config and config.clock_out_limit else 3
@@ -772,6 +816,7 @@ class AttendanceViewSet(viewsets.ViewSet):
         ).order_by('-clock_time').first()
         if not clock_in_record or (clock_in_record.date < today - td(days=1)):
             return Response({'error': '请先上班打卡'}, status=400)
+
         # 使用配置时间或默认 18:00；夜班下班截止时间为上班日次日（如 20:00 上班 → 次日 06:00 下班）
         is_night = config is not None and config.shift_type == 'night'
         if config and config.clock_out_time:
@@ -796,7 +841,19 @@ class AttendanceViewSet(viewsets.ViewSet):
             reverse_geocoding=serializer.validated_data.get('reverse_geocoding'),
             ip_address=serializer.validated_data.get('ip_address', '') or get_request_ip(request),
             user_agent=serializer.validated_data.get('user_agent', '') or request.META.get('HTTP_USER_AGENT', ''),
+            camera_info=camera_info or {},
         )
+        if photo:
+            # clock_time 为 auto_now_add，创建后按照片时间戳回写
+            try:
+                AttendanceRecord.objects.filter(pk=record.pk).update(clock_time=now)
+                record.clock_time = now
+            except Exception as e:
+                logger.warning(f'回写下班打卡时间失败 record={record.id}: {e}')
+            try:
+                self._save_clock_photo(record, photo)
+            except Exception as e:
+                logger.warning(f'保存下班打卡照片失败 record={record.id}: {e}')
         logger.info(f'{request.user} 下班打卡 {today} status={status_val}')
         location_text = serializer.validated_data.get('location', '')
         status_text = '早退' if status_val == 'early_leave' else '正常'
@@ -1026,6 +1083,8 @@ class AttendanceViewSet(viewsets.ViewSet):
             'makeup_allowance': allowance,
             'makeup_used': makeup_used,
             'makeup_remaining': max(0, allowance - makeup_used),
+            # 拍照打卡开关（集团级，默认关闭）
+            'photo_clock_enabled': self._photo_clock_enabled(tenant),
         })})
 
     @action(detail=True, methods=['get'])
@@ -1591,6 +1650,136 @@ class AttendanceViewSet(viewsets.ViewSet):
             clock_out_limit=pick('clock_out_limit', 3),
         )
 
+    def _photo_clock_enabled(self, tenant):
+        """拍照打卡总开关：只认集团最顶层默认配置，默认关闭"""
+        cfg = self._group_default_config(tenant)
+        return bool(cfg and cfg.photo_clock_enabled)
+
+    @staticmethod
+    def _clock_payload(request):
+        """兼容 JSON 与 multipart/form-data 的打卡参数。
+
+        multipart 下 reverse_geocoding 是 JSON 字符串，需要还原为对象，
+        否则 AttendanceClockSerializer 的 JSONField 校验会失败。
+        """
+        data = {}
+        for key in ('latitude', 'longitude', 'location', 'device', 'remark',
+                    'ip_address', 'user_agent'):
+            val = request.data.get(key)
+            if val not in (None, ''):
+                data[key] = val
+        rg = request.data.get('reverse_geocoding')
+        if isinstance(rg, str):
+            try:
+                rg = json.loads(rg)
+            except (TypeError, ValueError):
+                rg = None
+        if rg is not None:
+            data['reverse_geocoding'] = rg
+        return data
+
+    @staticmethod
+    def _validate_clock_photo(request):
+        """校验打卡照片（可选）。返回 (文件, 错误信息)。"""
+        photo = request.FILES.get('photo')
+        if not photo:
+            return None, None
+        if photo.size > 10 * 1024 * 1024:
+            return None, '打卡照片不能超过 10MB'
+        try:
+            from PIL import Image
+            Image.open(photo).verify()
+            photo.seek(0)
+        except Exception:
+            return None, '打卡照片格式不正确，请重新拍摄'
+        return photo, None
+
+    @staticmethod
+    def _save_clock_photo(record, photo):
+        """保存打卡照片：原图 + 压缩图（JPEG，最长边 1280）"""
+        import io
+        from PIL import Image, ImageOps
+        from django.core.files.base import ContentFile
+
+        data = photo.read()
+        photo_name = photo.name or 'clock.jpg'
+        record.photo.save(photo_name, ContentFile(data), save=False)
+
+        try:
+            img = Image.open(io.BytesIO(data))
+            img = ImageOps.exif_transpose(img)
+            img.thumbnail((1280, 1280))
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            buf = io.BytesIO()
+            img.save(buf, format='JPEG', quality=80, optimize=True)
+            record.photo_compressed.save(
+                'clock_%s_%s.jpg' % (record.user_id, record.id),
+                ContentFile(buf.getvalue()), save=False)
+        except Exception as e:
+            logger.warning(f'打卡照片压缩失败 record={record.id}: {e}')
+
+        record.save(update_fields=['photo', 'photo_compressed'])
+
+    # 已知虚拟摄像头/虚拟相机名称特征（客户端与后端共用，后端做二次拦截）
+    _VIRTUAL_CAMERA_RE = re.compile(
+        r'obs\s*virtual|virtual\s*cam|虚拟摄[像相]头|虚拟相机|manycam|xsplit|snap\s*camera|'
+        r'droidcam|ivcam|epoccam|iriun|camtwist|youcam|sparkocam|vcam|e2esoft|webcamoid|'
+        r'fake\s*camera|camera\s*emulator|ip\s*camera|virtual\s*camera',
+        re.IGNORECASE,
+    )
+
+    @staticmethod
+    def _parse_photo_taken_at(raw):
+        """解析照片上的打卡时间（ISO 8601 / 'YYYY-MM-DD HH:MM:SS'），返回本地时区时间。"""
+        if not raw:
+            return None
+        try:
+            ts = _dt.fromisoformat(str(raw).strip().replace('Z', '+00:00'))
+        except (TypeError, ValueError):
+            return None
+        if timezone.is_naive(ts):
+            ts = timezone.make_aware(ts, timezone.get_current_timezone())
+        return timezone.localtime(ts)
+
+    def _resolve_clock_time(self, request, photo):
+        """拍照打卡时以照片时间戳作为打卡时间；超出合理范围则回退服务器时间。"""
+        server_now = timezone.localtime(timezone.now())
+        if not photo:
+            return server_now
+        ts = self._parse_photo_taken_at(request.data.get('photo_taken_at'))
+        if ts is None:
+            return server_now
+        if ts > server_now + timedelta(seconds=60) or ts < server_now - timedelta(minutes=15):
+            logger.warning(f'打卡照片时间戳超出允许范围，回退服务器时间：photo={ts} server={server_now}')
+            return server_now
+        return ts
+
+    def _camera_info(self, request):
+        """读取并校验打卡相机设备信息；命中虚拟摄像头黑名单时拒绝打卡。"""
+        raw = request.data.get('camera_info')
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError):
+                raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+
+        info = {}
+        for key in ('label', 'deviceId', 'groupId', 'facingMode'):
+            info[key] = str(raw.get(key) or '')[:200]
+        for key in ('width', 'height', 'frameRate'):
+            try:
+                info[key] = round(float(raw.get(key) or 0), 2)
+            except (TypeError, ValueError):
+                info[key] = 0
+
+        label = info.get('label') or ''
+        if label and self._VIRTUAL_CAMERA_RE.search(label):
+            return None, f'检测到虚拟摄像头（{label}），已阻止打卡，请切换为手机/电脑的真实摄像头后重试'
+        return info, None
+
     def _group_default_config(self, tenant):
         """该企业所属「集团最顶层」的默认考勤配置（无父级时即自身默认）。
         仅用于「指定区域打卡」总开关的读取——开关是集团级单一开关，
@@ -1764,6 +1953,9 @@ class AttendanceViewSet(viewsets.ViewSet):
         # 「指定区域打卡」总开关只在最顶层集团的默认配置上可改（前端据此决定是否显示开关）
         extra['can_set_geo_switch'] = bool(is_su and tenant.parent_id is None)
         extra['geo_config'] = {'visible': visible, 'can_config': can_config}
+        # 拍照打卡总开关：仅集团默认配置 + 超级管理员可改
+        extra['can_set_photo_switch'] = bool(is_su and tenant.parent_id is None)
+        extra['photo_clock_enabled'] = self._photo_clock_enabled(tenant)
         return Response({'results': data, **extra})
 
     @action(detail=False, methods=['post'])
@@ -1866,6 +2058,9 @@ class AttendanceViewSet(viewsets.ViewSet):
                 defaults['location_required'] = bool(request.data.get('location_required'))
             if 'location_config_visible' in request.data:
                 defaults['location_config_visible'] = bool(request.data.get('location_config_visible'))
+            # 拍照打卡总开关：仅超管可开/关，默认关闭
+            if 'photo_clock_enabled' in request.data:
+                defaults['photo_clock_enabled'] = bool(request.data.get('photo_clock_enabled'))
         try:
             config, created = AttendanceConfig.objects.update_or_create(
                 tenant=tenant,
@@ -1913,6 +2108,11 @@ class AttendanceViewSet(viewsets.ViewSet):
                 if effective and effective.clock_out_time else '18:00'),
             'effective_shift_type': (effective.shift_type if effective else 'day'),
             'geo': self._my_geo_payload(tenant, dept_id, request.user),
+            'photo_clock': {
+                'enabled': self._photo_clock_enabled(tenant),
+                'can_config': bool(request.user.user_type == 'super_admin'
+                                   and tenant and tenant.parent_id is None),
+            },
         }
         if config:
             if isinstance(config, UserAttendanceConfig):

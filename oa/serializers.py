@@ -22,6 +22,8 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
     status_display = serializers.SerializerMethodField()
     avatar_url = serializers.SerializerMethodField()
     department_name = serializers.SerializerMethodField()
+    photo_url = serializers.SerializerMethodField()
+    photo_compressed_url = serializers.SerializerMethodField()
 
     class Meta:
         model = AttendanceRecord
@@ -31,9 +33,26 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
             'clock_time', 'date', 'latitude', 'longitude', 'location',
             'device', 'status', 'status_display', 'remark', 'reverse_geocoding',
             'bd09_latitude', 'bd09_longitude', 'ip_address', 'user_agent',
-            'makeup_at',
+            'makeup_at', 'photo_url', 'photo_compressed_url', 'camera_info',
         ]
-        read_only_fields = ['user', 'clock_time']
+        read_only_fields = ['user', 'clock_time', 'camera_info']
+
+    @staticmethod
+    def _file_url(obj, field, request):
+        try:
+            f = getattr(obj, field)
+            if f:
+                url = f.url
+                return request.build_absolute_uri(url) if request else url
+        except Exception:
+            pass
+        return ''
+
+    def get_photo_url(self, obj):
+        return self._file_url(obj, 'photo', self.context.get('request'))
+
+    def get_photo_compressed_url(self, obj):
+        return self._file_url(obj, 'photo_compressed', self.context.get('request'))
 
     def get_user_name(self, obj):
         return obj.user.real_name or obj.user.username
@@ -768,6 +787,7 @@ class AttendanceConfigSerializer(serializers.ModelSerializer):
             'makeup_allowance', 'clock_out_limit',
             'shift_type',
             'location_required', 'location_config_visible', 'location_ranges', 'location_ranges_map',
+            'photo_clock_enabled',
             'updated_by', 'updated_by_name',
             'created_at', 'updated_at',
         ]

@@ -11336,6 +11336,16 @@ class ChatClient {
                 </div>
 
                 <div class="form-group">
+                    <label>群聊主题词云</label>
+                    <div style="position:relative;border:1px solid var(--border-color,#ebeef5);border-radius:8px;background:#fff;overflow:hidden;">
+                        <canvas id="groupWordCloudCanvas" style="display:block;width:100%;height:220px;"></canvas>
+                        <div id="groupWordCloudEmpty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#909399;font-size:13px;pointer-events:none;">正在分析群聊内容...</div>
+                        <div id="groupWordCloudTip" style="position:absolute;display:none;padding:4px 8px;background:rgba(255,255,255,.96);border:1px solid #e4e7ed;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.12);font-size:12px;color:#303133;pointer-events:none;z-index:5;white-space:nowrap;"></div>
+                    </div>
+                    <div id="groupWordCloudHint" style="font-size:12px;color:#909399;margin-top:4px;"></div>
+                </div>
+
+                <div class="form-group">
                     <label>群成员 (${room.members ? room.members.length : 0})</label>
                     <div class="search-input-wrapper">
                         <i class="fas fa-search"></i>
@@ -11370,6 +11380,10 @@ class ChatClient {
 
         // 显示模态框
         this.openModal('groupManagementModal');
+
+        // 群聊主题词云（按该群最近 30 天文本消息统计）
+        var self = this;
+        setTimeout(function () { self._loadGroupWordCloud(roomId); }, 30);
 
         // 加载成员列表
         this.loadGroupMembersForManagement(roomId);
@@ -11705,6 +11719,16 @@ class ChatClient {
                 </div>
 
                 <div class="form-group">
+                    <label>群聊主题词云</label>
+                    <div style="position:relative;border:1px solid var(--border-color,#ebeef5);border-radius:8px;background:#fff;overflow:hidden;">
+                        <canvas id="groupWordCloudCanvas" style="display:block;width:100%;height:220px;"></canvas>
+                        <div id="groupWordCloudEmpty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#909399;font-size:13px;pointer-events:none;">正在分析群聊内容...</div>
+                        <div id="groupWordCloudTip" style="position:absolute;display:none;padding:4px 8px;background:rgba(255,255,255,.96);border:1px solid #e4e7ed;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.12);font-size:12px;color:#303133;pointer-events:none;z-index:5;white-space:nowrap;"></div>
+                    </div>
+                    <div id="groupWordCloudHint" style="font-size:12px;color:#909399;margin-top:4px;"></div>
+                </div>
+
+                <div class="form-group">
                     <label>群成员 (${room.members ? room.members.length : 0})</label>
                     <div class="search-input-wrapper">
                         <i class="fas fa-search"></i>
@@ -11728,6 +11752,10 @@ class ChatClient {
         // 显示模态框
         this.openModal('groupManagementModal');
 
+        // 群聊主题词云（按该群最近 30 天文本消息统计）
+        var self = this;
+        setTimeout(function () { self._loadGroupWordCloud(roomId); }, 30);
+
         // 加载成员列表
         this.loadGroupMembersForManagement(roomId);
 
@@ -11750,6 +11778,126 @@ class ChatClient {
         };
     }
 
+
+    // ==================== 群聊主题词云 ====================
+
+    async _loadGroupWordCloud(roomId) {
+        var canvas = document.getElementById('groupWordCloudCanvas');
+        if (!canvas) return;
+        var empty = document.getElementById('groupWordCloudEmpty');
+        var hint = document.getElementById('groupWordCloudHint');
+        if (empty) { empty.style.display = 'flex'; empty.textContent = '正在分析群聊内容...'; }
+        if (hint) hint.textContent = '';
+
+        try {
+            var resp = await fetch('/api/chat/rooms/' + roomId + '/word_cloud/?days=30', {
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) throw new Error('加载失败');
+            var raw = await resp.json();
+            var data = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+            this._renderGroupWordCloud(data);
+        } catch (e) {
+            if (empty) empty.textContent = '词云加载失败，请稍后重试';
+            console.warn('加载群聊词云失败:', e);
+        }
+    }
+
+    _renderGroupWordCloud(data) {
+        var canvas = document.getElementById('groupWordCloudCanvas');
+        if (!canvas) return;
+        var empty = document.getElementById('groupWordCloudEmpty');
+        var hint = document.getElementById('groupWordCloudHint');
+        var tip = document.getElementById('groupWordCloudTip');
+        var words = (data && data.words) || [];
+        var days = (data && data.days) || 30;
+
+        if (hint) {
+            hint.textContent = words.length
+                ? '统计近 ' + days + ' 天 ' + (data.total_messages || 0) + ' 条文本消息，悬停查看词频'
+                : '';
+        }
+        if (!words.length) {
+            if (empty) { empty.style.display = 'flex'; empty.textContent = '暂无足够的聊天文本生成词云'; }
+            return;
+        }
+        if (empty) empty.style.display = 'none';
+
+        var wrap = canvas.parentElement;
+        var isMobile = window.innerWidth < 768;
+        var cssW = Math.max(220, (wrap ? wrap.clientWidth : 600) - 2);
+        var cssH = isMobile ? 180 : 220;
+        var dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.floor(cssW * dpr);
+        canvas.height = Math.floor(cssH * dpr);
+        canvas.style.height = cssH + 'px';
+        var ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, cssW, cssH);
+
+        var palette = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#7C4DFF', '#16A085',
+            '#D81B60', '#00ACC1', '#8E44AD', '#2E86DE'];
+        var items = words.slice(0, 60);
+        var values = items.map(function (w) { return w.value || 0; });
+        var maxV = Math.max.apply(null, [1].concat(values));
+        var minV = Math.min.apply(null, values);
+        var fontMin = isMobile ? 11 : 12;
+        var fontMax = isMobile ? 26 : 32;
+        var placed = [];
+        var hits = [];
+        var fits = function (x, y, w, h) {
+            if (x < 2 || y < 2 || x + w > cssW - 2 || y + h > cssH - 2) return false;
+            for (var i = 0; i < placed.length; i++) {
+                var r = placed[i];
+                if (!(x + w <= r.x || x >= r.x + r.w || y + h <= r.y || y >= r.y + r.h)) return false;
+            }
+            return true;
+        };
+
+        items.forEach(function (item, idx) {
+            var value = item.value || 0;
+            var ratio = maxV === minV ? 1 : (value - minV) / (maxV - minV);
+            var fontSize = Math.round(fontMin + Math.sqrt(Math.max(ratio, 0)) * (fontMax - fontMin));
+            ctx.font = (idx < 5 ? '700 ' : '500 ') + fontSize + 'px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+            var text = String(item.name || '');
+            var tw = Math.ceil(ctx.measureText(text).width) + 4;
+            var th = Math.ceil(fontSize * 1.25);
+            var baseX = cssW / 2 - tw / 2 + (Math.random() - 0.5) * 40;
+            var baseY = cssH / 2 - th / 2 + (Math.random() - 0.5) * 30;
+            var x = 0, y = 0, ok = false;
+            for (var i = 0; i < 1200; i++) {
+                var t = i * 0.25;
+                x = baseX + t * Math.cos(t) * 2.0;
+                y = baseY + t * Math.sin(t) * 1.25;
+                if (fits(x, y, tw, th)) { ok = true; break; }
+            }
+            if (!ok) return;
+            placed.push({x: x, y: y, w: tw, h: th});
+            hits.push({x: x, y: y, w: tw, h: th, name: text, value: value});
+            ctx.fillStyle = palette[idx % palette.length];
+            ctx.textBaseline = 'top';
+            ctx.fillText(text, x + 2, y + 1);
+        });
+
+        canvas._wordCloudHits = hits;
+        canvas.onmousemove = function (e) {
+            if (!tip) return;
+            var rect = canvas.getBoundingClientRect();
+            var px = (e.clientX - rect.left) * (cssW / Math.max(rect.width, 1));
+            var py = (e.clientY - rect.top) * (cssH / Math.max(rect.height, 1));
+            var hit = (canvas._wordCloudHits || []).find(function (h) {
+                return px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h;
+            });
+            if (!hit) { tip.style.display = 'none'; return; }
+            tip.textContent = hit.name + '：' + hit.value + ' 次';
+            tip.style.display = 'block';
+            var wrapRect = wrap.getBoundingClientRect();
+            var left = Math.min(e.clientX - wrapRect.left + 12, Math.max(2, wrapRect.width - tip.offsetWidth - 4));
+            tip.style.left = Math.max(2, left) + 'px';
+            tip.style.top = Math.max(2, Math.min(e.clientY - wrapRect.top + 12, wrapRect.height - tip.offsetHeight - 4)) + 'px';
+        };
+        canvas.onmouseleave = function () { if (tip) tip.style.display = 'none'; };
+    }
 
     // 优化：加载群聊成员用于管理（群主在第一位，显示部门职位）
     async loadGroupMembersForManagement(roomId) {

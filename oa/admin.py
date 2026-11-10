@@ -35,8 +35,8 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
 
 @admin.register(AttendanceConfig)
 class AttendanceConfigAdmin(admin.ModelAdmin):
-    list_display = ['id', 'tenant', 'sub_tenant', 'department', 'shift_type', 'location_required', 'updated_by', 'makeup_allowance', 'clock_out_limit', 'clock_in_enabled', 'clock_in_time', 'clock_out_enabled', 'clock_out_time', 'updated_at', 'created_at']
-    list_filter = ['clock_in_enabled', 'clock_out_enabled', 'shift_type', 'tenant']
+    list_display = ['id', 'tenant', 'sub_tenant', 'department', 'shift_type', 'location_required', 'photo_clock_enabled', 'updated_by', 'makeup_allowance', 'clock_out_limit', 'clock_in_enabled', 'clock_in_time', 'clock_out_enabled', 'clock_out_time', 'updated_at', 'created_at']
+    list_filter = ['clock_in_enabled', 'clock_out_enabled', 'location_required', 'photo_clock_enabled', 'shift_type', 'tenant']
     search_fields = ['id', 'tenant__name', 'sub_tenant__name', 'department__name']
     list_per_page = 20
 

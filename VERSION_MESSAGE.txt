@@ -1,3 +1,16 @@
+222. 打卡照片预览 / 照片时间作为打卡时间 / 虚拟摄像头校验：
+   1）打卡详情里的打卡照片支持点击放大预览，再次点击图片返回；预览右上角新增全屏按钮，点击进入全屏、再次点击退出全屏；按 Esc 也可退出；关闭详情弹窗会自动关闭预览；
+   2）开启拍照打卡后，打卡时间改为采用照片上烧录的时间戳（前端随照片提交 ISO 时间），迟到/早退判定也按该时间计算；若照片时间与服务器时间偏差超过 15 分钟，则回退服务器时间并记录日志；
+   3）相机设备校验：拍摄时读取摄像头名称、deviceId、分辨率等信息随照片提交；前端识别并阻止 OBS Virtual Camera、ManyCam、DroidCam、iVCam、虚拟摄像头等虚拟设备，检测到多个摄像头时提供下拉切换（自动优先真实摄像头）；后端再做虚拟摄像头黑名单二次拦截并拒绝打卡，设备信息存入打卡记录供审计；
+   4）说明：模型新增 `AttendanceRecord.camera_info`，需在服务器执行 `python manage.py makemigrations oa && python manage.py migrate`；同步 `oa/models.py`、`oa/serializers.py`、`oa/views.py`、`static/js/attendance.js`、`templates/oa/attendance.html`、`VERSION_MESSAGE.txt` 后重启后端；资源版本号 `20261110-photopreview01`。
+
+221. 词云升级 jieba + 群聊主题词云 + 考勤拍照打卡：
+   1）词云分词改用第三方 jieba（服务器需 `pip install jieba==0.42.1`）；未安装时自动回退原轻量分词，不影响使用；管理控制台词云同步使用新分词；
+   2）群聊管理模态框（群主版/普通成员版）在「群公告」下方新增「群聊主题词云」，统计该群近 30 天文本消息高频词，可悬停查看词频；仅该群成员可查看；
+   3）考勤打卡新增拍照打卡：考勤配置的「集团默认配置」新增「启用拍照打卡」开关（默认关闭，仅超级管理员可开/关）；开启后员工上/下班打卡需授权相机并抓拍带时间戳（含位置）的照片，后端保存原图 + 压缩图（JPEG，最长边 1280），打卡记录详情可查看照片、列表显示相机标记；
+   4）照片按租户/企业隔离：打卡记录归属当前企业，照片仅随有权限的考勤记录接口下发（超管/部门负责人/本人）；
+   5）说明：前后端 + 模型改动，需在 Linux 服务器执行 `pip install jieba==0.42.1`、`python manage.py makemigrations oa && python manage.py migrate` 后重启后端；同步 `utils/wordcloud_utils.py`、`requirements.txt`、`chat/views.py`、`oa/models.py`、`oa/serializers.py`、`oa/views.py`、`static/js/chat.js`、`static/js/attendance.js`、`templates/chat/chat.html`、`templates/oa/attendance.html`、`VERSION_MESSAGE.txt`；资源版本号 `20261110-jiebaphoto01`。
+
 220. 聊天室工作通知分页 + 管理控制台词云与统计口径修正：
    1）聊天页右侧工作通知列表改为分页加载（每页 20 条）：底部新增「加载更多」按钮，点击时按钮显示「加载中...」并出现「正在加载更多通知...」提示，加载完显示「已加载全部通知」；
    2）通知列表向下滚动超过一定距离后，右下角出现「回到顶部」浮动按钮，点击平滑回到列表顶部；

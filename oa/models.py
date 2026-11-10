@@ -61,6 +61,14 @@ class AttendanceRecord(models.Model):
     bd09_longitude = models.FloatField(null=True, blank=True, verbose_name='BD09经度')
     ip_address = models.CharField(max_length=50, blank=True, default='', verbose_name='IP地址')
     user_agent = models.TextField(blank=True, default='', verbose_name='User-Agent')
+    # 拍照打卡：原图（带时间戳水印） + 压缩图（供前端快速展示）
+    photo = models.ImageField(upload_to='attendance/photos/%Y/%m/', null=True, blank=True,
+                              verbose_name='打卡照片原图')
+    photo_compressed = models.ImageField(upload_to='attendance/photos/compressed/%Y/%m/',
+                                         null=True, blank=True,
+                                         verbose_name='打卡照片压缩图')
+    # 拍照打卡时的相机设备信息（名称/deviceId/分辨率等），用于审计与虚拟摄像头识别
+    camera_info = models.JSONField(default=dict, blank=True, verbose_name='打卡相机设备信息')
 
     class Meta:
         ordering = ['-clock_time']
@@ -811,6 +819,8 @@ class AttendanceConfig(models.Model):
     shift_type = models.CharField(max_length=10, choices=SHIFT_TYPE_CHOICES, default='day', verbose_name='班次类型')
     # 指定区域打卡总开关：仅「集团级默认配置」这一行有效（其他层级即使读写也不参与判定）
     location_required = models.BooleanField(default=False, verbose_name='启用指定区域打卡')
+    # 拍照打卡总开关：默认关闭，仅超级管理员可在「集团默认配置」中开启/关闭
+    photo_clock_enabled = models.BooleanField(default=False, verbose_name='启用拍照打卡')
     # 是否显示「考勤打卡范围配置」：默认隐藏，仅超级管理员可开启/隐藏；
     # 同样只认「集团级默认配置」这一行。其他角色无权查看/配置打卡范围。
     location_config_visible = models.BooleanField(default=False, verbose_name='显示考勤范围配置')

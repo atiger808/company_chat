@@ -209,6 +209,272 @@ class AttendanceApp {
         return raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
     }
 
+    // multipart 上传（拍照打卡）：不能带 Content-Type，交给浏览器生成 boundary
+    async apiPostForm(url, formData) {
+        var headers = {};
+        var token = localStorage.getItem('access_token');
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+        var resp = await fetch(url, { method: 'POST', headers: headers, body: formData });
+        if (!resp.ok) {
+            if (resp.status === 401) {
+                this.showToast('登录已过期，请重新登录', true);
+                this.handleAuthError();
+                return;
+            }
+            var err = await resp.json().catch(function () { return {}; });
+            throw new Error(err.error || '请求失败');
+        }
+        var raw = await resp.json();
+        return raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+    }
+
+    _clockFormData(data, photo) {
+        var fd = new FormData();
+        Object.keys(data).forEach(function (k) {
+            var v = data[k];
+            if (v === undefined || v === null || v === '') return;
+            fd.append(k, typeof v === 'object' ? JSON.stringify(v) : v);
+        });
+        fd.append('photo', photo, 'clock_photo.jpg');
+        // 照片上烧录的时间戳（ISO 8601），后端以此作为打卡时间
+        if (photo._takenAt) fd.append('photo_taken_at', photo._takenAt);
+        // 相机设备信息（用于审计与虚拟摄像头识别）
+        if (photo._cameraInfo) fd.append('camera_info', JSON.stringify(photo._cameraInfo));
+        return fd;
+    }
+
+    // 相机抓拍：实时预览 → 拍摄 → 在照片底部烧录时间戳（含位置）→ 预览确认 → 返回 File
+    _captureClockPhoto(locationText) {
+        return new Promise((resolve) => {
+            if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                if (typeof PermUtils !== 'undefined' && PermUtils.showPermissionGuide) {
+                    PermUtils.showPermissionGuide('camera', '拍照打卡需要授权摄像头权限，且需在 HTTPS 环境下使用。');
+                } else {
+                    this.showToast('当前环境无法调用相机，请使用 HTTPS 打开或换用手机端打卡', true);
+                }
+                resolve(null);
+                return;
+            }
+
+            var overlay = document.createElement('div');
+            // 低于 PermUtils 权限引导层（99999），便于权限被拒时在其上方弹出开启指引
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,.94);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;';
+            overlay.innerHTML =
+                '<div style="width:100%;max-width:520px;color:#fff;">'
+                + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
+                + '<div style="font-size:16px;font-weight:600;"><i class="fas fa-camera"></i> 拍照打卡</div>'
+                + '<button data-act="close" style="width:32px;height:32px;border:none;background:rgba(255,255,255,.15);color:#fff;border-radius:50%;font-size:20px;cursor:pointer;">&times;</button>'
+                + '</div>'
+                + '<select data-role="camera" style="display:none;width:100%;margin-bottom:8px;padding:8px 10px;border-radius:8px;border:1px solid #555;background:#1e1e1e;color:#fff;font-size:13px;"></select>'
+                + '<div style="position:relative;background:#000;border-radius:12px;overflow:hidden;">'
+                + '<video data-role="video" autoplay playsinline muted style="width:100%;max-height:65vh;display:block;"></video>'
+                + '<canvas data-role="canvas" style="width:100%;max-height:65vh;display:none;"></canvas>'
+                + '</div>'
+                + '<div data-role="msg" style="margin-top:10px;font-size:13px;color:#ffd666;line-height:1.6;min-height:20px;"></div>'
+                + '<div style="margin-top:14px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">'
+                + '<button data-act="capture" style="padding:10px 26px;border:none;border-radius:22px;background:#409eff;color:#fff;font-size:14px;cursor:pointer;"><i class="fas fa-camera"></i> 拍摄</button>'
+                + '<button data-act="retake" style="display:none;padding:10px 22px;border:1px solid rgba(255,255,255,.4);border-radius:22px;background:transparent;color:#fff;font-size:14px;cursor:pointer;">重拍</button>'
+                + '<button data-act="confirm" style="display:none;padding:10px 26px;border:none;border-radius:22px;background:#67c23a;color:#fff;font-size:14px;cursor:pointer;"><i class="fas fa-check"></i> 使用照片打卡</button>'
+                + '</div></div>';
+            document.body.appendChild(overlay);
+
+            var video = overlay.querySelector('[data-role="video"]');
+            var canvas = overlay.querySelector('[data-role="canvas"]');
+            var msg = overlay.querySelector('[data-role="msg"]');
+            var captureBtn = overlay.querySelector('[data-act="capture"]');
+            var retakeBtn = overlay.querySelector('[data-act="retake"]');
+            var confirmBtn = overlay.querySelector('[data-act="confirm"]');
+            var camSelect = overlay.querySelector('[data-role="camera"]');
+            var stream = null;
+            var file = null;
+            var finished = false;
+            var cameraInfo = {};
+            var currentDeviceId = '';
+
+            // 已知虚拟摄像头/虚拟相机名称特征（与后端黑名单保持一致，前后端双重拦截）
+            var VIRTUAL_CAMERA_RE = /obs\s*virtual|virtual\s*cam|虚拟摄[像相]头|虚拟相机|manycam|xsplit|snap\s*camera|droidcam|ivcam|epoccam|iriun|camtwist|youcam|sparkocam|vcam|e2esoft|webcamoid|fake\s*camera|camera\s*emulator|ip\s*camera|virtual\s*camera/i;
+            var isVirtualCamera = function (label) {
+                return !!label && VIRTUAL_CAMERA_RE.test(String(label));
+            };
+
+            var stop = function () {
+                if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+            };
+            var finish = function (result) {
+                if (finished) return;
+                finished = true;
+                stop();
+                overlay.remove();
+                resolve(result);
+            };
+            overlay.querySelector('[data-act="close"]').onclick = function () { finish(null); };
+
+            // 枚举可用摄像头（授权后才能拿到设备名称），并识别虚拟摄像头
+            var refreshCameraList = function () {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+                navigator.mediaDevices.enumerateDevices().then(function (devs) {
+                    var cams = devs.filter(function (d) { return d.kind === 'videoinput'; });
+                    if (!cams.length) { camSelect.style.display = 'none'; return; }
+
+                    camSelect.innerHTML = '';
+                    cams.forEach(function (d, i) {
+                        var opt = document.createElement('option');
+                        opt.value = d.deviceId;
+                        var label = d.label || ('摄像头 ' + (i + 1));
+                        opt.textContent = label + (isVirtualCamera(label) ? '（虚拟）' : '');
+                        camSelect.appendChild(opt);
+                    });
+                    camSelect.style.display = cams.length > 1 ? 'block' : 'none';
+                    if (currentDeviceId) camSelect.value = currentDeviceId;
+
+                    // 默认选中了虚拟摄像头且存在真实摄像头时，自动切换到真实摄像头
+                    var current = cams.filter(function (c) { return c.deviceId === currentDeviceId; })[0] || cams[0];
+                    if (isVirtualCamera(current.label)) {
+                        var real = cams.filter(function (c) { return !isVirtualCamera(c.label || ''); })[0];
+                        if (real && real.deviceId && real.deviceId !== currentDeviceId) {
+                            camSelect.value = real.deviceId;
+                            startCamera(real.deviceId);
+                        }
+                    }
+                }).catch(function () { /* 设备列表读取失败不阻断拍照 */ });
+            };
+
+            var startCamera = function (deviceId) {
+                if (stream) {
+                    stream.getTracks().forEach(function (t) { t.stop(); });
+                    stream = null;
+                }
+                msg.textContent = '正在请求相机权限...';
+                var videoConstraints = deviceId
+                    ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 960 } }
+                    : { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 960 } };
+                navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false })
+                    .then(function (s) {
+                        stream = s;
+                        var track = s.getVideoTracks()[0];
+                        var settings = (track && track.getSettings) ? track.getSettings() : {};
+                        currentDeviceId = settings.deviceId || deviceId || '';
+                        cameraInfo = {
+                            label: (track && track.label) || '',
+                            deviceId: settings.deviceId || '',
+                            groupId: settings.groupId || '',
+                            facingMode: settings.facingMode || '',
+                            width: settings.width || 0,
+                            height: settings.height || 0,
+                            frameRate: settings.frameRate || 0
+                        };
+
+                        video.srcObject = s;
+                        video.style.display = 'block';
+                        canvas.style.display = 'none';
+                        retakeBtn.style.display = 'none';
+                        confirmBtn.style.display = 'none';
+                        video.play().catch(function () {});
+                        refreshCameraList();
+
+                        if (isVirtualCamera(cameraInfo.label)) {
+                            captureBtn.style.display = 'none';
+                            msg.textContent = '检测到虚拟摄像头（' + cameraInfo.label
+                                + '），为保障考勤真实性已禁止拍照打卡，请在上方列表中选择真实摄像头';
+                            return;
+                        }
+                        captureBtn.style.display = '';
+                        captureBtn.innerHTML = '<i class="fas fa-camera"></i> 拍摄';
+                        captureBtn.onclick = captureHandler;
+                        msg.textContent = '请正对镜头，光线充足时拍摄效果更佳';
+                    }).catch(function (err) {
+                        if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
+                            msg.textContent = '相机权限被拒绝。请在浏览器/系统设置中允许摄像头权限后重试。';
+                            if (typeof PermUtils !== 'undefined' && PermUtils.showPermissionGuide) {
+                                PermUtils.showPermissionGuide('camera', '拍照打卡需要摄像头权限。');
+                            }
+                        } else if (err && err.name === 'NotFoundError') {
+                            msg.textContent = '未检测到可用摄像头，无法拍照打卡。';
+                        } else {
+                            msg.textContent = '相机启动失败：' + ((err && err.message) || '未知错误');
+                        }
+                        // 允许重试（首次权限拒绝后用户可能已在系统设置中打开）
+                        captureBtn.style.display = '';
+                        captureBtn.innerHTML = '<i class="fas fa-redo"></i> 重试';
+                        captureBtn.onclick = function () {
+                            captureBtn.innerHTML = '<i class="fas fa-camera"></i> 拍摄';
+                            captureBtn.onclick = captureHandler;
+                            startCamera();
+                        };
+                    });
+            };
+            camSelect.onchange = function () { startCamera(camSelect.value); };
+
+            var pad = function (n) { return String(n).padStart(2, '0'); };
+            var drawCaptured = function () {
+                var vw = video.videoWidth || 0, vh = video.videoHeight || 0;
+                if (!vw || !vh) { msg.textContent = '摄像头画面尚未就绪，请稍后重试'; return null; }
+                var maxSide = 1280;
+                var scale = Math.min(1, maxSide / Math.max(vw, vh));
+                var w = Math.round(vw * scale), h = Math.round(vh * scale);
+                canvas.width = w;
+                canvas.height = h;
+                var ctx = canvas.getContext('2d');
+                ctx.drawImage(video, 0, 0, w, h);
+
+                var now = new Date();
+                var ts = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate())
+                    + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+                var fs = Math.max(13, Math.round(w / 42));
+                var lines = ['打卡时间：' + ts];
+                if (locationText) lines.push('位置：' + String(locationText).slice(0, 32));
+                var barH = lines.length * (fs + 8) + 14;
+                ctx.fillStyle = 'rgba(0,0,0,.5)';
+                ctx.fillRect(0, h - barH, w, barH);
+                ctx.fillStyle = '#fff';
+                ctx.textBaseline = 'top';
+                ctx.font = 'bold ' + fs + 'px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+                lines.forEach(function (line, i) {
+                    ctx.fillText(line, 12, h - barH + 8 + i * (fs + 8));
+                });
+                return {ts: ts, iso: now.toISOString()};
+            };
+
+            var captureHandler = function () {
+                if (isVirtualCamera(cameraInfo.label)) {
+                    msg.textContent = '检测到虚拟摄像头，请切换为真实摄像头后再拍摄';
+                    return;
+                }
+                var captured = drawCaptured();
+                if (!captured) return;
+                canvas.style.display = 'block';
+                video.style.display = 'none';
+                captureBtn.style.display = 'none';
+                retakeBtn.style.display = '';
+                confirmBtn.style.display = '';
+                msg.textContent = '照片已带打卡时间戳，确认无误后点击「使用照片打卡」';
+                canvas.toBlob(function (blob) {
+                    if (!blob) { msg.textContent = '照片生成失败，请重拍'; return; }
+                    file = new File([blob], 'clock_photo.jpg', { type: 'image/jpeg' });
+                    // 时间戳与相机信息随照片一起提交：后端用照片时间作为打卡时间
+                    file._takenAt = captured.iso;
+                    file._cameraInfo = Object.assign({}, cameraInfo);
+                }, 'image/jpeg', 0.92);
+            };
+            captureBtn.onclick = captureHandler;
+            retakeBtn.onclick = function () {
+                file = null;
+                canvas.style.display = 'none';
+                video.style.display = 'block';
+                captureBtn.style.display = '';
+                retakeBtn.style.display = 'none';
+                confirmBtn.style.display = 'none';
+                msg.textContent = '请正对镜头，光线充足时拍摄效果更佳';
+            };
+            confirmBtn.onclick = function () {
+                if (!file) { msg.textContent = '照片尚未生成，请稍后重试或重新拍摄'; return; }
+                finish(file);
+            };
+
+            startCamera();
+        });
+    }
+
     // 指定区域打卡提示 + 打卡范围地图（告诉员工有哪些打卡点、自己是否在范围内）
     // ⚠️ 移动端/iOS/PWA 修复点：先渲染「范围 + 地图」，再异步补「我的位置」。
     //   iOS 独立 PWA 里 navigator.geolocation 常常既不回调成功也不回调失败（拿不到权限弹窗），
@@ -669,6 +935,12 @@ class AttendanceApp {
             }
             var makeupBtn = document.getElementById('makeupBtn');
             if (makeupBtn) makeupBtn.style.display = data.makeup_enabled ? '' : 'none';
+
+            // 拍照打卡：集团开启后，打卡前会要求抓拍带时间戳的照片
+            this._photoClockEnabled = data.photo_clock_enabled === true;
+            if (statusEl && this._photoClockEnabled && !data.has_clock_out) {
+                statusEl.textContent += ' · 📷 需拍照打卡';
+            }
         } catch (e) {
             console.error('加载今日状态失败:', e);
         }
@@ -771,7 +1043,8 @@ class AttendanceApp {
                 + '<td>' + attendanceApp._escape(r.department_name || '-') + '</td>'
                 + '<td>' + (r.date || '-') + '</td>'
                 + '<td><span class="badge badge-info">' + attendanceApp._escape(r.clock_type_display || r.clock_type) + '</span></td>'
-                + '<td>' + (r.clock_time ? attendanceApp._formatTime(r.clock_time) : '-') + '</td>'
+                + '<td>' + (r.clock_time ? attendanceApp._formatTime(r.clock_time) : '-')
+                + (r.photo_compressed_url ? ' <i class="fas fa-camera" style="color:#16a085;font-size:11px;" title="已拍照打卡"></i>' : '') + '</td>'
                 + '<td><span class="status-badge ' + st + '">' + attendanceApp._escape(r.status_display || statusMap[st] || st) + '</span></td>'
                 + '<td onclick="event.stopPropagation();attendanceApp.showDetail(\'' + key + '\')">' + attendanceApp._escape(r.location || '-') + (r.bd09_latitude ? ' <i class="fas fa-map-marker-alt" style="color:#f56c6c;font-size:11px;" title="已标记地图位置"></i>' : '') + '</td>'
                 + '<td>' + attendanceApp._escape(r.device || '-') + '</td>'
@@ -890,6 +1163,7 @@ class AttendanceApp {
     }
 
     async showDetail(id) {
+        this._closePhotoPreview();
         id = String(id);
         if (id.indexOf('v:') === 0) {
             this._showVirtualDetail(id);
@@ -903,6 +1177,8 @@ class AttendanceApp {
                 'location_abnormal': '地点异常', 'leave': '请假', 'trip': '出差'
             };
             const avatar = d.avatar_url || '/static/images/default-avatar.png';
+            const photoFull = d.photo_url || d.photo_compressed_url || '';
+            const photoShow = d.photo_compressed_url || d.photo_url || '';
             let html = '<div class="detail-grid">'
                 + '<div class="detail-item" style="grid-column:1/-1;"><label>用户</label><span style="display:flex;align-items:center;gap:8px;"><img src="' + avatar + '" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">' + this._escape(d.user_name || '') + '</span></div>'
                 + '<div class="detail-item"><label>部门</label><span>' + this._escape(d.department_name || '-') + '</span></div>'
@@ -916,6 +1192,17 @@ class AttendanceApp {
                 + '<div class="detail-item"><label>设备</label><span>' + (d.device || '-') + '</span></div>'
                 + '<div class="detail-item"><label>IP地址</label><span>' + (d.ip_address || '-') + '</span></div>'
                 + '</div>'
+                + (photoFull
+                    ? '<div class="detail-item" style="margin-top:12px;grid-column:1/-1;"><label>打卡照片</label>'
+                    + '<img src="' + String(photoShow).replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '" alt="打卡照片" '
+                    + 'onclick="attendanceApp._showPhotoPreview(\'' + String(photoFull).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;') + '\')" '
+                    + 'style="max-width:100%;max-height:260px;border-radius:8px;border:1px solid var(--border-color,#ebeef5);cursor:zoom-in;display:block;">'
+                    + '<div style="font-size:12px;color:#909399;margin-top:4px;"><i class="fas fa-info-circle"></i> 点击照片放大预览，再次点击返回；预览时右上角可全屏查看</div>'
+                    + '</div>' : '')
+                + ((d.camera_info && d.camera_info.label)
+                    ? '<div class="detail-item"><label>相机设备</label><span>' + this._escape(d.camera_info.label)
+                    + (d.camera_info.width ? '（' + this._escape(String(d.camera_info.width)) + '×' + this._escape(String(d.camera_info.height || '')) + '）' : '')
+                    + '</span></div>' : '')
                 + '<div class="detail-item"><label>User-Agent</label><span style="font-size:11px;word-break:break-all;">' + (d.user_agent || '-') + '</span></div>';
 
             const modal = document.getElementById('attendanceDetailModal');
@@ -940,6 +1227,102 @@ class AttendanceApp {
         } catch (e) {
             console.error('加载详情失败:', e);
         }
+    }
+
+    // ==================== 打卡照片预览 / 全屏 ====================
+    closeDetailModal() {
+        this._closePhotoPreview();
+        var modal = document.getElementById('attendanceDetailModal');
+        if (modal) {
+            modal.classList.remove('show');
+            modal.style.display = 'none';
+        }
+    }
+
+    _bindPhotoPreviewEsc() {
+        if (this._photoEscBound) return;
+        this._photoEscBound = true;
+        var self = this;
+        document.addEventListener('keydown', function (e) {
+            if (e.key !== 'Escape') return;
+            if (!self._photoPreviewOverlay) return;
+            if (self._photoFullscreen) {
+                self._setPhotoFullscreen(false);
+            } else {
+                self._closePhotoPreview();
+            }
+        });
+    }
+
+    _showPhotoPreview(src) {
+        this._closePhotoPreview();
+        this._bindPhotoPreviewEsc();
+
+        var overlay = document.createElement('div');
+        overlay.id = 'attPhotoPreviewOverlay';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:100002;background:rgba(0,0,0,.82);display:flex;align-items:center;justify-content:center;padding:24px;';
+        overlay.innerHTML = '<img id="attPhotoPreviewImg" src="' + String(src).replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '" alt="打卡照片" '
+            + 'style="max-width:90vw;max-height:82vh;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);cursor:zoom-out;user-select:none;">'
+            + '<button id="attPhotoPreviewFullBtn" title="全屏预览" style="position:absolute;top:18px;right:18px;width:42px;height:42px;border-radius:50%;border:none;background:rgba(255,255,255,.18);color:#fff;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;">'
+            + '<i class="fas fa-expand"></i></button>';
+        document.body.appendChild(overlay);
+
+        var self = this;
+        overlay.querySelector('#attPhotoPreviewImg').onclick = function () {
+            // 全屏时点击图片退出全屏（回到预览）；预览时点击图片关闭预览
+            if (self._photoFullscreen) {
+                self._setPhotoFullscreen(false);
+            } else {
+                self._closePhotoPreview();
+            }
+        };
+        overlay.querySelector('#attPhotoPreviewFullBtn').onclick = function (e) {
+            e.stopPropagation();
+            self._setPhotoFullscreen(!self._photoFullscreen);
+        };
+        overlay.onclick = function (e) {
+            if (e.target === overlay) self._closePhotoPreview();
+        };
+
+        this._photoPreviewOverlay = overlay;
+        this._photoFullscreen = false;
+    }
+
+    _setPhotoFullscreen(on) {
+        var overlay = this._photoPreviewOverlay;
+        if (!overlay) return;
+        var img = overlay.querySelector('#attPhotoPreviewImg');
+        var btn = overlay.querySelector('#attPhotoPreviewFullBtn');
+        this._photoFullscreen = !!on;
+        if (on) {
+            overlay.style.background = '#000';
+            overlay.style.padding = '0';
+            img.style.maxWidth = '100vw';
+            img.style.maxHeight = '100vh';
+            img.style.borderRadius = '0';
+            if (btn) {
+                btn.title = '退出全屏';
+                btn.innerHTML = '<i class="fas fa-compress"></i>';
+            }
+        } else {
+            overlay.style.background = 'rgba(0,0,0,.82)';
+            overlay.style.padding = '24px';
+            img.style.maxWidth = '90vw';
+            img.style.maxHeight = '82vh';
+            img.style.borderRadius = '10px';
+            if (btn) {
+                btn.title = '全屏预览';
+                btn.innerHTML = '<i class="fas fa-expand"></i>';
+            }
+        }
+    }
+
+    _closePhotoPreview() {
+        var overlay = this._photoPreviewOverlay
+            || document.getElementById('attPhotoPreviewOverlay');
+        if (overlay) overlay.remove();
+        this._photoPreviewOverlay = null;
+        this._photoFullscreen = false;
     }
 
     _showVirtualDetail(key) {
@@ -1146,14 +1529,32 @@ class AttendanceApp {
         try {
             var loc = await this._fetchLocation();
             if (loc.abort) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sign-in-alt"></i> 上班打卡'; return; }
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 打卡中...';
             var info = this._getClientInfo();
             var data = { device: this._getDeviceInfo(), user_agent: info.userAgent };
             if (loc.latitude) data.latitude = loc.latitude;
             if (loc.longitude) data.longitude = loc.longitude;
             if (loc.location) data.location = loc.location;
             if (loc.reverse_geocoding) data.reverse_geocoding = loc.reverse_geocoding;
-            var result = await this.apiPost(OA_API_URL + '/attendance/clock-in/', data);
+
+            var photo = null;
+            if (this._photoClockEnabled) {
+                btn.innerHTML = '<i class="fas fa-camera"></i> 请拍摄打卡照片...';
+                photo = await this._captureClockPhoto(data.location || '');
+                if (!photo) {
+                    btn.disabled = false;
+                    btn.classList.remove('clocked');
+                    btn.innerHTML = '<i class="fas fa-sign-in-alt"></i> 上班打卡';
+                    this.showToast('已取消拍照，未记录本次打卡', false);
+                    return;
+                }
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 上传打卡照片...';
+            } else {
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 打卡中...';
+            }
+
+            var result = photo
+                ? await this.apiPostForm(OA_API_URL + '/attendance/clock-in/', this._clockFormData(data, photo))
+                : await this.apiPost(OA_API_URL + '/attendance/clock-in/', data);
             if (result && result.skip) {
                 this.showToast(result.error || '该时段无需打卡', false);
                 btn.disabled = true;
@@ -1180,14 +1581,32 @@ class AttendanceApp {
         try {
             var loc = await this._fetchLocation();
             if (loc.abort) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sign-out-alt"></i> 下班打卡'; return; }
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 打卡中...';
             var info = this._getClientInfo();
             var data = { device: this._getDeviceInfo(), user_agent: info.userAgent };
             if (loc.latitude) data.latitude = loc.latitude;
             if (loc.longitude) data.longitude = loc.longitude;
             if (loc.location) data.location = loc.location;
             if (loc.reverse_geocoding) data.reverse_geocoding = loc.reverse_geocoding;
-            var result = await this.apiPost(OA_API_URL + '/attendance/clock-out/', data);
+
+            var photo = null;
+            if (this._photoClockEnabled) {
+                btn.innerHTML = '<i class="fas fa-camera"></i> 请拍摄打卡照片...';
+                photo = await this._captureClockPhoto(data.location || '');
+                if (!photo) {
+                    btn.disabled = false;
+                    btn.classList.remove('clocked');
+                    btn.innerHTML = '<i class="fas fa-sign-out-alt"></i> 下班打卡';
+                    this.showToast('已取消拍照，未记录本次打卡', false);
+                    return;
+                }
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 上传打卡照片...';
+            } else {
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 打卡中...';
+            }
+
+            var result = photo
+                ? await this.apiPostForm(OA_API_URL + '/attendance/clock-out/', this._clockFormData(data, photo))
+                : await this.apiPost(OA_API_URL + '/attendance/clock-out/', data);
             if (result && result.skip) {
                 this.showToast(result.error || '该时段无需打卡', false);
                 btn.disabled = true;
@@ -2014,6 +2433,8 @@ class AttendanceApp {
         document.getElementById('attendanceMakeupAllowance').value = 3;
         document.getElementById('attendanceClockOutLimit').value = 3;
         this._setShiftType('day');
+        this._setPhotoSwitch(false);
+        this._syncPhotoSwitchVisibility(type);
         document.getElementById('attendanceConfigForm').style.display = 'block';
         document.getElementById('attendanceConfigFooter').style.display = 'flex';
         document.getElementById('attendanceConfigDeleteBtn').style.display = 'none';
@@ -2107,15 +2528,20 @@ class AttendanceApp {
                 if (type === 'global') {
                     this._setGeoSwitch(cfg.location_required === true);
                     this._setGeoVisible(cfg.location_config_visible === true);
+                    this._setPhotoSwitch(cfg.photo_clock_enabled === true);
                 }
                 this._renderConfigMeta(cfg);
             } else {
                 // 该层级还没有配置：范围清空（留空即沿用上一层）
                 this._setGeoRanges([]);
-                if (type === 'global') this._setGeoSwitch(false);
+                if (type === 'global') {
+                    this._setGeoSwitch(false);
+                    this._setPhotoSwitch(false);
+                }
                 this._renderConfigMeta(null);
             }
             this._syncGeoSwitchVisibility(type);
+            this._syncPhotoSwitchVisibility(type);
             this._loadAttConfigList();
         } catch (e) {
             console.warn('加载配置失败', e);
@@ -2652,6 +3078,20 @@ class AttendanceApp {
         if (el) el.checked = !!on;
     }
 
+    // 拍照打卡总开关：仅集团默认配置 + 超级管理员可改（后端二次校验）
+    _setPhotoSwitch(on) {
+        var el = document.getElementById('attPhotoClockEnabled');
+        if (el) el.checked = !!on;
+    }
+
+    _syncPhotoSwitchVisibility(type) {
+        var isSuperAdmin = localStorage.getItem('user_type') === 'super_admin';
+        var row = document.getElementById('attPhotoClockRow');
+        if (row) {
+            row.style.display = (isSuperAdmin && this._canSetPhotoSwitch && type === 'global') ? 'block' : 'none';
+        }
+    }
+
     _setGeoRanges(list) {
         var out = [];
         (list || []).forEach(function (r) {
@@ -3015,10 +3455,16 @@ class AttendanceApp {
             var subTenants = json.sub_tenants || [];
             // 「指定区域打卡」总开关是否可编辑（仅最顶层集团 + 超管）
             this._canSetGeoSwitch = json.can_set_geo_switch === true;
+            // 拍照打卡总开关是否可编辑（仅最顶层集团 + 超管）
+            this._canSetPhotoSwitch = json.can_set_photo_switch === true;
+            if (json.photo_clock_enabled !== undefined) {
+                this._setPhotoSwitch(json.photo_clock_enabled === true);
+            }
             // 打卡范围配置是否可见/可配（后端已按角色裁剪，超管且开关打开才为真）
             this._geoVisible = !!(json.geo_config && json.geo_config.can_config);
             this._setGeoVisible(json.geo_config ? json.geo_config.visible : false);
             this._syncGeoSwitchVisibility(this._configAttType);
+            this._syncPhotoSwitchVisibility(this._configAttType);
             // 右侧子公司选择器
             var rightSel = document.getElementById('attConfigSubTenantSelect');
             if (rightSel) {
@@ -3442,6 +3888,11 @@ class AttendanceApp {
             // 关闭显示时一并把总开关关掉，避免"看不到范围却仍在强制校验"的困惑
             data.location_config_visible = !!(vis && vis.checked);
             if (!data.location_config_visible) data.location_required = false;
+        }
+        // 拍照打卡总开关：仅集团默认配置 + 超管可改（后端也会二次校验）
+        if (attType === 'global' && this._canSetPhotoSwitch) {
+            var photoSw = document.getElementById('attPhotoClockEnabled');
+            data.photo_clock_enabled = !!(photoSw && photoSw.checked);
         }
         if (attType === 'user' && userId) data.user_id = parseInt(userId);
         var url = OA_API_URL + '/attendance/save-attendance-config/';

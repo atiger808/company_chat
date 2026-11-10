@@ -46,6 +46,7 @@ from accounts.permissions import IsSuperAdmin, IsAdminOrSuperAdmin, IsAdminUserM
 from utils.utils import SystemConfigManager, require_super_admin, require_admin_or_super_admin
 from utils.mixins import CustomResponseMixin, EncryptionResponseMixin
 from utils.encrypt_aes import encrypt_data, decrypt_data
+from utils.wordcloud_utils import build_word_cloud
 
 
 
@@ -770,6 +771,49 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
             'read_count': read_count,
             'member_count': chat_room.members.count(),
         })
+
+    @action(detail=True, methods=['get'])
+    def word_cloud(self, request, pk=None):
+        """☁️ 群聊主题词云（仅该群成员可见）
+
+        统计该群最近 N 天的文本消息高频词，帮助成员快速了解群聊主题。
+        """
+        try:
+            chat_room = ChatRoom.objects.get(id=pk, members=request.user)
+        except ChatRoom.DoesNotExist:
+            return Response({'error': '聊天室不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            days = min(max(int(request.query_params.get('days', 30) or 30), 1), 90)
+        except (TypeError, ValueError):
+            days = 30
+
+        cache_key = f'chat_room_wordcloud_{chat_room.id}_{days}'
+        cached = cache.get(cache_key)
+        if cached:
+            return Response(cached)
+
+        start = timezone.now() - timedelta(days=days)
+        contents = list(
+            Message.objects.filter(
+                chat_room=chat_room,
+                timestamp__gte=start,
+                is_deleted=False,
+                message_type='text',
+            ).exclude(content='').exclude(content__isnull=True)
+            .order_by('-timestamp').values_list('content', flat=True)[:5000]
+        )
+        words, total_messages = build_word_cloud(contents)
+        payload = {
+            'words': words,
+            'total_messages': total_messages,
+            'word_count': len(words),
+            'days': days,
+            'room_id': chat_room.id,
+            'room_name': chat_room.name or '',
+        }
+        cache.set(cache_key, payload, 300)
+        return Response(payload)
 
     @action(detail=True, methods=['post'])
     def announcement_read(self, request, pk=None):
@@ -2508,67 +2552,6 @@ class ChatRoomAdminViewSet(viewsets.ModelViewSet):
             )
 
 
-# ==================== 数据统计：词云分词（无需第三方分词库） ====================
-
-_WORDCLOUD_STOPWORDS = {
-    '我们', '你们', '他们', '她们', '它们', '这个', '那个', '这些', '那些', '什么', '怎么',
-    '怎样', '为何', '为什么', '可以', '没有', '不是', '就是', '还是', '因为', '所以', '但是',
-    '如果', '现在', '今天', '明天', '昨天', '好的', '收到', '谢谢', '麻烦', '一下', '已经',
-    '需要', '进行', '然后', '时候', '感觉', '知道', '觉得', '可能', '应该', '事情', '问题',
-    '东西', '地方', '时间', '大家', '自己', '多少', '还有', '并且', '而且', '或者', '以及',
-    '对于', '关于', '通过', '根据', '由于', '虽然', '不过', '这样', '那样', '这里', '那里',
-    '一起', '一直', '一点', '一些', '不会', '不能', '不用', '不要', '没关系', '没问题',
-    '哈哈', '呵呵', '嗯嗯', '好的好的', '行吧', '好吧', '是的', '对的', '真的', '有点',
-    '比较', '非常', '特别', '确实', '其实', '另外', '主要', '直接', '马上', '刚才', '刚刚',
-    '的话', '来说', '之后', '之前', '以后', '以前', '是否', '里面', '上面', '下面', '方面',
-}
-
-_WORDCLOUD_EN_STOPWORDS = {
-    'the', 'and', 'for', 'you', 'are', 'with', 'this', 'that', 'have', 'not', 'but', 'can',
-    'will', 'was', 'were', 'from', 'they', 'them', 'your', 'our', 'its', 'what', 'when',
-    'where', 'which', 'who', 'how', 'why', 'all', 'any', 'one', 'two', 'get', 'got', 'use',
-    'http', 'https', 'www', 'com', 'cn', 'ok', 'okay', 'yes', 'hi', 'hello', 'test', 'null',
-    'none', 'true', 'false', 'the', 'is', 'of', 'to', 'in', 'on', 'at', 'be', 'it', 'as',
-}
-
-
-def _wordcloud_tokens(content):
-    """从一条聊天文本中提取候选词：英文单词 + 中文 2~4 字片段（重叠切分）。
-
-    项目未引入 jieba 等分词库，这里用重叠 n-gram + 停用词过滤得到可用词云；
-    高频短词（如“客户”“项目”“发货”）会自然浮到前面，低频噪声由最小词频过滤。
-    """
-    import re
-
-    text = (content or '').strip()
-    if not text:
-        return
-    text = re.sub(r'https?://\S+', ' ', text)
-    text = re.sub(r'@\S+', ' ', text)
-
-    for m in re.finditer(r'[A-Za-z][A-Za-z0-9_+#.-]{1,}', text):
-        word = m.group(0).strip('.-_').lower()
-        if len(word) >= 2 and word not in _WORDCLOUD_EN_STOPWORDS:
-            yield word
-
-    for run in re.findall(r'[一-龥]{2,}', text):
-        run = run[:12]
-        n = len(run)
-        if n <= 4:
-            if run not in _WORDCLOUD_STOPWORDS:
-                yield run
-            continue
-        for size in (2, 3):
-            for i in range(0, n - size + 1):
-                word = run[i:i + size]
-                if word not in _WORDCLOUD_STOPWORDS:
-                    yield word
-        for i in range(0, n - 4 + 1, 3):
-            word = run[i:i + 4]
-            if word not in _WORDCLOUD_STOPWORDS:
-                yield word
-
-
 def _pct_growth(current, previous):
     """环比增长率：上一周期为 0 时，本期有量记 100%，否则 0%"""
     if previous and previous > 0:
@@ -2955,7 +2938,6 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
         统计当前租户/企业下最近 N 天的文本消息，提取高频词。
         历史消息可能较多，取最近 8000 条并缓存 5 分钟，避免每次刷新都全量解析。
         """
-        from collections import Counter
         from org.filters import resolve_tenant_for_request
 
         try:
@@ -2965,7 +2947,7 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
 
         tenant = resolve_tenant_for_request(request)
         tenant_id = getattr(tenant, 'id', None)
-        cache_key = f'admin_wordcloud_{tenant_id or "all"}_{days}'
+        cache_key = f'admin_wordcloud_jieba_{tenant_id or "all"}_{days}'
         cached = cache.get(cache_key)
         if cached:
             return Response(cached)
@@ -2981,21 +2963,12 @@ class AdminStatisticsViewSet(viewsets.ViewSet):
 
         contents = list(qs.order_by('-timestamp').values_list('content', flat=True)[:8000])
 
-        counter = Counter()
-        for content in contents:
-            for token in _wordcloud_tokens(content[:300]):
-                counter[token] += 1
-
-        words = [(w, c) for w, c in counter.items() if c >= 2]
-        if len(words) < 12:
-            words = list(counter.items())
-        words.sort(key=lambda x: x[1], reverse=True)
-        top = words[:120]
+        words, total_messages = build_word_cloud(contents)
 
         payload = {
-            'words': [{'name': w, 'value': c} for w, c in top],
-            'total_messages': len(contents),
-            'word_count': len(top),
+            'words': words,
+            'total_messages': total_messages,
+            'word_count': len(words),
             'days': days,
             'tenant_id': tenant_id,
             'tenant_name': (tenant.short_name or tenant.name) if tenant else '全部企业',
