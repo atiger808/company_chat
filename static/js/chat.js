@@ -4467,6 +4467,8 @@ class ChatClient {
         } = options;
 
         if (!roomId) return false;
+        // 切换聊天室时停止连续朗读
+        if (!append && this._continuousTTS) this.stopContinuousTTS();
         // 🔧 「加载更多」防抖：同一聊天室上滚分页时避免重复请求；
         //    但切换聊天室（append=false）必须放行，否则会因上一个请求在途而整场加载失败
         if (append && this.isLoadingMore) return false;
@@ -4786,9 +4788,10 @@ class ChatClient {
 
         // 创建滚动处理函数
         this.infiniteScrollHandler = () => {
-            // 检查是否滚动到顶部（加载更早的消息）
-            if (messagesList.scrollTop < 50 &&
+            // 提前 120px 触发，避免用户真的滚到顶部才出现“加载中”的空档
+            if (messagesList.scrollTop < 120 &&
                 !this.isLoadingMore &&
+                !this._historyAnchorRestoring &&
                 this.hasMoreMessages &&
                 this.currentRoomId) {
 
@@ -4912,58 +4915,103 @@ class ChatClient {
     }
 
 
+    // 记录当前视口内第一条消息及它在容器中的相对位置（用于加载后精确还原）
+    _captureMessageAnchor() {
+        const list = document.getElementById('messagesList');
+        if (!list) return null;
+        const listRect = list.getBoundingClientRect();
+        const items = list.querySelectorAll('.message-wrapper[data-message-id]');
+        let anchor = null;
+        for (let i = 0; i < items.length; i++) {
+            const r = items[i].getBoundingClientRect();
+            if (r.bottom > listRect.top + 1) { anchor = items[i]; break; }
+        }
+        if (!anchor) {
+            return {scrollTop: list.scrollTop, scrollHeight: list.scrollHeight};
+        }
+        return {
+            id: anchor.getAttribute('data-message-id'),
+            offsetTop: anchor.getBoundingClientRect().top - listRect.top,
+            scrollTop: list.scrollTop,
+            scrollHeight: list.scrollHeight
+        };
+    }
+
+    // 历史消息插入后，让原先查看的消息停留在原来的屏幕位置
+    _restoreMessageAnchor(anchor) {
+        if (!anchor) return;
+        const list = document.getElementById('messagesList');
+        if (!list) return;
+        const apply = () => {
+            if (!list.isConnected) return;
+            if (anchor.id) {
+                const el = list.querySelector(`.message-wrapper[data-message-id="${anchor.id}"]`);
+                if (el) {
+                    const delta = (el.getBoundingClientRect().top - list.getBoundingClientRect().top) - anchor.offsetTop;
+                    if (Math.abs(delta) > 0.5) list.scrollTop += delta;
+                    return;
+                }
+            }
+            const deltaH = list.scrollHeight - (anchor.scrollHeight || 0);
+            if (deltaH) list.scrollTop = (anchor.scrollTop || 0) + deltaH;
+        };
+        apply();
+        requestAnimationFrame(apply);
+        setTimeout(apply, 80);
+        setTimeout(apply, 240);
+        // 图片/字体异步加载会改变上方高度，短暂监听尺寸变化继续校正锚点
+        if (typeof ResizeObserver !== 'undefined') {
+            try {
+                const ro = new ResizeObserver(apply);
+                ro.observe(list);
+                setTimeout(() => ro.disconnect(), 800);
+            } catch (e) { /* ignore */ }
+        }
+    }
+
     // 加载更多历史消息
     async loadMoreHistory() {
-
         if (this.isLoadingMore || !this.hasMoreMessages || !this.currentRoomId || !this.oldestMessageId) return;
 
-        // 🔧 关键修复：保存当前滚动位置
+        // 加载前记录锚点：用户当前看到的第一条消息
+        const anchor = this._captureMessageAnchor();
+        const beforeCount = this.messages.length;
+        // 还原期间暂停滚动触发的自动分页，避免刚渲染完 scrollTop=0 时再次误触发
+        this._historyAnchorRestoring = true;
+
+        // 悬浮加载提示：不插入消息列表，避免加载期间把可视内容向下挤动
+        const loader = document.createElement('div');
+        loader.className = 'history-top-loading';
+        loader.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 正在加载更早的消息...';
+        const host = document.getElementById('messagesContainer');
+        if (host) host.appendChild(loader);
+
         try {
-            // 显示加载指示器
-            const loadingIndicator = document.createElement('div');
-            loadingIndicator.className = 'message-loading-indicator';
-            loadingIndicator.innerHTML = `
-            <div class="spinner"></div>
-            <span>加载更多消息...</span>
-        `;
-            const messagesList = document.getElementById('messagesList');
-            if (messagesList && messagesList.firstChild) {
-                messagesList.insertBefore(loadingIndicator, messagesList.firstChild);
-            }
-            const currentOldestMessageId = this.oldestMessageId
-            const loadingIndicatorOffset = loadingIndicator.offsetHeight;
-            console.log('currentOldestMessageId: ', currentOldestMessageId)
-            console.log('loadingIndicatorOffset: ', loadingIndicatorOffset)
-            console.log('加载更多历史消息...');
-            // 加载更早的消息
             await this.loadChatHistory(this.currentRoomId, {
                 beforeId: this.oldestMessageId,
                 append: true,
-                page_size: 30
+                page_size: 50
             });
-
-
-            // 恢复滚动位置（考虑加载指示器高度）
-            if (messagesList) {
-                const currentScrollTop = document.querySelector(`.message-wrapper[data-message-id="${currentOldestMessageId}"]`).offsetTop
-                let targetScrollTop = currentScrollTop - loadingIndicatorOffset;
-                console.log('currentScrollTop: ', currentScrollTop)
-                console.log('targetScrollTop: ', targetScrollTop)
-
-                messagesList.scrollTop = targetScrollTop;
-
-                setTimeout(() => {
-                    messagesList.scrollTop = targetScrollTop;
-                }, 100);
-            }
-
         } catch (error) {
             console.error('加载更多历史消息失败:', error);
             this.showError('加载更多消息失败');
         } finally {
-            // 移除加载指示器
-            const indicator = document.querySelector('.message-loading-indicator');
-            if (indicator) indicator.remove();
+            if (loader.parentNode) loader.remove();
+            // 新加载的消息做一次淡入，提示“更早消息已就位”
+            const added = this.messages.length - beforeCount;
+            if (added > 0) {
+                const ids = this.messages.slice(0, added).map(m => String(m.id));
+                ids.forEach(id => {
+                    const el = document.querySelector(`.message-wrapper[data-message-id="${id}"]`);
+                    if (el) el.classList.add('msg-append-in');
+                });
+                setTimeout(() => {
+                    document.querySelectorAll('.msg-append-in').forEach(el => el.classList.remove('msg-append-in'));
+                }, 420);
+            }
+            // 用锚点精确还原，避免新消息插入后画面跳到顶部
+            this._restoreMessageAnchor(anchor);
+            setTimeout(() => { this._historyAnchorRestoring = false; }, 300);
         }
     }
 
@@ -5374,27 +5422,33 @@ class ChatClient {
         const messagesList = document.getElementById('messagesList');
         if (!messagesList) return;
 
-        // 清空消息列表
-        messagesList.innerHTML = '';
-
         // 按时间顺序排序（最早的在前，最新的在后）
         this.messages.sort((a, b) => {
             return new Date(a.timestamp) - new Date(b.timestamp);
         });
 
-        // 重新渲染所有消息
+        // 先在离屏容器中完成全部渲染，再一次性替换，避免逐条插入造成滚动闪烁
+        const batch = document.createElement('div');
         this.messages.forEach((message, index) => {
             const senderId = message.sender_id ?? message.sender?.id;
             const type = senderId === this.currentUser?.id ? 'sent' : 'received';
 
             // 渲染时间戳分隔符（每5分钟或跨天）
             if (index === 0 || this.shouldShowTimestamp(this.messages[index - 1], message)) {
-                const timeElement = this.renderTimeStamp(message.timestamp);
-                messagesList.appendChild(timeElement);
+                batch.appendChild(this.renderTimeStamp(message.timestamp));
             }
 
-            this.renderMessage(message, type);
+            this.renderMessage(message, type, batch);
         });
+
+        messagesList.innerHTML = '';
+        while (batch.firstChild) messagesList.appendChild(batch.firstChild);
+
+        // 连续朗读中重渲染后恢复当前消息高亮
+        if (this._continuousTTS && this._continuousTTS.currentId != null) {
+            const cur = document.querySelector(`.message-wrapper[data-message-id="${this._continuousTTS.currentId}"]`);
+            if (cur) cur.classList.add('tts-reading');
+        }
 
         if (!append) {
             // 滚动到底部
@@ -5492,7 +5546,7 @@ class ChatClient {
 
 
     // 消息渲染方法 - 微信样式
-    renderMessage(message, type) {
+    renderMessage(message, type, targetContainer) {
         const template = document.getElementById('messageTemplate');
         if (!template) return;
 
@@ -5713,10 +5767,25 @@ class ChatClient {
             };
             actionBtnForward.appendChild(forwardBtn);
 
+            // 朗读按钮（文本消息；电脑/手机/平板通用）
+            let ttsBtn = null;
+            if (this._isTtsableMessage(message)) {
+                ttsBtn = document.createElement('button');
+                ttsBtn.className = 'message-tts-btn';
+                ttsBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
+                ttsBtn.title = '朗读（连续朗读）';
+                ttsBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    this._toggleMessageTTS(message, ttsBtn);
+                };
+            }
+
             if (type === 'sent') {
-                headerElementContainer.appendChild(actionBtnForward)
+                headerElementContainer.appendChild(actionBtnForward);
+                if (ttsBtn) headerElementContainer.appendChild(ttsBtn);
             } else {
                 messageWrapper.appendChild(forwardBtn);
+                if (ttsBtn) messageWrapper.appendChild(ttsBtn);
             }
         }
 
@@ -5731,15 +5800,15 @@ class ChatClient {
         wrapper.appendChild(messageWrapper);
 
 
-        // 获取消息列表容器
-        const messagesList = document.getElementById('messagesList');
+        // 获取消息列表容器（批量渲染时传入离屏容器，避免逐条触发滚动）
+        const messagesList = targetContainer || document.getElementById('messagesList');
         if (messagesList) {
             messagesList.appendChild(messageElement);
         }
 
 
-        // 如果是最新消息且当前在聊天界面，滚动到底部
-        if (this.currentRoomId && parseInt(message.chat_room) == parseInt(this.currentRoomId)) {
+        // 如果是最新消息且当前在聊天界面，滚动到底部（批量渲染时不滚动）
+        if (!targetContainer && this.currentRoomId && parseInt(message.chat_room) == parseInt(this.currentRoomId)) {
             Utils.scrollToBottom(messagesList);
         }
 
@@ -7370,7 +7439,7 @@ class ChatClient {
         var dotHtml = n.is_read ? '' : '<span style="position:absolute;top:20px;right:2px;width:8px;height:8px;border-radius:50%;background:#409eff;"></span>';
         var u = (n.related_url || '');
         var detailBtn = u ? '<span onclick="event.stopPropagation();chatClient._clickNotification(' + n.id + ',\'' + u + '\',' + (n.is_read ? 'true' : 'false') + ')" style="display:inline-block;margin-top:6px;padding:2px 10px;font-size:11px;color:var(--primary-color,#409eff);background:#ecf5ff;border-radius:4px;cursor:pointer;">查看详情 <i class="fas fa-arrow-right" style="font-size:10px;"></i></span>' : '';
-        return '<div class="notif-chat-item ' + cls + '" onclick="chatClient._markNotifRead(' + n.id + ')" style="position:relative;display:flex;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border-color,#f0f0f0);cursor:pointer;transition:background 0.15s;">'
+        return '<div class="notif-chat-item ' + cls + '" onclick="chatClient._markNotifRead(' + n.id + ')" style="position:relative;display:flex;gap:12px;padding:14px 16px;border-bottom:1px solid #ede4e4;cursor:pointer;transition:background 0.15s;">'
             + '<div style="width:40px;height:40px;border-radius:50%;background:' + color + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff;font-size:16px;"><i class="' + icon + '"></i></div>'
             + '<div style="flex:1;min-width:0;">'
             + '<div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:14px;font-weight:' + (n.is_read ? '400' : '600') + ';color:var(--text-primary,#303133);">' + this._notifEscape(n.title) + '</span>'
@@ -11740,6 +11809,18 @@ class ChatClient {
                     </div>
                 </div>
 
+                <!-- 群管理员可见：添加群成员 -->
+                <div class="form-group" id="groupAdminAddMemberGroup" style="display:none;">
+                    <label>添加成员</label>
+                    <div class="search-input-wrapper">
+                        <i class="fas fa-search"></i>
+                        <input type="text" placeholder="搜索用户添加到群聊..." id="addMemberSearch">
+                    </div>
+                    <div class="member-results gm-scope" id="addMemberResults">
+                        <!-- 可添加的成员列表 -->
+                    </div>
+                </div>
+
             </div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="chatClient.closeModal('groupManagementModal')">确定</button>
@@ -11763,6 +11844,12 @@ class ChatClient {
         document.getElementById('groupManageSearch').addEventListener('input', (e) => {
             this.searchGroupMembers(e.target.value, roomId);
         });
+        var addMemberSearch = document.getElementById('addMemberSearch');
+        if (addMemberSearch) {
+            addMemberSearch.addEventListener('input', (e) => {
+                this.searchAvailableMembers(e.target.value, roomId);
+            });
+        }
 
         // 绑定关闭事件
         const closeBtn = modal.querySelector('.close-btn');
@@ -11947,15 +12034,42 @@ class ChatClient {
 
         membersContainer.innerHTML = this._buildGroupMemberGridHtml(roomId, sortedMembers)
             || '<div class="empty-state"><p>暂无成员</p></div>';
+
+        // 非群主的管理员：成员详情同步后按群管理员身份显示「添加成员」
+        this._applyGroupAdminTools(roomId);
+    }
+
+    // 当前用户是否为该群的群管理员（群主不算）
+    _isCurrentGroupAdmin(room) {
+        if (!room || !this.currentUser) return false;
+        if (this.currentUser.id === room.creator) return false;
+        var me = (room.members || []).find(function (m) { return m.id === chatClient.currentUser.id; });
+        return !!(me && me.is_group_admin);
+    }
+
+    // 群管理员在成员列表弹窗中的「添加成员」入口
+    _applyGroupAdminTools(roomId) {
+        var group = document.getElementById('groupAdminAddMemberGroup');
+        if (!group) return;  // 群主管理弹窗没有该隐藏区
+        var room = this.chatRooms.find(r => r.id === parseInt(roomId));
+        if (this._isCurrentGroupAdmin(room)) {
+            group.style.display = '';
+            this.loadAvailableMembersForGroup(roomId);
+        } else {
+            group.style.display = 'none';
+        }
     }
 
     // 统一的群成员宫格渲染（加载与搜索共用，保证两处展示一致）
-    // 参考微信：每行 5 个，只展示昵称与职位；点击头像查看用户信息；群主可设置群管理员 / 移除成员
+    // 参考微信：每行 5 个，只展示昵称与职位；点击头像查看用户信息；
+    // 群主可设置群管理员 / 移除成员，群管理员可移除普通成员（不能移除群主和其他管理员）
     _buildGroupMemberGridHtml(roomId, members) {
         var room = this.chatRooms.find(r => r.id === parseInt(roomId));
         if (!room || !members || !members.length) return '';
-        // 只有群主能设置群管理员 / 移除成员
-        var iAmCreator = this.currentUser && this.currentUser.id === room.creator;
+        var myId = this.currentUser ? this.currentUser.id : null;
+        var iAmCreator = myId !== null && myId === room.creator;
+        var me = (room.members || []).find(function (m) { return m.id === myId; });
+        var iAmAdmin = !iAmCreator && !!(me && me.is_group_admin);
 
         var html = '<div class="member-grid">';
         members.forEach(function (member) {
@@ -11965,6 +12079,10 @@ class ChatClient {
                 posName = member.org_departments[0].position || '';
             }
             var isAdmin = !isCreator && !!member.is_group_admin;
+            var showSetAdmin = iAmCreator && !isCreator;  // 仅群主可设置/取消管理员
+            // 群主可移除普通成员和管理员；群管理员只能移除普通成员，且不能移除自己
+            var canRemove = !isCreator && member.id !== myId
+                && (iAmCreator || (iAmAdmin && !isAdmin));
             html += '<div class="member-grid-item ' + (isCreator ? 'creator' : '') + '" data-member-id="' + member.id + '">'
                 + '<div class="member-grid-avatar" title="查看用户信息" '
                 + 'onclick="event.stopPropagation();chatClient.showUserProfile(' + member.id + ');">'
@@ -11973,15 +12091,19 @@ class ChatClient {
                 + '<div class="member-grid-name" title="' + chatClient._escape(member.real_name || member.username) + '">' + chatClient._escape(member.real_name || member.username) + '</div>'
                 + (posName ? '<div class="member-grid-position" title="' + chatClient._escape(posName) + '">' + chatClient._escape(posName) + '</div>' : '')
                 + (isCreator ? '<div class="member-grid-tag">群主</div>' : (isAdmin ? '<div class="member-grid-tag admin">管理员</div>' : ''))
-                + (!isCreator && iAmCreator
+                + (showSetAdmin || canRemove
                     ? '<div class="gm-actions" onclick="event.stopPropagation();">'
-                        + '<button type="button" class="gm-btn' + (isAdmin ? ' is-admin' : '') + '" '
-                        + 'title="' + (isAdmin ? '取消群管理员' : '设为群管理员') + '" '
-                        + 'onclick="chatClient.setGroupAdmin(' + roomId + ', ' + member.id + ', ' + (isAdmin ? 'false' : 'true') + ')">'
-                        + '<i class="fas fa-star"></i><span class="gm-btn-text">' + (isAdmin ? '取消管理员' : '设管理员') + '</span></button>'
-                        + '<button type="button" class="gm-btn danger" title="移除成员" '
-                        + 'onclick="chatClient.removeGroupMember(' + roomId + ', ' + member.id + ')">'
-                        + '<i class="fas fa-user-minus"></i><span class="gm-btn-text">移除</span></button>'
+                        + (showSetAdmin
+                            ? '<button type="button" class="gm-btn' + (isAdmin ? ' is-admin' : '') + '" '
+                                + 'title="' + (isAdmin ? '取消群管理员' : '设为群管理员') + '" '
+                                + 'onclick="chatClient.setGroupAdmin(' + roomId + ', ' + member.id + ', ' + (isAdmin ? 'false' : 'true') + ')">'
+                                + '<i class="fas fa-star"></i><span class="gm-btn-text">' + (isAdmin ? '取消管理员' : '设管理员') + '</span></button>'
+                            : '')
+                        + (canRemove
+                            ? '<button type="button" class="gm-btn danger" title="移除成员" '
+                                + 'onclick="chatClient.removeGroupMember(' + roomId + ', ' + member.id + ')">'
+                                + '<i class="fas fa-user-minus"></i><span class="gm-btn-text">移除</span></button>'
+                            : '')
                       + '</div>'
                     : '')
                 + '</div>';
@@ -11999,9 +12121,9 @@ class ChatClient {
         // 获取当前群成员的ID
         const currentMemberIds = room.members ? room.members.map(m => m.id) : [];
 
-        // 根据用户类型过滤可添加的成员
+        // 根据用户类型过滤可添加的成员；群管理员视同管理角色，可添加企业内用户
         let availableMembers;
-        if (this.currentUser.user_type === 'normal') {
+        if (this.currentUser.user_type === 'normal' && !this._isCurrentGroupAdmin(room)) {
             // 普通用户只能添加好友
             availableMembers = this.users.filter(user =>
                 user.id !== this.currentUser.id &&
@@ -12009,7 +12131,7 @@ class ChatClient {
                 this.currentUser.friends?.some(f => f.id === user.id)
             );
         } else {
-            // 管理员可以添加所有用户
+            // 管理员 / 群管理员可以添加所有用户
             availableMembers = this.users.filter(user =>
                 user.id !== this.currentUser.id &&
                 !currentMemberIds.includes(user.id)
@@ -12782,6 +12904,9 @@ class ChatClient {
             <div class="menu-item" onclick="chatClient.quoteSelectedItem()"><i class="fas fa-quote-left"></i> 引用</div>
             <div class="menu-item" onclick="chatClient.forwardSelectedItem()"><i class="fas fa-share"></i> 转发</div>
         `;
+            if (this._isTtsableMessage(message)) {
+                menuHtml += '<div class="menu-item" onclick="chatClient.speakSelectedMessage()"><i class="fas fa-volume-up"></i> 朗读</div>';
+            }
 
             // 🔧 新增：如果消息是文件且在云盘中，添加“在线编辑”和“保存到云盘”
             if (message.file_info && (message.message_type === 'file' || message.message_type === 'image' || message.message_type === 'video' || message.message_type === 'audio')) {
@@ -12871,31 +12996,30 @@ class ChatClient {
                             <textarea id="taskConvertDesc" class="form-control" rows="3" placeholder="任务详情...">${this.escapeHtml(message.content)}</textarea>
                         </div>
                     </div>
-                    <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-                        <div class="form-group">
-                            <label>指派给</label>
-                            <div class="assignee-picker">
-                                <input type="hidden" id="taskConvertAssigneeId" value="">
-                                <div class="assignee-selected" id="taskConvertAssigneeSelected" style="display:none;">
-                                    <img id="taskConvertAssigneeAvatar" class="assignee-avatar" src="/static/images/default-avatar.png" alt="头像">
-                                    <div class="assignee-info">
-                                        <div class="assignee-name" id="taskConvertAssigneeName"></div>
-                                        <div class="assignee-meta" id="taskConvertAssigneeMeta"></div>
-                                    </div>
-                                    <button type="button" class="assignee-clear" title="取消选择" onclick="chatClient.clearConvertAssignee(event)">&times;</button>
+                    <div class="form-group">
+                        <label>指派给</label>
+                        <div class="assignee-picker">
+                            <input type="hidden" id="taskConvertAssigneeId" value="">
+                            <div class="assignee-selected" id="taskConvertAssigneeSelected" style="display:none;">
+                                <img id="taskConvertAssigneeAvatar" class="assignee-avatar" src="/static/images/default-avatar.png" alt="头像">
+                                <div class="assignee-info">
+                                    <div class="assignee-name" id="taskConvertAssigneeName"></div>
+                                    <div class="assignee-meta" id="taskConvertAssigneeMeta"></div>
                                 </div>
-                                <div class="assignee-search">
-                                    <i class="fas fa-search"></i>
-                                    <input type="text" id="taskConvertAssigneeSearchInput" class="form-control" placeholder="输入姓名/账号/部门/职位搜索用户...">
-                                </div>
-                                <div class="assignee-dropdown" id="taskConvertAssigneeDropdown"></div>
+                                <button type="button" class="assignee-clear" title="取消选择" onclick="chatClient.clearConvertAssignee(event)">&times;</button>
                             </div>
+                            <div class="assignee-search">
+                                <i class="fas fa-search"></i>
+                                <input type="text" id="taskConvertAssigneeSearchInput" class="form-control" placeholder="输入姓名/账号/部门/职位搜索用户...">
+                            </div>
+                            <div class="assignee-dropdown" id="taskConvertAssigneeDropdown"></div>
                         </div>
-                        <div class="form-group">
+                    </div>
+                    <div class="form-group">
                             <label>截止日期</label>
                             <input type="datetime-local" id="taskConvertDueDate" class="form-control" style="padding-left: 12px;">
                         </div>
-                    </div>
+                    
                     <div class="form-group" style="margin-bottom: 0;">
                         <label style="display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px;">
                             <i class="fas fa-link" style="color: var(--primary-color);"></i> 
@@ -12941,8 +13065,8 @@ class ChatClient {
             }
         });
         // 模态框内滚动/窗口缩放时关闭下拉，避免位置错乱
-        const modal = document.getElementById('taskConvertModal');
-        if (modal) modal.addEventListener('scroll', () => { dropdown.style.display = 'none'; }, true);
+        // const modal = document.getElementById('taskConvertModal');
+        // if (modal) modal.addEventListener('scroll', () => { dropdown.style.display = 'none'; }, true);
         window.addEventListener('resize', () => { dropdown.style.display = 'none'; });
         // 不默认指派任何人，交由用户搜索选择
     }
@@ -13092,6 +13216,137 @@ class ChatClient {
             btn.disabled = false;
             btn.innerHTML = '<i class="fas fa-plus-circle"></i> 创建任务';
         }
+    }
+
+    // ==================== 消息朗读（浏览器语音合成） ====================
+    _isTtsableMessage(message) {
+        if (!message || message.is_deleted) return false;
+        var type = message.message_type || 'text';
+        if (type !== 'text' && type !== 'emoji') return false;
+        return !!this._messageTtsText(message);
+    }
+
+    _messageTtsText(message) {
+        var content = String((message && message.content) || '');
+        return content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    _toggleMessageTTS(message, btn) {
+        if (!window.BrowserTTS) return;
+        if (!BrowserTTS.supported) { this.showError('当前浏览器不支持语音播放'); return; }
+        if (!message || !this._messageTtsText(message)) { this.showError('该消息暂无可朗读内容'); return; }
+        // 正在连续朗读：点击当前正在朗读的消息则停止；点击其它消息则从该条重新开始
+        var active = this._continuousTTS;
+        if (active && String(active.currentId) === String(message.id)) {
+            this.stopContinuousTTS();
+            return;
+        }
+        this._startContinuousTTS(message);
+    }
+
+    // 从指定消息开始，按时间顺序连续朗读后续文本消息（类似微信连续朗读）
+    _startContinuousTTS(startMessage) {
+        var items = (this.messages || []).filter(m => this._isTtsableMessage(m));
+        if (!items.length) return;
+        var idx = items.findIndex(m => String(m.id) === String(startMessage.id));
+        if (idx < 0) idx = 0;
+        this._continuousTTS = {items: items, index: idx, active: true, currentId: null};
+        this._showContinuousTTSFloat();
+        this._speakContinuousQueue();
+    }
+
+    _showContinuousTTSFloat() {
+        if (document.getElementById('continuousTtsFloat')) return;
+        var el = document.createElement('div');
+        el.id = 'continuousTtsFloat';
+        el.className = 'continuous-tts-float';
+        el.title = '点击停止连续朗读';
+        el.innerHTML = '<span class="ctf-icon"><i class="fas fa-volume-up"></i><span class="ctf-ring"></span></span>'
+            + '<span class="ctf-text">连续朗读中</span>'
+            + '<i class="fas fa-times ctf-close"></i>';
+        el.onclick = function (e) {
+            e.stopPropagation();
+            chatClient.stopContinuousTTS();
+        };
+        document.body.appendChild(el);
+    }
+
+    _highlightTTSMessage(msg) {
+        document.querySelectorAll('.message-wrapper.tts-reading').forEach(function (x) {
+            x.classList.remove('tts-reading');
+        });
+        var el = document.querySelector(`.message-wrapper[data-message-id="${msg.id}"]`);
+        if (el) {
+            el.classList.add('tts-reading');
+            this._ensureMessageVisible(el);
+        }
+    }
+
+    _speakContinuousQueue() {
+        var st = this._continuousTTS;
+        if (!st || !st.active) return;
+        var list = st.items.slice(st.index, st.index + 200);
+        if (!list.length) { this.stopContinuousTTS(); return; }
+
+        // 立即高亮首条，后续由 onItemStart 逐条切换
+        st.currentId = list[0].id;
+        this._highlightTTSMessage(list[0]);
+
+        var self = this;
+        var lastStarted = -1;
+        var entries = list.map(function (msg) {
+            var text = self._messageTtsText(msg);
+            var sender = (msg.sender && (msg.sender.real_name || msg.sender.username)) || '';
+            return {text: sender ? sender + '：' + text : text, data: msg};
+        });
+        // 一次性入队，iOS/移动端不会因异步回调续播被系统拦截
+        var ok = BrowserTTS.speakSequence(entries, {
+            lang: 'zh-CN', rate: 1,
+            onItemStart: function (index, msg) {
+                if (self._continuousTTS !== st) return;
+                lastStarted = index;
+                st.currentId = msg.id;
+                self._highlightTTSMessage(msg);
+            },
+            onend: function () {
+                if (self._continuousTTS !== st) return;
+                // 浏览器提前中断长队列时，从下一条继续
+                if (lastStarted >= 0 && lastStarted < list.length - 1) {
+                    st.index = st.index + lastStarted + 1;
+                    self._speakContinuousQueue();
+                    return;
+                }
+                self.stopContinuousTTS();
+            }
+        });
+        if (!ok) this.stopContinuousTTS();
+    }
+
+    _ensureMessageVisible(el) {
+        var list = document.getElementById('messagesList');
+        if (!list || !el) return;
+        var r = el.getBoundingClientRect();
+        var lr = list.getBoundingClientRect();
+        if (r.top >= lr.top + 8 && r.bottom <= lr.bottom - 8) return;
+        // 即时滚动，避免平滑滚动动画打断语音合成队列
+        var target = list.scrollTop + (r.top - lr.top) - Math.max(8, (list.clientHeight - el.offsetHeight) / 2);
+        list.scrollTop = Math.max(0, target);
+    }
+
+    stopContinuousTTS() {
+        this._continuousTTS = null;
+        if (window.BrowserTTS) BrowserTTS.stop();
+        document.querySelectorAll('.message-wrapper.tts-reading').forEach(function (x) {
+            x.classList.remove('tts-reading');
+        });
+        var f = document.getElementById('continuousTtsFloat');
+        if (f) f.remove();
+    }
+
+    speakSelectedMessage() {
+        var message = this.contextTarget;
+        this.hideContextMenu();
+        if (message) this._toggleMessageTTS(message, null);
     }
 
     forwardSelectedItem() {

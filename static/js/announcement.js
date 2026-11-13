@@ -73,6 +73,8 @@ class AnnouncementApp {
             var d = await this.apiGet(ANN_API + '/');
             this._canCreate = !!d.can_create;
             this._archiveDays = d.archive_days || 1;
+            this._voiceEnabled = !!d.voice_enabled;
+            this._voiceAutoplay = d.voice_autoplay !== false;
             this._applyCreateBtn();
             // 子公司与部门：从现有接口获取
             try {
@@ -140,6 +142,8 @@ class AnnouncementApp {
                 this._applyCreateBtn();
             }
             if (d.archive_days) this._archiveDays = d.archive_days;
+            if (typeof d.voice_enabled !== 'undefined') this._voiceEnabled = !!d.voice_enabled;
+            if (typeof d.voice_autoplay !== 'undefined') this._voiceAutoplay = d.voice_autoplay !== false;
             this._renderList();
         } catch (e) {
             listEl.innerHTML = '<div class="ann-empty">加载失败：' + this._escape(e.message || '') + '</div>';
@@ -902,10 +906,54 @@ class AnnouncementApp {
         }).join('');
     }
 
+    // ==================== 语音播放 ====================
+    _ttsBtnHtml() {
+        if (!this._voiceEnabled) return '';
+        if (!window.BrowserTTS || !BrowserTTS.supported) return '';
+        return '<button type="button" class="tts-btn" title="朗读公告内容" '
+            + 'onclick="event.stopPropagation();annApp.toggleTTS(this)">'
+            + '<i class="fas fa-volume-up"></i><span>朗读</span></button>';
+    }
+
+    toggleTTS(btn) {
+        if (!window.BrowserTTS) return;
+        if (!BrowserTTS.supported) { this.showToast('当前浏览器不支持语音播放', true); return; }
+        var content = document.querySelector('#annDetailBody .ann-detail-content');
+        var text = content ? (content.innerText || content.textContent || '') : '';
+        var title = this._currentAnn ? (this._currentAnn.title || '') : '';
+        var speakText = (title ? title + '。' : '') + text;
+        if (!speakText.trim()) { this.showToast('暂无可朗读内容', true); return; }
+        BrowserTTS.toggle(speakText, btn, {lang: 'zh-CN', rate: 1});
+    }
+
+    _autoPlayAnnouncement() {
+        if (!this._voiceEnabled || this._voiceAutoplay === false) return;
+        if (!window.BrowserTTS || !BrowserTTS.supported) return;
+        var self = this;
+        clearTimeout(this._ttsTimer);
+        this._ttsTimer = setTimeout(function () {
+            var modal = document.getElementById('annDetailModal');
+            if (!modal || !modal.classList.contains('show')) return;
+            var content = document.querySelector('#annDetailBody .ann-detail-content');
+            var text = content ? (content.innerText || content.textContent || '') : '';
+            var title = self._currentAnn ? (self._currentAnn.title || '') : '';
+            var speakText = (title ? title + '。' : '') + text;
+            if (!speakText.trim()) return;
+            BrowserTTS.speak(speakText, {
+                lang: 'zh-CN', rate: 1,
+                button: document.querySelector('#annDetailBody .tts-btn')
+            });
+        }, 350);
+    }
+
     // ==================== 详情 ====================
     async openDetail(id) {
         try {
             var a = await this.apiGet(ANN_API + '/' + id + '/');
+            if (typeof a.voice_enabled !== 'undefined') this._voiceEnabled = !!a.voice_enabled;
+            if (typeof a.voice_autoplay !== 'undefined') this._voiceAutoplay = a.voice_autoplay !== false;
+            if (window.BrowserTTS) BrowserTTS.stop();
+            clearTimeout(this._ttsTimer);
             var body = document.getElementById('annDetailBody');
             var self = this;
             var isAuthor = parseInt(localStorage.getItem('user_id'), 10) === a.author;
@@ -922,7 +970,7 @@ class AnnouncementApp {
                     + '</span>'
                 : (a.is_archived ? '<span style="font-size:12px;color:#909399;"></span>' : '');
             var time = String(a.published_at || a.updated_at || '').replace('T', ' ').slice(0, 16);
-            body.innerHTML = '<div style="display:flex;align-items:center;gap:8px;justify-content: space-between;"><div style="display:flex;align-items:center;gap:6px;">' + pub + archTag + '<span class="ann-badge" style="background:#7c4dff;">' + this._escape(a.scope_label || '集团全员') + '</span></div>' + actions + '</div>'
+            body.innerHTML = '<div style="display:flex;align-items:center;gap:8px;justify-content: space-between;"><div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' + pub + archTag + '<span class="ann-badge" style="background:#7c4dff;">' + this._escape(a.scope_label || '集团全员') + '</span>' + this._ttsBtnHtml() + '</div>' + actions + '</div>'
                 + '<div class="ann-detail-title">' + this._escape(a.title) + '</div>'
                 + '<div class="ann-detail-meta">'
                 + '<span><img src="' + this._escape(a.author_avatar || '/static/images/default-avatar.png') + '" style="width:22px;height:22px;border-radius:50%;vertical-align:middle;margin-right:4px;">' + this._escape(a.author_name) + '</span>'
@@ -966,11 +1014,14 @@ class AnnouncementApp {
             modal.style.display = 'flex';
             setTimeout(function () { modal.classList.add('show'); }, 10);
             this._loadComments(id);
+            this._autoPlayAnnouncement();
         } catch (e) {
             this.showAlert('加载失败', e.message || '');
         }
     }
     closeDetail() {
+        clearTimeout(this._ttsTimer);
+        if (window.BrowserTTS) BrowserTTS.stop();
         var modal = document.getElementById('annDetailModal');
         if (modal) { modal.classList.remove('show'); setTimeout(function () { modal.style.display = 'none'; }, 150); }
     }

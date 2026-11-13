@@ -25,7 +25,7 @@ from django.contrib.auth import logout
 from django.db.models import Q, Prefetch
 from django.conf import settings
 from .models import (CustomUser, Department, ConsultationRequest, LoginLog, OperationLog,
-                     TenantMembership)
+                     Tenant, TenantMembership)
 from chat.models import ChatRoom
 from loguru import logger
 
@@ -439,90 +439,229 @@ class UserAdminViewSet(viewsets.ModelViewSet):
 
         return queryset.order_by('-date_joined').distinct()
 
+    # ==================== 企业 / 企业角色 / 主部门 ====================
+    @staticmethod
+    def _role_keys():
+        return {code for code, _label in TenantMembership.ROLE_CHOICES}
+
+    def _resolve_target_tenant(self, request):
+        """解析本次操作的目标企业，返回 (tenant, error_response)。
+
+        - 超级管理员：必须显式选择所属企业；
+        - 普通管理员：固定为自己当前激活/所属企业。
+        """
+        if self._is_super(request.user):
+            raw = request.data.get('tenant_id') or request.data.get('tenant') or ''
+            if not raw:
+                return None, Response(
+                    {'error': '所属企业为必选项，请选择所属企业'},
+                    status=status.HTTP_400_BAD_REQUEST)
+            try:
+                tenant = Tenant.objects.filter(id=int(raw), is_active=True).first()
+            except (TypeError, ValueError):
+                tenant = None
+            if tenant is None:
+                return None, Response(
+                    {'error': '所选企业不存在或已停用'},
+                    status=status.HTTP_400_BAD_REQUEST)
+            return tenant, None
+        try:
+            tenant = request.user.get_active_tenant()
+        except Exception:
+            tenant = None
+        if tenant is None:
+            return None, Response(
+                {'error': '当前管理员未归属任何企业，无法管理企业用户'},
+                status=status.HTTP_400_BAD_REQUEST)
+        return tenant, None
+
+    def _own_department_id_for_tenant(self, user, tenant):
+        """管理员在目标企业内的主部门（避免取到其他企业的部门）。"""
+        try:
+            from org.models import UserDepartment
+            rel = UserDepartment.objects.filter(
+                user=user, is_primary=True, department__tenant=tenant,
+                department__is_active=True).select_related('department').first()
+            if rel:
+                return rel.department_id
+        except Exception:
+            pass
+        if getattr(user, 'department_id', None):
+            dept = getattr(user, 'department', None)
+            if dept is not None and getattr(dept, 'tenant_id', None) == getattr(tenant, 'id', None):
+                return user.department_id
+        return None
+
+    def _resolve_target_department_id(self, request, tenant, is_super):
+        """解析目标主部门 id（组织架构部门）：超管取表单选择，普通管理员取本人主部门。"""
+        if is_super:
+            raw = request.data.get('_org_dept_id') or request.data.get('org_dept_id') or ''
+        else:
+            raw = self._own_department_id_for_tenant(request.user, tenant) or ''
+        try:
+            dept_id = int(raw)
+        except (TypeError, ValueError):
+            return None
+        if not dept_id:
+            return None
+        if is_super:
+            exists = Department.objects.filter(
+                id=dept_id, tenant=tenant, is_active=True).exists()
+            if not exists:
+                return None
+        return dept_id
+
+    def _resolve_enterprise_role(self, request, is_super, default='member'):
+        """解析企业角色：仅超管可指定，普通管理员一律普通成员。"""
+        if not is_super:
+            return 'member'
+        raw = (request.data.get('enterprise_role') or '').strip()
+        if not raw:
+            return default
+        if raw not in self._role_keys():
+            return None
+        return raw
+
+    def _bind_tenant_membership(self, target, tenant, role, force_role=True):
+        """把目标用户落到指定企业：设置激活企业 + 企业成员关系角色。"""
+        if target is None or tenant is None:
+            return
+        membership = TenantMembership.objects.filter(user=target, tenant=tenant).first()
+        created = False
+        if membership is None:
+            membership = TenantMembership.objects.create(
+                user=target, tenant=tenant, role=role or 'member', is_active=True)
+            created = True
+        else:
+            fields = []
+            if force_role and role and membership.role != role:
+                membership.role = role
+                fields.append('role')
+            if not membership.is_active:
+                membership.is_active = True
+                membership.left_at = None
+                fields.extend(['is_active', 'left_at'])
+            if fields:
+                membership.save(update_fields=fields)
+        if target.active_tenant_id != tenant.id:
+            target.active_tenant = tenant
+            target.save(update_fields=['active_tenant'])
+        if created:
+            self._notify_join_tenant(target, tenant)
+
+    def _notify_join_tenant(self, target, tenant):
+        """首次加入企业时发送工作通知（失败不影响主流程）。"""
+        try:
+            from oa.views import send_work_notification
+            actor = self.request.user
+            operator_name = actor.real_name or actor.username
+            send_work_notification(
+                user_id=target.id, title='加入企业通知',
+                content=f'您已被 {operator_name} 添加到企业「{tenant.name}」',
+                notification_type='hr', related_url='/org/',
+                extra_data={'tenant_id': tenant.id, 'tenant_name': tenant.name},
+            )
+        except Exception as e:
+            logger.warning(f'发送加入企业通知失败: {e}')
+
+    def _assign_primary_department(self, target, tenant, department_id):
+        """把选择的部门设为用户主部门（同企业内主部门唯一）。"""
+        if target is None or not department_id:
+            return
+        try:
+            from org.models import UserDepartment
+            from org.views import ensure_primary_department
+            rel, _ = UserDepartment.objects.get_or_create(
+                user=target, department_id=department_id,
+                defaults={'is_primary': True})
+            ensure_primary_department(
+                target, tenant, preferred_department_id=department_id, force=True)
+            if not rel.is_primary:
+                # 兼容旧版无企业部门：ensure_primary_department 不会处理 tenant 为空的部门
+                UserDepartment.objects.filter(user=target, department__tenant=tenant) \
+                    .exclude(id=rel.id).update(is_primary=False)
+                UserDepartment.objects.filter(id=rel.id).update(is_primary=True)
+        except Exception as e:
+            logger.warning(f'设置用户主部门失败: {e}')
+
     def create(self, request, *args, **kwargs):
-        """
-        🔧 关键修复：创建用户时的权限控制
-        """
+        """创建用户：企业必选，选择的企业即激活企业，选择的部门即主部门。"""
         user = request.user
+        is_super = self._is_super(user)
 
-        # 🔧 普通管理员不能创建超级管理员或管理员
-        if not self._is_super(user):
-            request_data = request.data.copy()
+        tenant, error = self._resolve_target_tenant(request)
+        if error is not None:
+            return error
 
-            # 强制设置为普通用户
+        request_data = request.data.copy()
+        if not is_super:
+            # 普通管理员只能创建普通用户
             request_data['user_type'] = 'normal'
+            # 保持旧版部门字段与本人一致，组织架构主部门在下方统一绑定
+            own_dept_id = self._own_department_id_for_tenant(user, tenant)
+            if own_dept_id:
+                request_data['department'] = own_dept_id
+            else:
+                request_data.pop('department', None)
+        request._full_data = request_data
 
-            # 部门隔离：普通管理员只能在本人所在部门下创建用户（无部门则创建为无部门用户）
-            request_data['department'] = self._own_department_id(user)
-
-            # 更新请求数据
-            request._full_data = request_data
+        role = self._resolve_enterprise_role(request, is_super, default='member')
+        if role is None:
+            return Response({'error': '企业角色不合法'}, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
+        created = serializer.instance
 
-        # 普通管理员新建的用户归属于本人所在企业与部门：补上企业成员关系与组织架构部门关系，
-        # 否则该用户既不在自己的（按企业+部门收窄的）可见范围内，也不会出现在组织架构里
-        if not self._is_super(user):
-            self._link_created_user(serializer.instance, user)
+        self._bind_tenant_membership(created, tenant, role, force_role=True)
+        dept_id = self._resolve_target_department_id(request, tenant, is_super)
+        self._assign_primary_department(created, tenant, dept_id)
 
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
-    def _link_created_user(self, created, actor):
-        """把普通管理员新建的用户落到本人所在企业 + 部门（成员关系/组织架构关系）"""
-        if created is None:
-            return
-        try:
-            active_tenant = actor.get_active_tenant()
-        except Exception:
-            active_tenant = None
-        if active_tenant:
-            try:
-                TenantMembership.objects.get_or_create(
-                    user=created, tenant=active_tenant,
-                    defaults={'role': 'member', 'is_active': True})
-            except Exception as e:
-                logger.warning(f'新建用户加入企业失败: {e}')
-        dept_id = self._own_department_id(actor)
-        if dept_id:
-            try:
-                from org.models import UserDepartment
-                UserDepartment.objects.get_or_create(
-                    user=created, department_id=dept_id, defaults={'is_primary': True})
-            except Exception as e:
-                logger.warning(f'新建用户加入部门失败: {e}')
-
     def update(self, request, *args, **kwargs):
-        """
-        🔧 关键修复：更新用户时的权限控制
-        """
+        """更新用户：同步企业、企业角色与主部门。"""
         user = request.user
+        is_super = self._is_super(user)
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
 
-        # 🔧 普通管理员不能修改用户类型和部门
-        if not self._is_super(user):
-            request_data = request.data.copy()
+        tenant, error = self._resolve_target_tenant(request)
+        if error is not None:
+            return error
 
-            # 移除用户类型和部门字段（防止被修改）
-            request_data.pop('user_type', None)
-            request_data.pop('department', None)
-
-            # 确保不能设置为超级管理员或管理员
+        if not is_super:
+            # 普通管理员不能修改用户类型和部门
             if instance.user_type != 'normal':
                 return Response(
                     {'error': '普通管理员只能管理普通用户'},
                     status=status.HTTP_403_FORBIDDEN
                 )
-
-            # 更新请求数据
+            request_data = request.data.copy()
+            request_data.pop('user_type', None)
+            request_data.pop('department', None)
             request._full_data = request_data
+
+        # 普通管理员编辑时保留用户既有企业角色，只有新建成员关系才使用默认成员角色
+        raw_role = (request.data.get('enterprise_role') or '').strip()
+        if is_super:
+            if raw_role and raw_role not in self._role_keys():
+                return Response({'error': '企业角色不合法'}, status=status.HTTP_400_BAD_REQUEST)
+            role = raw_role or None
+            force_role = bool(raw_role)
+        else:
+            role = None
+            force_role = False
 
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
+
+        self._bind_tenant_membership(instance, tenant, role, force_role=force_role)
+        dept_id = self._resolve_target_department_id(request, tenant, is_super)
+        self._assign_primary_department(instance, tenant, dept_id)
 
         return Response(serializer.data)
 
@@ -1391,11 +1530,7 @@ class UserViewSet(viewsets.ModelViewSet):
         与通讯录搜索不同：普通用户也可搜索全部活跃用户用于任务指派，不受好友限制。
         q 为空时返回最近在线的用户（上限 500）。"""
         query = request.query_params.get('q', '').strip()
-        qs = CustomUser.objects.filter(
-            is_active=True
-        ).exclude(
-            id=request.user.id
-        ).select_related('department')
+        qs = self._contact_prefetch(self._contact_scope_queryset(request))
         if query:
             qs = qs.filter(
                 Q(username__icontains=query) |

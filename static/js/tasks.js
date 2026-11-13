@@ -750,8 +750,8 @@ class TaskApp {
             if (picker && !picker.contains(e.target)) dropdown.style.display = 'none';
         });
         // 模态框内滚动/窗口缩放时关闭下拉，避免位置错乱
-        const modal = document.getElementById('taskModal');
-        if (modal) modal.addEventListener('scroll', () => { dropdown.style.display = 'none'; }, true);
+        // const modal = document.getElementById('taskModal');
+        // if (modal) modal.addEventListener('scroll', () => { dropdown.style.display = 'none'; }, true);
         window.addEventListener('resize', () => { dropdown.style.display = 'none'; });
     }
 

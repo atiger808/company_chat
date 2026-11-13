@@ -30,8 +30,7 @@ class AdminChatRoomsClient {
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', () => this.init());
         } else {
-            console.log('AdminChatRoomsClient DOMContentLoaded');
-            // this.init();
+            console.log('AdminChatRoomsClient 已创建（等待管理控制台按需初始化）');
         }
     }
 
@@ -204,6 +203,13 @@ class AdminChatRoomsClient {
         if (!this._imageClickBound) {
             this._imageClickBound = true;
             messagesList.addEventListener('click', (e) => {
+                // 朗读按钮走事件委托，始终使用当前加载历史消息的实例
+                const ttsBtn = e.target.closest('.history-tts-btn');
+                if (ttsBtn) {
+                    e.stopPropagation();
+                    this.speakHistoryMessage(ttsBtn.getAttribute('data-tts-message-id'), ttsBtn);
+                    return;
+                }
                 // 处理图片预览点击
                 const imageEl = e.target.closest('.message-image-img');
                 if (imageEl) {
@@ -519,6 +525,7 @@ class AdminChatRoomsClient {
 
     // 显示聊天室历史
     showRoomHistory(roomId) {
+        this.stopContinuousTTS();
         this.currentRoomId = roomId;
         this.currentPage = 1;
         this.hasMoreMessages = true;
@@ -575,16 +582,9 @@ class AdminChatRoomsClient {
 
         if (!append) {
             this.showLoading();
-        } else {
-            // 🔧 关键：在加载前记录当前最早消息的 ID 和位置，用于恢复滚动
-            const messagesList = document.getElementById('messagesHistoryList');
-            if (messagesList && this.oldestMessageId) {
-                const oldestElement = messagesList.querySelector(`.history-message[data-message-id="${this.oldestMessageId}"]`);
-                if (oldestElement) {
-                    this.scrollPositionToRestore = oldestElement.offsetTop;
-                }
-            }
         }
+        // 上滑加载更早消息时，记录当前视口内第一条消息及其相对位置
+        const anchor = append ? this._captureHistoryAnchor() : null;
 
         try {
             const params = new URLSearchParams({
@@ -684,22 +684,14 @@ class AdminChatRoomsClient {
             }
 
 
-            // 🔧 关键：恢复滚动位置
+            // 🔧 加载更早消息：用锚点精确还原，保持用户正在看的那条消息不跳动
             if (append) {
-                setTimeout(() => {
-                    const messagesList = document.getElementById('messagesHistoryList');
-                    if (messagesList && this.scrollPositionToRestore !== undefined) {
-                        messagesList.scrollTop = this.scrollPositionToRestore;
-                        this.scrollPositionToRestore = undefined;
-                    }
-                }, 50);
+                this._restoreHistoryAnchor(anchor);
             } else {
                 // 首次加载滚动到底部
                 setTimeout(() => {
-                    const messagesList = document.getElementById('messagesHistoryList');
-                    if (messagesList) {
-                        messagesList.scrollTop = messagesList.scrollHeight;
-                    }
+                    const list = document.getElementById('messagesHistoryList');
+                    if (list) list.scrollTop = list.scrollHeight;
                 }, 100);
             }
 
@@ -766,6 +758,12 @@ class AdminChatRoomsClient {
         });
 
         messagesList.appendChild(fragment);
+
+        // 连续朗读中重渲染后恢复当前消息高亮
+        if (this._continuousTTS && this._continuousTTS.currentId != null) {
+            const cur = messagesList.querySelector(`.history-message[data-message-id="${this._continuousTTS.currentId}"]`);
+            if (cur) cur.classList.add('tts-reading');
+        }
 
         // 🔧 关键修复：重新绑定图片消息事件（因为重新渲染会移除旧的事件监听）
         setTimeout(() => {
@@ -1117,7 +1115,14 @@ class AdminChatRoomsClient {
             }
         }
 
-        html += `<div class="message-bubble ${messageType}">${contentHtml}</div>`;
+        // 文本/表情消息增加朗读按钮（电脑/手机/平板通用）
+        let ttsHtml = '';
+        if ((fileType === 'text' || fileType === 'emoji') && message.content) {
+            ttsHtml = '<button type="button" class="history-tts-btn" title="连续朗读" '
+                + 'data-tts-message-id="' + message.id + '">'
+                + '<i class="fas fa-volume-up"></i></button>';
+        }
+        html += `<div class="message-bubble ${messageType}">${contentHtml}${ttsHtml}</div>`;
 
 
         // 创建消息内容元素
@@ -1127,6 +1132,161 @@ class AdminChatRoomsClient {
 
         messageElement.appendChild(contentElement);
         return messageElement;
+    }
+
+    // 朗读聊天历史消息（连续朗读，类似微信）
+    _historyMessageText(message) {
+        return String((message && message.content) || '')
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    speakHistoryMessage(messageId, btn) {
+        if (!window.BrowserTTS) return;
+        if (!BrowserTTS.supported) { this.showError('不支持语音播放', '当前浏览器不支持语音朗读'); return; }
+        let message = (this.roomMessages || []).find(m => String(m.id) === String(messageId));
+        let text = message ? this._historyMessageText(message) : '';
+        // 兜底：全局实例状态异常/DOM 重渲染后，直接从当前消息气泡取文本
+        if (!text) {
+            const el = document.querySelector(`.history-message[data-message-id="${messageId}"]`);
+            const bubble = el ? el.querySelector('.message-bubble') : null;
+            text = bubble ? (bubble.innerText || '').replace(/\s+/g, ' ').trim() : '';
+            if (!message && text) {
+                message = {id: messageId, content: text, message_type: 'text', is_deleted: false};
+            }
+        }
+        if (!message || !text) { this.showError('无法朗读', '该消息暂无文字内容'); return; }
+        // 点击正在朗读的那条 = 停止；点击其它消息 = 从该条开始连续朗读
+        if (this._continuousTTS && String(this._continuousTTS.currentId) === String(messageId)) {
+            this.stopContinuousTTS();
+            return;
+        }
+        this._startContinuousTTS(message);
+    }
+
+    // 从已渲染的历史消息 DOM 构造朗读队列（roomMessages 状态异常时兜底）
+    _collectHistoryTtsItemsFromDom() {
+        const out = [];
+        document.querySelectorAll('#messagesHistoryList .history-message[data-message-id]').forEach(el => {
+            const bubble = el.querySelector('.message-bubble');
+            const text = bubble ? (bubble.innerText || '').replace(/\s+/g, ' ').trim() : '';
+            if (!text) return;
+            const senderEl = el.querySelector('.message-sender-info.left span:first-of-type');
+            out.push({
+                id: el.getAttribute('data-message-id'),
+                content: text,
+                message_type: 'text',
+                is_deleted: false,
+                sender: {real_name: senderEl ? senderEl.textContent.trim() : ''}
+            });
+        });
+        return out;
+    }
+
+    _startContinuousTTS(startMessage) {
+        let items = (this.roomMessages || []).filter(m =>
+            !m.is_deleted && (m.message_type === 'text' || m.message_type === 'emoji') && this._historyMessageText(m));
+        let idx = items.findIndex(m => String(m.id) === String(startMessage.id));
+        if (idx < 0) {
+            const domItems = this._collectHistoryTtsItemsFromDom();
+            if (domItems.length) {
+                items = domItems;
+                idx = items.findIndex(m => String(m.id) === String(startMessage.id));
+            }
+        }
+        if (!items.length) return;
+        if (idx < 0) idx = 0;
+        this._continuousTTS = {items: items, index: idx, active: true, currentId: null};
+        this._showContinuousTTSFloat();
+        this._speakContinuousQueue();
+    }
+
+    _showContinuousTTSFloat() {
+        if (document.getElementById('continuousTtsFloat')) return;
+        const el = document.createElement('div');
+        el.id = 'continuousTtsFloat';
+        el.className = 'continuous-tts-float';
+        el.title = '点击停止连续朗读';
+        el.innerHTML = '<span class="ctf-icon"><i class="fas fa-volume-up"></i><span class="ctf-ring"></span></span>'
+            + '<span class="ctf-text">连续朗读中</span>'
+            + '<i class="fas fa-times ctf-close"></i>';
+        const self = this;
+        el.onclick = function (e) {
+            e.stopPropagation();
+            self.stopContinuousTTS();
+        };
+        document.body.appendChild(el);
+    }
+
+    _highlightTTSMessage(msg) {
+        document.querySelectorAll('.history-message.tts-reading').forEach(el => el.classList.remove('tts-reading'));
+        const el = document.querySelector(`.history-message[data-message-id="${msg.id}"]`);
+        if (el) {
+            el.classList.add('tts-reading');
+            this._ensureHistoryMessageVisible(el);
+        }
+    }
+
+    _speakContinuousQueue() {
+        const st = this._continuousTTS;
+        if (!st || !st.active) return;
+        const list = st.items.slice(st.index, st.index + 200);
+        if (!list.length) { this.stopContinuousTTS(); return; }
+
+        // 立即高亮首条，后续由 onItemStart 切换
+        st.currentId = list[0].id;
+        this._highlightTTSMessage(list[0]);
+
+        const self = this;
+        let lastStarted = -1;
+        const entries = list.map(function (msg) {
+            const text = self._historyMessageText(msg);
+            const sender = msg.sender?.real_name || msg.sender?.username || '';
+            return {text: sender ? sender + '：' + text : text, data: msg};
+        });
+        console.log('[连续朗读] 本次入队消息数:', entries.length);
+        // 一次性入队，避免 iOS 在异步回调中续播被拦截
+        const ok = BrowserTTS.speakSequence(entries, {
+            lang: 'zh-CN', rate: 1,
+            onItemStart: function (index, msg) {
+                if (self._continuousTTS !== st) return;
+                lastStarted = index;
+                st.currentId = msg.id;
+                self._highlightTTSMessage(msg);
+            },
+            onend: function () {
+                if (self._continuousTTS !== st) return;
+                // 部分浏览器会中断长语音队列：若只播到中间，从下一条继续
+                if (lastStarted >= 0 && lastStarted < list.length - 1) {
+                    console.warn('[连续朗读] 语音引擎提前结束，从第 ' + (lastStarted + 2) + ' 条继续');
+                    st.index = st.index + lastStarted + 1;
+                    self._speakContinuousQueue();
+                    return;
+                }
+                self.stopContinuousTTS();
+            }
+        });
+        if (!ok) this.stopContinuousTTS();
+    }
+
+    _ensureHistoryMessageVisible(el) {
+        const list = document.getElementById('messagesHistoryList');
+        if (!list || !el) return;
+        const r = el.getBoundingClientRect();
+        const lr = list.getBoundingClientRect();
+        if (r.top >= lr.top + 8 && r.bottom <= lr.bottom - 8) return;
+        // 使用即时 scrollTop 而不是平滑 scrollIntoView，避免滚动动画打断语音队列
+        const target = list.scrollTop + (r.top - lr.top) - Math.max(8, (list.clientHeight - el.offsetHeight) / 2);
+        list.scrollTop = Math.max(0, target);
+    }
+
+    stopContinuousTTS() {
+        this._continuousTTS = null;
+        if (window.BrowserTTS) BrowserTTS.stop();
+        document.querySelectorAll('.history-message.tts-reading').forEach(el => el.classList.remove('tts-reading'));
+        const f = document.getElementById('continuousTtsFloat');
+        if (f) f.remove();
     }
 
     // 🔧 新增：渲染历史消息中的引用消息（支持媒体直接渲染和文件滚动定位）
@@ -1808,6 +1968,7 @@ class AdminChatRoomsClient {
 
     // 返回聊天室列表
     backToRooms() {
+        this.stopContinuousTTS();
         this.currentRoomId = null;
         this.currentRoom = null;
         this.roomMessages = [];
@@ -1859,51 +2020,89 @@ class AdminChatRoomsClient {
         this.roomMessages = originalMessages;
     }
 
-    // 🔧 修复：加载更多历史消息（向上滚动）
-    loadMoreHistory() {
+    // 记录当前视口内第一条历史消息及其相对位置
+    _captureHistoryAnchor() {
+        const list = document.getElementById('messagesHistoryList');
+        if (!list) return null;
+        const listRect = list.getBoundingClientRect();
+        const items = list.querySelectorAll('.history-message[data-message-id]');
+        let anchor = null;
+        for (let i = 0; i < items.length; i++) {
+            const r = items[i].getBoundingClientRect();
+            if (r.bottom > listRect.top + 1) { anchor = items[i]; break; }
+        }
+        if (!anchor) {
+            return {scrollTop: list.scrollTop, scrollHeight: list.scrollHeight};
+        }
+        return {
+            id: anchor.getAttribute('data-message-id'),
+            offsetTop: anchor.getBoundingClientRect().top - listRect.top,
+            scrollTop: list.scrollTop,
+            scrollHeight: list.scrollHeight
+        };
+    }
+
+    // 更早消息插入顶部后，保持用户原来查看的那条消息位置不变
+    _restoreHistoryAnchor(anchor) {
+        if (!anchor) return;
+        const apply = () => {
+            const list = document.getElementById('messagesHistoryList');
+            if (!list || !list.isConnected) return;
+            if (anchor.id) {
+                const el = list.querySelector(`.history-message[data-message-id="${anchor.id}"]`);
+                if (el) {
+                    const delta = (el.getBoundingClientRect().top - list.getBoundingClientRect().top) - anchor.offsetTop;
+                    if (Math.abs(delta) > 0.5) list.scrollTop += delta;
+                    return;
+                }
+            }
+            const deltaH = list.scrollHeight - (anchor.scrollHeight || 0);
+            if (deltaH) list.scrollTop = (anchor.scrollTop || 0) + deltaH;
+        };
+        apply();
+        requestAnimationFrame(apply);
+        setTimeout(apply, 80);
+        setTimeout(apply, 240);
+        // 图片异步加载导致高度变化时继续校正
+        const list = document.getElementById('messagesHistoryList');
+        if (list && typeof ResizeObserver !== 'undefined') {
+            try {
+                const ro = new ResizeObserver(apply);
+                ro.observe(list);
+                setTimeout(() => ro.disconnect(), 800);
+            } catch (e) { /* ignore */ }
+        }
+    }
+
+    // 加载更多历史消息（向上滚动）
+    async loadMoreHistory() {
         if (this.isLoading || !this.hasMoreMessages || !this.currentRoomId) return;
 
+        // 悬浮加载提示：不插入消息列表，避免加载时内容位移
+        const loader = document.createElement('div');
+        loader.className = 'history-top-loading';
+        loader.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 正在加载更早的消息...';
+        const host = document.getElementById('messagesHistoryContainer');
+        if (host) host.appendChild(loader);
 
+        const beforeCount = this.roomMessages.length;
         try {
-
-            // 显示加载指示器
-            const loadingIndicator = document.createElement('div');
-            loadingIndicator.className = 'message-loading-indicator';
-            loadingIndicator.innerHTML = `
-                <div class="spinner"></div>
-                <span>加载更多消息...</span>
-            `;
-
-
-            // 记录当前最早消息的位置
-            const messagesList = document.getElementById('messagesHistoryList');
-            if (messagesList && messagesList.firstChild) {
-                messagesList.insertBefore(loadingIndicator, messagesList.firstChild);
-            }
-            const currentOldestMessageId = this.oldestMessageId
-            const loadingIndicatorOffset = loadingIndicator.offsetHeight;
-            console.log('currentOldestMessageId: ', currentOldestMessageId)
-            console.log('loadingIndicatorOffset: ', loadingIndicatorOffset)
-            console.log('加载更多历史消息...')
-
-            this.loadRoomHistory(this.currentRoomId, this.currentPage + 1, true);
-
-            if (messagesList) {
-
-                const currentScrollTop = document.querySelector(`.history-message[data-message-id="${this.oldestMessageId}"]`).offsetTop
-                console.log('currentScrollTop: ', currentScrollTop)
-                console.log('loadingIndicator.offsetHeight: ', loadingIndicator.offsetHeight)
-                messagesList.scrollTop = currentScrollTop - loadingIndicatorOffset;
-
-            }
-        } catch (error) {
-            console.error('加载更多历史消息出错：', error);
+            // loadRoomHistory 内部已负责锚点捕获与还原
+            await this.loadRoomHistory(this.currentRoomId, this.currentPage + 1, true);
         } finally {
-            // 移除加载指示器
-            const indicator = document.querySelector('.message-loading-indicator');
-            if (indicator) indicator.remove();
+            if (loader.parentNode) loader.remove();
+            const added = this.roomMessages.length - beforeCount;
+            if (added > 0) {
+                const ids = this.roomMessages.slice(0, added).map(m => String(m.id));
+                ids.forEach(id => {
+                    const el = document.querySelector(`.history-message[data-message-id="${id}"]`);
+                    if (el) el.classList.add('msg-append-in');
+                });
+                setTimeout(() => {
+                    document.querySelectorAll('.msg-append-in').forEach(el => el.classList.remove('msg-append-in'));
+                }, 420);
+            }
         }
-
     }
 
     // 移除无限滚动监听器
@@ -1923,7 +2122,8 @@ class AdminChatRoomsClient {
         this.removeInfiniteScrollListener();
 
         this.infiniteScrollHandler = () => {
-            if (messagesList.scrollTop < 50 && !this.isLoading && this.hasMoreMessages && this.currentRoomId) {
+            // 提前 120px 预加载，减少滚到顶部后的等待感
+            if (messagesList.scrollTop < 120 && !this.isLoading && this.hasMoreMessages && this.currentRoomId) {
                 this.loadMoreHistory();
             }
         };
@@ -2069,7 +2269,11 @@ class AdminChatRoomsClient {
     }
 }
 
-// 初始化
+// 初始化（单例：避免后创建的实例覆盖全局状态导致朗读取不到历史消息）
 document.addEventListener('DOMContentLoaded', () => {
-    window.adminChatRoomsClient = new AdminChatRoomsClient();
+    if (!window.adminChatRoomsClient) {
+        window.adminChatRoomsClient = new AdminChatRoomsClient();
+    } else if (!window.adminChatRoomsClient.isInitialized) {
+        window.adminChatRoomsClient.init();
+    }
 });

@@ -58,15 +58,23 @@ class WorkSummaryApp {
             this.me = me;
             this._myId = me && (me.id != null ? me.id : me.user_id);
             this._isSuperAdmin = (me.user_type === 'super_admin');
-            // 探测团队查看权限（部门负责人 / 超管）
+            // 探测团队查看权限（按部门权限配置；负责人/超管保留批量分析）
             const resp = await fetch(WS_API + '/all/?page=1&page_size=1', {headers: TokenManager.getHeaders()});
-            if (resp.ok) this._canViewAll = true;
+            if (resp.ok) {
+                let raw = await resp.json();
+                let data = raw && raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+                this._canViewTeam = true;
+                this._canManageTeam = !!(data && data.can_manage);
+                this._teamDeptIds = (data && data.allowed_department_ids) || null;
+            }
         } catch (e) { /* ignore */ }
+        this._canViewAll = !!this._canManageTeam;
         const teamTab = document.getElementById('wsTabTeam');
         const rangeTab = document.getElementById('wsTabRange');
-        if (teamTab) teamTab.style.display = this._canViewAll ? '' : 'none';
-        if (rangeTab) rangeTab.style.display = this._canViewAll ? '' : 'none';
-        if (this._canViewAll) { this._loadDepartments(); this.loadRangeAnalyses(1); }
+        if (teamTab) teamTab.style.display = this._canViewTeam ? '' : 'none';
+        if (rangeTab) rangeTab.style.display = this._canManageTeam ? '' : 'none';
+        if (this._canViewTeam) this._loadDepartments(this._teamDeptIds);
+        if (this._canManageTeam) this.loadRangeAnalyses(1);
     }
 
     async _loadConfig() {
@@ -77,6 +85,8 @@ class WorkSummaryApp {
             if (banner) banner.style.display = (cfg && cfg.enabled === false && cfg.is_super_admin) ? 'flex' : 'none';
             const btn = document.getElementById('wsModelConfigBtn');
             if (btn) btn.style.display = (cfg && cfg.is_super_admin) ? '' : 'none';
+            const permBtn = document.getElementById('wsPermConfigBtn');
+            if (permBtn) permBtn.style.display = (cfg && cfg.is_super_admin) ? '' : 'none';
             // 数据安全提示：脱敏开启时展示（默认开启）
             const sec = document.getElementById('wsSecurityNotice');
             if (sec) sec.style.display = (cfg && cfg.mask_sensitive !== false) ? 'flex' : 'none';
@@ -102,10 +112,15 @@ class WorkSummaryApp {
         }
         if (def) def.textContent = cfg.effective_model || '';
         this.onModelSelectChange();
-        // —— 数据安全 / 限额 / 灰度试点 ——
+        // —— 数据安全 / 语音播放 / 限额 / 灰度试点 ——
         const mask = document.getElementById('wsMaskSensitive');
         if (mask) mask.checked = cfg.mask_sensitive !== false;
         this._updateMaskText();
+        const voice = document.getElementById('wsVoiceEnabled');
+        if (voice) voice.checked = !!cfg.voice_enabled;
+        const autoplay = document.getElementById('wsVoiceAutoplay');
+        if (autoplay) autoplay.checked = cfg.voice_autoplay !== false;
+        this._updateVoiceUi();
         const lim = document.getElementById('wsLimitEnabled');
         if (lim) lim.checked = !!cfg.limit_enabled;
         this._updateLimitUi();
@@ -127,6 +142,16 @@ class WorkSummaryApp {
         const on = !!(document.getElementById('wsMaskSensitive') && document.getElementById('wsMaskSensitive').checked);
         const txt = document.getElementById('wsMaskText');
         if (txt) { txt.textContent = on ? '已开启' : '已关闭'; txt.style.color = on ? '#67c23a' : '#f56c6c'; }
+    }
+    _updateVoiceUi() {
+        const on = !!(document.getElementById('wsVoiceEnabled') && document.getElementById('wsVoiceEnabled').checked);
+        const row = document.getElementById('wsVoiceAutoplayRow');
+        if (row) row.style.display = on ? 'block' : 'none';
+        const txt = document.getElementById('wsVoiceText');
+        if (txt) { txt.textContent = on ? '已开启' : '未开启'; txt.style.color = on ? '#67c23a' : '#909399'; }
+        const autoOn = !!(document.getElementById('wsVoiceAutoplay') && document.getElementById('wsVoiceAutoplay').checked);
+        const autoTxt = document.getElementById('wsVoiceAutoplayText');
+        if (autoTxt) { autoTxt.textContent = autoOn ? '自动播放' : '手动播放'; autoTxt.style.color = autoOn ? '#67c23a' : '#909399'; }
     }
     _updateLimitUi() {
         const on = !!(document.getElementById('wsLimitEnabled') && document.getElementById('wsLimitEnabled').checked);
@@ -164,7 +189,7 @@ class WorkSummaryApp {
         if (!wrap) return;
         if (this._deptTree) { this._renderScopeDeptList(); return; }
         try {
-            const resp = await fetch('/api/oa/approval/org_departments/', {headers: TokenManager.getHeaders()});
+            const resp = await fetch('/api/oa/approval/org-departments/', {headers: TokenManager.getHeaders()});
             if (!resp.ok) return;
             const data = await resp.json();
             this._deptTree = data.results || [];
@@ -313,6 +338,8 @@ class WorkSummaryApp {
             enabled: !!(en && en.checked),
             model_id: model_id,
             mask_sensitive: !!(document.getElementById('wsMaskSensitive') && document.getElementById('wsMaskSensitive').checked),
+            voice_enabled: !!(document.getElementById('wsVoiceEnabled') && document.getElementById('wsVoiceEnabled').checked),
+            voice_autoplay: !!(document.getElementById('wsVoiceAutoplay') && document.getElementById('wsVoiceAutoplay').checked),
             limit_enabled: !!(document.getElementById('wsLimitEnabled') && document.getElementById('wsLimitEnabled').checked),
             daily_call_limit: parseInt((document.getElementById('wsDailyCallLimit') || {}).value) || 0,
             daily_cost_limit: parseFloat((document.getElementById('wsDailyCostLimit') || {}).value) || 0,
@@ -329,17 +356,213 @@ class WorkSummaryApp {
             if (banner) banner.style.display = (cfg.enabled === false) ? 'flex' : 'none';
             const sec = document.getElementById('wsSecurityNotice');
             if (sec) sec.style.display = (cfg.mask_sensitive !== false) ? 'flex' : 'none';
+            // 语音开关变化后刷新当前列表，使「朗读」按钮立即生效
+            if (this._currentTab === 'team') this.loadTeam(this.teamPage);
+            else this.loadMy(this.myPage);
         } catch (e) {
             this.toast('保存失败：' + (e.message || ''), true);
         }
     }
 
-    async _loadDepartments() {
+    // ===== 团队总结部门权限配置（超管） =====
+    async openPermConfigModal() {
+        const modal = document.getElementById('wsPermModal');
+        if (!modal) return;
+        this._permUsers = [];
+        this._permUsersFound = [];
+        this._renderPermUserTags();
+        modal.classList.add('show');
+        await this._loadPermDepartments();
+    }
+    closePermConfigModal() {
+        const modal = document.getElementById('wsPermModal');
+        if (modal) modal.classList.remove('show');
+    }
+    async _loadPermDepartments() {
         try {
-            const resp = await fetch('/api/oa/approval/org_departments/', {headers: TokenManager.getHeaders()});
+            let depts = this._deptTree;
+            if (!depts) {
+                const resp = await fetch('/api/oa/approval/org-departments/', {headers: TokenManager.getHeaders()});
+                if (!resp.ok) return;
+                const data = await resp.json();
+                depts = data.results || [];
+                this._deptTree = depts;
+            }
+            const sel = document.getElementById('wsPermDept');
+            if (!sel) return;
+            const kids = {};
+            depts.forEach(d => { const pid = d.parent_id != null ? d.parent_id : 0; (kids[pid] = kids[pid] || []).push(d); });
+            let html = '<option value="">请选择部门</option>';
+            const walk = (pid, depth) => (kids[pid] || []).forEach(d => {
+                html += '<option value="' + d.id + '">' + new Array(depth + 1).join('— ') + this.escapeHtml(d.name) + '</option>';
+                walk(d.id, depth + 1);
+            });
+            walk(0, 0);
+            if (!kids[0] || !kids[0].length) {
+                depts.forEach(d => {
+                    html += '<option value="' + d.id + '">' + this.escapeHtml(d.name) + '</option>';
+                });
+            }
+            const prev = sel.value;
+            sel.innerHTML = html;
+            if (prev) sel.value = prev;
+            this.onPermDeptChange();
+        } catch (e) { /* ignore */ }
+    }
+    _resetPermForm() {
+        const set = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
+        set('wsPermManager', true);
+        set('wsPermDeputy', true);
+        set('wsPermAllMembers', false);
+        ['wsPermView', 'wsPermLike', 'wsPermComment', 'wsPermPrint', 'wsPermExport', 'wsPermShare']
+            .forEach(id => set(id, true));
+        this._permUsers = [];
+        this._renderPermUserTags();
+        const del = document.getElementById('wsPermDeleteBtn');
+        if (del) del.style.display = 'none';
+        const meta = document.getElementById('wsPermMeta');
+        if (meta) meta.textContent = '';
+    }
+    async onPermDeptChange() {
+        this._resetPermForm();
+        const sel = document.getElementById('wsPermDept');
+        const deptId = sel ? sel.value : '';
+        if (!deptId) return;
+        try {
+            const data = await this.apiGet(WS_API + '/team-permissions/?department_id=' + deptId);
+            const p = data && (data.results || [])[0];
+            if (!p) return;
+            const set = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
+            set('wsPermManager', p.include_manager);
+            set('wsPermDeputy', p.include_deputy);
+            set('wsPermAllMembers', p.include_all_members);
+            set('wsPermView', p.can_view);
+            set('wsPermLike', p.can_like);
+            set('wsPermComment', p.can_comment);
+            set('wsPermPrint', p.can_print);
+            set('wsPermExport', p.can_export);
+            set('wsPermShare', p.can_share);
+            this._permUsers = p.members || [];
+            this._renderPermUserTags();
+            const del = document.getElementById('wsPermDeleteBtn');
+            if (del) del.style.display = '';
+            const meta = document.getElementById('wsPermMeta');
+            if (meta) {
+                meta.textContent = '最后更新：' + (p.updated_at ? this._fmtDateTime(p.updated_at) : '-')
+                    + (p.updated_by_name ? ' · 操作人：' + p.updated_by_name : '');
+            }
+        } catch (e) { /* ignore */ }
+    }
+    async searchPermUsers() {
+        const input = document.getElementById('wsPermUserInput');
+        const kw = (input ? input.value : '').trim();
+        const list = document.getElementById('wsPermUserList');
+        if (!list) return;
+        try {
+            const data = await this.apiGet(WS_API + '/members/?scope=share&search=' + encodeURIComponent(kw));
+            this._permUsersFound = (data.results || []).slice();
+            const users = this._permUsersFound.filter(u =>
+                !(this._permUsers || []).some(x => x.id === u.id));
+            if (!kw || !users.length) { list.innerHTML = ''; list.classList.remove('show'); return; }
+            const self = this;
+            list.classList.add('show');
+            list.innerHTML = users.map(u =>
+                '<div class="ws-range-user-item" onclick="workSummaryApp.pickPermUser(' + u.id + ', this)">'
+                + '<img src="' + (u.avatar || '/static/images/default-avatar.png') + '">'
+                + '<div class="ws-range-user-meta"><div>' + self.escapeHtml(u.name) + '</div>'
+                + '<div class="ws-range-user-sub">' + self.escapeHtml(u.department_name || '') + (u.position ? ' · ' + self.escapeHtml(u.position) : '') + '</div></div></div>'
+            ).join('');
+        } catch (e) { /* ignore */ }
+    }
+    pickPermUser(id, el) {
+        this._permUsers = this._permUsers || [];
+        const u = (this._permUsersFound || []).find(x => x.id === id);
+        if (u && !this._permUsers.some(x => x.id === id)) this._permUsers.push(u);
+        const input = document.getElementById('wsPermUserInput');
+        if (input) input.value = '';
+        const list = document.getElementById('wsPermUserList');
+        if (list) { list.innerHTML = ''; list.classList.remove('show'); }
+        this._renderPermUserTags();
+    }
+    removePermUser(id) {
+        this._permUsers = (this._permUsers || []).filter(u => u.id !== id);
+        this._renderPermUserTags();
+    }
+    _renderPermUserTags() {
+        const wrap = document.getElementById('wsPermUserTags');
+        if (!wrap) return;
+        wrap.innerHTML = (this._permUsers || []).map(u =>
+            '<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:#e8f8f5;border-radius:14px;font-size:12px;color:#0e6655;">'
+            + '<img src="' + (u.avatar || '/static/images/default-avatar.png') + '" style="width:18px;height:18px;border-radius:50%;object-fit:cover;">'
+            + this.escapeHtml(u.name || '') +
+            '<i class="fas fa-times" style="cursor:pointer;" onclick="workSummaryApp.removePermUser(' + u.id + ')"></i></span>'
+        ).join('');
+    }
+    async savePermConfig() {
+        const sel = document.getElementById('wsPermDept');
+        const deptId = sel ? sel.value : '';
+        if (!deptId) { this.toast('请先选择部门', true); return; }
+        const get = (id) => { const el = document.getElementById(id); return !!(el && el.checked); };
+        const payload = {
+            department_id: parseInt(deptId, 10),
+            include_manager: get('wsPermManager'),
+            include_deputy: get('wsPermDeputy'),
+            include_all_members: get('wsPermAllMembers'),
+            member_ids: (this._permUsers || []).map(u => u.id),
+            can_view: get('wsPermView'),
+            can_like: get('wsPermLike'),
+            can_comment: get('wsPermComment'),
+            can_print: get('wsPermPrint'),
+            can_export: get('wsPermExport'),
+            can_share: get('wsPermShare'),
+        };
+        try {
+            await this.apiPost(WS_API + '/team-permissions/', payload);
+            this.toast('部门权限已保存', false);
+            await this.onPermDeptChange();
+            if (this._currentTab === 'team') this.loadTeam(this.teamPage);
+        } catch (e) {
+            this.toast('保存失败：' + (e.message || ''), true);
+        }
+    }
+    async deletePermConfig() {
+        const sel = document.getElementById('wsPermDept');
+        const deptId = sel ? sel.value : '';
+        if (!deptId) return;
+        const ok = await this.showConfirmDialog('删除部门权限',
+            '删除后该部门将恢复为「负责人/副负责人可查看」的默认规则，确定删除吗？', 'danger');
+        if (!ok) return;
+        try {
+            await this.apiPost(WS_API + '/team-permissions/', {department_id: parseInt(deptId, 10), remove: true});
+            this.toast('已删除该部门权限配置', false);
+            await this.onPermDeptChange();
+            if (this._currentTab === 'team') this.loadTeam(this.teamPage);
+        } catch (e) {
+            this.toast('删除失败：' + (e.message || ''), true);
+        }
+    }
+
+    async _loadDepartments(allowedIds) {
+        try {
+            const resp = await fetch('/api/oa/approval/org-departments/', {headers: TokenManager.getHeaders()});
             if (!resp.ok) return;
             const data = await resp.json();
-            const depts = data.results || [];
+            let depts = data.results || [];
+            // 非负责人只展示已授权部门的选项（含其上级节点，便于树形展示）
+            if (Array.isArray(allowedIds)) {
+                const allowedSet = new Set(allowedIds.map(Number));
+                const byId = {};
+                depts.forEach(d => { byId[d.id] = d; });
+                const keep = new Set(allowedSet);
+                allowedSet.forEach(id => {
+                    let d = byId[id], guard = 0;
+                    while (d && d.parent_id && !keep.has(Number(d.parent_id)) && guard++ < 20) {
+                        keep.add(Number(d.parent_id));
+                        d = byId[d.parent_id];
+                    }
+                });
+                depts = depts.filter(d => keep.has(Number(d.id)));
+            }
             const sel = document.getElementById('wsDeptFilter');
             if (!sel) return;
             const tree = {};
@@ -527,6 +750,10 @@ class WorkSummaryApp {
             if (!typing) {
                 clearInterval(self._typeTimers[key]);
                 delete self._typeTimers[key];
+                if (opts && opts.autoPlay) {
+                    var firstEl = (self._typeEls[key] || [])[0] || el;
+                    self._maybeAutoPlayTTS(key, buf, firstEl);
+                }
             }
         };
         tick();
@@ -559,9 +786,47 @@ class WorkSummaryApp {
         return '<div class="ws-analysis-body-wrap ws-collapsed"><div class="ws-analysis-body">' + this._renderMarkdown(result) + '</div></div>'
             + '<div class="ws-analysis-toggle"><button class="ws-collapse-btn" onclick="workSummaryApp.toggleAnalysisCollapse(this)"><i class="fas fa-chevron-down"></i> 展开</button></div>';
     }
+    // 分析标题（开启语音播放时附带「朗读」按钮）
+    _analysisTitle(label) {
+        var btn = '';
+        if (this.config && this.config.voice_enabled && window.BrowserTTS && BrowserTTS.supported) {
+            btn = '<button type="button" class="tts-btn" title="朗读分析结果" '
+                + 'onclick="event.stopPropagation();workSummaryApp.toggleTTS(this)">'
+                + '<i class="fas fa-volume-up"></i><span>朗读</span></button>';
+        }
+        return '<div class="ws-analysis-title"><i class="fas fa-robot"></i> '
+            + (label || '大模型分析建议') + btn + '</div>';
+    }
+
+    // 手动朗读/停止分析结果
+    toggleTTS(btn) {
+        if (!window.BrowserTTS) return;
+        if (!BrowserTTS.supported) { this.toast('当前浏览器不支持语音播放', true); return; }
+        var analysis = btn.closest('.ws-analysis');
+        var body = analysis ? analysis.querySelector('.ws-analysis-body') : null;
+        var text = body ? (body.innerText || body.textContent || '') : '';
+        if (!text.trim()) { this.toast('暂无可朗读内容', true); return; }
+        BrowserTTS.toggle(text, btn, {lang: 'zh-CN', rate: 1});
+    }
+
+    // 分析完成后自动播放（仅当超管开启语音播放 + 自动播放；每个结果容器只播一次）
+    _maybeAutoPlayTTS(key, text, el) {
+        var cfg = this.config || {};
+        if (!cfg.voice_enabled || cfg.voice_autoplay === false) return;
+        if (!window.BrowserTTS || !BrowserTTS.supported) return;
+        if (BrowserTTS.isSpeaking()) return;
+        this._ttsAutoPlayed = this._ttsAutoPlayed || {};
+        if (this._ttsAutoPlayed[key]) return;
+        if (!String(text || '').trim()) return;
+        this._ttsAutoPlayed[key] = true;
+        var btn = el ? el.querySelector('.tts-btn') : null;
+        if (!btn) btn = document.querySelector('#wsDetailAnalysis .tts-btn');
+        BrowserTTS.speak(text, {lang: 'zh-CN', rate: 1, button: btn});
+    }
+
     _analysisHtml(s) {
         if (s.status === 'done' && s.analysis_result) {
-            return '<div class="ws-analysis"><div class="ws-analysis-title"><i class="fas fa-robot"></i> 大模型分析建议</div>' + this._analysisCollapsedHtml(s.analysis_result) + '</div>';
+            return '<div class="ws-analysis">' + this._analysisTitle('大模型分析建议') + this._analysisCollapsedHtml(s.analysis_result) + '</div>';
         }
         if (s.status === 'analyzing') {
             return '<div class="ws-analysis" id="wsAnalysis_' + s.id + '"></div>';
@@ -989,18 +1254,27 @@ class WorkSummaryApp {
             + '<div class="ws-actions">'
             + this._socialBar(s)
             + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openDetail(' + s.id + ')"><i class="fas fa-eye"></i> 详情</button>'
-            + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openPrintModal(' + s.id + ')"><i class="fas fa-print"></i> 打印</button>'
+            + (this._canDo(s, 'print') ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openPrintModal(' + s.id + ')"><i class="fas fa-print"></i> 打印</button>' : '')
             + (s.status === 'failed' || s.status === 'done' ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.rerunAnalysis(' + s.id + ')"><i class="fas fa-sync"></i> 重新分析</button>' : '')
-            + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openExportModal(' + s.id + ')"><i class="fas fa-download"></i> 导出</button>'
-            + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openShareModal(' + s.id + ')"><i class="fas fa-share-alt"></i> 分享</button>'
+            + (this._canDo(s, 'export') ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openExportModal(' + s.id + ')"><i class="fas fa-download"></i> 导出</button>' : '')
+            + (this._canDo(s, 'share') ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openShareModal(' + s.id + ')"><i class="fas fa-share-alt"></i> 分享</button>' : '')
             + (s.user === this._myId ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.editSummary(' + s.id + ')"><i class="fas fa-edit"></i> 编辑</button>' : '')
             + '</div></div>';
     }
+    // 后端按部门权限下发的操作开关；undefined 视为允许（兼容旧数据）
+    _canDo(s, action) {
+        return !s || s['can_' + action] !== false;
+    }
     _socialBar(s) {
         const liked = !!s.liked_by_me;
-        const self = this;
-        return '<button type="button" class="btn btn-sm ' + (liked ? 'btn-primary' : 'btn-secondary') + '" data-liked="' + (liked ? '1' : '0') + '" title="点赞" onclick="workSummaryApp.toggleWsListLike(' + s.id + ', this)"><i class="fas fa-thumbs-up"></i> <b>' + (s.like_count || 0) + '</b></button>'
-            + '<button type="button" class="btn btn-sm btn-secondary" title="评论" onclick="workSummaryApp.openDetailAndComment(' + s.id + ')"><i class="fas fa-comment-dots"></i> <b>' + (s.comment_count || 0) + '</b></button>';
+        let html = '';
+        if (this._canDo(s, 'like')) {
+            html += '<button type="button" class="btn btn-sm ' + (liked ? 'btn-primary' : 'btn-secondary') + '" data-liked="' + (liked ? '1' : '0') + '" title="点赞" onclick="workSummaryApp.toggleWsListLike(' + s.id + ', this)"><i class="fas fa-thumbs-up"></i> <b>' + (s.like_count || 0) + '</b></button>';
+        }
+        if (this._canDo(s, 'comment')) {
+            html += '<button type="button" class="btn btn-sm btn-secondary" title="评论" onclick="workSummaryApp.openDetailAndComment(' + s.id + ')"><i class="fas fa-comment-dots"></i> <b>' + (s.comment_count || 0) + '</b></button>';
+        }
+        return html;
     }
     async toggleWsListLike(id, btn) {
         if (!btn) return;
@@ -1018,7 +1292,7 @@ class WorkSummaryApp {
 
     // ===== 团队总结 =====
     async loadTeam(page) {
-        if (!this._canViewAll) return;
+        if (!this._canViewTeam) return;
         this.teamPage = page || 1;
         const wrap = document.getElementById('wsTeamList');
         if (!wrap) return;
@@ -1094,10 +1368,11 @@ class WorkSummaryApp {
                 + analysisHtml
                 + '<div class="ws-actions">' + this._socialBar(s)
                 + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openDetail(' + s.id + ')"><i class="fas fa-eye"></i> 详情</button>'
-            + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openPrintModal(' + s.id + ')"><i class="fas fa-print"></i> 打印</button>'
-                + (s.status === 'failed' || s.status === 'done' ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.rerunAnalysis(' + s.id + ')"><i class="fas fa-sync"></i> 重新分析</button>' : '')
-                + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openExportModal(' + s.id + ')"><i class="fas fa-download"></i> 导出</button>'
-            + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openShareModal(' + s.id + ')"><i class="fas fa-share-alt"></i> 分享</button>'
+            + (this._canDo(s, 'print') ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openPrintModal(' + s.id + ')"><i class="fas fa-print"></i> 打印</button>' : '')
+                + ((s.status === 'failed' || s.status === 'done') && (s.user === this._myId || this._isSuperAdmin)
+                    ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.rerunAnalysis(' + s.id + ')"><i class="fas fa-sync"></i> 重新分析</button>' : '')
+                + (this._canDo(s, 'export') ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openExportModal(' + s.id + ')"><i class="fas fa-download"></i> 导出</button>' : '')
+            + (this._canDo(s, 'share') ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.openShareModal(' + s.id + ')"><i class="fas fa-share-alt"></i> 分享</button>' : '')
             + (s.user === this._myId ? '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.editSummary(' + s.id + ')"><i class="fas fa-edit"></i> 编辑</button>' : '')
                 + '</div></div>';
         }).join('');
@@ -1133,19 +1408,19 @@ class WorkSummaryApp {
         try {
             const d = await this.apiGet(WS_API + '/' + id + '/');
             if (!d) return;
-            const titleHtml = '<div class="ws-analysis-title"><i class="fas fa-robot"></i> 大模型分析建议</div>';
+            const titleHtml = this._analysisTitle('大模型分析建议');
             const curLen = (d.analysis_result || '').length;
             // 列表卡片：分析中有内容才打字（无内容保持科技感动画），完成时折叠长内容
             const el = document.getElementById('wsAnalysis_' + id);
             if (el) {
                 const typed = (this._typeLen && this._typeLen['s' + id]) || 0;
                 if (d.status === 'analyzing') {
-                    if (d.analysis_result && curLen > typed) this._startTyping('s' + id, el, d.analysis_result || '', titleHtml, {collapsible: true});
+                    if (d.analysis_result && curLen > typed) this._startTyping('s' + id, el, d.analysis_result || '', titleHtml, {collapsible: true, autoPlay: true});
                     else if (!d.analysis_result && !(el.querySelector && el.querySelector('.ws-ai-thinking'))) this._showThinking(el);
                     // 内容无新增则保持当前状态，避免重复渲染把用户已展开的内容又折叠回去
                 } else if (d.status === 'done') {
                     this._stopPolling(id);
-                    if (curLen !== typed) this._startTyping('s' + id, el, d.analysis_result || '（模型未返回内容）', titleHtml, {collapsible: true});
+                    if (curLen !== typed) this._startTyping('s' + id, el, d.analysis_result || '（模型未返回内容）', titleHtml, {collapsible: true, autoPlay: true});
                 } else if (d.status === 'failed') {
                     this._stopPolling(id);
                     this._stopTyping('s' + id, '<span style="color:#f56c6c;">分析失败：' + this.escapeHtml(d.error_message || '请重试') + '</span>');
@@ -1162,11 +1437,11 @@ class WorkSummaryApp {
                 const detailEl = document.getElementById('wsDetailAnalysis');
                 const typedD = (this._typeLen && this._typeLen['d' + id]) || 0;
                 if (d.status === 'analyzing') {
-                    if (d.analysis_result && curLen > typedD) this._startTyping('d' + id, detailEl, d.analysis_result || '', titleHtml);
+                    if (d.analysis_result && curLen > typedD) this._startTyping('d' + id, detailEl, d.analysis_result || '', titleHtml, {autoPlay: true});
                     else if (!d.analysis_result && !(detailEl.querySelector && detailEl.querySelector('.ws-ai-thinking'))) this._showThinking(detailEl);
                 } else if (d.status === 'done') {
                     this._stopPolling(id);
-                    if (curLen !== typedD) this._startTyping('d' + id, detailEl, d.analysis_result || '（模型未返回内容）', titleHtml);
+                    if (curLen !== typedD) this._startTyping('d' + id, detailEl, d.analysis_result || '（模型未返回内容）', titleHtml, {autoPlay: true});
                 } else if (d.status === 'failed') { this._stopPolling(id); this._stopTyping('d' + id, '<span style="color:#f56c6c;">分析失败：' + this.escapeHtml(d.error_message || '') + '</span>'); }
             }
             if (d.prompt_text) {
@@ -1182,6 +1457,8 @@ class WorkSummaryApp {
             const d = await this.apiGet(WS_API + '/' + id + '/');
             if (!d) return;
             this._detailId = id;
+            // 每次打开详情都允许按配置重新自动播放
+            if (this._ttsAutoPlayed) delete this._ttsAutoPlayed['d' + id];
             const filesHtml = (d.files || []).length
                 ? this._fileHtml(d.files)
                 : '<div style="color:#c0c4cc;font-size:12px;margin:6px 0;">未上传工作数据文件</div>';
@@ -1189,7 +1466,7 @@ class WorkSummaryApp {
                   + '<div style="font-size:13px;font-weight:600;color:#909399;"><i class="fas fa-key"></i> 喂给大模型的提示词</div>'
                   + '<button class="btn btn-sm btn-secondary" onclick="workSummaryApp.toggleDetailPrompt()"><i class="fas fa-eye"></i> 查看提示词</button></div>'
                   + '<div id="wsDetailPrompt" style="display:none;margin-top:8px;background:#f8f9fb;border:1px solid #ebeef5;border-radius:8px;padding:10px 12px;font-size:12px;color:#606266;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;">' + (d.prompt_text ? this.escapeHtml(d.prompt_text) : '') + '</div></div>';
-            const analysisHtml = '<div id="wsDetailAnalysis" class="ws-analysis"><div class="ws-analysis-title"><i class="fas fa-robot"></i> 大模型分析建议</div></div>';
+            const analysisHtml = '<div id="wsDetailAnalysis" class="ws-analysis">' + this._analysisTitle('大模型分析建议') + '</div>';
             const body = document.getElementById('wsDetailBody');
             body.innerHTML = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">'
                 + '<span class="ws-user"><img src="' + (d.user_avatar || '/static/images/default-avatar.png') + '">' + this.escapeHtml(d.user_name) + '</span>'
@@ -1209,16 +1486,16 @@ class WorkSummaryApp {
             const footer = document.getElementById('wsDetailFooter');
             if (footer) {
                 footer.innerHTML = '<button class="btn btn-secondary" onclick="workSummaryApp.closeDetail()">关闭</button>'
-                    + '<button class="btn btn-secondary" onclick="workSummaryApp.openExportModal(' + d.id + ')"><i class="fas fa-download"></i> 导出</button>'
-                    + '<button class="btn btn-secondary" onclick="workSummaryApp.openShareModal(' + d.id + ')"><i class="fas fa-share-alt"></i> 分享</button>'
-                    + '<button class="btn btn-secondary" onclick="workSummaryApp.openPrintModal(' + d.id + ')"><i class="fas fa-print"></i> 打印</button>'
+                    + (this._canDo(d, 'export') ? '<button class="btn btn-secondary" onclick="workSummaryApp.openExportModal(' + d.id + ')"><i class="fas fa-download"></i> 导出</button>' : '')
+                    + (this._canDo(d, 'share') ? '<button class="btn btn-secondary" onclick="workSummaryApp.openShareModal(' + d.id + ')"><i class="fas fa-share-alt"></i> 分享</button>' : '')
+                    + (this._canDo(d, 'print') ? '<button class="btn btn-secondary" onclick="workSummaryApp.openPrintModal(' + d.id + ')"><i class="fas fa-print"></i> 打印</button>' : '')
                     + (d.user === this._myId ? '<button class="btn btn-secondary" onclick="workSummaryApp.editSummary(' + d.id + ')"><i class="fas fa-edit"></i> 编辑</button>' : '');
             }
             // 分析与建议：已完成→从零开始打字呈现；分析中/待分析→科技感动态 AI 提示 + 轮询
-            const titleHtml = '<div class="ws-analysis-title"><i class="fas fa-robot"></i> 大模型分析建议</div>';
+            const titleHtml = this._analysisTitle('大模型分析建议');
             const detailEl = document.getElementById('wsDetailAnalysis');
             if (d.status === 'done') {
-                if (d.analysis_result) { this._resetTyping('d' + d.id); this._startTyping('d' + d.id, detailEl, d.analysis_result, titleHtml); }
+                if (d.analysis_result) { this._resetTyping('d' + d.id); this._startTyping('d' + d.id, detailEl, d.analysis_result, titleHtml, {autoPlay: true}); }
                 else if (detailEl) detailEl.innerHTML = titleHtml + '<div class="ws-analysis-body">（模型未返回内容）</div>';
             } else if (d.status === 'analyzing' || d.status === 'pending') {
                 this._showThinking(detailEl);
@@ -1241,12 +1518,14 @@ class WorkSummaryApp {
     closeDetail() {
         document.getElementById('wsDetailModal').classList.remove('show');
         this._detailId = null;
+        if (window.BrowserTTS) BrowserTTS.stop();
         const el = document.getElementById('wsDetailAnalysis');
         if (el && el._thinkTimer) { clearInterval(el._thinkTimer); el._thinkTimer = null; }
     }
     // 打开总结详情并自动展开评论输入区（卡片评论按钮/工作汇总跳转共用）
     async openDetailAndComment(id) {
         await this.openDetail(id);
+        if (this._socialSummary && !this._canDo(this._socialSummary, 'comment')) return;
         const box = document.getElementById('wsCommentBox');
         if (box) { box.style.display = 'block'; }
         if (this._socialSummary) this._loadWsComments(this._socialSummary.id);
@@ -1262,14 +1541,23 @@ class WorkSummaryApp {
         if (!wrap) return;
         this._socialSummary = d;
         const liked = !!d.liked_by_me;
+        const canLike = this._canDo(d, 'like');
+        const canComment = this._canDo(d, 'comment');
+        if (!canLike && !canComment) { this._socialSummary = d; return; }
         const box = document.createElement('div');
         box.id = 'wsSocialBox';
         box.innerHTML =
             '<div style="display:flex;align-items:center;gap:10px;margin:14px 0 4px;border-top:1px solid #ebeef5;padding-top:12px;flex-wrap:wrap;">'
-            + '<button type="button" class="btn btn-sm ' + (liked ? 'btn-primary' : 'btn-secondary') + '" data-liked="' + (liked ? '1' : '0') + '" onclick="workSummaryApp.toggleWsLike(' + d.id + ', this)"><i class="fas fa-thumbs-up"></i> <span>点赞</span> <b>' + (d.like_count || 0) + '</b></button>'
-            + '<button type="button" class="btn btn-sm btn-secondary" onclick="workSummaryApp.toggleWsCommentBox()"><i class="fas fa-comment-dots"></i> 评论 <b>' + (d.comment_count || 0) + '</b></button>'
+            + (canLike
+                ? '<button type="button" class="btn btn-sm ' + (liked ? 'btn-primary' : 'btn-secondary') + '" data-liked="' + (liked ? '1' : '0') + '" onclick="workSummaryApp.toggleWsLike(' + d.id + ', this)"><i class="fas fa-thumbs-up"></i> <span>点赞</span> <b>' + (d.like_count || 0) + '</b></button>'
+                : '')
+            + (canComment
+                ? '<button type="button" class="btn btn-sm btn-secondary" onclick="workSummaryApp.toggleWsCommentBox()"><i class="fas fa-comment-dots"></i> 评论 <b>' + (d.comment_count || 0) + '</b></button>'
+                : '')
             + '</div>'
-            + '<div id="wsCommentBox" style="display:none;border-top:1px solid #ebeef5;margin-top:6px;padding-top:10px;"></div>';
+            + (canComment
+                ? '<div id="wsCommentBox" style="display:none;border-top:1px solid #ebeef5;margin-top:6px;padding-top:10px;"></div>'
+                : '');
         wrap.appendChild(box);
         this._wsReplyTo = null;
         this._wsImage = null;
@@ -1768,7 +2056,7 @@ class WorkSummaryApp {
         wrap.innerHTML = list.map(a => {
             const resultHtml = a.status === 'analyzing'
                 ? '<div class="ws-analysis" id="wsRangeResult_' + a.id + '"></div>'
-                : '<div class="ws-analysis" id="wsRangeResult_' + a.id + '"><div class="ws-analysis-title"><i class="fas fa-robot"></i> 大模型分析结果</div>' + (a.status === 'done' ? self._analysisCollapsedHtml(a.analysis_result || '（模型未返回内容）') : (a.status === 'failed' ? '<div class="ws-analysis-body" style="color:#f56c6c;">分析失败：' + self.escapeHtml(a.error_message || '') + '</div>' : (a.status === 'disabled' ? '<div class="ws-analysis-body" style="color:#909399;">模型分析功能已停用</div>' : '<div class="ws-analysis-body">等待分析...</div>'))) + '</div>';
+                : '<div class="ws-analysis" id="wsRangeResult_' + a.id + '">' + self._analysisTitle('大模型分析结果') + (a.status === 'done' ? self._analysisCollapsedHtml(a.analysis_result || '（模型未返回内容）') : (a.status === 'failed' ? '<div class="ws-analysis-body" style="color:#f56c6c;">分析失败：' + self.escapeHtml(a.error_message || '') + '</div>' : (a.status === 'disabled' ? '<div class="ws-analysis-body" style="color:#909399;">模型分析功能已停用</div>' : '<div class="ws-analysis-body">等待分析...</div>'))) + '</div>';
             return '<div class="ws-list-item" id="wsRangeItem_' + a.id + '">'
                 + '<div class="ws-item-head">'
                 + '<span class="ws-user"><img src="' + (a.target_avatar || '/static/images/default-avatar.png') + '">' + self.escapeHtml(a.target_name) + '</span>'
@@ -1804,13 +2092,17 @@ class WorkSummaryApp {
             const d = await this.apiGet(WS_API + '/range/' + id + '/');
             if (!d) return;
             const el = document.getElementById('wsRangeResult_' + id);
-            const titleHtml = '<div class="ws-analysis-title"><i class="fas fa-robot"></i> 大模型分析结果</div>';
+            const titleHtml = this._analysisTitle('大模型分析结果');
             if (el) {
                 if (d.status === 'analyzing') {
-                    if (d.analysis_result) this._startTyping('r' + id, el, d.analysis_result || '', titleHtml);
+                    if (d.analysis_result) this._startTyping('r' + id, el, d.analysis_result || '', titleHtml, {autoPlay: true});
                     else if (!(el.querySelector && el.querySelector('.ws-ai-thinking'))) this._showThinking(el);
                 }
-                else if (d.status === 'done') { this._stopRangePolling(id); this._stopTyping('r' + id, titleHtml + this._analysisCollapsedHtml(d.analysis_result || '（模型未返回内容）')); }
+                else if (d.status === 'done') {
+                    this._stopRangePolling(id);
+                    this._stopTyping('r' + id, titleHtml + this._analysisCollapsedHtml(d.analysis_result || '（模型未返回内容）'));
+                    this._maybeAutoPlayTTS('r' + id, d.analysis_result || '', el);
+                }
                 else if (d.status === 'failed') { this._stopRangePolling(id); this._stopTyping('r' + id, '<span style="color:#f56c6c;">分析失败：' + this.escapeHtml(d.error_message || '') + '</span>'); }
             }
             const stEl = document.getElementById('wsRangeStatus_' + id);

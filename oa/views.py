@@ -27,10 +27,12 @@ from .models import (
     MaterialRequirementItem, MaterialRequisitionItem, MaterialStockIn,
     MaterialStockInItem, MaterialStockLog, DocumentSequence,
     WatermarkConfig, DEFAULT_WATERMARK_PAGES, PrintLog, DailyWorkSummary,
+    WorkSummaryDeptPermission,
     Announcement, AnnouncementComment, FinanceSpecialist,
     NotificationPopupConfig, AnnouncementConfig, ReportAccessConfig,
     AgentConfig, DEFAULT_AGENT_EMBED_CODE,
 )
+from .work_summary_permissions import WorkSummaryPermissionResolver
 from .type_utils import (
     ensure_builtin_types, resolve_approval_type,
     collect_form_data, validate_form_data, invoice_field_key, invoice_field_keys,
@@ -414,6 +416,96 @@ class AttendanceViewSet(viewsets.ViewSet):
     def _shift_end_passed(cls, d, config, now):
         return now >= cls._shift_end_deadline(d, config)
 
+    def attendance_appeal_eligibility(self, user, target_date, clock_type='day', tenant=None):
+        """考勤申诉/补卡提交前校验：该日期（卡种）是否真的存在缺卡/异常。
+
+        返回 (eligible: bool, reason: str)。无异常时 reason 为可直接展示给用户的提示。
+        """
+        from datetime import date as _date_cls
+        from .holidays import is_rest_day
+
+        if isinstance(target_date, str):
+            try:
+                target_date = _date_cls.fromisoformat(str(target_date)[:10])
+            except (ValueError, TypeError):
+                return False, '日期格式错误，请使用 YYYY-MM-DD'
+        if not isinstance(target_date, _date_cls):
+            return False, '日期格式错误，请使用 YYYY-MM-DD'
+
+        clock_type = str(clock_type or 'day')
+        if clock_type not in ('clock_in', 'clock_out', 'day'):
+            clock_type = 'day'
+        labels = {'clock_in': '上班卡', 'clock_out': '下班卡', 'day': '全天'}
+        slot_label = labels.get(clock_type, '全天')
+
+        today = timezone.localdate()
+        if target_date > today:
+            return False, '不能对未到来的日期发起考勤申诉/补卡申请'
+        joined = getattr(user, 'date_joined', None)
+        if joined and target_date < joined.date():
+            return False, '该日期早于入职日期，无需发起考勤申诉/补卡申请'
+
+        records = {r.clock_type: r for r in AttendanceRecord.objects.filter(
+            user=user, date=target_date)}
+        has_abnormal = any(r.status != 'normal' for r in records.values())
+
+        # 已审批通过的请假/出差覆盖该日期时，不视为考勤异常；
+        # 但当天若确实存在异常打卡（如加班迟到），仍允许申诉。
+        leave = ApprovalRequest.objects.filter(
+            applicant=user, status='approved',
+            approval_type__in=['leave', 'trip'],
+            start_date__lte=target_date, end_date__gte=target_date,
+        ).first()
+        if leave and not has_abnormal:
+            kind = '请假' if leave.approval_type == 'leave' else '出差'
+            return False, f'该日期已有审批通过的{kind}记录，无需发起考勤申诉/补卡申请'
+
+        if tenant is None:
+            try:
+                tenant = user.get_active_tenant()
+            except Exception:
+                tenant = None
+        try:
+            config = self._effective_attendance_config(
+                tenant, self._primary_department_id(user, tenant), user)
+        except Exception:
+            config = None
+        now = timezone.localtime(timezone.now())
+
+        if clock_type in ('clock_in', 'clock_out'):
+            rec = records.get(clock_type)
+            if rec is not None:
+                if rec.status == 'normal':
+                    return False, f'该日期{slot_label}考勤正常，无需发起考勤申诉/补卡申请'
+                return True, ''
+            # 漏打该卡：休息日不判异常
+            if is_rest_day(target_date):
+                return False, '该日期为休息日，无需发起考勤申诉/补卡申请'
+            if clock_type == 'clock_out' and target_date == today \
+                    and not self._shift_end_passed(target_date, config, now):
+                return False, '今日下班时间未到，暂无需发起下班卡申诉/补卡申请'
+            return True, ''
+
+        # 全天：存在任一异常/缺卡即可申诉
+        if records:
+            abnormal = [r for r in records.values() if r.status != 'normal']
+            if abnormal:
+                return True, ''
+            has_in = 'clock_in' in records
+            has_out = 'clock_out' in records
+            if has_in and has_out:
+                return False, '该日期上班卡与下班卡均正常，无需发起考勤申诉/补卡申请'
+            if target_date == today and not has_out \
+                    and not self._shift_end_passed(target_date, config, now):
+                return False, '今日下班时间未到，暂无法发起全天申诉/补卡申请'
+            return True, ''
+
+        if is_rest_day(target_date):
+            return False, '该日期为休息日，无需发起考勤申诉/补卡申请'
+        if target_date == today:
+            return False, '今日考勤尚未结束，请针对上班卡或下班卡单独申诉，或下班后再提交全天申诉'
+        return True, ''
+
     @staticmethod
     def _user_presentation(user):
         """成员展示信息（姓名/头像/主部门），虚拟行按用户缓存一次，避免逐日重复计算"""
@@ -690,6 +782,16 @@ class AttendanceViewSet(viewsets.ViewSet):
         if camera_err:
             return Response({'error': camera_err}, status=400)
 
+        # 人脸检测：前端确认已检测到清晰人脸；组件不可用时会标记 skipped 放行
+        face_photo, face_err = self._validate_face_photo(request)
+        if face_err:
+            return Response({'error': face_err}, status=400)
+        face_meta = self._parse_face_meta(request.data.get('face_meta'))
+        if (photo and self._photo_clock_enabled(tenant) and face_meta
+                and face_meta.get('detected') is False and not face_meta.get('skipped')):
+            return Response({'error': '未检测到人脸，请正对镜头后重新拍摄',
+                             'face_required': True}, status=400)
+
         # 拍照打卡时以照片上的时间戳作为打卡时间
         now = self._resolve_clock_time(request, photo)
         today = now.date()
@@ -730,6 +832,11 @@ class AttendanceViewSet(viewsets.ViewSet):
                 self._save_clock_photo(record, photo)
             except Exception as e:
                 logger.warning(f'保存上班打卡照片失败 record={record.id}: {e}')
+        if face_photo or face_meta:
+            try:
+                self._save_face(record, face_photo, face_meta)
+            except Exception as e:
+                logger.warning(f'保存上班打卡人脸照片/信息失败 record={record.id}: {e}')
         location_text = serializer.validated_data.get('location', '')
         logger.info(f'{request.user} 上班打卡 {today} status={status_val}'
                     + (f' 命中打卡范围={loc_hit} 距离={int(loc_dist)}米' if loc_hit else ''))
@@ -793,6 +900,16 @@ class AttendanceViewSet(viewsets.ViewSet):
         if camera_err:
             return Response({'error': camera_err}, status=400)
 
+        # 人脸检测：前端确认已检测到清晰人脸；组件不可用时会标记 skipped 放行
+        face_photo, face_err = self._validate_face_photo(request)
+        if face_err:
+            return Response({'error': face_err}, status=400)
+        face_meta = self._parse_face_meta(request.data.get('face_meta'))
+        if (photo and self._photo_clock_enabled(tenant) and face_meta
+                and face_meta.get('detected') is False and not face_meta.get('skipped')):
+            return Response({'error': '未检测到人脸，请正对镜头后重新拍摄',
+                             'face_required': True}, status=400)
+
         # 拍照打卡时以照片上的时间戳作为打卡时间
         now = self._resolve_clock_time(request, photo)
         today = now.date()
@@ -854,6 +971,11 @@ class AttendanceViewSet(viewsets.ViewSet):
                 self._save_clock_photo(record, photo)
             except Exception as e:
                 logger.warning(f'保存下班打卡照片失败 record={record.id}: {e}')
+        if face_photo or face_meta:
+            try:
+                self._save_face(record, face_photo, face_meta)
+            except Exception as e:
+                logger.warning(f'保存下班打卡人脸照片/信息失败 record={record.id}: {e}')
         logger.info(f'{request.user} 下班打卡 {today} status={status_val}')
         location_text = serializer.validated_data.get('location', '')
         status_text = '早退' if status_val == 'early_leave' else '正常'
@@ -939,8 +1061,8 @@ class AttendanceViewSet(viewsets.ViewSet):
                 }, status=400)
             else:
                 return Response({'error': '该日期无需补卡'}, status=400)
-        if clock_type not in ('clock_in', 'clock_out'):
-            return Response({'error': '请选择补卡类型（上班卡/下班卡）'}, status=400)
+        if clock_type not in ('clock_in', 'clock_out', 'day'):
+            return Response({'error': '请选择补卡类型（上班卡/下班卡/全天）'}, status=400)
 
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
         dept_id = self._primary_department_id(request.user, tenant)
@@ -961,51 +1083,83 @@ class AttendanceViewSet(viewsets.ViewSet):
                 'makeup_remaining': 0,
             }, status=400)
 
-        if clock_type == 'clock_in':
-            cfg_time = config.clock_in_time if config and config.clock_in_time else dt_time(9, 0)
-            label = '上班'
+        # 计算本次需要补录/修正的卡种。全天补卡一次处理上、下班两张卡。
+        records_now = {
+            r.clock_type: r
+            for r in AttendanceRecord.objects.filter(user=request.user, date=makeup_date)
+        }
+        if clock_type == 'day':
+            needed = []
+            for ct in ('clock_in', 'clock_out'):
+                rec = records_now.get(ct)
+                if rec is None or rec.status in ('late', 'early_leave'):
+                    needed.append(ct)
+            if not needed:
+                return Response({'error': '该日期考勤正常，无需补卡'}, status=400)
         else:
-            cfg_time = config.clock_out_time if config and config.clock_out_time else dt_time(18, 0)
-            label = '下班'
-
-        # 已存在该日期该类型的打卡记录：正常记录不可补卡；迟到/早退记录可补卡修正为正常
-        existing = AttendanceRecord.objects.filter(user=request.user, date=makeup_date, clock_type=clock_type).first()
-        if existing:
-            if existing.status == 'normal':
+            rec = records_now.get(clock_type)
+            if rec is not None and rec.status == 'normal':
                 return Response({'error': '该日期已正常打卡，无需补卡'}, status=400)
-            # 迟到/早退 → 补卡修正为正常，并记录补卡时间
-            existing.status = 'normal'
-            existing.makeup_at = now
-            existing.remark = '补卡'
-            existing.save(update_fields=['status', 'makeup_at', 'remark'])
-            record = existing
-            logger.info(f'{request.user} 补卡(修正迟到/早退) {clock_type} {makeup_date}')
-        else:
-            clock_dt = dt_datetime.combine(makeup_date, cfg_time)
-            aware_dt = timezone.make_aware(clock_dt) if timezone.is_naive(clock_dt) else clock_dt
-            record = AttendanceRecord.objects.create(
-                user=request.user, clock_type=clock_type, date=makeup_date,
-                tenant=tenant,
-                status='normal', remark='补卡',
-                location='', device='补卡',
-                makeup_at=now,
-            )
-            # clock_time 为 auto_now_add，创建后更新为配置时间
-            record.clock_time = aware_dt
-            record.save(update_fields=['clock_time'])
-            logger.info(f'{request.user} 补卡 {clock_type} {makeup_date} 时间:{aware_dt}')
+            needed = [clock_type]
+
+        if used + len(needed) > allowance:
+            remaining = max(0, allowance - used)
+            return Response({
+                'error': f'本月补卡次数不足（剩余 {remaining} 次，本次需 {len(needed)} 次）',
+                'makeup_used': used,
+                'makeup_allowance': allowance,
+                'makeup_remaining': remaining,
+            }, status=400)
+
+        labels_text = {'clock_in': '上班卡', 'clock_out': '下班卡'}
+        done_labels = []
+        fixed_any = False
+        record = None
+        for ct in needed:
+            if ct == 'clock_in':
+                cfg_time = config.clock_in_time if config and config.clock_in_time else dt_time(9, 0)
+            else:
+                cfg_time = config.clock_out_time if config and config.clock_out_time else dt_time(18, 0)
+            existing = records_now.get(ct)
+            if existing:
+                # 迟到/早退 → 补卡修正为正常，并记录补卡时间
+                existing.status = 'normal'
+                existing.makeup_at = now
+                existing.remark = '补卡'
+                existing.save(update_fields=['status', 'makeup_at', 'remark'])
+                record = existing
+                fixed_any = True
+                logger.info(f'{request.user} 补卡(修正迟到/早退) {ct} {makeup_date}')
+            else:
+                clock_dt = dt_datetime.combine(makeup_date, cfg_time)
+                aware_dt = timezone.make_aware(clock_dt) if timezone.is_naive(clock_dt) else clock_dt
+                record = AttendanceRecord.objects.create(
+                    user=request.user, clock_type=ct, date=makeup_date,
+                    tenant=tenant,
+                    status='normal', remark='补卡',
+                    location='', device='补卡',
+                    makeup_at=now,
+                )
+                # clock_time 为 auto_now_add，创建后更新为配置时间
+                record.clock_time = aware_dt
+                record.save(update_fields=['clock_time'])
+                logger.info(f'{request.user} 补卡 {ct} {makeup_date} 时间:{aware_dt}')
+            done_labels.append(labels_text.get(ct, ct))
+
         send_work_notification(
             user_id=request.user.id,
             title='补卡成功',
-            content=f'已补{label}卡（{makeup_date}）' + ('，原迟到/早退记录已修正为正常' if existing else f'，时间 {cfg_time.strftime("%H:%M")}'),
+            content=f'已补{"、".join(done_labels)}（{makeup_date}）'
+                    + ('，原迟到/早退记录已修正为正常' if fixed_any else ''),
             notification_type='attendance',
             related_url='/oa/attendance/',
-            extra_data={'clock_type': clock_type, 'date': str(makeup_date), 'makeup': True},
+            extra_data={'clock_type': clock_type, 'clock_types': needed,
+                        'date': str(makeup_date), 'makeup': True},
         )
         data = AttendanceRecordSerializer(record, context={'request': request}).data
-        data['makeup_used'] = used + 1
+        data['makeup_used'] = used + len(needed)
         data['makeup_allowance'] = allowance
-        data['makeup_remaining'] = allowance - (used + 1)
+        data['makeup_remaining'] = allowance - (used + len(needed))
         return Response({'encrypt': True, 'data': encrypt_data(data)}, status=201)
 
     @action(detail=False, methods=['get'])
@@ -1041,6 +1195,29 @@ class AttendanceViewSet(viewsets.ViewSet):
                     'status_display': item.get_status_display(),
                 })})
         return Response({'encrypt': True, 'data': encrypt_data({'exists': False})})
+
+    @action(detail=False, methods=['get'])
+    def appeal_eligibility(self, request):
+        """提交申诉前校验：该日期/卡种是否确实存在缺卡或考勤异常。"""
+        target_uid = request.query_params.get('user_id')
+        if target_uid:
+            try:
+                target_uid = int(target_uid)
+            except (TypeError, ValueError):
+                return Response({'error': '目标成员参数无效'}, status=400)
+            if target_uid != request.user.id:
+                return Response({'error': '只能查看本人考勤的申诉资格'}, status=403)
+        date_str = (request.query_params.get('date') or '').strip()
+        clock_type = (request.query_params.get('clock_type') or 'day').strip() or 'day'
+        tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
+        eligible, reason = self.attendance_appeal_eligibility(
+            request.user, date_str, clock_type, tenant)
+        return Response({'encrypt': True, 'data': encrypt_data({
+            'eligible': eligible,
+            'reason': reason,
+            'date': date_str,
+            'clock_type': clock_type,
+        })})
 
     @action(detail=False, methods=['get'])
     def today(self, request):
@@ -1720,6 +1897,80 @@ class AttendanceViewSet(viewsets.ViewSet):
             logger.warning(f'打卡照片压缩失败 record={record.id}: {e}')
 
         record.save(update_fields=['photo', 'photo_compressed'])
+
+    @staticmethod
+    def _validate_face_photo(request):
+        """校验前端截取的人脸照片（可选，用于后续人脸识别数据储备）。"""
+        face = request.FILES.get('face_photo')
+        if not face:
+            return None, None
+        if face.size > 5 * 1024 * 1024:
+            return None, '人脸照片不能超过 5MB'
+        try:
+            from PIL import Image
+            Image.open(face).verify()
+            face.seek(0)
+        except Exception:
+            return None, '人脸照片格式不正确，请重新拍摄'
+        return face, None
+
+    @staticmethod
+    def _parse_face_meta(raw):
+        """规整前端人脸检测结果（分数、人脸框、清晰度、是否跳过检测）。"""
+        # 未携带人脸信息（旧版前端/未开启检测）时返回 None，避免被误判为“无人脸”
+        if raw is None or raw == '':
+            return None
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError):
+                raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+
+        def _num(value, digits=3):
+            try:
+                return round(float(value or 0), digits)
+            except (TypeError, ValueError):
+                return 0
+
+        box = raw.get('box') if isinstance(raw.get('box'), dict) else {}
+        return {
+            'detected': bool(raw.get('detected')),
+            'skipped': bool(raw.get('skipped')),
+            'score': _num(raw.get('score')),
+            'blur': _num(raw.get('blur')),
+            'sizeRatio': _num(raw.get('sizeRatio'), 4),
+            'box': {k: _num(box.get(k), 2) for k in ('x', 'y', 'width', 'height')},
+            'capturedAt': str(raw.get('capturedAt') or '')[:64],
+            'library': str(raw.get('library') or '')[:64],
+            'reason': str(raw.get('reason') or '')[:64],
+        }
+
+    @staticmethod
+    def _save_face(record, face, meta):
+        """保存人脸截图（压缩到最长边 480）与人脸检测元数据。"""
+        import io
+        from PIL import Image, ImageOps
+        from django.core.files.base import ContentFile
+
+        record.face_meta = meta or {}
+        if face:
+            data = face.read()
+            name = 'face_%s_%s.jpg' % (record.user_id, record.id)
+            try:
+                img = Image.open(io.BytesIO(data))
+                img = ImageOps.exif_transpose(img)
+                img.thumbnail((480, 480))
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                buf = io.BytesIO()
+                img.save(buf, format='JPEG', quality=85, optimize=True)
+                data = buf.getvalue()
+            except Exception as e:
+                logger.warning(f'人脸照片压缩失败 record={record.id}: {e}')
+            record.face_photo.save(name, ContentFile(data), save=False)
+        record.save(update_fields=['face_photo', 'face_meta'])
 
     # 已知虚拟摄像头/虚拟相机名称特征（客户端与后端共用，后端做二次拦截）
     _VIRTUAL_CAMERA_RE = re.compile(
@@ -3893,6 +4144,19 @@ class ApprovalViewSet(viewsets.ViewSet):
                 request.user, serializer.validated_data, form_data)
             if dup_msg:
                 return Response({'error': dup_msg}, status=400)
+            # 校验该日期/卡种是否确实存在缺卡或异常，避免对正常考勤提交无效申诉
+            appeal_date = serializer.validated_data.get('start_date')
+            if not appeal_date:
+                try:
+                    appeal_date = _date.fromisoformat(
+                        str((form_data or {}).get('date') or '')[:10])
+                except ValueError:
+                    appeal_date = None
+            appeal_clock = str((form_data or {}).get('clock_type') or 'day')
+            eligible, reason = AttendanceViewSet().attendance_appeal_eligibility(
+                request.user, appeal_date, appeal_clock, tenant)
+            if not eligible:
+                return Response({'error': reason}, status=400)
 
         # 审批方式/模式统一读取审批类型配置（无配置时沿用默认/传入值）
         sign_type, approval_mode = self._resolve_sign_mode(
@@ -7702,6 +7966,8 @@ class AnnouncementConfigViewSet(viewsets.ViewSet):
             'archive_days': int(cfg.archive_days or AnnouncementConfig.DEFAULT_ARCHIVE_DAYS),
             'min_archive_days': AnnouncementConfig.MIN_ARCHIVE_DAYS,
             'max_archive_days': AnnouncementConfig.MAX_ARCHIVE_DAYS,
+            'voice_enabled': bool(cfg.voice_enabled),
+            'voice_autoplay': bool(cfg.voice_autoplay),
         }
 
     @staticmethod
@@ -7762,6 +8028,9 @@ class AnnouncementConfigViewSet(viewsets.ViewSet):
                                        min(AnnouncementConfig.MAX_ARCHIVE_DAYS, days))
             except (TypeError, ValueError):
                 pass
+        for f in ('voice_enabled', 'voice_autoplay'):
+            if f in request.data:
+                setattr(cfg, f, bool(request.data.get(f)))
         cfg.save()
         data = self._config_data(cfg)
         data['publishers'] = self._publisher_details(data['publisher_ids'])
@@ -7863,12 +8132,24 @@ class PrintLogViewSet(viewsets.ViewSet):
             count = 0
         # 校验「允许打印」权限（用户自定义覆盖全局），结果随响应返回，前端据 allowed=false 阻止打印
         allowed = get_effective_operation_permission(request.user, 'allow_print', tenant)
+        page = str(request.data.get('page') or 'other')[:50]
+        # 每日工作总结：再校验该部门是否授予当前用户「打印」权限
+        if allowed and page == 'work_summary':
+            try:
+                sid = int(request.data.get('target_id'))
+                s = DailyWorkSummary.objects.select_related('user').get(id=sid)
+                if not WorkSummaryPermissionResolver(request.user, tenant).can(s, 'print'):
+                    allowed = False
+            except (TypeError, ValueError, DailyWorkSummary.DoesNotExist):
+                pass
+            except Exception as e:
+                logger.warning(f'校验团队总结打印权限失败: {e}')
         # 打印操作一律记录到打印日志（含无权限的尝试），便于管理员查看打印统计与权限分配
         try:
             PrintLog.objects.create(
                 tenant=tenant,
                 user=request.user,
-                page=str(request.data.get('page') or 'other')[:50],
+                page=page,
                 target_type=str(request.data.get('target_type') or '')[:50],
                 target_id=str(request.data.get('target_id') or '')[:100],
                 count=max(count, 0),
@@ -8144,17 +8425,18 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
             return set()
         return set(UserDepartment.objects.filter(department_id__in=dept_ids).values_list('user_id', flat=True))
 
+    def _resolver(self):
+        """当前请求的团队总结权限解析器（配置/部门树按请求缓存）"""
+        if not hasattr(self, '_ws_permission_resolver'):
+            self._ws_permission_resolver = WorkSummaryPermissionResolver(
+                self.request.user, self._tenant(self.request))
+        return self._ws_permission_resolver
+
     def _can_view_summary(self, user, s):
-        """判断某用户能否查看该总结：本人 / 超管 / 其负责部门成员"""
-        if s.user_id == user.id:
+        """能否查看该总结：本人/超管，或已配置该部门查看权限"""
+        if s.user_id == user.id or user.user_type == 'super_admin':
             return True
-        if user.user_type == 'super_admin':
-            return True
-        from org.models import UserDepartment
-        dept_ids = self._managed_dept_ids(user)
-        if not dept_ids:
-            return False
-        return UserDepartment.objects.filter(user_id=s.user_id, department_id__in=dept_ids).exists()
+        return self._resolver().can(s, 'view')
 
     def _summary_data(self, s, with_result=False):
         d = {
@@ -8185,6 +8467,16 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
                 d['liked_by_me'] = s.likes.filter(user_id=req.user.id).exists()
             except Exception:
                 d['liked_by_me'] = False
+        # 当前用户对该总结可执行的操作（前端据此显示/隐藏按钮，后端接口同样强制校验）
+        d.update({'can_view': True, 'can_like': True, 'can_comment': True,
+                  'can_print': True, 'can_export': True, 'can_share': True})
+        if req and getattr(req.user, 'is_authenticated', False):
+            try:
+                acts = self._resolver().actions_for(s)
+                for action, allowed in acts.items():
+                    d['can_' + action] = bool(allowed)
+            except Exception:
+                pass
         if with_result:
             d['analysis_result'] = s.analysis_result
             d['prompt_text'] = s.prompt_text
@@ -8207,18 +8499,14 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
             'created_at': c.created_at.isoformat() if c.created_at else None,
         }
 
-    def _can_interact_summary(self, s, user):
-        """能否对某篇总结点赞/评论：本人、超管，或同企业内部门负责人(其部门可见范围)"""
+    def _can_interact_summary(self, s, user, action='like'):
+        """能否对某篇总结点赞/评论：本人、超管，或该部门已配置对应操作权限"""
         if not user or not user.is_authenticated:
             return False
         if s.user_id == user.id or user.user_type == 'super_admin':
             return True
-        if user.user_type == 'admin':
-            tenant = self._tenant(self.request) if hasattr(self, 'request') else None
-            if tenant and s.tenant_id in (tenant.id, (tenant.parent_id if tenant.parent_id else tenant.id)):
-                scoped = self._scoped_user_ids(user)
-                return scoped is None or s.user_id in scoped
-        return False
+        tenant = self._tenant(self.request) if hasattr(self, 'request') else (s.tenant or None)
+        return WorkSummaryPermissionResolver(user, tenant).can(s, action)
 
     def _notify_summary_managers(self, s):
         """总结提交后，通知提交人当前企业主部门的主负责人与副负责人"""
@@ -8252,7 +8540,7 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
             s = DailyWorkSummary.objects.select_related('user').get(id=pk)
         except DailyWorkSummary.DoesNotExist:
             return Response({'error': '总结不存在'}, status=404)
-        if not self._can_interact_summary(s, request.user):
+        if not self._can_interact_summary(s, request.user, 'like'):
             return Response({'error': '无权对该总结点赞'}, status=403)
         newly = False
         existed = DailyWorkSummaryLike.objects.filter(summary=s, user=request.user).exists()
@@ -8304,7 +8592,7 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
             s = DailyWorkSummary.objects.select_related('user').get(id=pk)
         except DailyWorkSummary.DoesNotExist:
             return Response({'error': '总结不存在'}, status=404)
-        if not self._can_interact_summary(s, request.user):
+        if not self._can_interact_summary(s, request.user, 'comment'):
             return Response({'error': '无权评论该总结'}, status=403)
         content = (request.data.get('content') or '').strip()
         image = (request.data.get('image') or '').strip()
@@ -8450,10 +8738,17 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def all(self, request):
-        """团队每日工作总结（部门负责人/超管）：部门过滤 + 日期过滤 + 搜索员工"""
-        if not self._can_view_all(request.user):
-            return Response({'error': '仅部门负责人或超级管理员可查看'}, status=403)
+        """团队每日工作总结：按部门权限配置开放查看范围 + 日期/部门/员工过滤"""
         tenant = self._tenant(request)
+        resolver = self._resolver()
+        scope = resolver.scope()
+        if scope['user_ids'] is None:
+            can_manage = True
+        else:
+            if not scope['dept_ids']:
+                return Response({'error': '暂无团队总结查看权限，请联系超级管理员配置'}, status=403)
+            can_manage = bool(scope['can_manage'])
+
         qs = DailyWorkSummary.objects.select_related('user').order_by('-summary_date', '-created_at')
         if tenant:
             ids = [tenant.id]
@@ -8462,16 +8757,19 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
             except Exception:
                 pass
             qs = qs.filter(tenant_id__in=ids)
-        # 部门负责人（非超管）：只能查看自己负责部门（含子部门）成员的总结
-        if request.user.user_type != 'super_admin':
-            scoped = self._scoped_user_ids(request.user)
-            qs = qs.filter(user_id__in=scoped) if scoped else qs.none()
+        if scope['user_ids'] is not None:
+            qs = qs.filter(user_id__in=scope['user_ids'])
         dept_id = request.query_params.get('department_id', '').strip()
         if dept_id:
             try:
-                from org.models import UserDepartment
-                member_ids = list(UserDepartment.objects.filter(department_id=int(dept_id)).values_list('user_id', flat=True))
-                qs = qs.filter(user_id__in=member_ids)
+                dept_id_int = int(dept_id)
+                if scope['dept_ids'] is not None and dept_id_int not in scope['dept_ids']:
+                    qs = qs.none()
+                else:
+                    from org.models import UserDepartment
+                    member_ids = list(UserDepartment.objects.filter(
+                        department_id=dept_id_int).values_list('user_id', flat=True))
+                    qs = qs.filter(user_id__in=member_ids)
             except Exception:
                 pass
         date_from = request.query_params.get('date_from', '').strip()
@@ -8497,7 +8795,117 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
         return Response({'encrypt': True, 'data': encrypt_data({
             'results': [self._summary_data(x, True) for x in items],
             'count': total, 'page': page, 'page_size': page_size, 'total_pages': total_pages,
+            'can_manage': can_manage,
+            'allowed_department_ids': scope['allowed_department_ids'],
         })})
+
+    @staticmethod
+    def _dept_permission_data(p):
+        from accounts.models import CustomUser
+        member_ids = []
+        for x in (p.member_ids or []):
+            try:
+                member_ids.append(int(x))
+            except (TypeError, ValueError):
+                continue
+        members = []
+        if member_ids:
+            us = CustomUser.objects.filter(id__in=member_ids)
+            members = [{
+                'id': u.id,
+                'name': u.real_name or u.username,
+                'avatar': u.get_avatar_url() if hasattr(u, 'get_avatar_url') else '',
+            } for u in us]
+        return {
+            'id': p.id,
+            'department': p.department_id,
+            'department_name': p.department.name if p.department else '',
+            'include_manager': p.include_manager,
+            'include_deputy': p.include_deputy,
+            'include_all_members': p.include_all_members,
+            'member_ids': member_ids,
+            'members': members,
+            'can_view': p.can_view,
+            'can_like': p.can_like,
+            'can_comment': p.can_comment,
+            'can_print': p.can_print,
+            'can_export': p.can_export,
+            'can_share': p.can_share,
+            'updated_at': p.updated_at.isoformat() if p.updated_at else None,
+            'updated_by_name': (p.updated_by.real_name or p.updated_by.username)
+            if p.updated_by_id else '',
+        }
+
+    @action(detail=False, methods=['get', 'post'])
+    def team_permissions(self, request):
+        """团队总结部门权限配置（仅超级管理员）。
+
+        GET  ?department_id= 读取某部门（不传则返回全部）
+        POST 保存/删除（remove=true 删除）
+        """
+        if request.user.user_type != 'super_admin':
+            return Response({'error': '仅超级管理员可配置团队总结权限'}, status=403)
+        tenant = self._tenant(request)
+        if not tenant:
+            return Response({'encrypt': True, 'data': encrypt_data({'results': []})})
+
+        if request.method == 'GET':
+            qs = WorkSummaryDeptPermission.objects.filter(tenant=tenant).select_related(
+                'department', 'updated_by')
+            dept_id = request.query_params.get('department_id', '').strip()
+            if dept_id:
+                try:
+                    qs = qs.filter(department_id=int(dept_id))
+                except (TypeError, ValueError):
+                    pass
+            return Response({'encrypt': True, 'data': encrypt_data({
+                'results': [self._dept_permission_data(p) for p in qs],
+            })})
+
+        from accounts.models import Department, CustomUser
+        dept_raw = request.data.get('department_id')
+        try:
+            dept = Department.objects.get(id=int(dept_raw))
+        except (TypeError, ValueError, Department.DoesNotExist):
+            return Response({'error': '部门不存在'}, status=400)
+        sub_ids = [tenant.id]
+        try:
+            sub_ids += [t.id for t in tenant.sub_tenants.filter(is_active=True)]
+        except Exception:
+            pass
+        if dept.tenant_id not in sub_ids:
+            return Response({'error': '无权配置该部门'}, status=403)
+
+        if request.data.get('remove'):
+            WorkSummaryDeptPermission.objects.filter(tenant=tenant, department=dept).delete()
+            return Response({'encrypt': True, 'data': encrypt_data({'removed': True})})
+
+        bool_keys = ('include_manager', 'include_deputy', 'include_all_members',
+                     'can_view', 'can_like', 'can_comment', 'can_print', 'can_export', 'can_share')
+        defaults = {k: bool(request.data.get(k)) for k in bool_keys if k in request.data}
+        if 'member_ids' in request.data:
+            raw = request.data.get('member_ids')
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except (TypeError, ValueError):
+                    raw = []
+            ids = []
+            for x in (raw if isinstance(raw, list) else []):
+                try:
+                    v = int(x)
+                except (TypeError, ValueError):
+                    continue
+                if v not in ids:
+                    ids.append(v)
+            valid_ids = set(CustomUser.objects.filter(
+                id__in=ids, is_active=True).values_list('id', flat=True))
+            defaults['member_ids'] = [i for i in ids if i in valid_ids][:500]
+        defaults['updated_by'] = request.user
+        perm, _created = WorkSummaryDeptPermission.objects.update_or_create(
+            tenant=tenant, department=dept, defaults=defaults)
+        return Response({'encrypt': True, 'data': encrypt_data(
+            self._dept_permission_data(perm))}, status=201)
 
     def retrieve(self, request, pk=None):
         try:
@@ -8522,8 +8930,9 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
             s = DailyWorkSummary.objects.select_related('user').get(id=pk)
         except DailyWorkSummary.DoesNotExist:
             return Response({'error': '工作总结不存在'}, status=404)
-        if not self._can_view_summary(request.user, s):
-            return Response({'error': '无权操作'}, status=403)
+        # 重新触发大模型分析会消耗调用额度：仅本人与超级管理员可操作
+        if s.user_id != request.user.id and request.user.user_type != 'super_admin':
+            return Response({'error': '仅本人或超级管理员可重新分析'}, status=403)
         try:
             from .tasks import analyze_work_summary_task
             analyze_work_summary_task.delay(s.id)
@@ -8541,7 +8950,7 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
         s = DailyWorkSummary.objects.select_related('user').filter(id=pk).first()
         if not s:
             return Response({'error': '工作总结不存在'}, status=404)
-        if not self._can_view_summary(request.user, s):
+        if not self._can_interact_summary(s, request.user, 'share'):
             return Response({'error': '无权分享该工作总结'}, status=403)
         target_id = request.data.get('target_user_id')
         if not target_id:
@@ -8624,7 +9033,7 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
         s = DailyWorkSummary.objects.select_related('user').filter(id=pk).first()
         if not s:
             return Response({'error': '工作总结不存在'}, status=404)
-        if not self._can_view_summary(request.user, s):
+        if not self._can_interact_summary(s, request.user, 'export'):
             return Response({'error': '无权导出该工作总结'}, status=403)
 
         fmt = str(fmt or 'pdf').strip().lower()
@@ -8683,6 +9092,8 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
             'today_call_count': cfg.today_call_count,
             'today_cost': float(cfg.today_cost or 0),
             'mask_sensitive': cfg.mask_sensitive,
+            'voice_enabled': cfg.voice_enabled,
+            'voice_autoplay': cfg.voice_autoplay,
             'scope_type': cfg.scope_type,
             'scope_value': list(cfg.scope_value or []),
             'scope_users_info': self._scope_users_info(cfg),
@@ -8715,6 +9126,8 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
                 'effective_model': settings.ARK_MODEL or 'doubao-seed-1-6-250615',
                 'presets': ARK_MODEL_PRESETS,
                 'is_super_admin': request.user.user_type == 'super_admin',
+                'voice_enabled': False,
+                'voice_autoplay': True,
                 'updated_at': None,
             })})
         if request.method == 'POST':
@@ -8728,8 +9141,8 @@ class DailyWorkSummaryViewSet(viewsets.ViewSet):
                 cfg.model_id = model_id[:100]
             elif 'model_id' in request.data:
                 cfg.model_id = ''
-            # —— 风险管控：调用限额 / 成本 / 数据脱敏 / 灰度范围 ——
-            for f in ('limit_enabled', 'mask_sensitive'):
+            # —— 风险管控：调用限额 / 成本 / 数据脱敏 / 语音播放 / 灰度范围 ——
+            for f in ('limit_enabled', 'mask_sensitive', 'voice_enabled', 'voice_autoplay'):
                 if f in request.data:
                     setattr(cfg, f, bool(request.data.get(f)))
             for f in ('daily_call_limit', 'daily_cost_limit', 'cost_per_1k_tokens'):
@@ -10258,6 +10671,8 @@ class AnnouncementViewSet(viewsets.ViewSet):
             'results': AnnouncementSerializer(results, many=True, context={'request': request}).data,
             'can_create': self._can_publish(request),
             'archive_days': int(cfg.archive_days or AnnouncementConfig.DEFAULT_ARCHIVE_DAYS),
+            'voice_enabled': bool(cfg.voice_enabled),
+            'voice_autoplay': bool(cfg.voice_autoplay),
         })})
 
     def _record_operation(self, request, a, action):
@@ -10298,7 +10713,14 @@ class AnnouncementViewSet(viewsets.ViewSet):
             a.save(update_fields=['viewed_by', 'view_count'])
         except Exception:
             pass
-        return Response({'encrypt': True, 'data': encrypt_data(AnnouncementSerializer(a, context={'request': request}).data)})
+        data = AnnouncementSerializer(a, context={'request': request}).data
+        try:
+            cfg = self._ann_config(request)
+            data['voice_enabled'] = bool(cfg.voice_enabled)
+            data['voice_autoplay'] = bool(cfg.voice_autoplay)
+        except Exception:
+            pass
+        return Response({'encrypt': True, 'data': encrypt_data(data)})
 
     def create(self, request):
         from .serializers import AnnouncementSerializer

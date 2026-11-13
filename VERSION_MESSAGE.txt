@@ -1,3 +1,97 @@
+238. 考勤申诉/补卡审批逻辑完善：
+   1）提交校验：前端打开申诉弹窗时先查询「申诉资格」，后端创建审批时再次校验；若该日期/卡种没有缺卡或考勤异常，直接提示「该日期…考勤正常，无需申诉/补卡」，避免无效审批；
+   2）校验覆盖：未来日期、早于入职日期、已审批请假/出差、休息日、下班时间未到、两张卡均正常等情况均返回明确中文原因；
+   3）全天支持：全天缺勤（当日无打卡记录）可发起全天申诉，审批通过后同时补录上班卡与下班卡；只有一张卡异常时也支持全天申诉；
+   4）补卡支持全天：同日上班卡和下班卡都需补时，补卡弹窗新增「全天一起补（上/下班卡）」选项，一次补录两张卡，按两张卡计入补卡次数，剩余次数不足时明确提示；
+   5）新增接口 `GET /api/oa/attendance/appeal-eligibility/` 返回 `{eligible, reason}`；考勤记录列表的申诉按钮仍按上班卡/下班卡/全天缺勤分别发起；
+   6）说明：无数据库结构变更，无需迁移；同步 `oa/views.py`、`oa/urls.py`、`company_chat/settings.py`、`static/js/attendance.js`、`templates/oa/attendance.html`、`VERSION_MESSAGE.txt` 后重启后端并强刷；资源版本号 `20261112-attappeal01`。
+
+237. 修复移动端（尤其 iOS）连续朗读不高亮问题：
+   1）管理控制台历史消息高亮加强：除消息行背景外，当前朗读消息的气泡增加 2px 紫色描边与光晕，避免被气泡背景遮挡而看不见；
+   2）iOS/iPadOS 合并朗读时，高亮不再依赖 onstart/onboundary：新增独立进度驱动器，按已朗读字数估算当前消息并每 250ms 切换高亮；若 Safari 支持 boundary 事件则自动改用真实字符位置校正；
+   3）语音实际开始（onstart）时重置估算起点，避免语音引擎启动延迟导致高亮超前；
+   4）聊天页消息气泡同步增加朗读描边，桌面与移动端高亮更明显；
+   5）说明：纯前端改动，无数据库变更、无需迁移；同步 `static/js/tts.js`、`static/css/chat.css`、`static/css/admin.css`、`templates/chat/chat.html`、`templates/chat/admin.html`、`VERSION_MESSAGE.txt` 后重启后端（模板缓存）并强制刷新/PWA 清缓存；资源版本号 `20261112-ttshighlight01`。
+
+236. 彻底修复管理控制台聊天历史连续朗读只读一条的问题：
+   1）朗读按钮改为事件委托绑定：不再依赖 `window.adminChatRoomsClient` 全局实例，避免实例不一致导致朗读队列为空；
+   2）管理控制台历史消息滚动改为即时 `scrollTop` 定位（不再使用平滑 `scrollIntoView`），避免滚动动画打断语音合成队列；
+   3）增加语音队列中断恢复：若浏览器只播放到队列中间就结束，自动从下一条未朗读的消息继续，直到全部读完；
+   4）iOS/iPadOS 连续朗读改为「多条消息合并为一个 utterance」一次朗读，配合 `onboundary` + 字数估算逐条高亮，确保 Safari 不会只读第一条；
+   5）悬浮停止按钮改为绑定当前实例，避免点击后无法停止；
+   6）说明：纯前端改动，无数据库变更、无需迁移；同步 `static/js/tts.js`、`static/js/chat.js`、`static/js/admin_chat_rooms.js`、`templates/chat/chat.html`、`templates/chat/admin.html`、`VERSION_MESSAGE.txt` 后重启后端（模板缓存）并强制刷新/PWA 清缓存；资源版本号 `20261112-continuous03`。
+
+235. 修复管理控制台聊天历史连续朗读（移动端兼容）：
+   1）根因①：管理控制台存在多个 `AdminChatRoomsClient` 实例，后创建的实例会覆盖 `window.adminChatRoomsClient` 且没有执行初始化，朗读按钮取到的是空消息列表；现改为单例创建并保留已加载的历史消息状态；
+   2）根因②：连续朗读原实现依赖上一条消息的 onend 回调再调用 speak()，iOS/移动端会把这个异步回调视为非用户手势而拦截后续朗读；现改为把整段连续朗读队列一次性交给语音引擎，每条消息首段开始时回调高亮，彻底避免异步续播被拦截；
+   3）增加兜底：若实例状态异常/列表不在内存中，直接读取当前消息气泡文本并从已渲染历史消息构建朗读队列；
+   4）移动端朗读按钮点击区域由 22px 增大到 30px 并常驻高亮可见，避免手指点不中；
+   5）说明：纯前端改动，无数据库变更、无需迁移；同步 `static/js/tts.js`、`static/js/chat.js`、`static/js/admin_chat_rooms.js`、`static/css/chat.css`、`templates/chat/chat.html`、`templates/chat/admin.html`、`VERSION_MESSAGE.txt` 后重启后端（模板缓存）并强刷；资源版本号 `20261112-continuous02`。
+
+234. 聊天消息连续朗读（类似微信）：
+   1）企业聊天室消息与管理控制台聊天历史消息支持连续朗读：点击任意文本/表情消息的「朗读」按钮，从该条开始按时间顺序逐条朗读后续文本消息；点击正在朗读的那条消息可停止；
+   2）正在朗读的消息自动高亮（浅紫色背景 + 描边），并自动滚动到可视区域；
+   3）聊天区域右侧悬浮「小喇叭」连续朗读按钮（移动端为圆形图标），带脉冲动画，点击立即停止连续朗读并清除高亮；
+   4）切换聊天室、返回聊天室列表、离开历史页面时自动停止连续朗读；
+   5）通用 `tts.js` 增加单条朗读完成回调（onend），连续朗读队列基于该回调逐条推进；手动停止不会触发下一条；
+   6）说明：纯前端改动，无数据库变更、无需迁移；同步 `static/js/tts.js`、`static/js/chat.js`、`static/js/admin_chat_rooms.js`、`static/css/chat.css`、`templates/chat/chat.html`、`templates/chat/admin.html`、`VERSION_MESSAGE.txt` 后重启后端（模板缓存）并强刷；资源版本号 `20261112-continuous01`。
+
+233. 聊天消息朗读 + 历史消息上滑加载优化：
+   1）管理控制台「聊天室管理」的历史消息新增朗读：文本/表情消息气泡右下角新增「朗读」按钮（电脑/手机/平板通用），朗读内容包含发送者姓名与消息正文，再次点击停止；进入/离开聊天室自动停止朗读；
+   2）聊天页与管理控制台历史消息上滑加载统一改为「锚点还原」：加载前记录当前视口内第一条消息及其相对位置，插入更早消息后精确还原，保证用户之前查看的那条消息停留在原来的屏幕位置，不再跳到顶部或抖动；
+   3）加载提示改为悬浮胶囊（不插入消息列表），避免加载过程中把可视内容向下挤动；触发距离由 50px 提前到 120px 预加载；聊天页历史消息改为离屏批量渲染后一次性替换，消除逐条插入造成的闪烁；
+   4）修复还原期间 scrollTop 归零可能重复触发分页的问题（增加还原锁），并在未找到锚点时按高度差回退定位；
+   5）说明：纯前端改动，无数据库变更、无需迁移；同步 `static/js/chat.js`、`static/js/admin_chat_rooms.js`、`static/js/tts.js`、`static/css/chat.css`、`static/css/admin.css`、`templates/chat/chat.html`、`templates/chat/admin.html`、`VERSION_MESSAGE.txt` 后重启后端（模板缓存）并强刷；资源版本号 `20261112-smoothscroll01`。
+
+232. 语音朗读移动端修复 + 聊天消息朗读：
+   1）修复苹果 iOS / Safari 只朗读标题、后续无声音：原实现依赖上一段语音 onend 回调再调用 speak()，iOS 在非用户手势的异步回调中会拦截后续朗读；现改为一次性把所有分段交给语音队列，并主动 resume() 唤醒引擎；iOS/iPadOS 进一步改为整段一次朗读，避免多段排队兼容问题；同时增加移动端看门狗，防止按钮停留在「停止」；
+   2）企业聊天室消息新增朗读：文本/表情消息在消息旁新增「朗读」按钮（电脑悬停显示，手机/平板常驻可见），同时右键/长按菜单新增「朗读」；朗读内容包含发送者姓名 + 消息正文，再次点击停止；切换消息会自动停止上一条朗读；
+   3）手机端自动朗读仍受系统策略限制（iOS 通常要求用户手势触发），若自动播放无声，可点击「朗读」按钮手动播放；
+   4）说明：本次为纯前端调整，无数据库变更、无需迁移；同步 `static/js/tts.js`、`static/js/chat.js`、`static/css/chat.css`、`static/js/work-summary.js`、`static/js/announcement.js`、`templates/chat/chat.html`、`templates/oa/work-summary.html`、`templates/oa/announcement.html`、`VERSION_MESSAGE.txt` 即可；资源版本号 `20261112-chattts01`。
+
+231. 工作总结/集团公告：大模型结果与公告内容浏览器语音播放：
+   1）每日工作总结：大模型分析结果标题旁新增「朗读」按钮，使用浏览器语音合成播报分析建议（按标点分段，避免长文本被截断）；分析完成后可按配置自动播放；
+   2）每日工作总结「模型配置」新增「语音播放」开关（默认关闭）与「自动播放」开关（默认开启）；仅超级管理员可配置，普通成员仅按配置显示朗读按钮/自动播放；
+   3）集团公告：公告详情头部新增「朗读」按钮，朗读公告标题与正文；打开公告详情时可按配置自动播放；
+   4）管理控制台「公告设置」新增「启用公告语音播放」与「打开公告时自动语音播放」开关（默认关闭语音、自动播放开启），仅超级管理员可配置；
+   5）新增通用 `static/js/tts.js`（SpeechSynthesis 封装：分段播报、朗读/停止按钮状态、自动播放）；关闭详情/切换公告会停止当前朗读；
+   6）说明：模型新增 `WorkSummaryConfig.voice_enabled / voice_autoplay`、`AnnouncementConfig.voice_enabled / voice_autoplay`，需在 Linux 服务器执行 `python manage.py makemigrations oa && python manage.py migrate`；同步 `oa/models.py`、`oa/views.py`、`static/js/tts.js`（新增）、`static/js/work-summary.js`、`static/js/announcement.js`、`static/js/admin.js`、`static/css/oa.css`、`templates/oa/work-summary.html`、`templates/oa/announcement.html`、`templates/chat/admin.html`、`VERSION_MESSAGE.txt` 后重启后端；资源版本号 `20261112-tts01`。
+
+230. 群聊管理：群管理员可添加/移除群成员：
+   1）群管理员（被群主设为管理员的成员）在群成员弹窗中新增「添加成员」区域，可搜索并添加企业内用户入群（不再受普通成员仅能添加好友的限制）；
+   2）群管理员可移除普通群成员；但不能移除群主，也不能移除其他群管理员（含自己）；
+   3）群主权限不变：可设置/取消群管理员，可移除普通成员与群管理员；被群主移出的管理员会自动取消管理员标记，避免重新入群后仍保留权限；
+   4）后端 `add_member` / `remove_member` 统一校验群主或群管理员身份，并在移除时二次拦截群主与管理员；普通成员调用仍返回 403；
+   5）说明：无数据库结构变更，无需迁移；同步 `chat/views.py`、`static/js/chat.js`、`templates/chat/chat.html`、`VERSION_MESSAGE.txt` 后重启后端；资源版本号 `20261112-groupadmin01`。
+
+229. 管理控制台用户管理：所属企业 / 企业角色 / 主部门完善：
+   1）添加与编辑用户时「所属企业」为必选项：超级管理员必须显式选择企业；普通管理员不显示该选项，默认使用其当前激活（或所属）企业；
+   2）所选企业即目标用户的当前激活企业（active_tenant），所选部门即目标用户的主部门（UserDepartment.is_primary，同企业内自动保持唯一）；
+   3）超级管理员新增「企业角色」选择项，选项来自 TenantMembership.ROLE_CHOICES（企业所有者/企业管理员/部门管理员/普通成员），默认普通成员，并写入该用户在选择企业中的成员关系；
+   4）普通管理员添加/编辑用户时隐藏所属企业、企业角色、部门、用户类型四项，默认：企业=本人当前企业、角色=普通成员（编辑时保留用户原角色）、部门=本人主部门（本人无部门则为空）、用户类型=普通用户；
+   5）说明：无数据库结构变更，无需迁移；新增/调整 `accounts/views.py` 中企业、企业角色、主部门绑定逻辑，`org/views.py` 与 `org/permissions.py` 企业列表/详情对 user_type=super_admin 放开（不要求企业成员关系）；同步 `accounts/views.py`、`org/views.py`、`org/permissions.py`、`templates/chat/admin.html`、`static/js/admin.js`、`VERSION_MESSAGE.txt` 后重启后端；资源版本号 `20261112-usermgmt`。
+
+228. 每日工作总结·团队总结按部门配置权限：
+   1）新增 `WorkSummaryDeptPermission`：每个部门可分别授予「部门负责人 / 副负责人 / 部门全体成员 / 指定成员」查看、点赞、评论、打印、导出、分享该部门团队每日工作总结的权限；未配置的部门沿用「负责人/副负责人（含子部门）可查看」的旧规则；
+   2）团队总结列表只返回用户有查看权限部门成员的总结；详情、点赞、评论、打印、导出、分享后端逐项校验，前端按接口返回的 `can_view/can_like/can_comment/can_print/can_export/can_share` 显示或隐藏按钮；
+   3）打印留痕接口对 `page=work_summary` 增加部门打印权限二次校验（无权限返回 allowed=false）；「重新分析」收紧为仅本人/超管可操作；
+   4）超级管理员在「每日工作总结」页面新增「团队权限」入口，可按部门配置授权范围与六项操作权限，支持删除恢复默认规则；非超管不可见不可调用；
+   5）说明：模型新增表 `WorkSummaryDeptPermission`，需在服务器执行 `python manage.py makemigrations oa && python manage.py migrate`；同步 `oa/models.py`、`oa/views.py`、`oa/urls.py`、`oa/work_summary_permissions.py`（新增）、`static/js/work-summary.js`、`templates/oa/work-summary.html`、`company_chat/settings.py`、`VERSION_MESSAGE.txt` 后重启后端；资源版本号 `20261111-teamperm01`。
+
+227. 每日工作总结职位提示词新增「短视频编导」：从选题策划、脚本/分镜、拍摄统筹、剪辑对接与成片数据等角度分析，给出次日/下阶段优化建议。纯后端常量改动，无需迁移；同步 `utils/ark_llm.py` 后重启后端及 Celery worker/beat。
+
+226. 修复开启「显示考勤打卡范围配置」后历史打卡点不显示：原因是开关关闭时后端不下发范围数据，保存后区块虽显示但本地没有打卡点；现在保存成功后直接用保存接口返回的完整配置即时回填范围列表（含 BD09 坐标）与「指定区域打卡」总开关，并重新渲染地图。纯前端改动，无需迁移；同步 `static/js/attendance.js`、`templates/oa/attendance.html`（资源版本号 `20261111-georanges01`）后强刷即可。
+
+225. 考勤配置「显示打卡范围配置」保存后即时生效：在考勤配置模态框切换「显示「考勤打卡范围配置」」并保存后，范围配置区块立即显示/隐藏（无需重新打开模态框）；开启时同步初始化地图与打卡点，关闭时同步收起「指定区域打卡」总开关。纯前端改动，无需迁移；同步 `static/js/attendance.js`、`templates/oa/attendance.html`（资源版本号 `20261111-geolive01`）后强刷即可。
+
+224. 拍照打卡人脸检测与样本留存：
+   1）前端引入本地 face-api.js（tinyFaceDetector 模型，位于 `/static/vendor/face-api/`）：实时预览每 450ms 检测人脸并绘制识别框与状态提示；拍摄时再次校验，未检测到人脸、人脸过小（宽度不足画面 10%）、人脸模糊（拉普拉斯方差低于 25）都会阻止拍摄并提示重拍；
+   2）检测通过后截取人脸区域（带边距、320×320 JPEG）随打卡照片上传；后端保存到 `media/attendance/faces/` 并记录 `face_meta`（置信度、清晰度、人脸框、占画面比例、检测库、时间），为后续人脸识别做数据储备；打卡详情可查看人脸照片并放大预览；
+   3）后端二次校验：拍照打卡开启时，若前端明确上报「未检测到人脸」且未标记跳过则拒绝打卡；face-api 组件加载失败时前端标记 skipped 并降级放行，保证考勤可用；旧版前端未携带人脸信息也不受影响；
+   4）说明：模型新增 `AttendanceRecord.face_photo` / `face_meta`，需在服务器执行 `python manage.py makemigrations oa && python manage.py migrate`；同步 `oa/models.py`、`oa/serializers.py`、`oa/views.py`、`static/js/attendance.js`、`static/vendor/face-api/`（3 个文件）、`templates/oa/attendance.html`、`VERSION_MESSAGE.txt` 后重启后端；资源版本号 `20261111-face01`。
+
+223. 每日工作总结职位提示词补充：新增「主办会计」「银行」两个岗位提示词，生成每日总结与范围分析时会自动按对应岗位视角输出。纯后端常量改动，无需迁移；同步 `utils/ark_llm.py` 后重启后端及 Celery worker/beat（提示词在进程内加载）。
+
 222. 打卡照片预览 / 照片时间作为打卡时间 / 虚拟摄像头校验：
    1）打卡详情里的打卡照片支持点击放大预览，再次点击图片返回；预览右上角新增全屏按钮，点击进入全屏、再次点击退出全屏；按 Esc 也可退出；关闭详情弹窗会自动关闭预览；
    2）开启拍照打卡后，打卡时间改为采用照片上烧录的时间戳（前端随照片提交 ISO 时间），迟到/早退判定也按该时间计算；若照片时间与服务器时间偏差超过 15 分钟，则回退服务器时间并记录日志；

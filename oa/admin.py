@@ -20,7 +20,7 @@ from .models import (
     NotificationPopupConfig, AnnouncementConfig, ReportAccessConfig,
     AgentConfig,
     DailyWorkSummary, WorkSummaryRangeAnalysis,
-    WorkSummaryConfig,
+    WorkSummaryConfig, WorkSummaryDeptPermission,
     FinanceSpecialist, Announcement, AnnouncementComment, AnnouncementOperation,
     ApprovalLifecycleConfig,
 )
@@ -277,8 +277,9 @@ class AgentConfigAdmin(admin.ModelAdmin):
 
 @admin.register(AnnouncementConfig)
 class AnnouncementConfigAdmin(admin.ModelAdmin):
-    list_display = ['id', 'tenant', 'archive_days', 'publisher_ids', 'updated_at']
+    list_display = ['id', 'tenant', 'archive_days', 'voice_enabled', 'voice_autoplay', 'publisher_ids', 'updated_at']
     search_fields = ['id', 'tenant__name']
+    list_filter = ['tenant', 'voice_enabled', 'voice_autoplay']
     list_per_page = 20
 
 
@@ -326,9 +327,16 @@ class WorkSummaryRangeAnalysisAdmin(admin.ModelAdmin):
 
 @admin.register(WorkSummaryConfig)
 class WorkSummaryConfigAdmin(admin.ModelAdmin):
-    list_display = ['id', 'tenant', 'tenant', 'updated_by', 'model_id', 'enabled', 'limit_enabled', 'limit_notified', 'near_limit_notified', 'today_call_count', 'today_cost', 'updated_at']
+    list_display = ['id', 'tenant', 'updated_by', 'model_id', 'enabled', 'limit_enabled', 'voice_enabled', 'voice_autoplay', 'limit_notified', 'near_limit_notified', 'today_call_count', 'today_cost', 'updated_at']
     search_fields = ['id', 'updated_by__username', 'updated_by__real_name', 'tenant__name']
-    list_filter = ['tenant', 'enabled', 'scope_type', 'limit_enabled', 'near_limit_notified', 'limit_notified']
+    list_filter = ['tenant', 'enabled', 'voice_enabled', 'voice_autoplay', 'scope_type', 'limit_enabled', 'near_limit_notified', 'limit_notified']
+    list_per_page = 20
+
+@admin.register(WorkSummaryDeptPermission)
+class WorkSummaryDeptPermissionAdmin(admin.ModelAdmin):
+    list_display = ['id', 'tenant', 'department', 'updated_by', 'include_manager', 'include_deputy', 'include_all_members', 'can_view', 'can_like', 'can_comment', 'can_print', 'can_export', 'can_share', 'updated_at', 'created_at']
+    search_fields = ['id', 'updated_by__username', 'updated_by__real_name', 'tenant__name']
+    list_filter = ['tenant', 'include_manager', 'include_deputy', 'include_all_members', 'can_view', 'can_like', 'can_comment', 'can_print', 'can_export', 'can_share']
     list_per_page = 20
 
 

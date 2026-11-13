@@ -69,6 +69,10 @@ class AttendanceRecord(models.Model):
                                          verbose_name='打卡照片压缩图')
     # 拍照打卡时的相机设备信息（名称/deviceId/分辨率等），用于审计与虚拟摄像头识别
     camera_info = models.JSONField(default=dict, blank=True, verbose_name='打卡相机设备信息')
+    # 人脸检测：截取的人脸照片（供后续人脸识别数据储备） + 检测质量元数据
+    face_photo = models.ImageField(upload_to='attendance/faces/%Y/%m/', null=True, blank=True,
+                                   verbose_name='打卡人脸照片')
+    face_meta = models.JSONField(default=dict, blank=True, verbose_name='人脸检测信息')
 
     class Meta:
         ordering = ['-clock_time']
@@ -1607,6 +1611,42 @@ class WorkSummaryRangeAnalysis(models.Model):
         return f'{self.target_user} {self.date_from}~{self.date_to} 范围分析'
 
 
+class WorkSummaryDeptPermission(models.Model):
+    """每日工作总结·团队总结部门权限。
+
+    每个部门一条：可分别授予部门负责人、副负责人、全体成员、指定成员的
+    查看/点赞/评论/打印/导出/分享权限；未配置的部门沿用「负责人/副负责人可见」的旧规则。
+    """
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE,
+                               related_name='work_summary_dept_permissions', verbose_name='所属企业')
+    department = models.ForeignKey(Department, on_delete=models.CASCADE,
+                                   related_name='work_summary_dept_permissions', verbose_name='部门')
+    include_manager = models.BooleanField(default=True, verbose_name='包含部门负责人')
+    include_deputy = models.BooleanField(default=True, verbose_name='包含副负责人')
+    include_all_members = models.BooleanField(default=False, verbose_name='包含部门全体成员')
+    member_ids = models.JSONField(default=list, blank=True, verbose_name='指定成员ID')
+    can_view = models.BooleanField(default=True, verbose_name='可查看')
+    can_like = models.BooleanField(default=True, verbose_name='可点赞')
+    can_comment = models.BooleanField(default=True, verbose_name='可评论')
+    can_print = models.BooleanField(default=True, verbose_name='可打印')
+    can_export = models.BooleanField(default=True, verbose_name='可导出')
+    can_share = models.BooleanField(default=True, verbose_name='可分享')
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
+                                   on_delete=models.SET_NULL,
+                                   related_name='work_summary_permission_updates',
+                                   verbose_name='最后配置人')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        unique_together = ('tenant', 'department')
+        verbose_name = '每日总结部门权限'
+        verbose_name_plural = '每日总结部门权限'
+
+    def __str__(self):
+        return f'{self.tenant} - {self.department} 团队总结权限'
+
+
 class WorkSummaryConfig(models.Model):
     """每日工作总结大模型配置（每企业一条，超管维护）：启用开关 + 调用的火山方舟大模型ID + 风险管控"""
     SCOPE_CHOICES = [
@@ -1635,6 +1675,9 @@ class WorkSummaryConfig(models.Model):
     near_limit_notified = models.BooleanField(default=False, verbose_name='接近上限是否已通知')
     # —— 内部数据合规：提交给大模型前做敏感信息脱敏 ——
     mask_sensitive = models.BooleanField(default=True, verbose_name='提交分析前脱敏敏感信息')
+    # —— 分析结果浏览器语音播报 ——
+    voice_enabled = models.BooleanField(default=False, verbose_name='启用分析结果语音播放')
+    voice_autoplay = models.BooleanField(default=True, verbose_name='分析完成后自动语音播放')
     # —— 上线灰度试点：限定 AI 分析开放范围 ——
     scope_type = models.CharField(max_length=20, choices=SCOPE_CHOICES, default='all', verbose_name='分析开放范围')
     scope_value = models.JSONField(default=list, verbose_name='范围值(职位名列表/部门ID列表/用户ID列表)')
@@ -1862,6 +1905,8 @@ class AnnouncementConfig(models.Model):
     publisher_ids = models.JSONField(default=list, blank=True, verbose_name='可发布公告的用户ID列表')
     archive_days = models.PositiveIntegerField(default=DEFAULT_ARCHIVE_DAYS,
                                                verbose_name='公告自动归档期限(天)')
+    voice_enabled = models.BooleanField(default=False, verbose_name='启用公告语音播放')
+    voice_autoplay = models.BooleanField(default=True, verbose_name='打开公告时自动语音播放')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
     class Meta:

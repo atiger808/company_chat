@@ -2803,3 +2803,25 @@ input:checked + .slider:before {
         bottom: 8px !important;
     }
 }
+/* 聊天历史容器用于悬浮「加载更早消息」提示 */
+.messages-history-container { position: relative; }
+
+/* 连续朗读当前消息高亮（加强可见性，避免被消息气泡遮挡） */
+.history-message.tts-reading {
+    background: rgba(124, 77, 255, 0.10);
+    border-radius: 10px;
+    box-shadow: 0 0 0 1px rgba(124, 77, 255, 0.35);
+}
+.history-message.tts-reading .message-bubble {
+    outline: 2px solid rgba(124, 77, 255, 0.75);
+    outline-offset: 2px;
+    box-shadow: 0 0 14px rgba(124, 77, 255, 0.30);
+}
+[data-theme="dark"] .history-message.tts-reading {
+    background: rgba(160, 107, 255, 0.16);
+    box-shadow: 0 0 0 1px rgba(160, 107, 255, 0.45);
+}
+[data-theme="dark"] .history-message.tts-reading .message-bubble {
+    outline-color: rgba(190, 160, 255, 0.85);
+    box-shadow: 0 0 14px rgba(160, 107, 255, 0.35);
+}

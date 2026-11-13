@@ -9,8 +9,8 @@
 
     <!--    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">-->
     <!--    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">-->
-    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261106-eea7c8b">
-    <link rel="stylesheet" href="/static/css/oa.css?v=20261106-eea7c8b">
+    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261112-8846f91">
+    <link rel="stylesheet" href="/static/css/oa.css?v=20261112-tts01">
 
     <style>
         body {
@@ -1270,7 +1270,7 @@
                 class="fas fa-bell"></i><span class="notif-badge hide" id="notifBadge">0</span></div>
         <div style="position:relative;display:flex;align-items:center;gap:4px;">
             <div class="user-avatar-wrap" id="oaUserAvatarWrap" onclick="toggleWsUserMenu(event)">
-                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20261106-eea7c8b" alt="头像">
+                <img id="adminAvatar" src="/static/images/default-avatar.png?v=20261112-8846f91" alt="头像">
             </div>
             <i class="fas fa-chevron-down" style="font-size:10px;color:rgba(255,255,255,0.7);cursor:pointer;"
                onclick="toggleWsUserMenu(event)"></i>
@@ -1346,6 +1346,9 @@
                 class="fas fa-chart-line"></i> 批量分析
         </button>
         <div style="flex:1;"></div>
+        <button class="ws-tab" id="wsPermConfigBtn" onclick="workSummaryApp.openPermConfigModal()"
+                style="display:none;border-color:#16a085;color:#16a085;"><i class="fas fa-user-shield"></i> 团队权限
+        </button>
         <button class="ws-tab" id="wsModelConfigBtn" onclick="workSummaryApp.openConfigModal()"
                 style="display:none;border-color:#9b59b6;color:#9b59b6;"><i class="fas fa-cog"></i> 模型设置
         </button>
@@ -1542,6 +1545,29 @@
                 开启后，提交给大模型分析前会自动对手机号/邮箱/证件号/银行卡等敏感信息做脱敏，符合集团数据安全管控规范。
             </div>
         </div>
+        <!-- 分析结果语音播放 -->
+        <div class="ws-model-row">
+            <label>语音播放 · 分析结果朗读</label>
+            <label class="ws-switch">
+                <input type="checkbox" id="wsVoiceEnabled" onchange="workSummaryApp._updateVoiceUi()">
+                <span class="ws-slider"></span>
+            </label>
+            <span id="wsVoiceText" style="font-size:13px;color:#606266;margin-left:6px;">未开启</span>
+            <div class="ws-model-hint">
+                开启后，大模型分析建议旁会出现「朗读」按钮，使用浏览器语音合成播报分析结果。
+            </div>
+        </div>
+        <div class="ws-model-row" id="wsVoiceAutoplayRow" style="display:none;">
+            <label>语音播放 · 自动播放</label>
+            <label class="ws-switch">
+                <input type="checkbox" id="wsVoiceAutoplay" onchange="workSummaryApp._updateVoiceUi()">
+                <span class="ws-slider"></span>
+            </label>
+            <span id="wsVoiceAutoplayText" style="font-size:13px;color:#606266;margin-left:6px;">自动播放</span>
+            <div class="ws-model-hint">
+                开启后，分析完成后自动朗读结果（默认开启）；关闭则仅显示「朗读」按钮，由用户手动播放。
+            </div>
+        </div>
         <!-- 第三方依赖风险管控：每日调用量/成本限额 -->
         <div class="ws-model-row">
             <label>第三方依赖风险管控 · 每日调用限额</label>
@@ -1617,6 +1643,70 @@
             <button class="btn btn-secondary" onclick="workSummaryApp.closeConfigModal()">取消</button>
             <button class="btn btn-primary" onclick="workSummaryApp.saveConfig()"><i class="fas fa-check"></i> 保存配置
             </button>
+        </div>
+    </div>
+</div>
+
+<!-- 团队总结部门权限配置模态框（超管） -->
+<div class="ws-model-modal" id="wsPermModal">
+    <div class="ws-model-box" style="max-width:760px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+            <h3 style="margin:0;font-size:16px;"><i class="fas fa-user-shield" style="color:#16a085;"></i> 团队总结部门权限
+            </h3>
+            <div style="display:flex;gap:6px;align-items:center;">
+                <button class="maximize-btn" onclick="workSummaryApp.toggleMaximize(this)" title="最大化"><i
+                        class="fas fa-expand"></i></button>
+                <button class="close-btn" onclick="workSummaryApp.closePermConfigModal()">&times;</button>
+            </div>
+        </div>
+        <div class="ws-model-row">
+            <label>选择部门</label>
+            <select id="wsPermDept" class="form-input" style="width:100%;"
+                    onchange="workSummaryApp.onPermDeptChange()"></select>
+            <div class="ws-model-hint">每个部门单独配置；未配置的部门沿用「负责人/副负责人可查看」的旧规则。</div>
+        </div>
+        <div class="ws-model-row">
+            <label>授权范围</label>
+            <div style="display:flex;flex-wrap:wrap;gap:16px;font-size:13px;">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="wsPermManager" style="width:15px;height:15px;"> 部门负责人
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="wsPermDeputy" style="width:15px;height:15px;"> 副负责人
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="wsPermAllMembers" style="width:15px;height:15px;"> 部门全体成员
+                </label>
+            </div>
+        </div>
+        <div class="ws-model-row">
+            <label>指定成员</label>
+            <div class="ws-range-user-picker">
+                <input type="text" id="wsPermUserInput" class="form-input" placeholder="搜索姓名/账号添加"
+                       autocomplete="off"
+                       oninput="workSummaryApp.searchPermUsers()" onfocus="workSummaryApp.searchPermUsers()">
+                <div class="ws-range-user-list" id="wsPermUserList"></div>
+            </div>
+            <div id="wsPermUserTags" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;"></div>
+        </div>
+        <div class="ws-model-row">
+            <label>操作权限</label>
+            <div style="display:flex;flex-wrap:wrap;gap:16px;font-size:13px;">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="wsPermView" style="width:15px;height:15px;"> 查看</label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="wsPermLike" style="width:15px;height:15px;"> 点赞</label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="wsPermComment" style="width:15px;height:15px;"> 评论</label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="wsPermPrint" style="width:15px;height:15px;"> 打印</label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="wsPermExport" style="width:15px;height:15px;"> 导出</label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="wsPermShare" style="width:15px;height:15px;"> 分享</label>
+            </div>
+            <div class="ws-model-hint">「查看」是点赞/评论/打印/导出/分享的前提；取消查看看不到该部门团队总结。</div>
+        </div>
+        <div id="wsPermMeta" style="font-size:12px;color:#909399;margin-bottom:8px;"></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+            <button class="btn btn-danger" id="wsPermDeleteBtn" style="margin-right:auto;display:none;"
+                    onclick="workSummaryApp.deletePermConfig()">删除该部门配置</button>
+            <button class="btn btn-secondary" onclick="workSummaryApp.closePermConfigModal()">取消</button>
+            <button class="btn btn-primary" onclick="workSummaryApp.savePermConfig()"><i class="fas fa-check"></i> 保存权限</button>
         </div>
     </div>
 </div>
@@ -1724,15 +1814,15 @@
     </div>
 </div>
 
-<script src="/static/js/dist/spark-md5.min.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/dist/sm4.min.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/encrypts.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/utils.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/api.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/tenant.js?v=20261107-orgsecure02"></script>
-<script src="/static/js/notifications.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/cloud-picker.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20261112-8846f91"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20261112-8846f91"></script>
+<script src="/static/js/dist/sm4.min.js?v=20261112-8846f91"></script>
+<script src="/static/js/encrypts.js?v=20261112-8846f91"></script>
+<script src="/static/js/utils.js?v=20261112-8846f91"></script>
+<script src="/static/js/api.js?v=20261112-8846f91"></script>
+<script src="/static/js/tenant.js?v=20261112-8846f91"></script>
+<script src="/static/js/notifications.js?v=20261112-8846f91"></script>
+<script src="/static/js/cloud-picker.js?v=20261112-8846f91"></script>
 <script>
     function toggleWsTheme() {
         var cur = document.documentElement.getAttribute('data-theme') || 'light';
@@ -1776,10 +1866,11 @@
         });
     })();
 </script>
-<script src="/static/js/work-summary.js?v=20261106-eea7c8c"></script>
-<script src="/static/js/watermark.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/tts.js?v=20261112-chattts01"></script>
+<script src="/static/js/work-summary.js?v=20261112-tts01"></script>
+<script src="/static/js/watermark.js?v=20261112-8846f91"></script>
 <script>WatermarkManager.init();</script>
-<script src="/static/js/agent.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/agent.js?v=20261112-8846f91"></script>
 <script>AgentManager.init();</script>
 </body>
 </html>

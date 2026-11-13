@@ -240,6 +240,9 @@ class AttendanceApp {
         if (photo._takenAt) fd.append('photo_taken_at', photo._takenAt);
         // 相机设备信息（用于审计与虚拟摄像头识别）
         if (photo._cameraInfo) fd.append('camera_info', JSON.stringify(photo._cameraInfo));
+        // 人脸截图 + 人脸检测元数据（供后续人脸识别数据储备与质量审计）
+        if (photo._faceBlob) fd.append('face_photo', photo._faceBlob, 'clock_face.jpg');
+        if (photo._faceMeta) fd.append('face_meta', JSON.stringify(photo._faceMeta));
         return fd;
     }
 
@@ -269,6 +272,9 @@ class AttendanceApp {
                 + '<div style="position:relative;background:#000;border-radius:12px;overflow:hidden;">'
                 + '<video data-role="video" autoplay playsinline muted style="width:100%;max-height:65vh;display:block;"></video>'
                 + '<canvas data-role="canvas" style="width:100%;max-height:65vh;display:none;"></canvas>'
+                + '<canvas data-role="overlay" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:block;"></canvas>'
+                + '<div data-role="faceStatus" style="position:absolute;left:10px;top:10px;display:none;align-items:center;gap:6px;padding:4px 10px;border-radius:14px;background:rgba(0,0,0,.55);color:#fff;font-size:12px;pointer-events:none;z-index:2;">'
+                + '<i class="fas fa-user-circle"></i><span data-role="faceText">人脸检测中...</span></div>'
                 + '</div>'
                 + '<div data-role="msg" style="margin-top:10px;font-size:13px;color:#ffd666;line-height:1.6;min-height:20px;"></div>'
                 + '<div style="margin-top:14px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">'
@@ -285,11 +291,21 @@ class AttendanceApp {
             var retakeBtn = overlay.querySelector('[data-act="retake"]');
             var confirmBtn = overlay.querySelector('[data-act="confirm"]');
             var camSelect = overlay.querySelector('[data-role="camera"]');
+            var overlayCanvas = overlay.querySelector('[data-role="overlay"]');
+            var faceStatusEl = overlay.querySelector('[data-role="faceStatus"]');
+            var faceTextEl = overlay.querySelector('[data-role="faceText"]');
             var stream = null;
             var file = null;
             var finished = false;
             var cameraInfo = {};
             var currentDeviceId = '';
+            // 人脸检测状态（face-api.js tinyFaceDetector）
+            var faceReady = false;
+            var faceLoadPromise = null;
+            var faceLoopTimer = null;
+            var detectorOptions = null;
+            var FACE_MIN_RATIO = 0.10;   // 人脸宽度至少占画面 10%，避免拍得太远
+            var FACE_BLUR_MIN = 25;      // 人脸区域拉普拉斯方差阈值，低于该值判为模糊
 
             // 已知虚拟摄像头/虚拟相机名称特征（与后端黑名单保持一致，前后端双重拦截）
             var VIRTUAL_CAMERA_RE = /obs\s*virtual|virtual\s*cam|虚拟摄[像相]头|虚拟相机|manycam|xsplit|snap\s*camera|droidcam|ivcam|epoccam|iriun|camtwist|youcam|sparkocam|vcam|e2esoft|webcamoid|fake\s*camera|camera\s*emulator|ip\s*camera|virtual\s*camera/i;
@@ -303,11 +319,153 @@ class AttendanceApp {
             var finish = function (result) {
                 if (finished) return;
                 finished = true;
+                stopFaceLoop();
                 stop();
                 overlay.remove();
                 resolve(result);
             };
             overlay.querySelector('[data-act="close"]').onclick = function () { finish(null); };
+
+            // ==================== 人脸检测（face-api.js） ====================
+            var ensureFaceModels = function () {
+                if (faceReady) return Promise.resolve(true);
+                if (faceLoadPromise) return faceLoadPromise;
+                var api = window.faceapi;
+                if (!api || !api.nets || !api.nets.tinyFaceDetector) {
+                    faceStatusEl.style.display = 'flex';
+                    faceStatusEl.style.background = 'rgba(200,140,40,.8)';
+                    faceTextEl.textContent = '人脸检测组件未加载，已跳过检测';
+                    faceLoadPromise = Promise.resolve(false);
+                    return faceLoadPromise;
+                }
+                faceStatusEl.style.display = 'flex';
+                faceStatusEl.style.background = 'rgba(0,0,0,.55)';
+                faceTextEl.textContent = '正在加载人脸检测...';
+                try {
+                    detectorOptions = new api.TinyFaceDetectorOptions({inputSize: 224, scoreThreshold: 0.45});
+                } catch (e) {
+                    detectorOptions = null;
+                }
+                faceLoadPromise = api.nets.tinyFaceDetector
+                    .loadFromUri('/static/vendor/face-api/models')
+                    .then(function () { faceReady = true; return true; })
+                    .catch(function (e) {
+                        console.warn('人脸检测模型加载失败', e);
+                        faceStatusEl.style.display = 'flex';
+                        faceStatusEl.style.background = 'rgba(200,140,40,.8)';
+                        faceTextEl.textContent = '人脸检测模型加载失败，已跳过检测';
+                        return false;
+                    });
+                return faceLoadPromise;
+            };
+
+            var drawFaceBox = function (det) {
+                if (!overlayCanvas) return;
+                var rect = video.getBoundingClientRect();
+                var w = Math.max(1, Math.round(rect.width));
+                var h = Math.max(1, Math.round(rect.height));
+                var dpr = window.devicePixelRatio || 1;
+                if (overlayCanvas.width !== Math.round(w * dpr) || overlayCanvas.height !== Math.round(h * dpr)) {
+                    overlayCanvas.width = Math.round(w * dpr);
+                    overlayCanvas.height = Math.round(h * dpr);
+                    overlayCanvas.style.width = w + 'px';
+                    overlayCanvas.style.height = h + 'px';
+                }
+                var ctx = overlayCanvas.getContext('2d');
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                ctx.clearRect(0, 0, w, h);
+                if (!det || !video.videoWidth) return;
+
+                var sx = w / video.videoWidth;
+                var sy = h / video.videoHeight;
+                var x = det.box.x * sx, y = det.box.y * sy;
+                var bw = det.box.width * sx, bh = det.box.height * sy;
+                var c = Math.min(18, bw * 0.28, bh * 0.28);
+                ctx.strokeStyle = '#22e58a';
+                ctx.lineWidth = 2.5;
+                ctx.strokeRect(x, y, bw, bh);
+                // 四角高亮，增加科技感
+                ctx.lineWidth = 4;
+                [[x, y, 1, 1], [x + bw, y, -1, 1], [x, y + bh, 1, -1], [x + bw, y + bh, -1, -1]]
+                    .forEach(function (p) {
+                        ctx.beginPath();
+                        ctx.moveTo(p[0], p[1] + p[3] * c);
+                        ctx.lineTo(p[0], p[1]);
+                        ctx.lineTo(p[0] + p[2] * c, p[1]);
+                        ctx.stroke();
+                    });
+                ctx.fillStyle = 'rgba(34,229,138,.95)';
+                ctx.font = 'bold 12px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+                ctx.fillText('人脸 ✓', x, Math.max(14, y - 7));
+            };
+
+            var runFaceLoop = function () {
+                if (!faceReady || !detectorOptions || !window.faceapi) return;
+                if (faceLoopTimer) clearInterval(faceLoopTimer);
+                faceStatusEl.style.display = 'flex';
+                faceStatusEl.style.background = 'rgba(0,0,0,.55)';
+                faceLoopTimer = setInterval(function () {
+                    if (finished || !stream || video.style.display === 'none' || !video.videoWidth) return;
+                    window.faceapi.detectAllFaces(video, detectorOptions).then(function (dets) {
+                        if (finished) return;
+                        var best = null;
+                        (dets || []).forEach(function (d) {
+                            if (!best || d.box.width * d.box.height > best.box.width * best.box.height) best = d;
+                        });
+                        drawFaceBox(best);
+                        if (best) {
+                            faceStatusEl.style.background = 'rgba(22,160,90,.8)';
+                            faceTextEl.textContent = '人脸已识别';
+                        } else {
+                            faceStatusEl.style.background = 'rgba(200,60,60,.8)';
+                            faceTextEl.textContent = '未检测到人脸，请正对镜头';
+                        }
+                    }).catch(function () { /* 单帧检测失败忽略 */ });
+                }, 450);
+            };
+
+            var stopFaceLoop = function () {
+                if (faceLoopTimer) { clearInterval(faceLoopTimer); faceLoopTimer = null; }
+                try {
+                    var ctx = overlayCanvas.getContext('2d');
+                    ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+                } catch (e) { /* 忽略 */ }
+            };
+
+            // 人脸区域清晰度：灰度拉普拉斯方差（数值越大越清晰）
+            var faceBlurScore = function (srcCanvas, box, fullW, fullH) {
+                var margin = 0.15;
+                var sx = Math.max(0, Math.floor(box.x - box.width * margin));
+                var sy = Math.max(0, Math.floor(box.y - box.height * margin));
+                var sw = Math.min(fullW - sx, Math.ceil(box.width * (1 + 2 * margin)));
+                var sh = Math.min(fullH - sy, Math.ceil(box.height * (1 + 2 * margin)));
+                if (sw < 24 || sh < 24) return 0;
+                var tw = 160, th = Math.max(24, Math.round(tw * sh / sw));
+                var c = document.createElement('canvas');
+                c.width = tw;
+                c.height = th;
+                var cx = c.getContext('2d');
+                cx.drawImage(srcCanvas, sx, sy, sw, sh, 0, 0, tw, th);
+                var data;
+                try { data = cx.getImageData(0, 0, tw, th).data; } catch (e) { return 0; }
+                var gray = new Float32Array(tw * th);
+                for (var i = 0, j = 0; i < data.length; i += 4, j++) {
+                    gray[j] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+                }
+                var sum = 0, sumSq = 0, n = 0;
+                for (var yy = 1; yy < th - 1; yy++) {
+                    for (var xx = 1; xx < tw - 1; xx++) {
+                        var idx = yy * tw + xx;
+                        var v = -4 * gray[idx] + gray[idx - 1] + gray[idx + 1] + gray[idx - tw] + gray[idx + tw];
+                        sum += v;
+                        sumSq += v * v;
+                        n++;
+                    }
+                }
+                if (!n) return 0;
+                var mean = sum / n;
+                return sumSq / n - mean * mean;
+            };
 
             // 枚举可用摄像头（授权后才能拿到设备名称），并识别虚拟摄像头
             var refreshCameraList = function () {
@@ -382,6 +540,10 @@ class AttendanceApp {
                         captureBtn.innerHTML = '<i class="fas fa-camera"></i> 拍摄';
                         captureBtn.onclick = captureHandler;
                         msg.textContent = '请正对镜头，光线充足时拍摄效果更佳';
+                        // 加载人脸检测模型并开始实时检测（加载失败时降级为跳过检测）
+                        ensureFaceModels().then(function (ok) {
+                            if (!finished && ok) runFaceLoop();
+                        });
                     }).catch(function (err) {
                         if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
                             msg.textContent = '相机权限被拒绝。请在浏览器/系统设置中允许摄像头权限后重试。';
@@ -435,25 +597,110 @@ class AttendanceApp {
                 return {ts: ts, iso: now.toISOString()};
             };
 
-            var captureHandler = function () {
+            var captureHandler = async function () {
                 if (isVirtualCamera(cameraInfo.label)) {
                     msg.textContent = '检测到虚拟摄像头，请切换为真实摄像头后再拍摄';
                     return;
                 }
+
+                var canFace = false;
+                try { canFace = await ensureFaceModels(); } catch (e) { canFace = false; }
+
                 var captured = drawCaptured();
                 if (!captured) return;
+
+                var faceMeta = {
+                    detected: false,
+                    skipped: !canFace,
+                    library: 'face-api.js',
+                    capturedAt: captured.iso,
+                    reason: canFace ? '' : 'face_api_unavailable'
+                };
+                var faceBox = null;
+
+                // 人脸检测 + 质量校验（未检测到人脸 / 人脸过小 / 模糊时阻止拍摄）
+                if (canFace && detectorOptions && window.faceapi) {
+                    try {
+                        var det = await window.faceapi.detectSingleFace(canvas, detectorOptions);
+                        if (!det || !det.box) {
+                            msg.textContent = '未检测到人脸，请正对镜头、保证光线充足后重新拍摄';
+                            return;
+                        }
+                        faceBox = det.box;
+                        var ratio = faceBox.width / canvas.width;
+                        if (ratio < FACE_MIN_RATIO) {
+                            msg.textContent = '人脸太小，请靠近摄像头后重新拍摄';
+                            return;
+                        }
+                        var blur = faceBlurScore(canvas, faceBox, canvas.width, canvas.height);
+                        if (blur < FACE_BLUR_MIN) {
+                            msg.textContent = '人脸较模糊（清晰度 ' + Math.round(blur)
+                                + '），请保持稳定、正对镜头并补光后重拍';
+                            return;
+                        }
+                        faceMeta = {
+                            detected: true,
+                            skipped: false,
+                            score: Math.round((det.score || 0) * 1000) / 1000,
+                            blur: Math.round(blur * 10) / 10,
+                            sizeRatio: Math.round(ratio * 10000) / 10000,
+                            box: {
+                                x: Math.round(faceBox.x), y: Math.round(faceBox.y),
+                                width: Math.round(faceBox.width), height: Math.round(faceBox.height)
+                            },
+                            capturedAt: captured.iso,
+                            library: 'face-api.js'
+                        };
+                    } catch (e) {
+                        console.warn('人脸检测失败，跳过检测', e);
+                        canFace = false;
+                        faceMeta.skipped = true;
+                        faceMeta.reason = 'face_detect_error';
+                    }
+                }
+
+                stopFaceLoop();
+                overlayCanvas.style.display = 'none';
+                faceStatusEl.style.display = 'none';
                 canvas.style.display = 'block';
                 video.style.display = 'none';
                 captureBtn.style.display = 'none';
                 retakeBtn.style.display = '';
                 confirmBtn.style.display = '';
-                msg.textContent = '照片已带打卡时间戳，确认无误后点击「使用照片打卡」';
+                msg.textContent = faceMeta.detected
+                    ? '人脸清晰，照片已带打卡时间戳，确认后点击「使用照片打卡」'
+                    : '照片已带打卡时间戳，确认无误后点击「使用照片打卡」';
+
+                // 截取人脸区域（扩展少量边距，正方形输出）用于后续人脸识别数据储备
+                var faceBlobPromise = null;
+                if (faceMeta.detected && faceBox) {
+                    faceBlobPromise = new Promise(function (resolveFace) {
+                        try {
+                            var out = 320, margin = 0.35;
+                            var sx = Math.max(0, faceBox.x - faceBox.width * margin);
+                            var sy = Math.max(0, faceBox.y - faceBox.height * margin);
+                            var ex = Math.min(canvas.width, faceBox.x + faceBox.width * (1 + margin));
+                            var ey = Math.min(canvas.height, faceBox.y + faceBox.height * (1 + margin));
+                            var fc = document.createElement('canvas');
+                            fc.width = out;
+                            fc.height = out;
+                            var fx = fc.getContext('2d');
+                            fx.drawImage(canvas, sx, sy, ex - sx, ey - sy, 0, 0, out, out);
+                            fc.toBlob(function (b) { resolveFace(b || null); }, 'image/jpeg', 0.9);
+                        } catch (e) {
+                            resolveFace(null);
+                        }
+                    });
+                }
+
                 canvas.toBlob(function (blob) {
                     if (!blob) { msg.textContent = '照片生成失败，请重拍'; return; }
                     file = new File([blob], 'clock_photo.jpg', { type: 'image/jpeg' });
-                    // 时间戳与相机信息随照片一起提交：后端用照片时间作为打卡时间
+                    // 时间戳、相机信息、人脸检测结果随照片一起提交
                     file._takenAt = captured.iso;
                     file._cameraInfo = Object.assign({}, cameraInfo);
+                    file._faceMeta = faceMeta;
+                    file._faceBlobPromise = faceBlobPromise;
                 }, 'image/jpeg', 0.92);
             };
             captureBtn.onclick = captureHandler;
@@ -461,13 +708,20 @@ class AttendanceApp {
                 file = null;
                 canvas.style.display = 'none';
                 video.style.display = 'block';
+                overlayCanvas.style.display = 'block';
                 captureBtn.style.display = '';
+                captureBtn.innerHTML = '<i class="fas fa-camera"></i> 拍摄';
+                captureBtn.onclick = captureHandler;
                 retakeBtn.style.display = 'none';
                 confirmBtn.style.display = 'none';
                 msg.textContent = '请正对镜头，光线充足时拍摄效果更佳';
+                if (faceReady) runFaceLoop();
             };
-            confirmBtn.onclick = function () {
+            confirmBtn.onclick = async function () {
                 if (!file) { msg.textContent = '照片尚未生成，请稍后重试或重新拍摄'; return; }
+                if (file._faceBlobPromise) {
+                    try { file._faceBlob = await file._faceBlobPromise; } catch (e) { file._faceBlob = null; }
+                }
                 finish(file);
             };
 
@@ -1063,7 +1317,8 @@ class AttendanceApp {
             return;
         }
         var labels = {late: '迟到', early_leave: '早退', missing_clock: '缺卡', absent: '缺勤', location_abnormal: '地点异常'};
-        var label = labels[anomalyType] || anomalyType;
+        var isWholeDay = (clockType === 'day') || (anomalyType === 'absent');
+        var label = isWholeDay ? '全天缺勤' : (labels[anomalyType] || anomalyType);
         // 同日期同时段已发起过申诉/补卡申请时直接提示，不再重复发起
         try {
             var check = await this.apiGet(OA_API_URL + '/attendance/appeal-status/?date='
@@ -1073,12 +1328,23 @@ class AttendanceApp {
                 return;
             }
         } catch (e) { /* 查询失败不阻断，后端提交时仍会做唯一性校验 */ }
+        // 提交前校验：该日期/卡种确实存在缺卡或考勤异常，避免对正常考勤发起无效申诉
+        try {
+            var elig = await this.apiGet(OA_API_URL + '/attendance/appeal-eligibility/?date='
+                + encodeURIComponent(date || '') + '&clock_type=' + encodeURIComponent(clockType || 'day'));
+            if (elig && elig.eligible === false) {
+                this.showToast(elig.reason || '该日期没有缺卡或考勤异常，无需申诉', true);
+                return;
+            }
+        } catch (e) { /* 查询失败不阻断，后端提交时仍会校验 */ }
 
         var overlay = document.createElement('div');
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
         overlay.innerHTML = '<div style="background:var(--bg-primary,#fff);border-radius:12px;max-width:460px;width:90%;box-shadow:0 12px 48px rgba(0,0,0,.2);">'
             + '<div style="padding:16px 20px;border-bottom:1px solid var(--border-color,#ebeef5);font-size:16px;font-weight:600;"><i class="fas fa-balance-scale" style="color:#e6a23c;"></i> 考勤申诉 · ' + this._escape(date) + ' ' + this._escape(label) + '</div>'
-            + '<div style="padding:16px 20px;"><div style="font-size:13px;color:#909399;margin-bottom:10px;">补卡次数不足或无法补卡时，可提交申诉，审批通过后该异常考勤自动恢复为正常。</div>'
+            + '<div style="padding:16px 20px;"><div style="font-size:13px;color:#909399;margin-bottom:10px;">补卡次数不足或无法补卡时，可提交申诉，审批通过后该异常考勤自动恢复为正常。'
+            + (isWholeDay ? '全天申诉审批通过后将同时补录上班卡与下班卡。' : '')
+            + '</div>'
             + '<textarea id="appealReasonInput" class="form-textarea" rows="4" placeholder="请填写申诉/补卡说明（必填）" style="width:100%;"></textarea></div>'
             + '<div style="padding:12px 20px;border-top:1px solid var(--border-color,#ebeef5);display:flex;gap:8px;justify-content:flex-end;">'
             + '<button class="btn btn-secondary" data-act="cancel">取消</button>'
@@ -1179,6 +1445,7 @@ class AttendanceApp {
             const avatar = d.avatar_url || '/static/images/default-avatar.png';
             const photoFull = d.photo_url || d.photo_compressed_url || '';
             const photoShow = d.photo_compressed_url || d.photo_url || '';
+            var isSuperAdmin = localStorage.getItem('user_type') === 'super_admin';
             let html = '<div class="detail-grid">'
                 + '<div class="detail-item" style="grid-column:1/-1;"><label>用户</label><span style="display:flex;align-items:center;gap:8px;"><img src="' + avatar + '" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">' + this._escape(d.user_name || '') + '</span></div>'
                 + '<div class="detail-item"><label>部门</label><span>' + this._escape(d.department_name || '-') + '</span></div>'
@@ -1199,6 +1466,18 @@ class AttendanceApp {
                     + 'style="max-width:100%;max-height:260px;border-radius:8px;border:1px solid var(--border-color,#ebeef5);cursor:zoom-in;display:block;">'
                     + '<div style="font-size:12px;color:#909399;margin-top:4px;"><i class="fas fa-info-circle"></i> 点击照片放大预览，再次点击返回；预览时右上角可全屏查看</div>'
                     + '</div>' : '')
+                + ((d.face_photo_url && isSuperAdmin)
+                    ? '<div class="detail-item"><label>人脸照片</label>'
+                    + '<img src="' + String(d.face_photo_url).replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '" alt="人脸照片" '
+                    + 'onclick="attendanceApp._showPhotoPreview(this.src)" '
+                    + 'style="width:120px;height:120px;object-fit:cover;border-radius:8px;border:1px solid var(--border-color,#ebeef5);cursor:zoom-in;display:block;">'
+                    + ((d.face_meta && d.face_meta.blur)
+                        ? '<div style="font-size:12px;color:#909399;margin-top:4px;">清晰度 ' + Math.round(d.face_meta.blur)
+                          + (d.face_meta.score ? ' · 置信度 ' + Math.round(d.face_meta.score * 100) + '%' : '') + '</div>'
+                        : '')
+                    + '</div>' : '')
+                + ((d.face_meta && d.face_meta.skipped)
+                    ? '<div class="detail-item"><label>人脸检测</label><span style="color:#e6a23c;">已跳过（组件不可用）</span></div>' : '')
                 + ((d.camera_info && d.camera_info.label)
                     ? '<div class="detail-item"><label>相机设备</label><span>' + this._escape(d.camera_info.label)
                     + (d.camera_info.width ? '（' + this._escape(String(d.camera_info.width)) + '×' + this._escape(String(d.camera_info.height || '')) + '）' : '')
@@ -1715,7 +1994,7 @@ class AttendanceApp {
                 hint.style.background = '#fdf6ec';
                 hint.style.color = '#e6a23c';
             } else {
-                hint.innerHTML = '<i class="fas fa-info-circle"></i> 已展示全部需补卡日期：点击日期后自动识别补上班卡/下班卡；若同日两张卡都需补，会提示选择补哪一张。';
+                hint.innerHTML = '<i class="fas fa-info-circle"></i> 已展示全部需补卡日期：点击日期后自动识别补上班卡/下班卡；若同日两张卡都需补，可选择单独补某一张，或「全天一起补」一次补录两张卡。';
                 hint.style.background = '#ecf5ff';
                 hint.style.color = '#409eff';
             }
@@ -1778,10 +2057,12 @@ class AttendanceApp {
                 autoEl.innerHTML = '<i class="fas fa-check-circle" style="color:#67c23a;"></i> 已自动识别：' + (selTypes[0] === 'clock_in' ? '补上班卡' : '补下班卡');
                 autoEl.style.color = '#303133';
             } else if (!this._mkSelectedType) {
-                autoEl.innerHTML = '<i class="fas fa-exclamation-circle" style="color:#e6a23c;"></i> 该日期上班卡和下班卡均需补卡，请选择要补的卡类型';
+                autoEl.innerHTML = '<i class="fas fa-exclamation-circle" style="color:#e6a23c;"></i> 该日期上班卡和下班卡均需补卡，请选择补上班卡、补下班卡或全天一起补';
                 autoEl.style.color = '#b88230';
             } else {
-                autoEl.innerHTML = '<i class="fas fa-check-circle" style="color:#67c23a;"></i> 当前选择：' + (this._mkSelectedType === 'clock_in' ? '补上班卡' : '补下班卡');
+                var typeText = this._mkSelectedType === 'clock_in' ? '补上班卡'
+                    : (this._mkSelectedType === 'clock_out' ? '补下班卡' : '全天一起补（上班卡 + 下班卡）');
+                autoEl.innerHTML = '<i class="fas fa-check-circle" style="color:#67c23a;"></i> 当前选择：' + typeText;
                 autoEl.style.color = '#303133';
             }
         }
@@ -1800,10 +2081,17 @@ class AttendanceApp {
         if (tipEl) {
             if (this._mkSelectedDate) {
                 if (!this._mkSelectedType) {
-                    tipEl.innerHTML = '<i class="fas fa-info-circle"></i> 该日期上班卡和下班卡均需补卡，请先选择补上班卡或补下班卡';
+                    tipEl.innerHTML = '<i class="fas fa-info-circle"></i> 该日期上班卡和下班卡均需补卡，请先选择补上班卡、补下班卡或全天一起补';
                     tipEl.style.display = 'block';
                     tipEl.style.background = '#fdf6ec';
                     tipEl.style.color = '#b88230';
+                } else if (this._mkSelectedType === 'day') {
+                    tipEl.innerHTML = '<i class="fas fa-clock" style="margin-right:4px;"></i> 将按考勤配置时间 <b>'
+                        + (cfgT.clock_in || '09:00') + '</b> 补上班卡、<b>' + (cfgT.clock_out || '18:00')
+                        + '</b> 补下班卡（' + this._mkSelectedDate + '），消耗 2 次补卡次数';
+                    tipEl.style.display = 'block';
+                    tipEl.style.background = '#f0f9eb';
+                    tipEl.style.color = '#67c23a';
                 } else {
                     var tipT = this._mkSelectedType === 'clock_in' ? (cfgT.clock_in || '09:00') : (cfgT.clock_out || '18:00');
                     tipEl.innerHTML = '<i class="fas fa-clock" style="margin-right:4px;"></i> 将按考勤配置时间 <b>' + tipT + '</b> 补' + (this._mkSelectedType === 'clock_in' ? '上班' : '下班') + '卡（' + this._mkSelectedDate + '）';
@@ -1833,7 +2121,11 @@ class AttendanceApp {
     chooseMakeupType(type) {
         if (!this._mkSelectedDate) { this.showToast('请先选择补卡日期', true); return; }
         var types = (this._mkEligibleTypes && this._mkEligibleTypes[this._mkSelectedDate]) || [];
-        if (types.indexOf(type) === -1) return;
+        if (type === 'day') {
+            if (types.length !== 2) return;  // 仅两张卡都需补时才允许全天一起补
+        } else if (types.indexOf(type) === -1) {
+            return;
+        }
         this._mkSelectedType = type;
         var typeHidden = document.getElementById('makeupClockType');
         if (typeHidden) typeHidden.value = type;
@@ -3907,7 +4199,41 @@ class AttendanceApp {
                 var err = await resp.json();
                 throw new Error(err.error || err.detail || '保存失败');
             }
+            // 保存接口会返回完整配置（含已有打卡范围），用于即时回填范围区块
+            var saved = null;
+            try {
+                var rawSaved = await resp.json();
+                saved = rawSaved && rawSaved.encrypt && window.EncryptUtils
+                    ? window.EncryptUtils.decryptPacket(rawSaved) : rawSaved;
+            } catch (e) { saved = null; }
             this.showToast('考勤配置保存成功', false);
+            // 「显示考勤打卡范围配置」保存后立即生效，无需重新打开配置模态框：
+            // 开启 → 立刻展示范围配置区块并初始化地图；关闭 → 立刻隐藏（同时收起总开关，与后端一致）
+            if (attType === 'global' && this._canSetGeoSwitch) {
+                var visNow = document.getElementById('attGeoConfigVisible');
+                var visibleNow = !!(visNow && visNow.checked);
+                this._geoVisible = visibleNow
+                    && localStorage.getItem('user_type') === 'super_admin';
+                if (!visibleNow) {
+                    this._setGeoSwitch(false);
+                }
+                this._syncGeoSwitchVisibility(this._configAttType);
+                if (this._geoVisible) {
+                    // 之前开关关闭时后端不会下发范围数据；这里用保存接口返回的完整配置回填，
+                    // 否则区块虽然显示了，但历史打卡点会是空的。
+                    var ranges = this._geoRanges || [];
+                    if (saved && (saved.location_ranges_map || saved.location_ranges)) {
+                        ranges = saved.location_ranges_map || saved.location_ranges;
+                    }
+                    this._setGeoSwitch(saved ? saved.location_required === true : false);
+                    var self = this;
+                    // 等区块从 display:none 变为可见后再初始化/校正地图尺寸
+                    setTimeout(function () {
+                        self._setGeoRanges(ranges);
+                        self._ensureGeoMap();
+                    }, 60);
+                }
+            }
             this._loadAttConfigList();
         } catch (e) {
             this.showAlert('保存失败', e.message || '请重试');

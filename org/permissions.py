@@ -35,6 +35,12 @@ class OrgPermission(permissions.BasePermission):
         if view.action == 'switch':
             return True
 
+        # 超级管理员查看企业列表/详情不要求企业成员关系（管理控制台选择所属企业需要）
+        if (view.__class__.__name__ == 'TenantViewSet'
+                and view.action in ('list', 'retrieve')
+                and (user.is_superuser or getattr(user, 'user_type', '') == 'super_admin')):
+            return True
+
         tenant = getattr(request, 'tenant', None)
         if not tenant:
             active = user.get_active_tenant()
@@ -74,6 +80,11 @@ class OrgPermission(permissions.BasePermission):
 
         # switch 动作：get_object 由 get_queryset 保证安全，无需额外检查
         if view.action == 'switch':
+            return True
+
+        # 超级管理员查看企业详情不要求企业成员关系
+        if (view.__class__.__name__ == 'TenantViewSet' and view.action == 'retrieve'
+                and (user.is_superuser or getattr(user, 'user_type', '') == 'super_admin')):
             return True
 
         tenant = getattr(request, 'tenant', None)

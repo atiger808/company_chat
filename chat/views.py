@@ -545,9 +545,16 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+    def _can_manage_group_members(self, chat_room, user):
+        """群主或群管理员可管理群成员。"""
+        if chat_room.creator_id == user.id:
+            return True
+        return ChatRoomUserState.objects.filter(
+            chat_room=chat_room, user=user, is_group_admin=True).exists()
+
     @action(detail=True, methods=['post'])
     def add_member(self, request, pk=None):
-        """添加成员"""
+        """添加成员（群主 / 群管理员）"""
         try:
             chat_room = ChatRoom.objects.get(pk=pk)
         except ChatRoom.DoesNotExist:
@@ -556,8 +563,8 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         if chat_room.room_type != 'group':
             return Response({'error': '只能向群聊添加成员'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if chat_room.creator != request.user:
-            return Response({'error': '只有群主才能添加成员'}, status=status.HTTP_403_FORBIDDEN)
+        if not self._can_manage_group_members(chat_room, request.user):
+            return Response({'error': '只有群主或群管理员才能添加成员'}, status=status.HTTP_403_FORBIDDEN)
 
         member_id = request.data.get('member_id')
 
@@ -578,7 +585,7 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def remove_member(self, request, pk=None):
-        """移除成员"""
+        """移除成员（群主 / 群管理员；群管理员不能移除群主和其他群管理员）"""
         try:
             chat_room = ChatRoom.objects.get(pk=pk)
         except ChatRoom.DoesNotExist:
@@ -587,8 +594,8 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         if chat_room.room_type != 'group':
             return Response({'error': '只能从群聊移除成员'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if chat_room.creator != request.user:
-            return Response({'error': '只有群主才能移除成员'}, status=status.HTTP_403_FORBIDDEN)
+        if not self._can_manage_group_members(chat_room, request.user):
+            return Response({'error': '只有群主或群管理员才能移除成员'}, status=status.HTTP_403_FORBIDDEN)
 
         member_id = request.data.get('member_id')
 
@@ -599,11 +606,32 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
             )
 
         try:
+            member_id = int(member_id)
+            is_owner = chat_room.creator_id == request.user.id
+
             # 不能移除自己
-            if int(member_id) == request.user.id:
+            if member_id == request.user.id:
                 return Response({'error': '不能移除自己'}, status=status.HTTP_400_BAD_REQUEST)
 
+            # 群主不能被任何人移除
+            if member_id == chat_room.creator_id:
+                return Response({'error': '不能移除群主'}, status=status.HTTP_400_BAD_REQUEST)
+
+            target_state = ChatRoomUserState.objects.filter(
+                chat_room=chat_room, user_id=member_id).first()
+            target_is_admin = bool(target_state and target_state.is_group_admin)
+
+            # 群管理员不能移除其他群管理员（群主仍可调整管理员）
+            if target_is_admin and not is_owner:
+                return Response({'error': '群管理员不能移除群管理员'},
+                                status=status.HTTP_403_FORBIDDEN)
+
             chat_room.members.remove(member_id)
+            # 被移出的管理员自动取消管理员身份，避免重新入群后仍保留权限
+            if target_is_admin:
+                ChatRoomUserState.objects.filter(
+                    chat_room=chat_room, user_id=member_id
+                ).update(is_group_admin=False)
             return Response({'status': 'success'})
         except Exception as e:
             return Response(

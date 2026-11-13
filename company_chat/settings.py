@@ -440,7 +440,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20261106-eea7c8b'
+STATIC_VERSION = '20261112-8846f91'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -574,6 +574,8 @@ API_MODEL_MAP = {
     "/api/oa/attendance/clock-in/": "上班打卡",
     "/api/oa/attendance/clock-out/": "下班打卡",
     "/api/oa/attendance/makeup/": "考勤补卡",
+    "/api/oa/attendance/appeal-status/": "考勤申诉状态",
+    "/api/oa/attendance/appeal-eligibility/": "考勤申诉资格校验",
     "/api/oa/attendance/export/": "考勤导出",
     "/api/oa/attendance/<int:pk>/convert-coords/": "坐标转换",
     "/api/oa/attendance/attendance-configs/": "考勤配置列表",
@@ -595,6 +597,7 @@ API_MODEL_MAP = {
     "/api/oa/approval/departments/": "审批部门",
     "/api/oa/approval/all-departments/": "全部部门",
     "/api/oa/approval/org_departments/": "组织部门",
+    "/api/oa/approval/org-departments/": "组织部门",
     "/api/oa/approval/upload-attachment/": "审批附件上传",
     "/api/oa/approval/dept-configs/": "审批配置列表",
     "/api/oa/approval/save-dept-config/": "保存审批配置",
@@ -711,6 +714,7 @@ API_MODEL_MAP = {
     "/api/oa/subsidy/report-pdf/": "普惠补贴-报表导出PDF(整页内容)",
     "/api/oa/work-summary/all/": "每日总结团队列表",
     "/api/oa/work-summary/config/": "每日总结模型配置",
+    "/api/oa/work-summary/team-permissions/": "每日总结团队权限配置",
     "/api/oa/work-summary/members/": "每日总结成员列表",
     "/api/oa/work-summary/range/": "每日总结范围分析",
     "/api/oa/work-summary/range/<int:pk>/": "每日总结范围分析详情",

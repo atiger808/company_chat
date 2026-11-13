@@ -275,7 +275,7 @@ class TenantViewSet(EncryptedResponseMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if user.is_superuser:
+        if user.is_superuser or getattr(user, 'user_type', '') == 'super_admin':
             return Tenant.objects.all().distinct()
         return Tenant.objects.filter(
             memberships__user=user,

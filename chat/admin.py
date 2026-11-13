@@ -20,8 +20,8 @@ class MessageAdmin(admin.ModelAdmin):
 
 @admin.register(ChatRoomUserState)
 class ChatRoomUserStateAdmin(admin.ModelAdmin):
-    list_display = ('id', 'chat_room', 'user', 'is_pinned', 'is_muted', 'updated_at')
-    list_filter = ('is_pinned', 'is_muted')
+    list_display = ('id', 'chat_room', 'user', 'is_group_admin', 'is_pinned', 'is_muted', 'updated_at')
+    list_filter = ('is_pinned', 'is_muted', 'is_group_admin')
     search_fields = ('id', 'user__username', 'user__real_name', 'chat_room__name')
     list_per_page = 20
 

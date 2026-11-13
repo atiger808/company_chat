@@ -1221,6 +1221,32 @@ body {
     color: #999;
 }
 
+/* 工作通知样式 */
+.notif-chat-item {
+
+    position: relative;
+    display: flex;
+    gap: 12px;
+    padding: 14px 16px;
+    /*border-bottom: 1px solid var(--border-color, #f0f0f0);*/
+    border-bottom: 1px solid #ede4e4;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.notif-chat-item:hover {
+    background: #e6f0ff;
+}
+
+.notif-chat-item.notif-item-unread {
+    background: #f0f7ff;
+}
+
+.notif-chat-item.notif-item-unread:hover {
+    background: #e6f0ff;
+}
+
+
 /* 图片消息样式 */
 .message-image {
     max-width: 200px;
@@ -12012,4 +12038,199 @@ body.pwa-mode .sidebar {
 
 [data-theme="dark"] .private-room-tenant-banner strong {
     color: #b3e19d;
+}
+/* 消息朗读按钮（文字转语音） */
+.message-tts-btn {
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.08);
+    color: #666;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s, background 0.2s, color 0.2s;
+}
+.message-wrapper:hover .message-tts-btn { opacity: 1; }
+.message-tts-btn:hover { background: rgba(64, 158, 255, 0.15); color: #409EFF; }
+.message-tts-btn.tts-speaking {
+    opacity: 1;
+    color: #f56c6c;
+    background: rgba(245, 108, 108, 0.14);
+}
+/* 触屏设备：朗读按钮常驻可见，方便手机/平板点击 */
+@media (hover: none) {
+    .message-tts-btn { opacity: 0.2; }
+    .message-tts-btn.tts-speaking { opacity: 1; }
+}
+
+/* 管理控制台聊天历史消息朗读按钮 */
+.history-tts-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    margin-left: 6px;
+    border: none;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.06);
+    color: #909399;
+    cursor: pointer;
+    vertical-align: middle;
+    font-size: 11px;
+    opacity: 0.75;
+    transition: all .15s;
+}
+.history-tts-btn:hover { color: #409EFF; background: rgba(64, 158, 255, 0.12); opacity: 1; }
+.history-tts-btn.tts-speaking { color: #f56c6c; background: rgba(245, 108, 108, 0.14); opacity: 1; }
+
+/* 上滑加载更早消息的悬浮提示（不占据列表布局，避免内容跳动） */
+.history-top-loading {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 40;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid #e4e7ed;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+    color: #606266;
+    font-size: 12px;
+    pointer-events: none;
+    animation: historyLoadFadeIn .18s ease-out;
+}
+.history-top-loading i { color: #409EFF; }
+@keyframes historyLoadFadeIn {
+    from { opacity: 0; transform: translate(-50%, -6px); }
+    to { opacity: 1; transform: translate(-50%, 0); }
+}
+[data-theme="dark"] .history-top-loading {
+    background: rgba(45, 45, 45, 0.96);
+    border-color: #444;
+    color: #c8c8c8;
+}
+
+/* 加载更早消息后的淡入提示（仅透明度，不影响锚点定位） */
+.msg-append-in { animation: msgAppendFadeIn .32s ease-out; }
+@keyframes msgAppendFadeIn {
+    from { opacity: 0.15; }
+    to { opacity: 1; }
+}
+
+/* ==================== 连续朗读：当前消息高亮 + 右侧悬浮停止按钮 ==================== */
+.message-wrapper.tts-reading {
+    background: rgba(124, 77, 255, 0.10);
+    border-radius: 10px;
+    box-shadow: 0 0 0 1px rgba(124, 77, 255, 0.35);
+    transition: background .2s ease, box-shadow .2s ease;
+}
+.message-wrapper.tts-reading .message-text { color: #5b34c9; }
+.history-message.tts-reading {
+    background: rgba(124, 77, 255, 0.10);
+    border-radius: 8px;
+    box-shadow: 0 0 0 1px rgba(124, 77, 255, 0.35);
+    transition: background .2s ease, box-shadow .2s ease;
+}
+
+.continuous-tts-float {
+    position: fixed;
+    right: 24px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 1400;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: 24px;
+    background: linear-gradient(135deg, #7c4dff, #a06bff);
+    color: #fff;
+    box-shadow: 0 8px 24px rgba(124, 77, 255, 0.38);
+    cursor: pointer;
+    user-select: none;
+    animation: ctfIn .22s ease-out;
+}
+.continuous-tts-float:hover { box-shadow: 0 10px 28px rgba(124, 77, 255, 0.5); }
+.ctf-icon { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; }
+.ctf-icon > i { font-size: 15px; position: relative; z-index: 1; }
+.ctf-ring {
+    position: absolute;
+    inset: -5px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.65);
+    animation: ctfPulse 1.5s ease-out infinite;
+}
+.ctf-text { font-size: 12px; white-space: nowrap; }
+.ctf-close { font-size: 11px; opacity: .85; margin-left: 2px; }
+@keyframes ctfPulse {
+    0% { transform: scale(.7); opacity: .9; }
+    70% { transform: scale(1.35); opacity: 0; }
+    100% { transform: scale(1.35); opacity: 0; }
+}
+@keyframes ctfIn {
+    from { opacity: 0; transform: translateY(-50%) scale(.9); }
+    to { opacity: 1; transform: translateY(-50%) scale(1); }
+}
+@media (max-width: 768px) {
+    .continuous-tts-float {
+        right: 12px;
+        top: 50%;
+        bottom: auto;
+        transform: translateY(-50%);
+        padding: 11px;
+        border-radius: 50%;
+        animation: ctfInMobile .22s ease-out;
+    }
+    .ctf-text { display: none; }
+    .ctf-close { display: none; }
+    @keyframes ctfInMobile {
+        from { opacity: 0; transform: translateY(-50%) scale(.85); }
+        to { opacity: 1; transform: translateY(-50%) scale(1); }
+    }
+}
+[data-theme="dark"] .message-wrapper.tts-reading {
+    background: rgba(160, 107, 255, 0.16);
+    box-shadow: 0 0 0 1px rgba(160, 107, 255, 0.45);
+}
+[data-theme="dark"] .message-wrapper.tts-reading .message-text { color: #c9b6ff; }
+[data-theme="dark"] .history-message.tts-reading {
+    background: rgba(160, 107, 255, 0.16);
+    box-shadow: 0 0 0 1px rgba(160, 107, 255, 0.45);
+}
+
+/* 移动端管理控制台历史消息朗读按钮：增大点击区域并常驻可见 */
+@media (hover: none) {
+    .history-tts-btn {
+        width: 30px;
+        height: 30px;
+        font-size: 14px;
+        margin-left: 8px;
+        opacity: 0.25;
+        color: #7c4dff;
+        background: rgba(124, 77, 255, 0.12);
+        touch-action: manipulation;
+    }
+    .message-tts-btn {
+        width: 30px;
+        height: 30px;
+        font-size: 14px;
+        opacity: 0.25;
+        touch-action: manipulation;
+    }
+}
+
+/* 连续朗读当前消息气泡描边（聊天页） */
+.message-wrapper.tts-reading .message-content {
+    outline: 2px solid rgba(124, 77, 255, 0.7);
+    outline-offset: 2px;
+    border-radius: 10px;
 }

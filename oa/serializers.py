@@ -24,6 +24,7 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
     department_name = serializers.SerializerMethodField()
     photo_url = serializers.SerializerMethodField()
     photo_compressed_url = serializers.SerializerMethodField()
+    face_photo_url = serializers.SerializerMethodField()
 
     class Meta:
         model = AttendanceRecord
@@ -34,8 +35,9 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
             'device', 'status', 'status_display', 'remark', 'reverse_geocoding',
             'bd09_latitude', 'bd09_longitude', 'ip_address', 'user_agent',
             'makeup_at', 'photo_url', 'photo_compressed_url', 'camera_info',
+            'face_photo_url', 'face_meta',
         ]
-        read_only_fields = ['user', 'clock_time', 'camera_info']
+        read_only_fields = ['user', 'clock_time', 'camera_info', 'face_meta']
 
     @staticmethod
     def _file_url(obj, field, request):
@@ -53,6 +55,9 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
 
     def get_photo_compressed_url(self, obj):
         return self._file_url(obj, 'photo_compressed', self.context.get('request'))
+
+    def get_face_photo_url(self, obj):
+        return self._file_url(obj, 'face_photo', self.context.get('request'))
 
     def get_user_name(self, obj):
         return obj.user.real_name or obj.user.username

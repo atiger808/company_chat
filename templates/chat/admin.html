@@ -4,15 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理控制台 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/chat.css?v=20261106-eea7c8b">
-    <link rel="stylesheet" href="/static/css/admin.css?v=20261109-chatstats01">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20261112-ttshighlight01">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20261112-ttshighlight01">
 <!--    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">-->
-    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261106-eea7c8b">
+    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261112-8846f91">
 
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260820-d0b2c3e">
     <!-- 🔧 新增：Chart.js 用于图表展示 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>-->
-    <script src="/static/js/dist/chart.min.js?v=20261106-eea7c8b"></script>
+    <script src="/static/js/dist/chart.min.js?v=20261112-8846f91"></script>
     <!-- 🔧 关键修复2: 添加 Chart.js 加载失败的回退方案 -->
     <script>
         // 检查 Chart.js 是否加载成功
@@ -202,7 +202,7 @@
                 </div>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="adminConsole.toggleUserDropdown(event)">
                     <span id="adminUsername" class="btn-text"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20261106-eea7c8b" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20261112-8846f91" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu show" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item"
@@ -843,7 +843,7 @@
                     </div>
 
                     <div class="form-group" id="createTenantGroup">
-                        <label>所属企业</label>
+                        <label>所属企业 <span class="required">*</span></label>
                         <div class="input-with-icon">
                             <i class="fas fa-building"></i>
                             <select id="newTenant" class="form-select" onchange="adminConsole.onTenantChange('new')">
@@ -857,7 +857,7 @@
                     </div>
 
                 </div>
-                <div class="form-row">
+                <div class="form-row" id="createTenantRoleRow">
                     <!-- 🔧 关键修复：部门字段添加权限控制 -->
                     <div class="form-group" id="createDepartmentGroup">
                         <label>部门</label>
@@ -869,10 +869,26 @@
                             </select>
                         </div>
 
-                        <small class="form-hint" id="createDepartmentHint" style="display:none;">
-                            <i class="fas fa-info-circle"></i> 普通管理员只能创建同部门用户
+                        <small class="form-hint" id="createDepartmentHint">
+                            <i class="fas fa-info-circle"></i> 所选部门将自动设为该用户的主部门
                         </small>
                     </div>
+
+                    <div class="form-group" id="createTenantRoleGroup">
+                        <label>企业角色</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-user-shield"></i>
+                            <select id="newEnterpriseRole" class="form-select">
+                                <option value="member">普通成员</option>
+                                <option value="dept_admin">部门管理员</option>
+                                <option value="admin">企业管理员</option>
+                                <option value="owner">企业所有者</option>
+                            </select>
+                        </div>
+                        <small class="form-hint">用户在该企业中的角色，默认普通成员</small>
+                    </div>
+                </div>
+                <div class="form-row">
 
                     <div class="form-group">
                         <label>职位</label>
@@ -883,8 +899,6 @@
                         </div>
                     </div>
 
-                </div>
-                <div class="form-row">
                     <div class="form-group" id="createUserTypeGroup">
                         <label>用户类型 <span class="required">*</span></label>
 
@@ -901,7 +915,9 @@
                         </small>
                     </div>
 
+
                 </div>
+
 
 
                 <!-- 好友分配区域 -->
@@ -1012,7 +1028,7 @@
 
                     <!-- 所属企业 -->
                     <div class="form-group" id="editTenantGroup">
-                        <label>所属企业</label>
+                        <label>所属企业 <span class="required">*</span></label>
                         <div class="input-with-icon">
                             <i class="fas fa-building"></i>
                             <select id="editTenant" class="form-select" onchange="adminConsole.onTenantChange('edit')">
@@ -1036,15 +1052,27 @@
                             </select>
                         </div>
 
-                        <small class="form-hint" id="editDepartmentHint" style="display:none;">
-                            <i class="fas fa-lock"></i> 普通管理员不能修改部门
+                        <small class="form-hint" id="editDepartmentHint">
+                            <i class="fas fa-info-circle"></i> 所选部门将自动设为该用户的主部门
                         </small>
                     </div>
 
 
                 </div>
-                <div class="form-row">
-
+                <div class="form-row" id="editTenantRoleRow">
+                    <div class="form-group" id="editTenantRoleGroup">
+                        <label>企业角色</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-user-shield"></i>
+                            <select id="editEnterpriseRole" class="form-select">
+                                <option value="member">普通成员</option>
+                                <option value="dept_admin">部门管理员</option>
+                                <option value="admin">企业管理员</option>
+                                <option value="owner">企业所有者</option>
+                            </select>
+                        </div>
+                        <small class="form-hint">用户在该企业中的角色，默认普通成员</small>
+                    </div>
                     <div class="form-group">
                         <label>职位</label>
 
@@ -1053,6 +1081,8 @@
                             <input type="text" id="editPosition">
                         </div>
                     </div>
+                </div>
+                <div class="form-row">
 
                     <!-- 🔧 关键修复：用户类型字段添加权限控制 -->
                     <div class="form-group" id="editUserTypeGroup">
@@ -1157,18 +1187,19 @@
         <div class="spinner"></div>
     </div>
 </div>
-<script src="/static/js/dist/spark-md5.min.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/dist/sm4.min.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/encrypts.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/utils.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/api.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/admin.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/admin_chat_rooms.js?v=20261106-eea7c8c"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20261112-8846f91"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20261112-8846f91"></script>
+<script src="/static/js/dist/sm4.min.js?v=20261112-8846f91"></script>
+<script src="/static/js/encrypts.js?v=20261112-8846f91"></script>
+<script src="/static/js/utils.js?v=20261112-8846f91"></script>
+<script src="/static/js/api.js?v=20261112-8846f91"></script>
+<script src="/static/js/admin.js?v=20261112-tts01"></script>
+<script src="/static/js/tts.js?v=20261112-ttshighlight01"></script>
+<script src="/static/js/admin_chat_rooms.js?v=20261112-continuous03"></script>
 <!-- 🔧 新增：数据统计和系统设置 JS -->
-<script src="/static/js/admin_statistics.js?v=20261109-chatstats01"></script>
-<script src="/static/js/admin_settings.js?v=20261106-eea7c8b"></script>
-<script src="/static/js/notifications.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/admin_statistics.js?v=20261112-8846f91"></script>
+<script src="/static/js/admin_settings.js?v=20261112-8846f91"></script>
+<script src="/static/js/notifications.js?v=20261112-8846f91"></script>
 
 
 <script>
@@ -1182,9 +1213,11 @@
                 if (chatRoomsNavItem) {
                     chatRoomsNavItem.style.display = 'flex';
                 }
-                // 初始化聊天室管理客户端
-                if (typeof AdminChatRoomsClient !== 'undefined') {
+                // 初始化聊天室管理客户端（单例，避免覆盖已加载的历史消息）
+                if (typeof AdminChatRoomsClient !== 'undefined' && !window.adminChatRoomsClient) {
                     window.adminChatRoomsClient = new AdminChatRoomsClient();
+                } else if (window.adminChatRoomsClient && !window.adminChatRoomsClient.isInitialized) {
+                    window.adminChatRoomsClient.init();
                 }
             }
         }
@@ -1397,6 +1430,20 @@
                 <input type="number" id="annArchiveDays" class="form-input" value="1" min="1" max="365" style="max-width:160px;">
                 <div style="font-size:12px;color:#909399;margin-top:4px;">单位：天（发布满 N 天后归档）。默认 1 天，可填 1~365 天。</div>
             </div>
+            <div class="form-group">
+                <label class="switch-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="annVoiceEnabled" style="width:16px;height:16px;cursor:pointer;"
+                           onchange="adminConsole._updateAnnVoiceUi()">
+                    <span><i class="fas fa-volume-up" style="color:#7c4dff;"></i> 启用公告语音播放（公告详情显示「朗读」按钮）</span>
+                </label>
+            </div>
+            <div class="form-group" id="annVoiceAutoplayGroup" style="display:none;">
+                <label class="switch-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input type="checkbox" id="annVoiceAutoplay" style="width:16px;height:16px;cursor:pointer;">
+                    <span><i class="fas fa-play-circle" style="color:#52c41a;"></i> 打开公告时自动语音播放（默认开启）</span>
+                </label>
+                <div style="font-size:12px;color:#909399;margin-top:4px;">使用浏览器语音合成播报公告标题与正文；关闭后仅保留手动「朗读」按钮。</div>
+            </div>
             <div style="border-top:1px solid var(--border-color,#ebeef5);padding-top:12px;margin-top:6px;">
                 <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">
                     <i class="fas fa-user-shield" style="color:#409eff;"></i> 可发布公告的成员（超级管理员始终可发布）
@@ -1541,9 +1588,9 @@
     </div>
 </div>
 
-<script src="/static/js/watermark.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/watermark.js?v=20261112-8846f91"></script>
 <script>WatermarkManager.init();</script>
-<script src="/static/js/agent.js?v=20261106-eea7c8b"></script>
+<script src="/static/js/agent.js?v=20261112-8846f91"></script>
 <script>AgentManager.init();</script>
 </body>
 </html>
