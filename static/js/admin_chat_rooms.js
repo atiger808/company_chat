@@ -1198,25 +1198,7 @@ class AdminChatRoomsClient {
         if (!items.length) return;
         if (idx < 0) idx = 0;
         this._continuousTTS = {items: items, index: idx, active: true, currentId: null};
-        this._showContinuousTTSFloat();
         this._speakContinuousQueue();
-    }
-
-    _showContinuousTTSFloat() {
-        if (document.getElementById('continuousTtsFloat')) return;
-        const el = document.createElement('div');
-        el.id = 'continuousTtsFloat';
-        el.className = 'continuous-tts-float';
-        el.title = '点击停止连续朗读';
-        el.innerHTML = '<span class="ctf-icon"><i class="fas fa-volume-up"></i><span class="ctf-ring"></span></span>'
-            + '<span class="ctf-text">连续朗读中</span>'
-            + '<i class="fas fa-times ctf-close"></i>';
-        const self = this;
-        el.onclick = function (e) {
-            e.stopPropagation();
-            self.stopContinuousTTS();
-        };
-        document.body.appendChild(el);
     }
 
     _highlightTTSMessage(msg) {
@@ -1239,6 +1221,10 @@ class AdminChatRoomsClient {
         this._highlightTTSMessage(list[0]);
 
         const self = this;
+        // 用户通过悬浮面板停止时，同步清理页面高亮与连续朗读状态
+        if (window.BrowserTTS) {
+            BrowserTTS.onStop = function () { self.stopContinuousTTS(); };
+        }
         let lastStarted = -1;
         const entries = list.map(function (msg) {
             const text = self._historyMessageText(msg);
@@ -1248,7 +1234,7 @@ class AdminChatRoomsClient {
         console.log('[连续朗读] 本次入队消息数:', entries.length);
         // 一次性入队，避免 iOS 在异步回调中续播被拦截
         const ok = BrowserTTS.speakSequence(entries, {
-            lang: 'zh-CN', rate: 1,
+            lang: 'zh-CN',
             onItemStart: function (index, msg) {
                 if (self._continuousTTS !== st) return;
                 lastStarted = index;
@@ -1283,10 +1269,11 @@ class AdminChatRoomsClient {
 
     stopContinuousTTS() {
         this._continuousTTS = null;
-        if (window.BrowserTTS) BrowserTTS.stop();
+        if (window.BrowserTTS) {
+            BrowserTTS.onStop = null;
+            BrowserTTS.stop();
+        }
         document.querySelectorAll('.history-message.tts-reading').forEach(el => el.classList.remove('tts-reading'));
-        const f = document.getElementById('continuousTtsFloat');
-        if (f) f.remove();
     }
 
     // 🔧 新增：渲染历史消息中的引用消息（支持媒体直接渲染和文件滚动定位）

@@ -3358,7 +3358,7 @@ class ChatClient {
                     </div>
                     
                     <!-- 卡片底部 -->
-                    <div style="padding: 8px 16px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;"
+                    <div style="padding: 8px 8px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;"
                         onclick="window.open('/tasks/?task_id=${task.id}', '_blank')">
                         点击查看详情 <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
                     </div>
@@ -3422,7 +3422,7 @@ class ChatClient {
                 </div>
 
                 <!-- 卡片底部 -->
-                <div style="padding: 8px 16px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;"
+                <div style="padding: 8px 8px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;"
                     onclick="window.open('/tasks/?task_id=${task.id}', '_blank')">
                     点击查看详情 <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
                 </div>
@@ -3485,7 +3485,7 @@ class ChatClient {
                     </div>` : ''}
                 </div>
                 <!-- 卡片底部 -->
-                <div style="padding: 8px 16px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;">
+                <div style="padding: 8px 8px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;">
                     点击查看审批 <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
                 </div>
             </div>
@@ -3528,7 +3528,7 @@ class ChatClient {
                     <div style="font-size: 12px; color: #606266; line-height: 1.6; margin-bottom: 8px; max-height: 60px; overflow: hidden;">${content}</div>
                     ${analysis ? `<div style="font-size: 12px; color: #7c4dff; line-height: 1.6; background:#f8f6ff; border-radius:6px; padding:8px 10px; max-height: 72px; overflow: hidden;">🤖 ${analysis}</div>` : ''}
                 </div>
-                <div style="padding: 8px 16px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;">
+                <div style="padding: 8px 8px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;">
                     点击查看每日总结 <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
                 </div>
             </div>
@@ -3572,7 +3572,7 @@ class ChatClient {
                         <i class="fas fa-user-circle" style="width: 14px;"></i> ${inviter} 邀请你参与协作
                     </div>
                 </div>
-                <div style="padding: 8px 16px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;">
+                <div style="padding: 8px 8px; background: #fafafa; border-top: 1px solid #f0f0f0; font-size: 12px; color: #909399; text-align: center;">
                     点击${openText} <i class="fas fa-external-link-alt" style="margin-left: 4px;"></i>
                 </div>
             </div>
@@ -13251,24 +13251,7 @@ class ChatClient {
         var idx = items.findIndex(m => String(m.id) === String(startMessage.id));
         if (idx < 0) idx = 0;
         this._continuousTTS = {items: items, index: idx, active: true, currentId: null};
-        this._showContinuousTTSFloat();
         this._speakContinuousQueue();
-    }
-
-    _showContinuousTTSFloat() {
-        if (document.getElementById('continuousTtsFloat')) return;
-        var el = document.createElement('div');
-        el.id = 'continuousTtsFloat';
-        el.className = 'continuous-tts-float';
-        el.title = '点击停止连续朗读';
-        el.innerHTML = '<span class="ctf-icon"><i class="fas fa-volume-up"></i><span class="ctf-ring"></span></span>'
-            + '<span class="ctf-text">连续朗读中</span>'
-            + '<i class="fas fa-times ctf-close"></i>';
-        el.onclick = function (e) {
-            e.stopPropagation();
-            chatClient.stopContinuousTTS();
-        };
-        document.body.appendChild(el);
     }
 
     _highlightTTSMessage(msg) {
@@ -13293,6 +13276,10 @@ class ChatClient {
         this._highlightTTSMessage(list[0]);
 
         var self = this;
+        // 用户通过悬浮面板停止时，同步清理页面高亮与连续朗读状态
+        if (window.BrowserTTS) {
+            BrowserTTS.onStop = function () { self.stopContinuousTTS(); };
+        }
         var lastStarted = -1;
         var entries = list.map(function (msg) {
             var text = self._messageTtsText(msg);
@@ -13301,7 +13288,7 @@ class ChatClient {
         });
         // 一次性入队，iOS/移动端不会因异步回调续播被系统拦截
         var ok = BrowserTTS.speakSequence(entries, {
-            lang: 'zh-CN', rate: 1,
+            lang: 'zh-CN',
             onItemStart: function (index, msg) {
                 if (self._continuousTTS !== st) return;
                 lastStarted = index;
@@ -13335,12 +13322,13 @@ class ChatClient {
 
     stopContinuousTTS() {
         this._continuousTTS = null;
-        if (window.BrowserTTS) BrowserTTS.stop();
+        if (window.BrowserTTS) {
+            BrowserTTS.onStop = null;
+            BrowserTTS.stop();
+        }
         document.querySelectorAll('.message-wrapper.tts-reading').forEach(function (x) {
             x.classList.remove('tts-reading');
         });
-        var f = document.getElementById('continuousTtsFloat');
-        if (f) f.remove();
     }
 
     speakSelectedMessage() {

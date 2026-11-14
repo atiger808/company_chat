@@ -806,7 +806,7 @@ class WorkSummaryApp {
         var body = analysis ? analysis.querySelector('.ws-analysis-body') : null;
         var text = body ? (body.innerText || body.textContent || '') : '';
         if (!text.trim()) { this.toast('暂无可朗读内容', true); return; }
-        BrowserTTS.toggle(text, btn, {lang: 'zh-CN', rate: 1});
+        BrowserTTS.toggle(text, btn, {lang: 'zh-CN'});
     }
 
     // 分析完成后自动播放（仅当超管开启语音播放 + 自动播放；每个结果容器只播一次）
@@ -821,7 +821,7 @@ class WorkSummaryApp {
         this._ttsAutoPlayed[key] = true;
         var btn = el ? el.querySelector('.tts-btn') : null;
         if (!btn) btn = document.querySelector('#wsDetailAnalysis .tts-btn');
-        BrowserTTS.speak(text, {lang: 'zh-CN', rate: 1, button: btn});
+        BrowserTTS.speak(text, {lang: 'zh-CN', button: btn});
     }
 
     _analysisHtml(s) {

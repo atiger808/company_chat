@@ -50,7 +50,7 @@ class MessageDeleteStatusAdmin(admin.ModelAdmin):
 @admin.register(FileUpload)
 class FileUploadAdmin(admin.ModelAdmin):
     list_display = ('id', 'md5', 'filename', 'size', 'mime_type', 'uploaded_by', 'created_at')
-    list_filter = ('uploaded_by', 'mime_type')
+    list_filter = ('mp3_status', 'mp3_converted', 'is_sync_to_cloud', 'mime_type')
     search_fields = ('filename', 'md5', 'id')
     list_per_page = 20
 

@@ -172,6 +172,7 @@ class Utils {
         'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp',
         // dng图片类型
         'image/dng',
+        'image/tiff',
         'application/pdf',
         'text/plain',
         'text/html',
@@ -214,6 +215,7 @@ class Utils {
             file.name.toLowerCase().endsWith('.pptx') ||
             file.name.toLowerCase().endsWith('.odt') ||
             file.name.toLowerCase().endsWith('.dng') ||
+            file.name.toLowerCase().endsWith('.tiff') ||
             file.name.toLowerCase().endsWith('.csv');
     }
 
@@ -223,7 +225,7 @@ class Utils {
         const ext = filename.toLowerCase().split('.').pop();
 
         // 图片
-        if (type.includes('image') || ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext)) {
+        if (type.includes('image') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'dng', 'tiff'].includes(ext)) {
             return 'fas fa-image';
         }
         // PDF
@@ -239,15 +241,15 @@ class Utils {
             return 'fas fa-file-word';
         }
         // 视频
-        if (type.includes('video') || ['mp4', 'avi', 'mov', 'wmv', 'mkv', 'flv'].includes(ext)) {
+        if (type.includes('video') || ['webm', 'mp4', 'avi', 'mov', 'wmv', 'mkv', 'flv'].includes(ext)) {
             return 'fas fa-file-video';
         }
         // 音频
-        if (type.includes('audio') || ['mp3', 'wav', 'ogg', 'm4a'].includes(ext)) {
+        if (type.includes('audio') || ['webm', 'mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'].includes(ext)) {
             return 'fas fa-file-audio';
         }
         // 压缩包
-        if (type.includes('zip') || type.includes('rar') || ['zip', 'rar'].includes(ext)) {
+        if (type.includes('zip') || type.includes('rar') || ['zip', 'rar', 'gz'].includes(ext)) {
             return 'fas fa-file-archive';
         }
         // 文本

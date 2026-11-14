@@ -1562,7 +1562,7 @@ class FileUploadView(APIView):
         # 🔧 关键修复4: 验证文件格式白名单
         if file_category == 'image':
             allowed_formats = SystemConfigManager.get_config('file.image_formats',
-                                                             ['jpg', 'jpeg', 'png', 'gif', 'webp'])
+                                                             ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'dng', 'tiff'])
             file_ext = file.name.split('.')[-1].lower() if '.' in file.name else ''
             if file_ext and file_ext not in allowed_formats:
                 return Response({
@@ -1570,7 +1570,7 @@ class FileUploadView(APIView):
                 }, status=status.HTTP_400_BAD_REQUEST)
 
         elif file_category == 'video':
-            allowed_formats = SystemConfigManager.get_config('file.video_formats', ['mp4', 'webm', 'mov'])
+            allowed_formats = SystemConfigManager.get_config('file.video_formats', ['webm', 'mp4', 'avi', 'mov', 'wmv', 'mkv', 'flv'])
             file_ext = file.name.split('.')[-1].lower() if '.' in file.name else ''
             if file_ext and file_ext not in allowed_formats:
                 return Response({
@@ -1578,7 +1578,7 @@ class FileUploadView(APIView):
                 }, status=status.HTTP_400_BAD_REQUEST)
 
         elif file_category == 'audio':
-            allowed_formats = SystemConfigManager.get_config('voice.allowed_formats', ['webm', 'mp3', 'm4a', 'ogg'])
+            allowed_formats = SystemConfigManager.get_config('voice.allowed_formats', ['webm', 'mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'])
             file_ext = file.name.split('.')[-1].lower() if '.' in file.name else ''
             if file_ext and file_ext not in allowed_formats:
                 return Response({

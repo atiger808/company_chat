@@ -12126,7 +12126,7 @@ body.pwa-mode .sidebar {
     to { opacity: 1; }
 }
 
-/* ==================== 连续朗读：当前消息高亮 + 右侧悬浮停止按钮 ==================== */
+/* ==================== 连续朗读：当前消息高亮（悬浮控制面板样式由 tts.js 注入） ==================== */
 .message-wrapper.tts-reading {
     background: rgba(124, 77, 255, 0.10);
     border-radius: 10px;
@@ -12141,62 +12141,6 @@ body.pwa-mode .sidebar {
     transition: background .2s ease, box-shadow .2s ease;
 }
 
-.continuous-tts-float {
-    position: fixed;
-    right: 24px;
-    top: 50%;
-    transform: translateY(-50%);
-    z-index: 1400;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 14px;
-    border-radius: 24px;
-    background: linear-gradient(135deg, #7c4dff, #a06bff);
-    color: #fff;
-    box-shadow: 0 8px 24px rgba(124, 77, 255, 0.38);
-    cursor: pointer;
-    user-select: none;
-    animation: ctfIn .22s ease-out;
-}
-.continuous-tts-float:hover { box-shadow: 0 10px 28px rgba(124, 77, 255, 0.5); }
-.ctf-icon { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; }
-.ctf-icon > i { font-size: 15px; position: relative; z-index: 1; }
-.ctf-ring {
-    position: absolute;
-    inset: -5px;
-    border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.65);
-    animation: ctfPulse 1.5s ease-out infinite;
-}
-.ctf-text { font-size: 12px; white-space: nowrap; }
-.ctf-close { font-size: 11px; opacity: .85; margin-left: 2px; }
-@keyframes ctfPulse {
-    0% { transform: scale(.7); opacity: .9; }
-    70% { transform: scale(1.35); opacity: 0; }
-    100% { transform: scale(1.35); opacity: 0; }
-}
-@keyframes ctfIn {
-    from { opacity: 0; transform: translateY(-50%) scale(.9); }
-    to { opacity: 1; transform: translateY(-50%) scale(1); }
-}
-@media (max-width: 768px) {
-    .continuous-tts-float {
-        right: 12px;
-        top: 50%;
-        bottom: auto;
-        transform: translateY(-50%);
-        padding: 11px;
-        border-radius: 50%;
-        animation: ctfInMobile .22s ease-out;
-    }
-    .ctf-text { display: none; }
-    .ctf-close { display: none; }
-    @keyframes ctfInMobile {
-        from { opacity: 0; transform: translateY(-50%) scale(.85); }
-        to { opacity: 1; transform: translateY(-50%) scale(1); }
-    }
-}
 [data-theme="dark"] .message-wrapper.tts-reading {
     background: rgba(160, 107, 255, 0.16);
     box-shadow: 0 0 0 1px rgba(160, 107, 255, 0.45);

@@ -923,7 +923,7 @@ class AnnouncementApp {
         var title = this._currentAnn ? (this._currentAnn.title || '') : '';
         var speakText = (title ? title + '。' : '') + text;
         if (!speakText.trim()) { this.showToast('暂无可朗读内容', true); return; }
-        BrowserTTS.toggle(speakText, btn, {lang: 'zh-CN', rate: 1});
+        BrowserTTS.toggle(speakText, btn, {lang: 'zh-CN'});
     }
 
     _autoPlayAnnouncement() {
@@ -940,7 +940,7 @@ class AnnouncementApp {
             var speakText = (title ? title + '。' : '') + text;
             if (!speakText.trim()) return;
             BrowserTTS.speak(speakText, {
-                lang: 'zh-CN', rate: 1,
+                lang: 'zh-CN',
                 button: document.querySelector('#annDetailBody .tts-btn')
             });
         }, 350);
