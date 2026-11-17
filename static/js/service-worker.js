@@ -2,7 +2,7 @@
 // @Desc   :PWA Service Worker - Web Push + SWR 缓存 + 离线回退
 
 // 每次部署递增此版本号（SW 文件字节变化即可触发更新，但显式版本更可靠）
-const STATIC_VERSION = '20260808-pwa11';
+const STATIC_VERSION = '20261118-reminder08';
 const CACHE = 'company-chat-' + STATIC_VERSION;
 const SHELL_CACHE = CACHE + '-shell';
 
@@ -11,12 +11,25 @@ const PRECACHE = [
     '/chat/',
     '/login/',
     '/manifest.json',
+    '/static/js/app-common.js',
+    '/static/js/chat-version.js',
     '/static/js/chat.js',
+    '/static/js/chat-realtime.js',
+    '/static/js/chat-render.js',
+    '/static/js/chat-modals.js',
+    '/static/js/chat-search-groups.js',
+    '/static/js/chat-ui-context.js',
+    '/static/js/chat-workorder.js',
+    '/static/js/workorder-ui.js',
+    '/static/js/chat-call.js',
+    '/static/js/chat-boot.js',
     '/static/js/api.js',
     '/static/js/utils.js',
     '/static/js/notifications.js',
+    '/static/js/notification-waterfall.js',
     '/static/js/push.js',
     '/static/css/chat.css',
+    '/static/css/workorder.css',
     '/static/images/default-avatar.png',
     '/static/images/notification-badge.png'
 ];

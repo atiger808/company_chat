@@ -2318,7 +2318,8 @@ class ChatRoomAdminViewSet(viewsets.ModelViewSet):
             message_type = request.query_params.get('message_type')
             if message_type:
                 valid_types = ['text', 'image', 'file', 'video', 'voice', 'audio', 'location', 'emoji',
-                               'task_card', 'approval_card', 'work_summary_card', 'collab_card']
+                               'task_card', 'approval_card', 'work_summary_card', 'collab_card',
+                               'work_order_card', 'work_order_notice']
                 if message_type not in valid_types:
                     return Response(
                         {'error': f'无效的消息类型，有效类型: {", ".join(valid_types)}'},

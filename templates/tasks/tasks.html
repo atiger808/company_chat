@@ -6,8 +6,8 @@
     <title>任务中心 - 义乌吉通集团</title>
     <link rel="icon" type="image/svg+xml" href="/media/avatars/tasks-blue.svg?v=20260820-d0a1b2c">
     <!-- 复用项目基础样式 -->
-    <link rel="stylesheet" href="/static/css/chat_auth.css?v=20261112-8846f91">
-    <link rel="stylesheet" href="/static/css/tasks.css?v=20261112-8846f91">
+    <link rel="stylesheet" href="/static/css/tasks.css?v=20261117-bb2128c">
+    <link rel="stylesheet" href="/static/css/workorder.css?v=20261117-bb2128c">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- 引入 SortableJS 用于看板拖拽 -->
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
@@ -18,127 +18,22 @@
 <!-- 侧边栏遮罩层（移动端） -->
 <div class="sidebar-overlay" id="sidebarOverlay" onclick="taskApp.toggleSidebar()"></div>
 
-<!-- 顶部导航 -->
-<header class="task-header">
-    <div class="header-left">
-        <button class="nav-btn sidebar-toggle btn-icon" onclick="taskApp.toggleSidebar()" title="切换侧边栏">
-            <i class="fas fa-bars"></i>
-        </button>
-        <a href="/" class="nav-btn btn-text" title="返回官网主页"><i class="fas fa-home"></i> <span class="btn-text">官网</span></a>
-        <a href="/chat/" class="nav-btn" title="进入聊天室"><i class="fas fa-comments"></i> <span class="btn-text">聊天室</span></a>
-        <a href="/cloud/" class="nav-btn btn-text" title="进入企业云网盘"><i class="fas fa-cloud"></i> <span class="btn-text">云网盘</span></a>
-
-        <a href="/oa/approval/" class="nav-btn btn-text"><i class="fas fa-check-double"></i> <span class="btn-text">OA审批</span></a>
-        <a href="/oa/attendance/" class="nav-btn btn-text"><i class="fas fa-clock"></i> <span class="btn-text">考勤</span></a>
-        <a href="/oa/subsidy/" class="nav-btn"><i class="fas fa-hand-holding-usd"></i> <span class="btn-text">普惠补贴</span></a>
-        <a href="/oa/work-calendar/" class="nav-btn btn-text"><i class="fas fa-calendar-alt"></i> <span class="btn-text">工作日历</span></a>
-        <a href="/oa/work-summary/" class="nav-btn"><i class="fas fa-file-signature"></i> <span class="btn-text">每日总结</span></a>
-        <a href="/oa/announcements/" class="nav-btn btn-text"><i class="fas fa-bullhorn"></i> <span class="btn-text">集团公告</span></a>
-    </div>
-    <div class="header-center btn-text">
-        <h1><i class="fas fa-tasks"></i> 任务中心</h1>
-    </div>
-    <div class="header-right">
-        <button class="btn-icon" id="themeToggleBtn" title="切换主题" onclick="taskApp.toggleTheme()"
-                style="border:none;background:transparent;cursor:pointer;font-size:16px;color:var(--text-secondary);">
-            <i class="fas fa-moon"></i>
-        </button>
-        <div class="notif-bell-wrap" id="notifBellWrap" title="工作通知" style="margin-right:4px;">
-            <i class="fas fa-bell"></i>
-            <span class="notif-badge hide" id="notifBadge">0</span>
-        </div>
-        <div class="user-info" id="currentUser" title="当前用户" onclick="taskApp.toggleUserDropdown(event)">
-            <img src="/static/images/default-avatar.png?v=20261112-8846f91" alt="头像" class="user-avatar">
-            <span class="user-name btn-text">加载中...</span>
-            <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
-            <div class="user-dropdown" id="userDropdown" style="display:none;">
-                <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/attendance/'">
-                    <i class="fas fa-clock"></i> 考勤打卡
-                </div>
-                <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/approval/'">
-                    <i class="fas fa-check-double"></i> OA审批
-                </div>
-                <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/subsidy/'">
-                    <i class="fas fa-hand-holding-usd"></i> 普惠补贴
-                </div>
-
-                <div class="dropdown-divider"></div>
-
-                <div class="dropdown-item" id="workCalendarBtn" onclick="event.stopPropagation();window.location.href='/oa/work-calendar/'">
-                    <i class="fas fa-calendar-alt"></i> 工作日历
-                </div>
-
-                <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/work-summary/'">
-                    <i class="fas fa-file-signature"></i> 每日工作总结
-                </div>
-
-                <div class="dropdown-divider"></div>
-
-                <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/announcements/'">
-                    <i class="fas fa-bullhorn" style="color:#7c4dff;"></i> 集团公告
-                </div>
-
-                <div class="dropdown-item" id="knowledgeBaseBtn" onclick="event.stopPropagation();window.location.href='/docs/'">
-                    <i class="fas fa-book" style="color:#409eff;"></i>
-                    <span>企业知识库</span>
-                </div>
-
-                <div class="dropdown-divider"></div>
-
-                <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/chat/'">
-                    <i class="fas fa-comments"></i> 聊天
-                </div>
-                <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/cloud/'">
-                    <i class="fas fa-cloud"></i> 网盘
-                </div>
-
-                <div class="dropdown-divider"></div>
-
-                <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/tasks/'">
-                    <i class="fas fa-tasks"></i> 任务
-                </div>
-
-                <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/org/'">
-                    <i class="fas fa-sitemap"></i> 组织架构
-                </div>
-
-                <div class="dropdown-divider"></div>
-
-                <div class="dropdown-item" id="adminConsoleBtn" style="display:none;" onclick="event.stopPropagation();window.location.href='/control/'">
-                    <i class="fas fa-shield-alt"></i> 管理控制台
-                </div>
-
-
-                <div class="dropdown-item text-danger" onclick="event.stopPropagation();taskApp.logout()">
-                    <i class="fas fa-sign-out-alt"></i> 退出登录
-                </div>
-            </div>
-        </div>
-        <!-- 仅管理员/超级管理员显示「管理控制台」 -->
-        <script>
-            (function () {
-                var t = localStorage.getItem('user_type');
-                if (t === 'admin' || t === 'super_admin') {
-                    var b = document.getElementById('adminConsoleBtn');
-                    if (b) b.style.display = 'flex';
-                }
-            })();
-        </script>
-    </div>
-</header>
-
 <div class="task-container">
     <!-- 左侧边栏 -->
     <aside class="task-sidebar" id="taskSidebar">
         <div class="sidebar-header">
-            <div class="sidebar-header-row">
-                <button class="btn btn-primary btn-new-task" onclick="taskApp.openCreateModal()">
-                    <i class="fas fa-plus"></i> 新建任务
-                </button>
-                <button class="sidebar-close-btn" onclick="taskApp.toggleSidebar()" title="关闭侧边栏">
-                    <i class="fas fa-times"></i>
-                </button>
-            </div>
+            <a href="/" class="task-logo" title="返回官网主页">
+                <i class="fas fa-tasks"></i>
+                <span>任务中心</span>
+            </a>
+            <button class="sidebar-close-btn" onclick="taskApp.toggleSidebar()" title="关闭侧边栏">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="sidebar-new-task">
+            <button class="btn btn-primary btn-new-task" onclick="taskApp.openCreateModal()">
+                <i class="fas fa-plus"></i> <span>新建任务</span>
+            </button>
         </div>
         <nav class="task-nav">
             <a class="nav-item active" data-filter="my" onclick="taskApp.switchFilter('my')">
@@ -153,25 +48,139 @@
             <a class="nav-item" data-filter="done" onclick="taskApp.switchFilter('done')">
                 <i class="fas fa-check-circle"></i> <span>已完成</span> <span class="badge" id="badge-done">0</span>
             </a>
+            <a class="nav-item" data-filter="workorders" onclick="taskApp.switchFilter('workorders')">
+                <i class="fas fa-clipboard-list"></i> <span>群工单</span> <span class="badge" id="badge-workorders">0</span>
+            </a>
         </nav>
         <div class="sidebar-footer">
-            <a class="nav-item" onclick="window.location.href='/oa/attendance/'" style="cursor:pointer;">
-                <i class="fas fa-clock"></i> <span>考勤打卡</span>
+            <a class="btn-back-chat" onclick="window.location.href='/chat/'">
+                <i class="fas fa-comments"></i><span>聊天室</span>
             </a>
-            <a class="nav-item" onclick="window.location.href='/oa/approval/'" style="cursor:pointer;">
-                <i class="fas fa-check-double"></i> <span>OA审批</span>
+            <a class="btn-back-chat" onclick="window.location.href='/cloud/'">
+                <i class="fas fa-cloud"></i><span>企业网盘</span>
             </a>
-            <a class="nav-item" onclick="window.location.href='/oa/subsidy/'" style="cursor:pointer;">
-                <i class="fas fa-hand-holding-usd"></i> <span>普惠补贴</span>
+            <a class="btn-back-chat" onclick="window.location.href='/oa/attendance/'">
+                <i class="fas fa-clock"></i><span>考勤打卡</span>
             </a>
-            <a class="nav-item" onclick="taskApp.logout()" style="cursor:pointer;">
-                <i class="fas fa-sign-out-alt" style="color:#f56c6c;"></i> <span style="color:#f56c6c;">退出登录</span>
+            <a class="btn-back-chat" onclick="window.location.href='/oa/approval/'">
+                <i class="fas fa-check-double"></i><span>OA审批</span>
+            </a>
+            <a class="btn-back-chat" onclick="window.location.href='/oa/subsidy/'">
+                <i class="fas fa-hand-holding-usd"></i><span>普惠补贴</span>
+            </a>
+            <a class="btn-back-chat" onclick="window.location.href='/oa/announcements/'">
+                <i class="fas fa-bullhorn"></i><span>集团公告</span>
+            </a>
+            <a class="btn-logout" onclick="taskApp.logout()">
+                <i class="fas fa-sign-out-alt"></i><span>退出登录</span>
             </a>
         </div>
     </aside>
 
+    <!-- 侧边栏拖动分隔条 -->
+    <div class="sidebar-splitter" id="taskSplitter" title="拖动调整宽度"></div>
+
     <!-- 右侧主区域 -->
     <main class="task-main">
+        <!-- 顶部栏 -->
+        <header class="task-header">
+            <div class="header-left">
+                <button class="btn-menu" onclick="taskApp.toggleSidebar()" title="打开菜单">
+                    <i class="fas fa-indent"></i>
+                </button>
+                <h1 class="task-page-title"><i class="fas fa-tasks"></i> 任务中心</h1>
+            </div>
+            <div class="header-right">
+                <button class="btn-icon" id="themeToggleBtn" title="切换主题" onclick="taskApp.toggleTheme()">
+                    <i class="fas fa-moon"></i>
+                </button>
+                <a href="/" class="btn-icon" title="官网主页" style="text-decoration:none;color:inherit;">
+                    <i class="fas fa-home"></i>
+                </a>
+                <div class="notif-bell-wrap" id="notifBellWrap" title="工作通知">
+                    <i class="fas fa-bell"></i>
+                    <span class="notif-badge hide" id="notifBadge">0</span>
+                </div>
+                <div class="user-info" id="currentUser" title="当前用户" onclick="taskApp.toggleUserDropdown(event)">
+                    <img src="/static/images/default-avatar.png?v=20261117-bb2128c" alt="头像" class="user-avatar">
+                    <span class="user-name btn-text">加载中...</span>
+                    <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
+                    <div class="user-dropdown" id="userDropdown" style="display:none;">
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/attendance/'">
+                            <i class="fas fa-clock"></i> 考勤打卡
+                        </div>
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/approval/'">
+                            <i class="fas fa-check-double"></i> OA审批
+                        </div>
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/subsidy/'">
+                            <i class="fas fa-hand-holding-usd"></i> 普惠补贴
+                        </div>
+
+                        <div class="dropdown-divider"></div>
+
+                        <div class="dropdown-item" id="workCalendarBtn" onclick="event.stopPropagation();window.location.href='/oa/work-calendar/'">
+                            <i class="fas fa-calendar-alt"></i> 工作日历
+                        </div>
+
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/work-summary/'">
+                            <i class="fas fa-file-signature"></i> 每日工作总结
+                        </div>
+
+                        <div class="dropdown-divider"></div>
+
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/oa/announcements/'">
+                            <i class="fas fa-bullhorn" style="color:#7c4dff;"></i> 集团公告
+                        </div>
+
+                        <div class="dropdown-item" id="knowledgeBaseBtn" onclick="event.stopPropagation();window.location.href='/docs/'">
+                            <i class="fas fa-book" style="color:#409eff;"></i>
+                            <span>企业知识库</span>
+                        </div>
+
+                        <div class="dropdown-divider"></div>
+
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/chat/'">
+                            <i class="fas fa-comments"></i> 聊天
+                        </div>
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/cloud/'">
+                            <i class="fas fa-cloud"></i> 网盘
+                        </div>
+
+                        <div class="dropdown-divider"></div>
+
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/tasks/'">
+                            <i class="fas fa-tasks"></i> 任务中心
+                        </div>
+
+                        <div class="dropdown-item" onclick="event.stopPropagation();window.location.href='/org/'">
+                            <i class="fas fa-sitemap"></i> 组织架构
+                        </div>
+
+                        <div class="dropdown-divider"></div>
+
+                        <div class="dropdown-item" id="adminConsoleBtn" style="display:none;" onclick="event.stopPropagation();window.location.href='/control/'">
+                            <i class="fas fa-shield-alt"></i> 管理控制台
+                        </div>
+
+
+                        <div class="dropdown-item text-danger" onclick="event.stopPropagation();taskApp.logout()">
+                            <i class="fas fa-sign-out-alt"></i> 退出登录
+                        </div>
+                    </div>
+                </div>
+                <!-- 仅管理员/超级管理员显示「管理控制台」 -->
+                <script>
+                    (function () {
+                        var t = localStorage.getItem('user_type');
+                        if (t === 'admin' || t === 'super_admin') {
+                            var b = document.getElementById('adminConsoleBtn');
+                            if (b) b.style.display = 'flex';
+                        }
+                    })();
+                </script>
+            </div>
+        </header>
+
         <div class="task-toolbar">
             <div class="toolbar-left">
                 <h3 id="currentViewTitle">我的任务</h3>
@@ -184,6 +193,29 @@
                 </button>
                 <button class="btn-icon" data-view="kanban" onclick="taskApp.switchView('kanban')" title="看板视图">
                     <i class="fas fa-columns"></i>
+                </button>
+            </div>
+            <div class="wo-toolbar-actions" id="woToolbarActions" style="display:none;">
+                <select id="woUrgencyFilter" class="form-control wo-filter-select" onchange="taskApp.loadWorkOrders(1)" title="按紧急等级筛选">
+                    <option value="">全部紧急度</option>
+                    <option value="low">低</option>
+                    <option value="medium">中</option>
+                    <option value="high">高</option>
+                    <option value="urgent">紧急</option>
+                </select>
+                <select id="woStatusFilter" class="form-control wo-filter-select" onchange="taskApp.loadWorkOrders(1)" title="按工单状态筛选">
+                    <option value="">全部状态</option>
+                    <option value="pending">待启动</option>
+                    <option value="processing">处理中</option>
+                    <option value="pending_verify">待核验</option>
+                    <option value="done">已闭环</option>
+                    <option value="cancelled">已取消</option>
+                </select>
+                <button class="btn btn-secondary wo-toolbar-btn" id="refreshWorkOrdersBtn" onclick="taskApp.refreshWorkOrders()" title="刷新工单">
+                    <i class="fas fa-sync-alt"></i><span class="btn-text">刷新</span>
+                </button>
+                <button class="btn btn-secondary wo-toolbar-btn" id="exportWorkOrdersBtn" onclick="taskApp.exportWorkOrders()" title="导出工单">
+                    <i class="fas fa-download"></i><span class="btn-text">导出</span>
                 </button>
             </div>
         </div>
@@ -208,6 +240,9 @@
             </div>
         </div>
     </main>
+
+    <!-- 详情面板拖动分隔条 -->
+    <div class="detail-splitter" id="taskDetailSplitter" title="拖动调整详情宽度"></div>
 
     <!-- 右侧详情面板 -->
     <aside class="task-detail-panel" id="taskDetailPanel">
@@ -247,7 +282,7 @@
                 <div class="assignee-picker">
                     <input type="hidden" id="taskAssigneeId" value="">
                     <div class="assignee-selected" id="taskAssigneeSelected" style="display:none;">
-                        <img id="taskAssigneeAvatar" class="assignee-avatar" src="/static/images/default-avatar.png?v=20261112-8846f91" alt="头像">
+                        <img id="taskAssigneeAvatar" class="assignee-avatar" src="/static/images/default-avatar.png?v=20261117-bb2128c" alt="头像">
                         <div class="assignee-info">
                             <div class="assignee-name" id="taskAssigneeName"></div>
                             <div class="assignee-meta" id="taskAssigneeMeta"></div>
@@ -293,18 +328,112 @@
     </div>
 </div>
 
-<script src="/static/js/utils.js?v=20261112-8846f91"></script>
-<script src="/static/js/api.js?v=20261112-8846f91"></script>
-<script src="/static/js/tasks.js?v=20261112-8846f91"></script>
-<script src="/static/js/notifications.js?v=20261112-8846f91"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20261117-bb2128c"></script>
+<script src="/static/js/utils.js?v=20261117-bb2128c"></script>
+<script src="/static/js/api.js?v=20261117-bb2128c"></script>
+<script src="/static/js/tasks.js?v=20261118-reminder02"></script>
+<script src="/static/js/workorder-ui.js?v=20261117-bb2128c"></script>
+<script src="/static/js/tasks-workorders.js?v=20261118-reminder02"></script>
+<script src="/static/js/notifications.js?v=20261117-bb2128c"></script>
+<script src="/static/js/notification-waterfall.js?v=20261118-reminder08"></script>
 
 <!-- 🔧 加密依赖：水印配置响应为加密包，需要 EncryptUtils 解密（缺此则水印静默不显示） -->
-<script src="/static/js/dist/crypto-js.min.js?v=20261112-8846f91"></script>
-<script src="/static/js/dist/sm4.min.js?v=20261112-8846f91"></script>
-<script src="/static/js/encrypts.js?v=20261112-8846f91"></script>
-<script src="/static/js/watermark.js?v=20261112-8846f91"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20261117-bb2128c"></script>
+<script src="/static/js/dist/sm4.min.js?v=20261117-bb2128c"></script>
+<script src="/static/js/encrypts.js?v=20261117-bb2128c"></script>
+<script src="/static/js/watermark.js?v=20261117-bb2128c"></script>
 <script>WatermarkManager.init();</script>
-<script src="/static/js/agent.js?v=20261112-8846f91"></script>
+<script src="/static/js/agent.js?v=20261117-bb2128c"></script>
 <script>AgentManager.init();</script>
+<script>
+    // 左侧导航栏 / 详情面板 拖动调整宽度（参考企业网盘主页）
+    document.addEventListener('DOMContentLoaded', function () {
+        var container = document.querySelector('.task-container');
+        if (!container) return;
+
+        // ===== 左侧导航栏 =====
+        var sidebar = document.getElementById('taskSidebar');
+        var sidebarSplitter = document.getElementById('taskSplitter');
+        if (sidebar && sidebarSplitter) {
+            var sDragging = false;
+            sidebarSplitter.addEventListener('mousedown', function (e) {
+                e.preventDefault();
+                sDragging = true;
+                sidebarSplitter.classList.add('active');
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+            });
+
+            document.addEventListener('mousemove', function (e) {
+                if (!sDragging) return;
+                var rect = container.getBoundingClientRect();
+                var newWidth = Math.max(48, Math.min(e.clientX - rect.left, rect.width * 0.4));
+                sidebar.style.width = newWidth + 'px';
+                sidebar.style.flex = 'none';
+                sidebar.classList.toggle('sidebar-narrow', newWidth < 80);
+            });
+
+            document.addEventListener('mouseup', function () {
+                if (!sDragging) return;
+                sDragging = false;
+                sidebarSplitter.classList.remove('active');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            });
+
+            // 小屏切换为抽屉时恢复默认宽度/文案，避免窄模式带进手机端
+            window.addEventListener('resize', function () {
+                if (window.innerWidth <= 768) {
+                    sidebar.style.width = '';
+                    sidebar.style.flex = '';
+                    sidebar.classList.remove('sidebar-narrow');
+                }
+            });
+        }
+
+        // ===== 详情面板 =====
+        var panel = document.getElementById('taskDetailPanel');
+        var detailSplitter = document.getElementById('taskDetailSplitter');
+        if (panel && detailSplitter) {
+            var syncDetailSplitter = function () {
+                detailSplitter.classList.toggle('show', panel.classList.contains('show'));
+            };
+            new MutationObserver(syncDetailSplitter).observe(panel, {
+                attributes: true,
+                attributeFilter: ['class']
+            });
+            syncDetailSplitter();
+
+            var dDragging = false;
+            detailSplitter.addEventListener('mousedown', function (e) {
+                if (window.innerWidth <= 1200) return;
+                e.preventDefault();
+                dDragging = true;
+                detailSplitter.classList.add('active');
+                panel.classList.add('resizing');
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+            });
+
+            document.addEventListener('mousemove', function (e) {
+                if (!dDragging) return;
+                var rect = container.getBoundingClientRect();
+                var sidebarWidth = sidebar ? sidebar.getBoundingClientRect().width + 5 : 0;
+                var maxWidth = Math.max(300, rect.width - sidebarWidth - 360);
+                var newWidth = Math.max(300, Math.min(rect.right - e.clientX, maxWidth));
+                panel.style.setProperty('--task-detail-width', newWidth + 'px');
+            });
+
+            document.addEventListener('mouseup', function () {
+                if (!dDragging) return;
+                dDragging = false;
+                detailSplitter.classList.remove('active');
+                panel.classList.remove('resizing');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            });
+        }
+    });
+</script>
 </body>
 </html>

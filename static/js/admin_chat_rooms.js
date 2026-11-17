@@ -1087,6 +1087,52 @@ class AdminChatRoomsClient {
                 }
                 break;
 
+            case 'work_order_card':
+                try {
+                    let woData = message.work_order_data || null;
+                    if (!woData && message.content) {
+                        try { woData = JSON.parse(message.content); } catch (_) {}
+                    }
+                    if (woData && woData.work_order_id) {
+                        const woP = woData.progress || {};
+                        contentHtml = `
+                            <div class="message-text" style="max-width:320px;border:1px solid #d9ecff;border-radius:8px;overflow:hidden;background:#f7fcff;cursor:pointer;"
+                                 onclick="window.open('/tasks/?work_order_id=${woData.work_order_id}','_blank')">
+                                <div style="padding:8px 12px;background:#eaf8ff;display:flex;justify-content:space-between;gap:8px;">
+                                    <b style="font-size:12px;color:#00a1ff;"><i class="fas fa-clipboard-list"></i> 群工单</b>
+                                    <span style="font-size:11px;color:#606266;">${this.escapeHtml(woData.status_display || '')}</span>
+                                </div>
+                                <div style="padding:8px 12px;font-size:13px;color:#303133;">
+                                    <div style="color:#909399;font-size:11px;">${this.escapeHtml(woData.order_no || '')}</div>
+                                    <div style="margin:2px 0 4px;">${this.escapeHtml(woData.title || '')}</div>
+                                    <div style="font-size:11px;color:#909399;">进度 ${woP.done || 0}/${woP.total || 0}</div>
+                                </div>
+                            </div>`;
+                    } else {
+                        contentHtml = '<span style="color:#909399;"><i class="fas fa-clipboard-list"></i> [群工单]</span>';
+                    }
+                } catch (e) {
+                    contentHtml = '<span style="color:#909399;"><i class="fas fa-clipboard-list"></i> [群工单]</span>';
+                }
+                break;
+
+            case 'work_order_notice':
+                try {
+                    let noticeData = message.work_order_data || null;
+                    if (!noticeData && message.content && String(message.content).trim().indexOf('{') === 0) {
+                        noticeData = JSON.parse(message.content);
+                    }
+                    const noticeText = (noticeData && noticeData.text) || message.content || '工单通知';
+                    const noticeId = noticeData && noticeData.work_order_id;
+                    contentHtml = '<div class="message-text" style="color:#606266;font-size:12px;line-height:1.7;">'
+                        + this.escapeHtml(noticeText)
+                        + (noticeId ? ' <a href="/tasks/?work_order_id=' + noticeId + '" target="_blank" style="color:#00a1ff;text-decoration:none;margin-left:4px;">查看工单详情 <i class="fas fa-external-link-alt"></i></a>' : '')
+                        + '</div>';
+                } catch (e) {
+                    contentHtml = `<div class="message-text" style="color:#909399;font-size:12px;">${this.escapeHtml(message.content || '工单通知')}</div>`;
+                }
+                break;
+
             default:
                 contentHtml = `<div class="message-text">${this.escapeHtml(message.content || '[未知消息类型]')}</div>`;
         }
@@ -1458,6 +1504,27 @@ class AdminChatRoomsClient {
                     </div>`;
                 }
                 break;
+
+            case 'work_order_card': {
+                let woQuote = {};
+                try {
+                    woQuote = (typeof quoteContent === 'string' && quoteContent.startsWith('{'))
+                        ? JSON.parse(quoteContent) : {};
+                } catch (e) {}
+                const woQuoteText = (woQuote.order_no ? woQuote.order_no + ' ' : '') + (woQuote.title || '群工单');
+                quotedContentHtml = `<i class="fas fa-clipboard-list"></i> ${this.escapeHtml(woQuoteText)}`;
+                break;
+            }
+
+            case 'work_order_notice': {
+                let nQuote = {};
+                try {
+                    nQuote = (typeof quoteContent === 'string' && quoteContent.startsWith('{'))
+                        ? JSON.parse(quoteContent) : {};
+                } catch (e) {}
+                quotedContentHtml = `${this.escapeHtml(nQuote.text || quoteContent || '工单通知')}`;
+                break;
+            }
 
             default:
                 quotedContentHtml = this.escapeHtml(quoteContent || '[未知类型]');

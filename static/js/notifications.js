@@ -181,11 +181,11 @@
     }
 
     function typeIcon(t) {
-        return { 'approval': 'fas fa-check-double', 'attendance': 'fas fa-clock', 'task': 'fas fa-tasks', 'collab': 'fas fa-users', 'subsidy': 'fas fa-hand-holding-usd', 'subsidy_apply': 'fas fa-file-invoice', 'subsidy_result': 'fas fa-clipboard-check', 'subsidy_withdraw': 'fas fa-money-check-alt', 'subsidy_withdraw_result': 'fas fa-wallet', 'daily': 'fas fa-calendar-day', 'work_summary': 'fas fa-file-signature', 'announcement': 'fas fa-bullhorn', 'hr': 'fas fa-user-tie', 'system': 'fas fa-bell' }[t] || 'fas fa-bell';
+        return { 'approval': 'fas fa-check-double', 'attendance': 'fas fa-clock', 'task': 'fas fa-tasks', 'collab': 'fas fa-users', 'subsidy': 'fas fa-hand-holding-usd', 'subsidy_apply': 'fas fa-file-invoice', 'subsidy_result': 'fas fa-clipboard-check', 'subsidy_withdraw': 'fas fa-money-check-alt', 'subsidy_withdraw_result': 'fas fa-wallet', 'daily': 'fas fa-calendar-day', 'work_summary': 'fas fa-file-signature', 'announcement': 'fas fa-bullhorn', 'workorder': 'fas fa-clipboard-list', 'hr': 'fas fa-user-tie', 'system': 'fas fa-bell' }[t] || 'fas fa-bell';
     }
 
     function typeColor(t) {
-        return { 'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'subsidy': '#16a085', 'subsidy_apply': '#16a085', 'subsidy_result': '#67c23a', 'subsidy_withdraw': '#e6a23c', 'subsidy_withdraw_result': '#16a085', 'daily': '#409eff', 'work_summary': '#9b59b6', 'announcement': '#7c4dff', 'hr': '#6c5ce7', 'system': '#909399' }[t] || '#909399';
+        return { 'approval': '#409eff', 'attendance': '#67c23a', 'task': '#e6a23c', 'collab': '#9b59b6', 'subsidy': '#16a085', 'subsidy_apply': '#16a085', 'subsidy_result': '#67c23a', 'subsidy_withdraw': '#e6a23c', 'subsidy_withdraw_result': '#16a085', 'daily': '#409eff', 'work_summary': '#9b59b6', 'announcement': '#7c4dff', 'workorder': '#00a1ff', 'hr': '#6c5ce7', 'system': '#909399' }[t] || '#909399';
     }
 
     function escapeHtml(text) {
@@ -292,18 +292,57 @@
         setTimeout(function () { if (card.parentNode) card.parentNode.removeChild(card); }, 220);
     }
 
+    function isDing(n) {
+        return !!(n && n.extra_data && n.extra_data.ding);
+    }
+
+    function playDingSound() {
+        try {
+            var Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return;
+            var ctx = new Ctx();
+            var beep = function (freq, start, duration) {
+                var o = ctx.createOscillator();
+                var g = ctx.createGain();
+                o.type = 'sine';
+                o.frequency.value = freq;
+                g.gain.setValueAtTime(0.0001, ctx.currentTime + start);
+                g.gain.exponentialRampToValueAtTime(0.16, ctx.currentTime + start + 0.02);
+                g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + duration);
+                o.connect(g);
+                g.connect(ctx.destination);
+                o.start(ctx.currentTime + start);
+                o.stop(ctx.currentTime + start + duration + 0.02);
+            };
+            // 两声短促 DING，避免依赖外部音频文件
+            beep(880, 0, 0.16);
+            beep(1174, 0.2, 0.22);
+            setTimeout(function () { try { ctx.close(); } catch (e) {} }, 700);
+        } catch (e) {}
+    }
+
+    function vibrateDing() {
+        try {
+            if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 300]);
+        } catch (e) {}
+    }
+
     // 弹出一张通知卡片：n 为通知对象（type/title/content/related_url/id/extra_data）
     function showPopup(n) {
-        if (!n || !popupEnabledFor(n.type)) return;
+        if (!n) return;
+        var ding = isDing(n);
+        // DING 是显式催办，不受「通知弹窗类型」开关限制
+        if (!popupEnabledFor(n.type) && !ding) return;
         var stack = popupStack();
-        var color = typeColor(n.type);
-        var label = (n.type === 'announcement') ? '集团公告' : '工作通知';
+        var color = ding ? '#f56c6c' : typeColor(n.type);
+        var label = ding ? 'DING 催办' : (n.type === 'announcement' ? '集团公告' : (n.type === 'workorder' ? '群工单' : '工作通知'));
         var url = notifJumpUrl(n);
 
         var card = document.createElement('div');
-        card.className = 'notif-popup';
+        card.className = 'notif-popup' + (ding ? ' notif-popup-ding' : '');
         card.style.borderLeftColor = color;
         card.style.color = color;
+        if (ding) card.style.boxShadow = '0 8px 28px rgba(245,108,108,.35)';
         card.innerHTML = '<button class="notif-popup-close" title="关闭">&times;</button>'
             + '<div class="notif-popup-head">'
             + '<i class="' + typeIcon(n.type) + '" style="color:' + color + ';font-size:13px;"></i>'
@@ -343,14 +382,13 @@
     // 打开页面时补弹：最近 24 小时内的未读通知（取最新一条），每条每次会话只弹一次，
     // 这样成员在公告发布时不在线，之后打开页面也能第一时间看到。
     async function popupRecentUnread() {
-        if (!anyPopupEnabled()) return;
         try {
             var data = await apiGet(OA_API_URL + '/notifications/?page=1&page_size=10&read_filter=unread');
             var rows = (data && data.results) || [];
             var cutoff = Date.now() - POPUP_RECENT_MS;
             for (var i = 0; i < rows.length; i++) {
                 var n = rows[i];
-                if (!popupEnabledFor(n.type)) continue;
+                if (!popupEnabledFor(n.type) && !isDing(n)) continue;
                 var t = Date.parse(n.created_at || '');
                 if (isNaN(t) || t < cutoff) continue;
                 if (popupShownBefore(n.id)) continue;
@@ -375,6 +413,8 @@
             u = '/tasks/?task_id=' + ed.task_id;
         } else if (n && n.type === 'work_summary' && ed.summary_id && u.indexOf('summary_id') === -1) {
             u = '/oa/work-summary/?id=' + ed.summary_id;
+        } else if (n && n.type === 'workorder' && ed.work_order_id) {
+            u = '/tasks/?work_order_id=' + ed.work_order_id;
         } else if (n && n.type === 'daily') {
             u = '/oa/work-calendar/';
         }
@@ -543,7 +583,13 @@
         // 供聊天页的全局 WebSocket 复用：收到工作通知时刷新未读数、弹窗与桌面通知
         onPush(n) {
             fetchUnreadCount();
-            if (n) showPopup(n);
+            if (n) {
+                if (isDing(n)) {
+                    playDingSound();
+                    vibrateDing();
+                }
+                showPopup(n);
+            }
             if (n && n.title && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
                 try {
                     new Notification(n.title, {body: n.content || '', icon: '/static/images/logo.png'});
@@ -636,11 +682,20 @@
                     var data = JSON.parse(e.data);
                     if (data.type === 'work.notification' && data.event_type === 'new') {
                         fetchUnreadCount();
-                        // 右上角弹窗：仅对该类型已开启弹窗时才弹（默认只开「集团公告」）
+                        if (isDing(data.notification)) {
+                            playDingSound();
+                            vibrateDing();
+                        }
+                        // 右上角弹窗：仅对该类型已开启弹窗时才弹（DING 不受开关限制）
                         showPopup(data.notification);
                         if (Notification.permission === 'granted') {
                             new Notification(data.notification.title, { body: data.notification.content, icon: '/static/images/logo.png' });
                         }
+                    }
+                    if (data.type === 'work_order.update') {
+                        try {
+                            window.dispatchEvent(new CustomEvent('workorder:update', {detail: data.work_order}));
+                        } catch (err) { /* ignore */ }
                     }
                     // 协作邀请通知也触发未读数刷新
                     if (data.type === 'collaboration_invite') {

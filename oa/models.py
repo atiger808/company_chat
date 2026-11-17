@@ -347,6 +347,7 @@ class WorkNotification(models.Model):
         ('daily', '每日通知'),
         ('work_summary', '每日工作总结'),
         ('announcement', '集团公告'),
+        ('workorder', '群工单'),
         ('hr', '人事通知'),
         ('system', '系统通知'),
     ]

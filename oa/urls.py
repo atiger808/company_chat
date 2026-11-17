@@ -193,5 +193,9 @@ urlpatterns = [
     path('notifications/mark-all-read/', WorkNotificationViewSet.as_view({'post': 'mark_all_read'}), name='notification-mark-all-read'),
     # 通知弹窗配置（读：所有登录用户；写：仅超级管理员）
     path('notifications/popup-config/', WorkNotificationViewSet.as_view({'get': 'popup_config', 'post': 'save_popup_config'}), name='notification-popup-config'),
+    # 瀑布流通知开关（读：所有登录用户，配置在「每日通知配置」里由超管保存）
+    path('notifications/waterfall-config/', WorkNotificationViewSet.as_view({'get': 'waterfall_config'}), name='notification-waterfall-config'),
+    # 瀑布流顶部「待办工作」：审批到达审批人 / 任务、群工单到达执行人
+    path('notifications/todo/', WorkNotificationViewSet.as_view({'get': 'todo'}), name='notification-todo'),
     path('notifications/<int:pk>/mark-read/', WorkNotificationViewSet.as_view({'post': 'mark_read'}), name='notification-mark-read'),
 ]

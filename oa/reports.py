@@ -361,26 +361,60 @@ class ApprovalReportViewSet(_AdminReportBase):
         now = timezone.now()
         timeout_count = qs.filter(status__in=['pending', 'processing', 'deferred'],
                                   created_at__lt=now - timedelta(days=timeout_days)).count()
+        type_names = self._type_names(request)
         durations = []
         node_durations = defaultdict(list)
+        duration_points = []
         for a in qs.prefetch_related('logs'):
             logs = sorted(a.logs.all(), key=lambda x: x.created_at)
             approve_logs = [l for l in logs if l.action == 'approve']
             if a.status == 'approved' and approve_logs:
-                durations.append((approve_logs[-1].created_at - a.created_at).total_seconds() / 60.0)
+                minutes = (approve_logs[-1].created_at - a.created_at).total_seconds() / 60.0
+                durations.append(minutes)
+                if len(duration_points) < 800:
+                    duration_points.append({
+                        'date': timezone.localtime(approve_logs[-1].created_at).date().isoformat(),
+                        'minutes': round(minutes, 1),
+                        'type': type_names.get(a.approval_type, a.approval_type),
+                        'title': a.title or '',
+                    })
             prev = a.created_at
             for idx, l in enumerate(logs):
                 if l.action in ('approve', 'reject', 'deferred', 'processing'):
                     node_durations[idx].append((l.created_at - prev).total_seconds() / 60.0)
                     prev = l.created_at
+
+        def _percentile(arr, p):
+            """无第三方依赖的分位数（p=0.5 即中位数）。"""
+            if not arr:
+                return 0
+            ordered = sorted(arr)
+            idx = int(round((len(ordered) - 1) * p))
+            return ordered[max(0, min(len(ordered) - 1, idx))]
+
         avg_minutes = round(sum(durations) / len(durations), 1) if durations else 0
         max_minutes = round(max(durations), 1) if durations else 0
+        median_minutes = round(_percentile(durations, 0.5), 1)
+        p90_minutes = round(_percentile(durations, 0.9), 1)
+        bucket_bounds = [60, 240, 480, 1440, 4320]
+        bucket_labels = ['<1小时', '1-4小时', '4-8小时', '8-24小时', '1-3天', '>3天']
+        bucket_counts = [0] * len(bucket_labels)
+        for minutes in durations:
+            idx = 0
+            while idx < len(bucket_bounds) and minutes > bucket_bounds[idx]:
+                idx += 1
+            bucket_counts[idx] += 1
+        duration_buckets = [{'label': bucket_labels[i], 'count': bucket_counts[i]}
+                            for i in range(len(bucket_labels))]
         node_avg = []
         for idx in sorted(node_durations.keys())[:6]:
             arr = node_durations[idx]
-            node_avg.append({'node': idx + 1, 'avg_minutes': round(sum(arr) / len(arr), 1) if arr else 0,
-                             'count': len(arr)})
-        type_names = self._type_names(request)
+            node_avg.append({
+                'node': idx + 1,
+                'avg_minutes': round(sum(arr) / len(arr), 1) if arr else 0,
+                'median_minutes': round(_percentile(arr, 0.5), 1),
+                'count': len(arr),
+            })
         by_type = [{'code': r['approval_type'],
                     'name': type_names.get(r['approval_type'], r['approval_type']),
                     'count': r['count']}
@@ -396,6 +430,8 @@ class ApprovalReportViewSet(_AdminReportBase):
                 'pending': pending, 'processing': processing, 'deferred': deferred,
                 'cancelled': cancelled, 'draft': draft,
                 'avg_minutes': avg_minutes, 'max_minutes': max_minutes,
+                'median_minutes': median_minutes, 'p90_minutes': p90_minutes,
+                'duration_count': len(durations),
                 'reject_rate': round(rejected / decided * 100, 2) if decided else 0,
                 'timeout_rate': round(timeout_count / total * 100, 2) if total else 0,
                 'timeout_count': timeout_count,
@@ -404,6 +440,8 @@ class ApprovalReportViewSet(_AdminReportBase):
             'node_avg': node_avg,
             'by_type': by_type,
             'trend': trend,
+            'duration_points': duration_points,
+            'duration_buckets': duration_buckets,
         }
 
     def _business_data(self, request):

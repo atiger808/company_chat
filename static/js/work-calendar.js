@@ -1374,6 +1374,21 @@ class WorkCalendarApp {
             document.getElementById('wcDigestEnabled').checked = !!d.enabled;
             document.getElementById('wcDigestTime').value = d.send_time || '09:00';
             document.getElementById('wcDigestAuto').checked = !!d.auto_send;
+            const rem = d.reminder || {};
+            const setVal = (id, val) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                if (el.type === 'checkbox') el.checked = !!val;
+                else el.value = val;
+            };
+            setVal('wcReminderApprovalEnabled', rem.approval_enabled);
+            setVal('wcReminderApprovalHours', rem.approval_hours || 24);
+            setVal('wcReminderTaskEnabled', rem.task_enabled);
+            setVal('wcReminderTaskHours', rem.task_hours || 24);
+            setVal('wcReminderWindowStart', rem.window_start || '09:00');
+            setVal('wcReminderWindowEnd', rem.window_end || '18:00');
+            setVal('wcReminderInterval', rem.interval_hours || 4);
+            setVal('wcWaterfallEnabled', d.waterfall_enabled !== undefined ? d.waterfall_enabled : rem.waterfall_enabled);
             const modal = document.getElementById('wcConfigModal');
             modal.style.display = 'flex';
             setTimeout(function () { modal.classList.add('show'); }, 10);
@@ -1388,10 +1403,29 @@ class WorkCalendarApp {
 
     async saveConfig() {
         try {
+            const num = (id, dft) => {
+                const el = document.getElementById(id);
+                const v = el ? parseInt(el.value, 10) : NaN;
+                return isNaN(v) ? dft : v;
+            };
+            const val = (id, dft) => {
+                const el = document.getElementById(id);
+                return el && el.value ? el.value : dft;
+            };
             const payload = {
                 enabled: document.getElementById('wcDigestEnabled').checked,
                 send_time: document.getElementById('wcDigestTime').value,
-                auto_send: document.getElementById('wcDigestAuto').checked
+                auto_send: document.getElementById('wcDigestAuto').checked,
+                reminder: {
+                    approval_enabled: !!(document.getElementById('wcReminderApprovalEnabled') || {}).checked,
+                    approval_hours: num('wcReminderApprovalHours', 24),
+                    task_enabled: !!(document.getElementById('wcReminderTaskEnabled') || {}).checked,
+                    task_hours: num('wcReminderTaskHours', 24),
+                    window_start: val('wcReminderWindowStart', '09:00'),
+                    window_end: val('wcReminderWindowEnd', '18:00'),
+                    interval_hours: num('wcReminderInterval', 4),
+                    waterfall_enabled: !!(document.getElementById('wcWaterfallEnabled') || {}).checked
+                }
             };
             const d = await this.apiPost(WC_API + '/digest-config/', payload);
             if (!d) return;

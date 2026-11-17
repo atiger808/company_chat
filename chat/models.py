@@ -244,6 +244,8 @@ class Message(models.Model):
         ('approval_card', '审批卡片'),
         ('work_summary_card', '工作总结卡片'),
         ('collab_card', '协作邀请卡片'),
+        ('work_order_card', '工单卡片'),
+        ('work_order_notice', '工单通知'),
         ('announcement', '群公告'),
     )
 
@@ -557,7 +559,7 @@ class SystemConfig(models.Model):
     class Meta:
         verbose_name = '系统配置'
         verbose_name_plural = verbose_name
-        ordering = ['category', 'key']
+        ordering = ['-updated_at']
 
     def __str__(self):
         return f'{self.name} ({self.key})'

@@ -562,6 +562,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'call_duration': event.get('call_duration'),
                 'task_data': event.get('task_data'),
                 'approval_data': event.get('approval_data'),
+                'work_order_data': event.get('work_order_data'),
             })
 
     # 👇 新增：处理任务更新事件
@@ -574,6 +575,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'type': 'task.update',
             'event': event.get('event'),
             'task': event.get('task')
+        })
+
+    async def work_order_update(self, event):
+        """群工单状态/进度变更（不新增聊天消息，前端就地更新卡片）"""
+        await self.send_encrypt({
+            'type': 'work_order.update',
+            'work_order': event.get('work_order'),
         })
 
     async def user_typing(self, event):
@@ -1048,6 +1056,13 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             'type': 'work.notification',
             'event_type': event.get('event_type'),
             'notification': event.get('notification'),
+        }))
+
+    async def work_order_update(self, event):
+        """群工单变更（任务中心/聊天页就地刷新）"""
+        await self.send(text_data=json.dumps({
+            'type': 'work_order.update',
+            'work_order': event.get('work_order'),
         }))
 
 

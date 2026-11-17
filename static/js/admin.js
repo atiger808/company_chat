@@ -849,10 +849,12 @@ class AdminConsole {
         }
     }
 
-    async loadUsers(page) {
+    async loadUsers(page, silent, seq) {
         if (page === undefined) page = this.currentPage || 1;
+        const tableWrap = silent ? document.getElementById('usersTableContainer') : null;
+        if (tableWrap) tableWrap.classList.add('is-searching');
         try {
-            this.showLoading();
+            if (!silent) this.showLoading();
             var tenantId = document.getElementById('filterTenant') ? document.getElementById('filterTenant').value : '';
             var deptId = document.getElementById('filterDepartment') ? document.getElementById('filterDepartment').value : '';
             var statusVal = document.getElementById('filterStatus') ? document.getElementById('filterStatus').value : '';
@@ -874,6 +876,7 @@ class AdminConsole {
             }
 
             const data = await response.json();
+            if (seq != null && seq !== this._userSearchSeq) return; // 过期响应丢弃
             if (data.results) {
                 this.users = data.results;
                 this.currentPage = data.page || page;
@@ -884,6 +887,7 @@ class AdminConsole {
             this.renderUsersTable();
 
         } catch (error) {
+            if (seq != null && seq !== this._userSearchSeq) return;
             console.error('加载用户失败:', error);
             this.showError('加载失败', error);
             var tbody = document.getElementById('usersTableBody');
@@ -895,7 +899,10 @@ class AdminConsole {
                 this.handleAuthError();
             }
         } finally {
-            this.hideLoading();
+            if (!silent) this.hideLoading();
+            if (tableWrap && (seq == null || seq === this._userSearchSeq)) {
+                tableWrap.classList.remove('is-searching');
+            }
         }
     }
 
@@ -2275,24 +2282,28 @@ class AdminConsole {
     // ==================== 搜索功能 ====================
 
     /**
-     * 🔧 搜索用户（调用后端接口）
+     * 🔧 搜索用户（300ms 防抖后调用后端，避免逐字请求造成页面抖动）
      */
     searchUsers(keyword) {
-        if (!keyword.trim()) {
-            this.loadUsers(1);
-            return;
-        }
-        // For search with keyword, use the backend search with filters
-        this.searchUsersFromBackend(keyword);
+        const kw = (keyword || '').trim();
+        clearTimeout(this._userSearchTimer);
+        const seq = (this._userSearchSeq = (this._userSearchSeq || 0) + 1);
+        this._userSearchTimer = setTimeout(() => {
+            if (!kw) {
+                this.loadUsers(1, true, seq);
+            } else {
+                this.searchUsersFromBackend(kw, seq);
+            }
+        }, 300);
     }
 
     /**
      * 🔧 从后端搜索用户（支持分页和企业/部门过滤）
      */
-    async searchUsersFromBackend(keyword) {
+    async searchUsersFromBackend(keyword, seq) {
+        const tableWrap = document.getElementById('usersTableContainer');
+        if (tableWrap) tableWrap.classList.add('is-searching');
         try {
-            this.showLoading();
-
             var tenantId = document.getElementById('filterTenant') ? document.getElementById('filterTenant').value : '';
             var deptId = document.getElementById('filterDepartment') ? document.getElementById('filterDepartment').value : '';
 
@@ -2310,6 +2321,9 @@ class AdminConsole {
             }
 
             const data = await response.json();
+            // 过期响应（用户已继续输入）直接丢弃，避免旧结果覆盖新结果
+            if (seq != null && seq !== this._userSearchSeq) return;
+
             if (data.results) {
                 this.users = data.results;
                 this.currentPage = data.page || 1;
@@ -2320,10 +2334,13 @@ class AdminConsole {
             this.renderUsersTable();
 
         } catch (error) {
+            if (seq != null && seq !== this._userSearchSeq) return;
             console.error('搜索用户失败:', error);
             this.showError('搜索失败', error.message);
         } finally {
-            this.hideLoading();
+            if ((seq == null || seq === this._userSearchSeq) && tableWrap) {
+                tableWrap.classList.remove('is-searching');
+            }
         }
     }
 
@@ -2374,6 +2391,14 @@ class AdminConsole {
                     document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
                     item.classList.add('active');
                     this.openReportAccessConfig();
+                    return;
+                }
+
+                // 群待办权限：打开配置模态框，不切换标签
+                if (item.dataset.tab === 'workorder-permission') {
+                    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                    item.classList.add('active');
+                    this.openWorkOrderPermissionConfig();
                     return;
                 }
 
@@ -3421,6 +3446,84 @@ class AdminConsole {
             this.showToast ? this.showToast('通知弹窗配置已保存', false) : (alert && alert('通知弹窗配置已保存'));
             this.closeNotifPopupConfig();
         } catch (e) { this.showError ? this.showError('保存失败', e.message) : (alert && alert('保存失败：' + e.message)); }
+    }
+
+    // ==================== 群待办 / 工单发起权限（仅超级管理员） ====================
+    openWorkOrderPermissionConfig() {
+        document.getElementById('workorderPermissionModal').style.display = 'flex';
+        setTimeout(function () { document.getElementById('workorderPermissionModal').classList.add('show'); }, 10);
+        this.loadWorkOrderPermissionConfig();
+    }
+    closeWorkOrderPermissionConfig() {
+        var m = document.getElementById('workorderPermissionModal');
+        if (m) { m.classList.remove('show'); setTimeout(function () { m.style.display = 'none'; }, 150); }
+    }
+    async loadWorkOrderPermissionConfig() {
+        try {
+            const resp = await fetch('/api/tasks/workorders/permission-config/', {
+                headers: TokenManager.getHeaders()
+            });
+            if (!resp.ok) {
+                this.showError && this.showError('加载失败', '无法获取群待办权限配置');
+                return;
+            }
+            let data = await resp.json();
+            if (data && data.encrypt && window.EncryptUtils) {
+                data = window.EncryptUtils.decryptPacket(data);
+            }
+            this._renderWorkOrderPermissionToggles(data.options || [], data.permissions || {});
+        } catch (e) {
+            console.warn('加载群待办权限配置失败', e);
+        }
+    }
+    _renderWorkOrderPermissionToggles(options, permissions) {
+        var containers = {
+            group_role: document.getElementById('woPermGroupRole'),
+            user_type: document.getElementById('woPermUserType'),
+            dept_role: document.getElementById('woPermDeptRole'),
+            enterprise_role: document.getElementById('woPermEnterpriseRole'),
+        };
+        Object.keys(containers).forEach(function (k) {
+            if (containers[k]) containers[k].innerHTML = '';
+        });
+        var self = this;
+        (options || []).forEach(function (opt) {
+            var box = containers[opt.group];
+            if (!box) return;
+            var on = permissions[opt.key] === true;
+            var label = document.createElement('label');
+            label.className = 'wo-perm-item';
+            label.innerHTML = '<span class="wo-perm-label">' + self._escape(opt.label) + '</span>'
+                + '<span class="switch"><input type="checkbox" class="wo-perm-toggle" data-perm="'
+                + self._escape(opt.key) + '" ' + (on ? 'checked' : '') + '>'
+                + '<span class="slider"></span></span>';
+            box.appendChild(label);
+        });
+    }
+    async saveWorkOrderPermissionConfig() {
+        var permissions = {};
+        document.querySelectorAll('#workorderPermissionModal .wo-perm-toggle').forEach(function (cb) {
+            permissions[cb.getAttribute('data-perm')] = cb.checked;
+        });
+        if (!Object.keys(permissions).some(function (k) { return permissions[k]; })) {
+            this.showError('保存失败', '请至少开启一种可发起身份');
+            return;
+        }
+        try {
+            const resp = await fetch('/api/tasks/workorders/permission-config/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify({permissions: permissions})
+            });
+            if (!resp.ok) {
+                const e2 = await resp.json().catch(function () { return {}; });
+                throw new Error(e2.error || '保存失败');
+            }
+            this.showSuccess('保存成功', '群待办权限配置已更新');
+            this.closeWorkOrderPermissionConfig();
+        } catch (e) {
+            this.showError('保存失败', e.message);
+        }
     }
 
     // ==================== 配置里的「用户多选」通用片段 ====================

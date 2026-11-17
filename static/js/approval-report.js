@@ -425,12 +425,17 @@
             + card(s.rejected || 0, '已驳回')
             + card(s.backlog || 0, '积压量')
             + card(fmtMin(s.avg_minutes), '平均审批时长')
+            + card(fmtMin(s.median_minutes), '中位数审批时长')
+            + card(fmtMin(s.p90_minutes), 'P90 审批时长')
             + card(fmtMin(s.max_minutes), '最长审批时长')
             + card((s.reject_rate || 0) + '%', '驳回率')
             + card((s.timeout_rate || 0) + '%', '超时率(' + (d.timeout_days || 3) + '天)')
             + '</div>';
         h += '<div id="arTrend" class="ar-chart"></div>';
-        h += '<div class="ar-row"><div id="arTypeBar" class="ar-chart sm"></div><div id="arNodeBar" class="ar-chart sm"></div></div>';
+        h += '<div class="ar-sec"><i class="fas fa-braille" style="color:#9b59b6;"></i> 审批时长散点分布（每个点=一笔已通过审批，受异常值影响时可观）</div>';
+        h += '<div id="arScatter" class="ar-chart"></div>';
+        h += '<div class="ar-row"><div id="arDurationBars" class="ar-chart sm"></div><div id="arNodeBar" class="ar-chart sm"></div></div>';
+        h += '<div id="arTypeBar" class="ar-chart sm"></div>';
         document.getElementById('arContent').innerHTML = h;
         var trend = d.trend || [];
         chart('arTrend', {
@@ -440,6 +445,46 @@
             yAxis: Object.assign({ type: 'value' }, baseAxis()),
             series: [{ name: '发起量', type: 'line', smooth: true, data: trend.map(function (x) { return x.count; }), areaStyle: { opacity: .15 }, itemStyle: { color: '#9b59b6' } }]
         });
+
+        var points = d.duration_points || [];
+        var dates = [];
+        points.forEach(function (p) { if (dates.indexOf(p.date) < 0) dates.push(p.date); });
+        dates.sort();
+        chart('arScatter', {
+            tooltip: {
+                trigger: 'item', confine: true, appendToBody: true,
+                formatter: function (p) {
+                    var v = p.value || [];
+                    return '<b>' + esc(v[2] || '') + '</b><br/>'
+                        + esc(v[3] || '') + ' · ' + esc(v[0] || '') + '<br/>用时：' + fmtMin(v[1]);
+                }
+            },
+            grid: { left: 52, right: 24, top: 24, bottom: 34 },
+            xAxis: Object.assign({ type: 'category', data: dates, boundaryGap: true }, baseAxis()),
+            yAxis: Object.assign({ type: 'value', name: '分钟' }, baseAxis()),
+            dataZoom: [{ type: 'inside', xAxisIndex: [0] }, { type: 'slider', xAxisIndex: [0], height: 12, bottom: 2 }],
+            series: [{
+                type: 'scatter', symbolSize: 9,
+                data: points.map(function (p) { return [p.date, p.minutes, p.title, p.type]; }),
+                itemStyle: { color: '#9b59b6', opacity: .72 }
+            }]
+        });
+
+        var buckets = d.duration_buckets || [];
+        var bucketColors = ['#67c23a', '#409eff', '#e6a23c', '#f56c6c', '#9b59b6', '#606266'];
+        chart('arDurationBars', {
+            tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+            grid: { left: 40, right: 16, top: 30, bottom: 26 },
+            xAxis: Object.assign({ type: 'category', data: buckets.map(function (x) { return x.label; }) }, baseAxis()),
+            yAxis: Object.assign({ type: 'value', name: '笔数', minInterval: 1 }, baseAxis()),
+            series: [{
+                name: '审批笔数', type: 'bar', barMaxWidth: 36,
+                data: buckets.map(function (x, i) {
+                    return { value: x.count, itemStyle: { color: bucketColors[i % bucketColors.length] } };
+                })
+            }]
+        });
+
         var types = d.by_type || [];
         chart('arTypeBar', {
             tooltip: { trigger: 'axis' },
@@ -451,10 +496,14 @@
         var nodes = d.node_avg || [];
         chart('arNodeBar', {
             tooltip: { trigger: 'axis' },
-            grid: { left: 40, right: 20, top: 24, bottom: 30 },
+            legend: { data: ['平均耗时', '中位耗时'], textStyle: { color: axisColor, fontSize: 11 }, top: 0 },
+            grid: { left: 40, right: 16, top: 40, bottom: 26 },
             xAxis: Object.assign({ type: 'category', data: nodes.map(function (x) { return '第' + x.node + '节点'; }) }, baseAxis()),
-            yAxis: Object.assign({ type: 'value' }, baseAxis()),
-            series: [{ name: '平均耗时(分钟)', type: 'bar', data: nodes.map(function (x) { return x.avg_minutes; }), itemStyle: { color: '#e6a23c' } }]
+            yAxis: Object.assign({ type: 'value', name: '分钟' }, baseAxis()),
+            series: [
+                { name: '平均耗时', type: 'bar', barMaxWidth: 22, data: nodes.map(function (x) { return x.avg_minutes; }), itemStyle: { color: '#e6a23c' } },
+                { name: '中位耗时', type: 'bar', barMaxWidth: 22, data: nodes.map(function (x) { return x.median_minutes || 0; }), itemStyle: { color: '#9b59b6' } }
+            ]
         });
     }
 

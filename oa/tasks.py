@@ -324,6 +324,16 @@ def send_daily_digest_to_user(user, tenant=None):
 
 
 @app.task(bind=True)
+def run_timeout_reminders(self):
+    """每 15 分钟检查：审批/任务/群工单超时未处理提醒（按企业配置的时间段/频率）。"""
+    try:
+        from .timeout_reminder import send_timeout_reminders
+        send_timeout_reminders()
+    except Exception as e:
+        logger.warning(f'超时提醒任务异常: {e}')
+
+
+@app.task(bind=True)
 def run_daily_digest(self):
     """每日定时：遍历开启自动发送的企业，到点后给企业所有活跃用户发送工作汇总。"""
     try:

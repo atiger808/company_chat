@@ -1052,7 +1052,9 @@ class AdminStatisticsClient {
             'approval_card': '审批卡片',
             'collab_card': '协作卡片',
             'announcement': '群公告',
-            'work_summary_card': '工作总结'
+            'work_summary_card': '工作总结',
+            'work_order_card': '工单卡片',
+            'work_order_notice': '工单通知'
         };
         return map[type] || type;
     }
@@ -1074,7 +1076,9 @@ class AdminStatisticsClient {
             'approval_card': '#79b1ec',
             'collab_card': '#bae7ff',
             'announcement': '#7c4dff',
-            'work_summary_card': '#9b59b6'
+            'work_summary_card': '#9b59b6',
+            'work_order_card': '#e74c3c',
+            'work_order_notice': '#34495e'
         }
         return map[type] || '#909399';
     }

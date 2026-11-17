@@ -31,7 +31,7 @@ class TaskApp {
             const qp = new URLSearchParams(window.location.search);
             const taskId = qp.get('task_id');
             if (taskId) {
-                setTimeout(() => { taskApp.selectTask(parseInt(taskId, 10)); }, 200);
+                this.openTaskDeepLink(parseInt(taskId, 10));
             }
         } catch (e) { console.warn('解析任务跳转参数失败', e); }
 
@@ -42,6 +42,41 @@ class TaskApp {
         document.addEventListener('click', () => {
             document.querySelectorAll('.user-dropdown').forEach(d => d.style.display = 'none');
         });
+    }
+
+    // 工作通知/瀑布流深链：按任务状态/归属切换左侧导航，再打开任务详情
+    async openTaskDeepLink(taskId) {
+        let filter = 'my';
+        try {
+            const res = await fetch(`/api/tasks/${taskId}/`, { headers: TokenManager.getHeaders() });
+            if (res.ok) {
+                const task = await res.json();
+                const uid = this.currentUser ? this.currentUser.id : null;
+                const assigneeId = task.assignee_info ? task.assignee_info.id : task.assignee;
+                const creatorId = task.creator_info ? task.creator_info.id : task.creator;
+                const isToday = task.due_date && this._isSameDay(task.due_date);
+                if (task.status === 'done' || task.status === 'archived') {
+                    filter = 'done';
+                } else if (creatorId == uid && assigneeId != uid) {
+                    filter = 'created';
+                } else if (isToday) {
+                    filter = 'today';
+                } else {
+                    filter = 'my';
+                }
+            }
+        } catch (e) { /* 取不到详情时仍尝试打开 */ }
+        this.switchFilter(filter);
+        setTimeout(() => this.selectTask(taskId), 300);
+    }
+
+    _isSameDay(value) {
+        const d = new Date(value);
+        if (isNaN(d.getTime())) return false;
+        const n = new Date();
+        return d.getFullYear() === n.getFullYear()
+            && d.getMonth() === n.getMonth()
+            && d.getDate() === n.getDate();
     }
 
     // ==================== 数据加载 ====================
@@ -121,6 +156,10 @@ class TaskApp {
     // ==================== 视图渲染 ====================
 
     render() {
+        if (this.currentFilter === 'workorders' && typeof this.renderWorkOrders === 'function') {
+            this.renderWorkOrders();
+            return;
+        }
         if (this.currentView === 'list') {
             document.getElementById('listView').style.display = 'flex';
             document.getElementById('kanbanView').style.display = 'none';
@@ -188,6 +227,8 @@ class TaskApp {
         this.render(); // 更新选中样式
 
         const panel = document.getElementById('taskDetailPanel');
+        const titleEl = panel.querySelector('.detail-header h3');
+        if (titleEl) titleEl.textContent = '任务详情';
         panel.classList.add('show');
 
         try {
@@ -407,12 +448,27 @@ class TaskApp {
         document.querySelectorAll('.nav-item').forEach(item => {
             item.classList.toggle('active', item.dataset.filter === filter);
         });
-        const titles = { my: '我的任务', created: '我创建的', today: '今日到期', done: '已完成' };
+        // 移动端：切换导航后自动收起侧边栏，直接展示对应主内容
+        if (window.innerWidth <= 768) this.closeSidebar();
+        const titles = { my: '我的任务', created: '我创建的', today: '今日到期', done: '已完成', workorders: '群工单' };
         document.getElementById('currentViewTitle').textContent = titles[filter];
+        if (filter === 'workorders') {
+            if (typeof this.loadWorkOrders === 'function') {
+                this.loadWorkOrders(1);
+            }
+            return;
+        }
+        var woToolbar = document.getElementById('woToolbarActions');
+        if (woToolbar) woToolbar.style.display = 'none';
+        var searchInput = document.querySelector('.task-toolbar .search-input');
+        if (searchInput) searchInput.placeholder = '搜索任务...';
+        var viewSwitcher = document.querySelector('.task-toolbar .view-switcher');
+        if (viewSwitcher) viewSwitcher.style.display = '';
         this.loadTasks();
     }
 
     switchView(view) {
+        if (this.currentFilter === 'workorders') return;
         this.currentView = view;
         document.querySelectorAll('.view-switcher .btn-icon').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.view === view);
@@ -423,6 +479,10 @@ class TaskApp {
 
     searchTasks(keyword) {
         this.searchKeyword = keyword;
+        if (this.currentFilter === 'workorders' && typeof this.loadWorkOrders === 'function') {
+            this.loadWorkOrders(1);
+            return;
+        }
         this.loadTasks();
     }
 
@@ -589,6 +649,13 @@ class TaskApp {
         const overlay = document.getElementById('sidebarOverlay');
         sidebar.classList.toggle('show');
         overlay.classList.toggle('show');
+    }
+
+    closeSidebar() {
+        const sidebar = document.getElementById('taskSidebar');
+        const overlay = document.getElementById('sidebarOverlay');
+        if (sidebar) sidebar.classList.remove('show');
+        if (overlay) overlay.classList.remove('show');
     }
 
     // ==================== 主题切换 ====================

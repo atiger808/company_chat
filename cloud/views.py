@@ -3408,14 +3408,15 @@ class CloudFileViewSet(viewsets.ModelViewSet, UtilsTools):
                 'exists': True
             }, status=status.HTTP_200_OK)
 
-        # 🔧 优化1：使用 get_or_create 返回的元组解包，确保获取的是对象实例而不是 (obj, created) 元组
-        safe_folder_name = '文档（来自聊天室）'
+        # 支持调用方指定默认目录（如群工单使用「文档（来自群工单）」）
+        folder_name = (request.data.get('folder_name') or '').strip()
+        safe_folder_name = (folder_name or '文档（来自聊天室）')[:100]
         root_folder, _ = Folder.objects.get_or_create(
             owner=user,
             name=safe_folder_name,
             defaults={
                 'parent': None,
-                'description': '从聊天室同步',
+                'description': '从群工单同步' if '群工单' in safe_folder_name else '从聊天室同步',
                 'is_public': False
             }
         )

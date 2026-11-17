@@ -270,6 +270,11 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'chat.tasks.sync_chat_card_status_task',
         'schedule': _crontab(minute='*/2'),
     },
+    # 每 15 分钟检查审批/任务/群工单超时未处理，按企业在工作日历配置的时间段与频率发送提醒
+    'timeout-reminder-quarter-hourly': {
+        'task': 'oa.tasks.run_timeout_reminders',
+        'schedule': _crontab(minute='*/15'),
+    },
 }
 
 # 添加这些关键配置
@@ -440,7 +445,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20261112-8846f91'
+STATIC_VERSION = '20261117-bb2128c'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -564,7 +569,20 @@ API_MODEL_MAP = {
     "/s/<str:share_code>/": "分享访问",
     "/s/<str:share_code>/download/": "分享下载",
 
-    # ====== 任务中心 ======
+    # ====== 任务中心 · 群工单（具体动作优先于通用前缀，中间件按最长规则匹配） ======
+    "/api/tasks/workorders/<int:pk>/stages/<int:stage_id>/reassign/": "群工单环节改派",
+    "/api/tasks/workorders/<int:pk>/change-verifier/": "群工单更换核验人",
+    "/api/tasks/workorders/<int:pk>/stage-action/": "群工单环节处理",
+    "/api/tasks/workorders/<int:pk>/comments/": "群工单进度评论",
+    "/api/tasks/workorders/<int:pk>/verify/": "群工单核验",
+    "/api/tasks/workorders/<int:pk>/cancel/": "群工单取消",
+    "/api/tasks/workorders/<int:pk>/ding/": "群工单催办",
+    "/api/tasks/workorders/permission-config/": "群工单发起权限配置",
+    "/api/tasks/workorders/can-create/": "群工单发起权限校验",
+    "/api/tasks/workorders/stats/": "群工单统计",
+    "/api/tasks/workorders/export/": "群工单导出",
+    "/api/tasks/workorders/<int:pk>/": "群工单详情",
+    "/api/tasks/workorders/": "群工单",
     "/api/tasks/": "任务中心",
 
     # ====== OA办公 ======

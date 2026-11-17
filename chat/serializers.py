@@ -161,6 +161,23 @@ class ChatRoomSerializer(serializers.ModelSerializer):
                     last_msg.content = content_text
                 except Exception as e:
                     logger.error(f"Error in get_last_message: {e}")
+            elif last_msg.message_type == 'work_order_card':
+                try:
+                    card_data = json.loads(last_msg.content)
+                    progress = card_data.get('progress') or {}
+                    content_text = (f"🧾 工单 {card_data.get('order_no', '')}「{card_data.get('title', '')}」"
+                                    f" · {card_data.get('status_display', '')} "
+                                    f"{progress.get('done', 0)}/{progress.get('total', 0)}")
+                    last_msg.content = content_text
+                except Exception as e:
+                    logger.error(f"Error in get_last_message: {e}")
+            elif last_msg.message_type == 'work_order_notice':
+                try:
+                    notice = json.loads(last_msg.content)
+                    content_text = notice.get('text') if isinstance(notice, dict) else ''
+                except Exception:
+                    content_text = last_msg.content
+                last_msg.content = content_text or '🧾 工单通知'
             # logger.info(f"Hit cache for {obj.id} last msg: {last_msg}")
             # # 返回序列化后的数据
             return MessageSerializer(last_msg, context=self.context).data
@@ -218,6 +235,23 @@ class ChatRoomSerializer(serializers.ModelSerializer):
                         last_msg.content = content_text
                     except Exception as e:
                         logger.error(f"Error in get_last_message: {e}")
+                elif last_msg.message_type == 'work_order_card':
+                    try:
+                        card_data = json.loads(last_msg.content)
+                        progress = card_data.get('progress') or {}
+                        content_text = (f"🧾 工单 {card_data.get('order_no', '')}「{card_data.get('title', '')}」"
+                                        f" · {card_data.get('status_display', '')} "
+                                        f"{progress.get('done', 0)}/{progress.get('total', 0)}")
+                        last_msg.content = content_text
+                    except Exception as e:
+                        logger.error(f"Error in get_last_message: {e}")
+                elif last_msg.message_type == 'work_order_notice':
+                    try:
+                        notice = json.loads(last_msg.content)
+                        content_text = notice.get('text') if isinstance(notice, dict) else ''
+                    except Exception:
+                        content_text = last_msg.content
+                    last_msg.content = content_text or '🧾 工单通知'
                 return MessageSerializer(last_msg, context=self.context).data
             return None
         except Exception as e:
@@ -356,6 +390,7 @@ class MessageSerializer(serializers.ModelSerializer):
     approval_data = serializers.SerializerMethodField()
     work_summary_data = serializers.SerializerMethodField()
     collab_data = serializers.SerializerMethodField()
+    work_order_data = serializers.SerializerMethodField()
 
     def create(self, validated_data):
         file_id = validated_data.pop('file_id', None)
@@ -383,7 +418,8 @@ class MessageSerializer(serializers.ModelSerializer):
             # 🔧 添加语音时长字段
             'voice_duration', 'mentioned_users', 'mentioned_all',  # 🔧 加入列表
             'call_duration', 'call_type', 'call_status',
-            'cloud_file_id', 'task_data', 'approval_data', 'work_summary_data', 'collab_data',  # 🔧 新增字段
+            'cloud_file_id', 'task_data', 'approval_data', 'work_summary_data', 'collab_data',
+            'work_order_data',  # 群工单卡片
         ]
         read_only_fields = ['id', 'timestamp', 'is_read', 'is_deleted', 'deleted_at', 'sender', 'sender_id', 'sender_name', 'voice_duration', 'mentioned_users', 'mentioned_all']
 
@@ -602,6 +638,19 @@ class MessageSerializer(serializers.ModelSerializer):
             except Exception as e:
                 logger.error(f"Error parsing collab card content: {e}")
                 return None
+        return None
+
+    def get_work_order_data(self, obj):
+        """群工单卡片 / 通知数据"""
+        if obj.message_type in ('work_order_card', 'work_order_notice'):
+            try:
+                data = json.loads(obj.content)
+                if isinstance(data, dict):
+                    return data
+            except Exception as e:
+                logger.error(f"Error parsing work order content: {e}")
+            if obj.message_type == 'work_order_notice':
+                return {'kind': 'notice', 'text': obj.content or '', 'work_order_id': None}
         return None
 
 

@@ -122,10 +122,28 @@ body {
 .sidebar.sidebar-narrow .sidebar-header .logo i {
   margin: 0;
 }
+.sidebar.sidebar-narrow .sidebar-header {
+  padding: 16px 0;
+  justify-content: center;
+}
+/* 导航文字是裸文本节点，用 font-size:0 隐藏，保证窄模式只保留图标 */
+.sidebar.sidebar-narrow .nav-menu .nav-item {
+  gap: 0;
+  font-size: 0;
+}
+.sidebar.sidebar-narrow .nav-menu .nav-item i {
+  font-size: 18px;
+}
 .sidebar.sidebar-narrow .sidebar-footer .btn-back-chat,
 .sidebar.sidebar-narrow .sidebar-footer .btn-logout {
   justify-content: center;
+  gap: 0;
   padding: 10px 8px;
+  font-size: 0;
+}
+.sidebar.sidebar-narrow .sidebar-footer .btn-back-chat i,
+.sidebar.sidebar-narrow .sidebar-footer .btn-logout i {
+  font-size: 15px;
 }
 .sidebar.sidebar-narrow .sidebar-footer .btn-back-chat span,
 .sidebar.sidebar-narrow .sidebar-footer .btn-logout span {

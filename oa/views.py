@@ -94,18 +94,21 @@ from utils.request_util import get_request_ip
 from utils.cloud_permission_utils import get_effective_operation_permission
 
 
-def send_work_notification(user_id, title, content, notification_type='system', related_url='', extra_data=None):
+def send_work_notification(user_id, title, content, notification_type='system', related_url='', extra_data=None,
+                           tenant=None):
     """创建工作通知并通过WebSocket实时推送"""
     from accounts.models import CustomUser
     try:
         user = CustomUser.objects.get(id=user_id)
+        extra_data = extra_data or {}
         note = WorkNotification.objects.create(
             recipient=user,
+            tenant=tenant,
             notification_type=notification_type,
             title=title,
             content=content,
             related_url=related_url,
-            extra_data=extra_data or {},
+            extra_data=extra_data,
         )
         # WebSocket实时推送
         channel_layer = get_channel_layer()
@@ -122,6 +125,7 @@ def send_work_notification(user_id, title, content, notification_type='system', 
                     'related_url': related_url,
                     'avatar_url': user.get_avatar_url() if hasattr(user, 'get_avatar_url') else '',
                     'created_at': note.created_at.isoformat() if note.created_at else '',
+                    'extra_data': extra_data,
                 }
             }
         )
@@ -10470,16 +10474,30 @@ class WorkCalendarViewSet(viewsets.ViewSet):
             cfg = DailyDigestConfig.objects.filter(tenant=tenant).first()
             if cfg and cfg.enabled and cfg.auto_send:
                 self._ensure_digest_periodic_task()
+            # 审批/任务超时提醒 + 瀑布流通知配置（存 SystemConfig，无需迁移）
+            from .timeout_reminder import save_timeout_config
+            reminder_payload = request.data.get('reminder')
+            if isinstance(reminder_payload, dict):
+                save_timeout_config(tenant, reminder_payload, user=request.user)
+            elif 'waterfall_enabled' in request.data:
+                save_timeout_config(
+                    tenant, {'waterfall_enabled': request.data.get('waterfall_enabled')},
+                    user=request.user)
             return Response({'encrypt': True, 'data': encrypt_data(self._digest_config_data(tenant))})
         return Response({'encrypt': True, 'data': encrypt_data(self._digest_config_data(tenant))})
 
     def _digest_config_data(self, tenant):
         from .models import DailyDigestConfig
+        from .timeout_reminder import get_timeout_config
         cfg = DailyDigestConfig.objects.filter(tenant=tenant).first()
+        reminder = get_timeout_config(tenant)
+        reminder.pop('last_sent_at', None)
         return {
             'enabled': bool(cfg and cfg.enabled),
             'send_time': (cfg.send_time.strftime('%H:%M') if cfg and cfg.send_time else '09:00'),
             'auto_send': bool(cfg and cfg.auto_send),
+            'reminder': reminder,
+            'waterfall_enabled': bool(reminder.get('waterfall_enabled')),
         }
 
     def _activity_weight_payload(self, tenant):
@@ -11033,6 +11051,135 @@ class WorkNotificationViewSet(viewsets.ViewSet):
                 pass
         cfg.save()
         return Response(self._popup_payload(cfg))
+
+    @action(detail=False, methods=['get'], url_path='waterfall-config')
+    def waterfall_config(self, request):
+        """瀑布流通知开关（工作日历「每日通知配置」里开启）。"""
+        from .timeout_reminder import is_waterfall_enabled
+        return Response({'enabled': is_waterfall_enabled(self._popup_config_tenant(request))})
+
+    @action(detail=False, methods=['get'])
+    def todo(self, request):
+        """瀑布流顶部「待办工作」：到达当前审批人的审批 + 到达执行人的任务/群工单。
+
+        待办与普通通知不同：不依赖「已读」状态，处理完成前会一直返回。
+        """
+        from django.db.models import F
+        from tasks.models import Task, WorkOrderStage
+        from .models import ApprovalAssignee
+
+        tenant = self._popup_config_tenant(request)
+        user = request.user
+        items = []
+        now = timezone.now()
+
+        approval_qs = ApprovalAssignee.objects.filter(
+            user=user, user__is_active=True, status='pending',
+            node__request__status__in=['pending', 'processing', 'deferred'],
+        ).select_related(
+            'node__request', 'node__request__applicant'
+        ).prefetch_related('node__request__approval_nodes')
+        if tenant:
+            approval_qs = approval_qs.filter(node__request__tenant=tenant)
+        seen_requests = set()
+        for assignee in approval_qs.order_by('created_at'):
+            req = assignee.node.request
+            # 串行审批只提醒「当前节点」；历史数据 current_node_order=0 时按首个节点兜底
+            if req.approval_mode != 'parallel':
+                cur_order = req.current_node_order or 0
+                if cur_order:
+                    if assignee.node.order != cur_order:
+                        continue
+                else:
+                    orders = [n.order for n in req.approval_nodes.all()]
+                    if orders and assignee.node.order != min(orders):
+                        continue
+            if req.id in seen_requests:
+                continue
+            seen_requests.add(req.id)
+            applicant = req.applicant
+            applicant_name = (getattr(applicant, 'real_name', '') or
+                              getattr(applicant, 'username', '') or '')
+            waited = now - assignee.created_at
+            hours = int(waited.total_seconds() // 3600)
+            items.append({
+                'kind': 'approval',
+                'id': req.id,
+                'badge': '审批',
+                'title': req.title or ('审批#' + str(req.id)),
+                'subtitle': '申请人：' + applicant_name + (' · 已等待 ' + str(hours) + ' 小时' if hours >= 1 else ''),
+                'since': assignee.created_at.isoformat() if assignee.created_at else '',
+                'url': '/oa/approval/?approval_id=' + str(req.id),
+            })
+
+        task_qs = Task.objects.filter(
+            assignee=user, status__in=['todo', 'in_progress'], assignee__is_active=True)
+        if tenant:
+            task_qs = task_qs.filter(tenant=tenant)
+        status_text = dict(Task.STATUS_CHOICES)
+        priority_text = dict(Task.PRIORITY_CHOICES)
+        for task in task_qs.select_related('assignee'):
+            due = ''
+            if task.due_date:
+                due = ' · 截止 ' + timezone.localtime(task.due_date).strftime('%m-%d %H:%M')
+            items.append({
+                'kind': 'task',
+                'id': task.id,
+                'badge': '任务',
+                'title': task.title,
+                'subtitle': status_text.get(task.status, task.status) + ' · ' +
+                            priority_text.get(task.priority, task.priority) + due,
+                'since': task.created_at.isoformat() if task.created_at else '',
+                'url': '/tasks/?task_id=' + str(task.id),
+            })
+
+        stage_qs = WorkOrderStage.objects.filter(
+            assignee=user, assignee__is_active=True,
+            status__in=['pending', 'processing'],
+            work_order__status__in=['pending', 'processing'],
+            work_order__current_stage_order=F('order'),
+        ).select_related('work_order', 'assignee').prefetch_related('work_order__stages')
+        if tenant:
+            stage_qs = stage_qs.filter(work_order__tenant=tenant)
+        for stage in stage_qs:
+            wo = stage.work_order
+            deadline = ''
+            if stage.deadline:
+                deadline = ' · 截止 ' + timezone.localtime(stage.deadline).strftime('%m-%d %H:%M')
+            prev_done = [s.completed_at for s in wo.stages.all()
+                         if s.order < stage.order and s.completed_at]
+            reached = stage.started_at or (max(prev_done) if prev_done else None) or wo.created_at
+            items.append({
+                'kind': 'workorder',
+                'id': wo.id,
+                'badge': '群工单',
+                'title': (wo.order_no or '') + ' ' + (wo.title or ''),
+                'subtitle': '当前环节：' + (stage.name or '') + deadline,
+                'since': reached.isoformat() if reached else '',
+                'url': '/tasks/?work_order_id=' + str(wo.id),
+            })
+
+        # 越早到达的待办越靠前，方便优先处理积压事项
+        items.sort(key=lambda x: x.get('since') or '')
+        try:
+            page = max(1, int(request.query_params.get('page') or 1))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(request.query_params.get('page_size') or 20)
+        except (TypeError, ValueError):
+            page_size = 20
+        page_size = max(1, min(50, page_size))
+        total = len(items)
+        start = (page - 1) * page_size
+        end = start + page_size
+        return Response({
+            'items': items[start:end],
+            'count': total,
+            'page': page,
+            'page_size': page_size,
+            'has_more': end < total,
+        })
 
 
 def _parse_ocr_raw(raw):
