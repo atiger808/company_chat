@@ -2402,6 +2402,14 @@ class AdminConsole {
                     return;
                 }
 
+                // 瀑布流通知：打开配置模态框，不切换标签
+                if (item.dataset.tab === 'waterfall-config') {
+                    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                    item.classList.add('active');
+                    this.openWaterfallConfig();
+                    return;
+                }
+
                 // 智能体：打开配置模态框，不切换标签
                 if (item.dataset.tab === 'agent') {
                     document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
@@ -3446,6 +3454,100 @@ class AdminConsole {
             this.showToast ? this.showToast('通知弹窗配置已保存', false) : (alert && alert('通知弹窗配置已保存'));
             this.closeNotifPopupConfig();
         } catch (e) { this.showError ? this.showError('保存失败', e.message) : (alert && alert('保存失败：' + e.message)); }
+    }
+
+    // ==================== 瀑布流工作通知（仅超级管理员） ====================
+    // 总开关 + 按页面开关；关闭总开关时所有页面都不显示。
+    openWaterfallConfig() {
+        document.getElementById('waterfallConfigModal').style.display = 'flex';
+        setTimeout(function () {
+            document.getElementById('waterfallConfigModal').classList.add('show');
+        }, 10);
+        this.loadWaterfallConfig();
+    }
+    closeWaterfallConfig() {
+        var m = document.getElementById('waterfallConfigModal');
+        if (m) { m.classList.remove('show'); setTimeout(function () { m.style.display = 'none'; }, 150); }
+    }
+    async loadWaterfallConfig() {
+        try {
+            const resp = await fetch('/api/oa/notifications/waterfall-config/', {headers: TokenManager.getHeaders()});
+            if (!resp.ok) { this.showError && this.showError('加载失败', '无法获取瀑布流通知配置'); return; }
+            const raw = await resp.json();
+            const d = raw.encrypt && window.EncryptUtils ? window.EncryptUtils.decryptPacket(raw) : raw;
+            const master = document.getElementById('wfMasterEnabled');
+            if (master) master.checked = !!d.enabled;
+            this._renderWaterfallPageToggles(d.options || [], d.pages || {});
+            this._renderWaterfallTodoToggles(d.todo_options || [], d.todo_types || {});
+        } catch (e) { console.warn('加载瀑布流通知配置失败', e); }
+    }
+    _renderWaterfallTodoToggles(options, todoTypes) {
+        var wrap = document.getElementById('wfTodoToggles');
+        if (!wrap) return;
+        if (!options.length) {
+            wrap.innerHTML = '<div style="color:#909399;font-size:13px;">暂无可配置的待办类型</div>';
+            return;
+        }
+        var self = this;
+        wrap.innerHTML = options.map(function (o) {
+            var on = todoTypes[o.key] === true;
+            return '<label class="wo-perm-item">'
+                + '<span class="wo-perm-label">' + self._escape(o.label) + '</span>'
+                + '<span class="switch">'
+                + '<input type="checkbox" class="wf-todo-cb" data-type="' + self._escape(o.key) + '" '
+                + (on ? 'checked' : '') + '>'
+                + '<span class="slider"></span></span>'
+                + '</label>';
+        }).join('');
+    }
+    _renderWaterfallPageToggles(options, pages) {
+        var wrap = document.getElementById('wfPageToggles');
+        if (!wrap) return;
+        if (!options.length) {
+            wrap.innerHTML = '<div style="color:#909399;font-size:13px;">暂无可配置的页面</div>';
+            return;
+        }
+        var self = this;
+        wrap.innerHTML = options.map(function (o) {
+            var on = pages[o.key] === true;
+            return '<label class="wo-perm-item">'
+                + '<span class="wo-perm-label">' + self._escape(o.label) + '</span>'
+                + '<span class="switch">'
+                + '<input type="checkbox" class="wf-page-cb" data-page="' + self._escape(o.key) + '" '
+                + (on ? 'checked' : '') + '>'
+                + '<span class="slider"></span></span>'
+                + '</label>';
+        }).join('');
+    }
+    async saveWaterfallConfig() {
+        var pages = {};
+        document.querySelectorAll('#wfPageToggles .wf-page-cb').forEach(function (cb) {
+            pages[cb.getAttribute('data-page')] = cb.checked;
+        });
+        var todoTypes = {};
+        document.querySelectorAll('#wfTodoToggles .wf-todo-cb').forEach(function (cb) {
+            todoTypes[cb.getAttribute('data-type')] = cb.checked;
+        });
+        var master = document.getElementById('wfMasterEnabled');
+        try {
+            const resp = await fetch('/api/oa/notifications/waterfall-config/', {
+                method: 'POST',
+                headers: TokenManager.getHeaders(),
+                body: JSON.stringify({
+                    enabled: !!(master && master.checked),
+                    pages: pages,
+                    todo_types: todoTypes,
+                })
+            });
+            if (!resp.ok) {
+                const e2 = await resp.json().catch(function () { return {}; });
+                throw new Error(e2.error || '保存失败');
+            }
+            this.showSuccess('保存成功', '瀑布流通知配置已保存');
+            this.closeWaterfallConfig();
+        } catch (e) {
+            this.showError ? this.showError('保存失败', e.message) : (alert && alert('保存失败：' + e.message));
+        }
     }
 
     // ==================== 群待办 / 工单发起权限（仅超级管理员） ====================

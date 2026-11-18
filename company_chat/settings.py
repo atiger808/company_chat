@@ -445,7 +445,7 @@ BASE_URL = 'https://chat.first-iq.com/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # 静态文件版本（每次部署更新）
-STATIC_VERSION = '20261117-bb2128c'
+STATIC_VERSION = '20261118-79b4cf7'
 
 # 构建时间
 BUILD_TIME = str(datetime.datetime.now())[:19]
@@ -583,6 +583,9 @@ API_MODEL_MAP = {
     "/api/tasks/workorders/export/": "群工单导出",
     "/api/tasks/workorders/<int:pk>/": "群工单详情",
     "/api/tasks/workorders/": "群工单",
+    "/api/tasks/<int:pk>/attachments/": "任务附件",
+    "/api/tasks/<int:pk>/change_status/": "任务状态变更",
+    "/api/tasks/<int:pk>/add_comment/": "任务评论",
     "/api/tasks/": "任务中心",
 
     # ====== OA办公 ======
@@ -753,6 +756,8 @@ API_MODEL_MAP = {
     "/api/oa/notifications/unread-count/": "通知未读数",
     "/api/oa/notifications/mark-all-read/": "通知全部已读",
     "/api/oa/notifications/popup-config/": "通知弹窗配置",
+    "/api/oa/notifications/waterfall-config/": "瀑布流通知配置",
+    "/api/oa/notifications/todo/": "瀑布流待办工作",
     "/api/oa/notifications/<int:pk>/mark-read/": "标记通知已读",
     "/api/system/announcement-config/": "集团公告配置",
     "/api/system/report-access-config/": "报表与数据分析配置",

@@ -72,6 +72,44 @@ def _read_text_file(path):
         return ''
 
 
+_VERSION_ENTRY_RE = re.compile(r'^(\d+)\.\s*(.*)$')
+
+# 版本接口只返回前若干行作为横幅预览，完整日志由 /version/log/ 分片加载
+VERSION_MESSAGE_PREVIEW_LINES = 12
+VERSION_LOG_DEFAULT_LIMIT = 6
+VERSION_LOG_MAX_LIMIT = 50
+
+
+def _parse_version_log(text):
+    """把 VERSION_MESSAGE.txt 解析成条目列表：以「N. 」开头的行是新条目，其余行归入上一条。"""
+    entries = []
+    current = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        m = _VERSION_ENTRY_RE.match(line)
+        if m:
+            current = {
+                'num': int(m.group(1)),
+                'title': (m.group(2) or '').strip() or line,
+                'parts': [],
+            }
+            entries.append(current)
+        elif current is not None:
+            current['parts'].append(line)
+        else:
+            entries.append({'num': None, 'title': line, 'parts': []})
+    return entries
+
+
+def _version_log_entries():
+    update_msg_file = os.path.join(settings.BASE_DIR, 'VERSION_MESSAGE.txt')
+    if not os.path.exists(update_msg_file):
+        return []
+    return _parse_version_log(_read_text_file(update_msg_file))
+
+
 class VersionView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -98,12 +136,18 @@ class VersionView(APIView):
         # 检查是否需要强制更新（可通过环境变量配置）
         force_update = os.environ.get('FORCE_UPDATE', 'false').lower() == 'true'
 
-        # 更新说明（可从文件读取）
+        # 更新说明（可从文件读取）：只取前若干行做横幅预览；
+        # 完整日志由 /api/chat/version/log/ 按 offset/limit 分片返回，避免一次加载全部内容。
         update_message = ""
+        version_entries = []
         update_msg_file = os.path.join(settings.BASE_DIR, 'VERSION_MESSAGE.txt')
         if os.path.exists(update_msg_file):
-            update_message = '<br>'.join(
-                [i for i in _read_text_file(update_msg_file).splitlines() if i.strip()])
+            raw_log = _read_text_file(update_msg_file)
+            version_entries = _parse_version_log(raw_log)
+            preview_lines = [
+                i for i in raw_log.splitlines() if i.strip()
+            ][:VERSION_MESSAGE_PREVIEW_LINES]
+            update_message = '<br>'.join(preview_lines)
             build_time = str(datetime.fromtimestamp(os.path.getmtime(update_msg_file)))[:19]
 
         # 版本提示自动关闭时长（管理控制台「系统设置-聊天设置」可配置，默认 120 秒）
@@ -121,11 +165,40 @@ class VersionView(APIView):
             'build_time': build_time,
             'force_update': force_update,
             'update_message': update_message,
+            'version_log_total': len(version_entries),
             'version_prompt_duration_seconds': prompt_seconds,
             'environment': settings.ENVIRONMENT if hasattr(settings, 'ENVIRONMENT') else 'production'
         }
 
         return JsonResponse(info)
+
+
+class VersionLogView(APIView):
+    """版本更新日志分片接口：按 offset/limit 返回解析后的条目，避免一次性下发全部日志。"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        try:
+            offset = max(0, int(request.query_params.get('offset', 0)))
+        except (TypeError, ValueError):
+            offset = 0
+        try:
+            limit = int(request.query_params.get('limit', VERSION_LOG_DEFAULT_LIMIT))
+        except (TypeError, ValueError):
+            limit = VERSION_LOG_DEFAULT_LIMIT
+        limit = max(1, min(limit, VERSION_LOG_MAX_LIMIT))
+
+        entries = _version_log_entries()
+        total = len(entries)
+        page = entries[offset:offset + limit]
+
+        return JsonResponse({
+            'entries': page,
+            'total': total,
+            'offset': offset,
+            'limit': limit,
+            'has_more': offset + len(page) < total,
+        })
 
 
 

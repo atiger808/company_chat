@@ -9,6 +9,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
     VersionView,
+    VersionLogView,
     ChatRoomViewSet,
     MessageViewSet,
     FileUploadView,
@@ -37,6 +38,7 @@ urlpatterns = [
     path('', include(router.urls)),
 
     path('version/', VersionView.as_view(), name='version'),
+    path('version/log/', VersionLogView.as_view(), name='version-log'),
 
     path('system/configs/', SystemcConfigView.as_view(), name='system-config'),
     path('turn/credentials/', TurnCredentialsView.as_view(), name='turn-credentials'),

@@ -363,6 +363,7 @@
                 + '      <span class="wo-card-stage"><i class="fas fa-route"></i> <span class="wo-current-stage">' + esc(cur.name || '') + '（' + esc(cur.assignee_name || '未指派') + '）</span></span>'
                 + (cur.deadline ? '<span><i class="fas fa-clock"></i> 截止 ' + esc(fmtTime(cur.deadline)) + '</span>' : '')
                 + '      <span><i class="fas fa-user-circle"></i> 发起 ' + esc(card.creator_name || '') + ' · 核验 ' + esc(card.verifier_name || '') + '</span>'
+                + (card.tenant_name ? '      <span><i class="fas fa-building"></i> ' + esc(card.tenant_name) + '</span>' : '')
                 + '    </div>'
                 + '  </div>'
                 + '  <div class="wo-card-foot">查看详情 / 更新进度 <i class="fas fa-chevron-right"></i></div>'
@@ -538,7 +539,8 @@
                 + '      <span style="color:' + urgencyColor(wo.urgency) + ';">' + esc(wo.urgency_display) + '</span>'
                 + '      <span><i class="fas fa-user-circle"></i> 发起 ' + esc(wo.creator_name) + '</span>'
                 + '      <span><i class="fas fa-user-shield"></i> 核验 ' + esc(wo.verifier_name) + '</span>'
-                + '      <span><i class="fas fa-building"></i> ' + esc(wo.room_name || '') + '</span>'
+                + '      <span><i class="fas fa-building"></i> 企业 ' + esc(wo.tenant_name || '-') + '</span>'
+                + '      <span><i class="fas fa-users"></i> ' + esc(wo.room_name || '') + '</span>'
                 + '      <span><i class="fas fa-clock"></i> ' + esc(fmtTime(wo.created_at)) + '</span>'
                 + '    </div>'
                 + '    <div class="wo-progress-line"><div class="wo-progress-bar"><i style="width:' + pct + '%;"></i></div><span class="wo-progress-label">进度 ' + (p.done || 0) + '/' + (p.total || 0) + '</span></div>'

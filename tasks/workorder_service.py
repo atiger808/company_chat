@@ -267,6 +267,7 @@ def build_card_data(wo):
             'status_display': STAGE_STATUS_TEXT.get(cur.status, cur.status),
         } if cur else None),
         'room_id': wo.chat_room_id,
+        'tenant_name': wo.tenant.name if wo.tenant else '',
         'creator_name': wo.creator_name,
         'verifier_name': wo.verifier_name,
         'last_action': wo.last_action,

@@ -6,6 +6,33 @@
     var OA_API = '/api/oa';
     var MAX_ITEMS = 15;
     var TODO_PAGE_SIZE = 20;
+    var AUTO_REFRESH_MS = 60000;
+    var _loadingAll = false;
+    var _lastRenderSig = '';
+    var _lastAutoAt = 0;
+    var _userDismissed = false;  // 用户手动关闭后，本次页面访问内定时刷新不再自动弹出
+    // 当前页面标识：管理控制台可按页面开关瀑布流（chat/tasks/approval/work_calendar/cloud）
+    var PAGE_KEY = (function () {
+        if (window.WATERFALL_PAGE) return window.WATERFALL_PAGE;
+        var p = window.location.pathname || '';
+        if (p.indexOf('/cloud/settings') === 0) return 'cloud_settings';
+        if (p.indexOf('/cloud/editor') === 0) return 'cloud_editor';
+        if (p.indexOf('/cloud') === 0) return 'cloud';
+        if (p.indexOf('/oa/approval') === 0) return 'oa_approval';
+        if (p.indexOf('/oa/subsidy-verify') === 0) return 'oa_subsidy_verify';
+        if (p.indexOf('/oa/subsidy-pay') === 0) return 'oa_subsidy_pay';
+        if (p.indexOf('/oa/subsidy') === 0) return 'oa_subsidy';
+        if (p.indexOf('/oa/attendance') === 0) return 'oa_attendance';
+        if (p.indexOf('/oa/announcement') === 0) return 'oa_announcements';
+        if (p.indexOf('/oa/work-calendar') === 0) return 'work_calendar';
+        if (p.indexOf('/oa/work-summary') === 0) return 'work_summary';
+        if (p.indexOf('/tasks') === 0) return 'tasks';
+        if (p.indexOf('/org') === 0) return 'org';
+        if (p.indexOf('/docs') === 0) return 'knowledge';
+        if (p.indexOf('/control') === 0 || p.indexOf('/admin') === 0) return 'admin';
+        if (p.indexOf('/chat') === 0) return 'chat';
+        return 'other';
+    })();
     var cached = [];
     var cachedTodo = [];
     var todoPage = 0;
@@ -40,7 +67,14 @@
     }
 
     async function apiPost(url) {
-        var res = await fetch(url, {method: 'POST', headers: authHeaders(), body: '{}'});
+        // keepalive：移动端点击后立即跳转时，浏览器仍会继续发送已读请求，
+        // 避免页面卸载把请求中断导致「已读」未生效。
+        var res = await fetch(url, {
+            method: 'POST',
+            headers: authHeaders(),
+            body: '{}',
+            keepalive: true
+        });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         return res.json().catch(function () { return {}; });
     }
@@ -59,7 +93,9 @@
     function typeIcon(t) {
         return {
             approval: 'fa-check-double', attendance: 'fa-clock', task: 'fa-tasks',
-            collab: 'fa-users', subsidy: 'fa-hand-holding-usd', daily: 'fa-calendar-day',
+            collab: 'fa-users', subsidy: 'fa-hand-holding-usd',
+            subsidy_apply: 'fa-file-invoice-dollar', subsidy_withdraw: 'fa-hand-holding-usd',
+            daily: 'fa-calendar-day',
             work_summary: 'fa-file-signature', announcement: 'fa-bullhorn',
             workorder: 'fa-clipboard-list', hr: 'fa-user-tie', system: 'fa-bell'
         }[t] || 'fa-bell';
@@ -70,6 +106,10 @@
         var ed = (n && n.extra_data) || {};
         if (n && n.type === 'approval' && ed.approval_id && u.indexOf('approval_id') === -1) {
             u = '/oa/approval/?approval_id=' + ed.approval_id;
+        } else if (n && n.type === 'subsidy_apply' && ed.application_id && u.indexOf('application_id') === -1) {
+            u = '/oa/subsidy-verify/?application_id=' + ed.application_id;
+        } else if (n && n.type === 'subsidy_withdraw' && ed.withdrawal_id && u.indexOf('withdrawal_id') === -1) {
+            u = '/oa/subsidy-pay/?withdrawal_id=' + ed.withdrawal_id;
         } else if (n && n.type === 'subsidy' && ed.application_id && u.indexOf('application_id') === -1) {
             u = '/oa/subsidy/?application_id=' + ed.application_id;
         } else if (n && n.type === 'task' && ed.task_id && u.indexOf('task_id') === -1) {
@@ -95,7 +135,7 @@
     function injectStyles() {
         if (document.getElementById('wfStyle')) return;
         var css = ''
-            + '#wfPanel{position:fixed;right:16px;top:72px;width:340px;max-width:calc(100vw - 24px);max-height:70vh;z-index:9600;display:flex;flex-direction:column;pointer-events:auto;opacity:.92;border-radius:12px;box-shadow:0 0 0 1px rgba(64,158,255,.32),0 10px 30px rgba(0,0,0,.14);transition:opacity .2s ease,box-shadow .2s ease;}'
+            + '#wfPanel{position:fixed;right:16px;top:72px;width:340px;max-width:calc(100vw - 24px);max-height:70vh;z-index:9600;display:flex;flex-direction:column;pointer-events:auto;opacity:.82;border-radius:12px;box-shadow:0 0 0 1px rgba(64,158,255,.32),0 10px 30px rgba(0,0,0,.14);transition:opacity .2s ease,box-shadow .2s ease;}'
             + '#wfPanel:hover{opacity:1;}'
             + '#wfPanel.collapsed{opacity:.96;box-shadow:0 0 0 2px rgba(64,158,255,.55),0 8px 24px rgba(0,0,0,.16);}'
             + '#wfPanel .wf-head{display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--bg-primary,#fff);border:1px solid var(--border-color,#ebeef5);border-radius:12px 12px 0 0;box-shadow:0 6px 24px rgba(0,0,0,.12);font-size:14px;font-weight:600;color:var(--text-primary,#303133);cursor:move;touch-action:none;user-select:none;}'
@@ -231,16 +271,24 @@
         head.addEventListener('pointercancel', end);
     }
 
-    function dismiss() {
+    function dismiss(markUser) {
         // 仅隐藏当前页面；下次打开页面仍会默认展示（不做持久化关闭）
+        if (markUser) _userDismissed = true;
         var p = document.getElementById('wfPanel');
         if (p) p.remove();
     }
 
     function todoCardHtml(t) {
+        var iconMap = {
+            approval: 'fa-check-double',
+            workorder: 'fa-clipboard-list',
+            subsidy_apply: 'fa-file-invoice-dollar',
+            subsidy_withdraw: 'fa-hand-holding-usd',
+            task: 'fa-tasks'
+        };
         return '<div class="wf-card wf-todo" data-kind="' + esc(t.kind || '') + '" data-url="' + esc(t.url || '') + '">'
             + '<div class="wf-icon" style="background:#f56c6c;">'
-            + '<i class="fas ' + (t.kind === 'approval' ? 'fa-check-double' : (t.kind === 'workorder' ? 'fa-clipboard-list' : 'fa-tasks')) + '"></i></div>'
+            + '<i class="fas ' + (iconMap[t.kind] || 'fa-tasks') + '"></i></div>'
             + '<div class="wf-body"><div class="wf-title"><span class="wf-badge">' + esc(t.badge || '待办') + '</span>'
             + esc(t.title || '') + '</div>'
             + '<div class="wf-text">' + esc(t.subtitle || '') + '</div>'
@@ -261,15 +309,37 @@
             + '<i class="fas fa-chevron-right wf-arrow"></i></div>';
     }
 
+    function _urlParamId(url, key) {
+        var m = String(url || '').match(new RegExp('[?&]' + key + '=(\\d+)'));
+        return m ? m[1] : '';
+    }
+
     // 待办已展示的事项，不再在「工作通知」区重复展示
     function filterNotifications() {
         var todoKeys = {};
         (cachedTodo || []).forEach(function (t) { todoKeys[t.kind + ':' + t.id] = true; });
         return (cached || []).filter(function (n) {
             var ed = n.extra_data || {};
-            if (n.type === 'approval' && ed.approval_id) return !todoKeys['approval:' + ed.approval_id];
-            if (n.type === 'task' && ed.task_id) return !todoKeys['task:' + ed.task_id];
-            if (n.type === 'workorder' && ed.work_order_id) return !todoKeys['workorder:' + ed.work_order_id];
+            if (n.type === 'approval') {
+                var aid = ed.approval_id || _urlParamId(n.related_url, 'approval_id');
+                if (aid) return !todoKeys['approval:' + aid];
+            }
+            if (n.type === 'task') {
+                var tid = ed.task_id || _urlParamId(n.related_url, 'task_id');
+                if (tid) return !todoKeys['task:' + tid];
+            }
+            if (n.type === 'workorder') {
+                var wid = ed.work_order_id || _urlParamId(n.related_url, 'work_order_id');
+                if (wid) return !todoKeys['workorder:' + wid];
+            }
+            if (n.type === 'subsidy_apply' || n.type === 'subsidy') {
+                var appId = ed.application_id || _urlParamId(n.related_url, 'application_id');
+                if (appId) return !todoKeys['subsidy_apply:' + appId];
+            }
+            if (n.type === 'subsidy_withdraw') {
+                var wdId = ed.withdrawal_id || _urlParamId(n.related_url, 'withdrawal_id');
+                if (wdId) return !todoKeys['subsidy_withdraw:' + wdId];
+            }
             return true;
         });
     }
@@ -279,6 +349,17 @@
         var label = kind === 'todo' ? '加载更多待办' : '加载更多通知';
         return '<div class="wf-more"><button class="wf-more-btn" data-kind="' + kind + '">'
             + label + ' <i class="fas fa-chevron-down" style="font-size:10px;"></i></button></div>';
+    }
+
+    function renderSig(todo, rows) {
+        var t = (todo || []).map(function (x) {
+            return [x.kind, x.id, x.badge, x.title, x.subtitle].join(':');
+        });
+        var r = (rows || []).map(function (x) {
+            return [x.id, x.title, x.content].join(':');
+        });
+        return [t.join('|'), r.join('|'), todoTotal, notifTotal,
+            todoHasMore ? 1 : 0, notifHasMore ? 1 : 0].join('||');
     }
 
     function render(todo, rows) {
@@ -291,6 +372,7 @@
         }
         todo = todo || [];
         rows = rows || [];
+        _lastRenderSig = renderSig(todo, rows);
         // 即使当前页被去重后为空，只要仍有更多数据，也必须渲染分区与「加载更多」按钮
         if (!todo.length && !rows.length && !todoHasMore && !notifHasMore) return;
         injectStyles();
@@ -304,12 +386,18 @@
             + '<button class="wf-toggle" title="隐藏瀑布流"><i class="fas fa-eye-slash"></i></button>'
             + '<button class="wf-close" title="关闭">&times;</button></div>'
             + '<div id="wfList">';
+
+        console.log(todoTotal)
+        console.log(notifTotal)
+        console.log(displayTotal)
         if (todo.length || todoHasMore) {
+            console.log(todo)
             html += '<div class="wf-sec-title todo"><i class="fas fa-list-check"></i> 待办工作（' + (todoTotal || todo.length) + '）</div>'
                 + (todo.length ? todo.map(todoCardHtml).join('') : '<div class="wf-empty-tip">暂无更多待办</div>')
                 + moreHtml('todo', todoHasMore);
         }
         if (rows.length || notifHasMore) {
+            console.log(rows)
             html += '<div class="wf-sec-title"><i class="fas fa-bell"></i> 工作通知（' + (notifTotal || rows.length) + '）</div>'
                 + (rows.length ? rows.map(normalCardHtml).join('') : '<div class="wf-empty-tip">当前页通知已并入待办，继续加载更多</div>')
                 + moreHtml('notif', notifHasMore);
@@ -345,7 +433,7 @@
         };
         var applyCollapsed = function (collapsed) {
             panel.classList.toggle('collapsed', collapsed);
-            if (toggleIcon) toggleIcon.className = collapsed ? 'fas fa-eye' : 'fas fa-eye-slash';
+            if (toggleIcon) toggleIcon.className = collapsed ? 'fas fa-eye-slash' : 'fas fa-eye';
             if (toggleBtn) toggleBtn.title = collapsed ? '显示瀑布流' : '隐藏瀑布流';
             if (collapsed) {
                 setFolded(false);
@@ -375,7 +463,7 @@
         }
         panel.querySelector('.wf-close').addEventListener('click', function (e) {
             e.stopPropagation();
-            dismiss();
+            dismiss(true);
         });
         panel.querySelectorAll('.wf-more-btn').forEach(function (btn) {
             btn.addEventListener('click', function (e) {
@@ -388,8 +476,30 @@
                 var url = card.getAttribute('data-url') || '';
                 var id = card.getAttribute('data-id');
                 // 待办不是「消息通知」，不标记已读；处理完成后由后端自动从待办中移除
-                if (id) apiPost(OA_API + '/notifications/' + id + '/mark-read/').catch(function () {});
-                if (url) window.location.href = url;
+                if (!id) {
+                    if (url) window.location.href = url;
+                    return;
+                }
+                // 未读通知：先等已读请求完成再跳转（移动端直接跳转会把请求中断），
+                // 同时本地移除该条，返回页面（含 bfcache）时不会仍显示已读通知。
+                if (card.getAttribute('data-navigating') === '1') return;
+                card.setAttribute('data-navigating', '1');
+                var navigated = false;
+                var go = function () {
+                    if (navigated) return;
+                    navigated = true;
+                    cached = cached.filter(function (n) { return String(n.id) !== String(id); });
+                    notifTotal = Math.max(0, notifTotal - 1);
+                    if (url) {
+                        window.location.href = url;
+                    } else {
+                        render(cachedTodo, filterNotifications());
+                    }
+                };
+                var timer = setTimeout(go, 1200);
+                apiPost(OA_API + '/notifications/' + id + '/mark-read/')
+                    .then(function () { clearTimeout(timer); go(); })
+                    .catch(function () { clearTimeout(timer); go(); });
             });
         });
     }
@@ -417,7 +527,7 @@
                     (cachedTodo.length < todoTotal || !!(td && td.has_more));
             } else {
                 var nextNotif = notifPage + 1;
-                var nd = await apiGet(OA_API + '/notifications/?page=' + nextNotif + '&page_size=' + MAX_ITEMS + '&read_filter=unread');
+                var nd = await apiGet(OA_API + '/notifications/?page=' + nextNotif + '&page_size=' + MAX_ITEMS + '&read_filter=unread&exclude_todo=1');
                 notifPage = nextNotif;
                 notifTotal = (nd && nd.count != null) ? nd.count : notifTotal;
                 var notifSeen = {};
@@ -439,28 +549,60 @@
     }
 
     async function load() {
+        if (_loadingAll) return;
         try {
             if (!token()) return;
+            _loadingAll = true;
             var cfg = await apiGet(OA_API + '/notifications/waterfall-config/');
-            if (!cfg || !cfg.enabled) return;
+            if (!cfg || !cfg.enabled) { dismiss(false); return; }
+            // 总开关开启时，仅管理控制台勾选的页面展示瀑布流
+            if (PAGE_KEY && cfg.pages && cfg.pages[PAGE_KEY] === false) { dismiss(false); return; }
+            // 自动刷新时保留用户已「加载更多」的条数，避免列表突然缩回第一页
+            var todoSize = Math.min(50, Math.max(TODO_PAGE_SIZE, (cachedTodo || []).length));
+            var notifSize = Math.max(MAX_ITEMS, Math.min(200, (cached || []).length));
             var results = await Promise.all([
-                apiGet(OA_API + '/notifications/todo/?page=1&page_size=' + TODO_PAGE_SIZE),
-                apiGet(OA_API + '/notifications/?page=1&page_size=' + MAX_ITEMS + '&read_filter=unread')
+                apiGet(OA_API + '/notifications/todo/?page=1&page_size=' + todoSize),
+                apiGet(OA_API + '/notifications/?page=1&page_size=' + notifSize + '&read_filter=unread&exclude_todo=1')
             ]);
             var td = results[0] || {};
             var nd = results[1] || {};
             cachedTodo = td.items || [];
-            todoPage = 1;
+            todoPage = Math.ceil(cachedTodo.length / TODO_PAGE_SIZE) || 1;
             todoTotal = (td.count != null) ? td.count : cachedTodo.length;
             // 以「总数 > 已加载」为主判断，兼容旧后端未返回 has_more / next 的情况
             todoHasMore = (cachedTodo.length < todoTotal) || !!td.has_more;
             cached = nd.results || [];
-            notifPage = 1;
+            notifPage = Math.ceil(cached.length / MAX_ITEMS) || 1;
             notifTotal = (nd.count != null) ? nd.count : cached.length;
             notifHasMore = !!(nd.next) || (notifTotal > cached.length);
-            render(cachedTodo, filterNotifications());
+            var rows = filterNotifications();
+            if (!_userDismissed && (!document.getElementById('wfPanel') ||
+                    renderSig(cachedTodo, rows) !== _lastRenderSig)) {
+                render(cachedTodo, rows);
+            }
         } catch (e) {
             // 静默失败：瀑布流不影响页面其它功能
+        } finally {
+            _loadingAll = false;
+        }
+    }
+
+    // 定时刷新：仅在页面可见、用户未操作瀑布流时于空闲时段拉取，减少对交互的影响
+    function autoRefresh() {
+        if (_loadingAll || todoLoading || notifLoading) return;
+        if (document.visibilityState && document.visibilityState !== 'visible') return;
+        // 已手动加载超过接口单页上限时不做自动刷新，避免列表回缩丢条目
+        if ((cachedTodo || []).length > 50 || (cached || []).length > 200) return;
+        var panel = document.getElementById('wfPanel');
+        if (panel && panel.matches && panel.matches(':hover')) return;
+        var now = Date.now();
+        if (now - _lastAutoAt < 45000) return;
+        _lastAutoAt = now;
+        var run = function () { load(); };
+        if ('requestIdleCallback' in window) {
+            requestIdleCallback(run, {timeout: 3000});
+        } else {
+            setTimeout(run, 300);
         }
     }
 
@@ -473,8 +615,26 @@
         }
     }
 
-    if (document.readyState === 'complete') schedule();
-    else window.addEventListener('load', schedule);
+    // 移动端返回页面时优先从 bfcache 恢复（不会重新执行 load），
+    // 此时重新拉取一次，确保已读的通知不再显示。
+    window.addEventListener('pageshow', function (e) {
+        if (e.persisted) load();
+    });
+
+    // 页面重新可见时补一次刷新（后台标签页不轮询，节省性能）
+    document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'visible') setTimeout(autoRefresh, 800);
+    });
+
+    if (document.readyState === 'complete') {
+        schedule();
+        setInterval(autoRefresh, AUTO_REFRESH_MS);
+    } else {
+        window.addEventListener('load', function () {
+            schedule();
+            setInterval(autoRefresh, AUTO_REFRESH_MS);
+        });
+    }
 
     window.NotificationWaterfall = {
         refresh: function () {
@@ -486,8 +646,13 @@
             notifTotal = 0;
             todoHasMore = false;
             notifHasMore = false;
+            _lastRenderSig = '';
+            _lastAutoAt = 0;
+            _userDismissed = false;
             load();
         },
-        close: dismiss
+        close: function () { dismiss(true); },
+        // 供实时推送等场景触发静默刷新（页面不可见或用户已关闭时不会强制弹出）
+        notify: function () { autoRefresh(); }
     };
 })();

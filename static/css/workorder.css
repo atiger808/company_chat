@@ -245,6 +245,23 @@
 .wo-card-kind { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; color: #1769aa; }
 .wo-card-kind i { color: #00a1ff; }
 .wo-status-badge { font-size: 11px; color: #fff; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+
+/* 群工单归属企业标识 */
+.wo-tenant-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: #409eff;
+    background: #ecf5ff;
+    border-radius: 10px;
+    padding: 1px 8px;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+[data-theme="dark"] .wo-tenant-badge { background: #1b334d; color: #7cc4ff; }
 .wo-mine-badge {
     font-size: 10px;
     color: #fff;
@@ -487,6 +504,31 @@
 /* ==================== 附件展示 / 图片预览 ==================== */
 .wo-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 .wo-attachments.compact { gap: 6px; }
+.wo-att-image-wrap { position: relative; display: inline-flex; }
+.wo-att-video-wrap { position: relative; display: inline-flex; }
+.wo-att-download {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: rgba(30, 41, 59, .62);
+    color: #fff;
+    font-size: 11px;
+    text-decoration: none;
+    flex-shrink: 0;
+    transition: background .15s, color .15s;
+}
+.wo-att-image-wrap .wo-att-download,
+.wo-att-video-wrap .wo-att-download {
+    position: absolute;
+    right: 5px;
+    top: 5px;
+    z-index: 2;
+}
+.wo-att-download:hover { background: rgba(0, 120, 215, .92); color: #fff; }
+.wo-att-file-actions .wo-att-download { background: #eef8ff; color: #0088e0; }
 .wo-att-image {
     width: 112px;
     height: 84px;

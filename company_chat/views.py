@@ -96,7 +96,7 @@ KNOWLEDGE_DOCS = [
             {
                 'slug': 'manual',
                 'title': '员工使用手册',
-                'desc': '各模块使用说明、限制速查与常见问题',
+                'desc': '各模块使用说明（含群工单、瀑布流通知与超时提醒）、限制速查与常见问题',
                 'file': '浙企钉-员工使用手册.md',
                 # 唯一对全员开放的知识库文档
                 'all_users': True,
@@ -110,7 +110,7 @@ KNOWLEDGE_DOCS = [
             {
                 'slug': 'structure',
                 'title': '项目结构文档',
-                'desc': '目录结构、模块职责、数据库模型与 API 汇总',
+                'desc': '目录结构、模块职责（含群工单/工作通知）、数据库模型与 API 汇总',
                 'file': '浙企钉-企业协同办公平台 · 项目结构文档.md',
                 'all_users': False,
             },

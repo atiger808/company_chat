@@ -10960,10 +10960,21 @@ class WorkNotificationViewSet(viewsets.ViewSet):
             qs = qs.filter(is_read=False)
         elif read_filter == 'read':
             qs = qs.filter(is_read=True)
-        total = qs.count()
-        total_pages = max(1, (total + page_size - 1) // page_size)
-        start = (page - 1) * page_size
-        items = qs[start:start + page_size]
+        exclude_todo = request.query_params.get('exclude_todo') in ('1', 'true', 'yes')
+        if exclude_todo:
+            # 瀑布流：待办区已展示的事项不再计入「工作通知」数量，保证通知数准确
+            tenant = self._popup_config_tenant(request)
+            todo_keys = self._todo_dedupe_keys(request.user, tenant)
+            filtered = [n for n in qs if self._notification_todo_key(n) not in todo_keys]
+            total = len(filtered)
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            start = (page - 1) * page_size
+            items = filtered[start:start + page_size]
+        else:
+            total = qs.count()
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            start = (page - 1) * page_size
+            items = qs[start:start + page_size]
         results = [{
             'id': n.id, 'type': n.notification_type,
             'title': n.title, 'content': n.content,
@@ -11052,115 +11063,259 @@ class WorkNotificationViewSet(viewsets.ViewSet):
         cfg.save()
         return Response(self._popup_payload(cfg))
 
-    @action(detail=False, methods=['get'], url_path='waterfall-config')
+    @action(detail=False, methods=['get', 'post'], url_path='waterfall-config')
     def waterfall_config(self, request):
-        """瀑布流通知开关（工作日历「每日通知配置」里开启）。"""
-        from .timeout_reminder import is_waterfall_enabled
-        return Response({'enabled': is_waterfall_enabled(self._popup_config_tenant(request))})
+        """瀑布流通知配置：GET 读取总开关与各页面开关；POST 仅超级管理员保存。"""
+        from .timeout_reminder import get_waterfall_config, save_timeout_config
+        tenant = self._popup_config_tenant(request)
+        if request.method == 'POST':
+            if getattr(request.user, 'user_type', '') != 'super_admin':
+                return Response({'error': '仅超级管理员可配置'}, status=403)
+            if not tenant:
+                return Response({'error': '未找到所属企业，无法配置瀑布流通知'}, status=400)
+            payload = {}
+            if 'enabled' in request.data:
+                payload['waterfall_enabled'] = bool(request.data.get('enabled'))
+            pages = request.data.get('pages')
+            if isinstance(pages, dict):
+                payload['waterfall_pages'] = pages
+            todo_types = request.data.get('todo_types')
+            if isinstance(todo_types, dict):
+                payload['todo_types'] = todo_types
+            save_timeout_config(tenant, payload, user=request.user)
+        return Response(get_waterfall_config(tenant))
 
-    @action(detail=False, methods=['get'])
-    def todo(self, request):
-        """瀑布流顶部「待办工作」：到达当前审批人的审批 + 到达执行人的任务/群工单。
+    def _subsidy_role_flags(self, user, tenant):
+        """返回 (是否财务核验人员, 是否财务支付人员)；超管视为两者皆是。"""
+        if not tenant:
+            return False, False
+        if getattr(user, 'user_type', '') == 'super_admin':
+            return True, True
+        try:
+            view = SubsidyViewSet()
+            return view._is_verifier(user, tenant), view._is_payment_staff(user, tenant)
+        except Exception as e:
+            logger.warning(f'解析补贴核验/支付角色失败: {e}')
+            return False, False
 
-        待办与普通通知不同：不依赖「已读」状态，处理完成前会一直返回。
-        """
-        from django.db.models import F
+    def _subsidy_todo_items(self, user, tenant, now, include_verify=True, include_pay=True):
+        """待核验发票 + 待支付提现（按普惠补贴配置中的财务人员权限返回）。"""
+        if not tenant:
+            return []
+        can_verify, can_pay = self._subsidy_role_flags(user, tenant)
+        if not ((can_verify and include_verify) or (can_pay and include_pay)):
+            return []
+        ids = [tenant.id]
+        try:
+            ids.extend(tenant.sub_tenants.filter(is_active=True).values_list('id', flat=True))
+        except Exception:
+            pass
+        items = []
+        if can_verify and include_verify:
+            qs = (SubsidyApplication.objects
+                  .filter(status='pending', tenant_id__in=ids, applicant__is_active=True)
+                  .select_related('applicant').order_by('created_at'))
+            for app in qs:
+                waited = now - app.created_at if app.created_at else timedelta(0)
+                hours = int(waited.total_seconds() // 3600)
+                name = (getattr(app.applicant, 'real_name', '') or
+                        getattr(app.applicant, 'username', '') or '')
+                items.append({
+                    'kind': 'subsidy_apply',
+                    'id': app.id,
+                    'badge': '核验',
+                    'title': (app.application_no or ('申领#' + str(app.id))) + ' · ' + name,
+                    'subtitle': '开票金额 ¥' + str(app.invoice_amount) +
+                                (' · 已等待 ' + str(hours) + ' 小时' if hours >= 1 else ''),
+                    'since': app.created_at.isoformat() if app.created_at else '',
+                    'url': '/oa/subsidy-verify/?application_id=' + str(app.id),
+                })
+        if can_pay and include_pay:
+            qs = (SubsidyWithdrawal.objects
+                  .filter(status='pending', tenant_id__in=ids, user__is_active=True)
+                  .select_related('user').order_by('requested_at'))
+            for wd in qs:
+                waited = now - wd.requested_at if wd.requested_at else timedelta(0)
+                hours = int(waited.total_seconds() // 3600)
+                name = (getattr(wd.user, 'real_name', '') or
+                        getattr(wd.user, 'username', '') or '')
+                items.append({
+                    'kind': 'subsidy_withdraw',
+                    'id': wd.id,
+                    'badge': '支付',
+                    'title': '提现申请 · ' + name,
+                    'subtitle': '提现金额 ¥' + str(wd.amount) +
+                                (' · 已等待 ' + str(hours) + ' 小时' if hours >= 1 else ''),
+                    'since': wd.requested_at.isoformat() if wd.requested_at else '',
+                    'url': '/oa/subsidy-pay/?withdrawal_id=' + str(wd.id),
+                })
+        return items
+
+    def _build_todo_items(self, user, tenant):
+        """构造当前用户全部待办（审批 / 任务 / 群工单 / 待核验发票 / 待支付提现）。"""
+        from django.db.models import F, Q
         from tasks.models import Task, WorkOrderStage
         from .models import ApprovalAssignee
+        from .timeout_reminder import get_timeout_config, TODO_TYPE_DEFAULTS
 
-        tenant = self._popup_config_tenant(request)
-        user = request.user
         items = []
         now = timezone.now()
-
-        approval_qs = ApprovalAssignee.objects.filter(
-            user=user, user__is_active=True, status='pending',
-            node__request__status__in=['pending', 'processing', 'deferred'],
-        ).select_related(
-            'node__request', 'node__request__applicant'
-        ).prefetch_related('node__request__approval_nodes')
+        todo_types = dict(TODO_TYPE_DEFAULTS)
         if tenant:
-            approval_qs = approval_qs.filter(node__request__tenant=tenant)
-        seen_requests = set()
-        for assignee in approval_qs.order_by('created_at'):
-            req = assignee.node.request
-            # 串行审批只提醒「当前节点」；历史数据 current_node_order=0 时按首个节点兜底
-            if req.approval_mode != 'parallel':
-                cur_order = req.current_node_order or 0
-                if cur_order:
-                    if assignee.node.order != cur_order:
-                        continue
-                else:
-                    orders = [n.order for n in req.approval_nodes.all()]
-                    if orders and assignee.node.order != min(orders):
-                        continue
-            if req.id in seen_requests:
-                continue
-            seen_requests.add(req.id)
-            applicant = req.applicant
-            applicant_name = (getattr(applicant, 'real_name', '') or
-                              getattr(applicant, 'username', '') or '')
-            waited = now - assignee.created_at
-            hours = int(waited.total_seconds() // 3600)
-            items.append({
-                'kind': 'approval',
-                'id': req.id,
-                'badge': '审批',
-                'title': req.title or ('审批#' + str(req.id)),
-                'subtitle': '申请人：' + applicant_name + (' · 已等待 ' + str(hours) + ' 小时' if hours >= 1 else ''),
-                'since': assignee.created_at.isoformat() if assignee.created_at else '',
-                'url': '/oa/approval/?approval_id=' + str(req.id),
-            })
+            todo_types.update(get_timeout_config(tenant).get('todo_types') or {})
 
-        task_qs = Task.objects.filter(
-            assignee=user, status__in=['todo', 'in_progress'], assignee__is_active=True)
-        if tenant:
-            task_qs = task_qs.filter(tenant=tenant)
-        status_text = dict(Task.STATUS_CHOICES)
-        priority_text = dict(Task.PRIORITY_CHOICES)
-        for task in task_qs.select_related('assignee'):
-            due = ''
-            if task.due_date:
-                due = ' · 截止 ' + timezone.localtime(task.due_date).strftime('%m-%d %H:%M')
-            items.append({
-                'kind': 'task',
-                'id': task.id,
-                'badge': '任务',
-                'title': task.title,
-                'subtitle': status_text.get(task.status, task.status) + ' · ' +
-                            priority_text.get(task.priority, task.priority) + due,
-                'since': task.created_at.isoformat() if task.created_at else '',
-                'url': '/tasks/?task_id=' + str(task.id),
-            })
+        if todo_types.get('approval', True):
+            approval_qs = ApprovalAssignee.objects.filter(
+                user=user, user__is_active=True, status='pending',
+                node__request__status__in=['pending', 'processing', 'deferred'],
+            ).select_related(
+                'node__request', 'node__request__applicant'
+            ).prefetch_related('node__request__approval_nodes')
+            if tenant:
+                approval_qs = approval_qs.filter(node__request__tenant=tenant)
+            seen_requests = set()
+            for assignee in approval_qs.order_by('created_at'):
+                req = assignee.node.request
+                # 串行审批只提醒「当前节点」；历史数据 current_node_order=0 时按首个节点兜底
+                if req.approval_mode != 'parallel':
+                    cur_order = req.current_node_order or 0
+                    if cur_order:
+                        if assignee.node.order != cur_order:
+                            continue
+                    else:
+                        orders = [n.order for n in req.approval_nodes.all()]
+                        if orders and assignee.node.order != min(orders):
+                            continue
+                if req.id in seen_requests:
+                    continue
+                seen_requests.add(req.id)
+                applicant = req.applicant
+                applicant_name = (getattr(applicant, 'real_name', '') or
+                                  getattr(applicant, 'username', '') or '')
+                waited = now - assignee.created_at
+                hours = int(waited.total_seconds() // 3600)
+                items.append({
+                    'kind': 'approval',
+                    'id': req.id,
+                    'badge': '审批',
+                    'title': req.title or ('审批#' + str(req.id)),
+                    'subtitle': '申请人：' + applicant_name + (' · 已等待 ' + str(hours) + ' 小时' if hours >= 1 else ''),
+                    'since': assignee.created_at.isoformat() if assignee.created_at else '',
+                    'url': '/oa/approval/?approval_id=' + str(req.id),
+                })
 
-        stage_qs = WorkOrderStage.objects.filter(
-            assignee=user, assignee__is_active=True,
-            status__in=['pending', 'processing'],
-            work_order__status__in=['pending', 'processing'],
-            work_order__current_stage_order=F('order'),
-        ).select_related('work_order', 'assignee').prefetch_related('work_order__stages')
-        if tenant:
-            stage_qs = stage_qs.filter(work_order__tenant=tenant)
-        for stage in stage_qs:
-            wo = stage.work_order
-            deadline = ''
-            if stage.deadline:
-                deadline = ' · 截止 ' + timezone.localtime(stage.deadline).strftime('%m-%d %H:%M')
-            prev_done = [s.completed_at for s in wo.stages.all()
-                         if s.order < stage.order and s.completed_at]
-            reached = stage.started_at or (max(prev_done) if prev_done else None) or wo.created_at
-            items.append({
-                'kind': 'workorder',
-                'id': wo.id,
-                'badge': '群工单',
-                'title': (wo.order_no or '') + ' ' + (wo.title or ''),
-                'subtitle': '当前环节：' + (stage.name or '') + deadline,
-                'since': reached.isoformat() if reached else '',
-                'url': '/tasks/?work_order_id=' + str(wo.id),
-            })
+        if todo_types.get('task', True):
+            task_qs = Task.objects.filter(
+                assignee=user, status__in=['todo', 'in_progress'], assignee__is_active=True)
+            if tenant:
+                # 历史任务可能未写入企业，仍按当前企业展示，避免待办缺失
+                task_qs = task_qs.filter(Q(tenant=tenant) | Q(tenant__isnull=True))
+            status_text = dict(Task.STATUS_CHOICES)
+            priority_text = dict(Task.PRIORITY_CHOICES)
+            for task in task_qs.select_related('assignee'):
+                due = ''
+                if task.due_date:
+                    due = ' · 截止 ' + timezone.localtime(task.due_date).strftime('%m-%d %H:%M')
+                overdue = ''
+                if task.due_date and task.due_date < now and task.status not in ('done', 'archived'):
+                    hours = int((now - task.due_date).total_seconds() // 3600)
+                    overdue = ' · 已逾期 ' + (f'{hours // 24}天' if hours >= 24 else f'{max(hours, 1)}小时')
+                items.append({
+                    'kind': 'task',
+                    'id': task.id,
+                    'badge': '任务',
+                    'title': task.title,
+                    'subtitle': status_text.get(task.status, task.status) + ' · ' +
+                                priority_text.get(task.priority, task.priority) + due + overdue,
+                    'since': task.created_at.isoformat() if task.created_at else '',
+                    'url': '/tasks/?task_id=' + str(task.id),
+                })
+
+            stage_qs = WorkOrderStage.objects.filter(
+                assignee=user, assignee__is_active=True,
+                status__in=['pending', 'processing'],
+                work_order__status__in=['pending', 'processing'],
+                work_order__current_stage_order=F('order'),
+            ).select_related('work_order', 'assignee').prefetch_related('work_order__stages')
+            if tenant:
+                stage_qs = stage_qs.filter(work_order__tenant=tenant)
+            for stage in stage_qs:
+                wo = stage.work_order
+                deadline = ''
+                if stage.deadline:
+                    deadline = ' · 截止 ' + timezone.localtime(stage.deadline).strftime('%m-%d %H:%M')
+                prev_done = [s.completed_at for s in wo.stages.all()
+                             if s.order < stage.order and s.completed_at]
+                reached = stage.started_at or (max(prev_done) if prev_done else None) or wo.created_at
+                items.append({
+                    'kind': 'workorder',
+                    'id': wo.id,
+                    'badge': '群工单',
+                    'title': (wo.order_no or '') + ' ' + (wo.title or ''),
+                    'subtitle': '当前环节：' + (stage.name or '') + deadline,
+                    'since': reached.isoformat() if reached else '',
+                    'url': '/tasks/?work_order_id=' + str(wo.id),
+                })
+
+        items.extend(self._subsidy_todo_items(
+            user, tenant, now,
+            include_verify=todo_types.get('subsidy_apply', False),
+            include_pay=todo_types.get('subsidy_withdraw', False)))
 
         # 越早到达的待办越靠前，方便优先处理积压事项
         items.sort(key=lambda x: x.get('since') or '')
+        return items
+
+    @staticmethod
+    def _notification_todo_key(n):
+        """把通知映射为待办去重键 (kind, id)，用于「工作通知」区排除已进入待办的条目。"""
+        ed = n.extra_data or {}
+        ntype = n.notification_type
+        pairs = []
+        if ntype == 'approval':
+            pairs.append(('approval', ed.get('approval_id')))
+        elif ntype == 'task':
+            pairs.append(('task', ed.get('task_id')))
+        elif ntype == 'workorder':
+            pairs.append(('workorder', ed.get('work_order_id')))
+        elif ntype in ('subsidy_apply', 'subsidy'):
+            pairs.append(('subsidy_apply', ed.get('application_id')))
+        elif ntype == 'subsidy_withdraw':
+            pairs.append(('subsidy_withdraw', ed.get('withdrawal_id')))
+        for kind, raw in pairs:
+            if raw is not None and str(raw).isdigit():
+                return kind, int(raw)
+        # 兼容旧通知：相关链接里带对象 ID
+        url = n.related_url or ''
+        m = re.search(r'[?&]approval_id=(\d+)', url)
+        if m and ntype == 'approval':
+            return 'approval', int(m.group(1))
+        m = re.search(r'[?&]task_id=(\d+)', url)
+        if m and ntype == 'task':
+            return 'task', int(m.group(1))
+        m = re.search(r'[?&]work_order_id=(\d+)', url)
+        if m and ntype == 'workorder':
+            return 'workorder', int(m.group(1))
+        m = re.search(r'[?&]application_id=(\d+)', url)
+        if m and ntype in ('subsidy_apply', 'subsidy'):
+            return 'subsidy_apply', int(m.group(1))
+        m = re.search(r'[?&]withdrawal_id=(\d+)', url)
+        if m and ntype == 'subsidy_withdraw':
+            return 'subsidy_withdraw', int(m.group(1))
+        return None
+
+    def _todo_dedupe_keys(self, user, tenant):
+        return {(it['kind'], int(it['id'])) for it in self._build_todo_items(user, tenant)
+                if it.get('id') is not None}
+
+    @action(detail=False, methods=['get'])
+    def todo(self, request):
+        """瀑布流顶部「待办工作」：审批 / 任务 / 群工单 / 待核验发票 / 待支付提现。
+
+        待办与普通通知不同：不依赖「已读」状态，处理完成前会一直返回。
+        """
+        tenant = self._popup_config_tenant(request)
+        items = self._build_todo_items(request.user, tenant)
         try:
             page = max(1, int(request.query_params.get('page') or 1))
         except (TypeError, ValueError):
@@ -11394,7 +11549,7 @@ class SubsidyViewSet(viewsets.ViewSet):
                         title='新补贴申领待核验',
                         content=f'{app.applicant.real_name or app.applicant.username} 提交了普惠补贴申领（{app.application_no}），请及时核验',
                         notification_type='subsidy_apply', related_url=verify_url,
-                        extra_data={'application_no': app.application_no, 'action': 'pending'},
+                        extra_data={'application_no': app.application_no, 'application_id': app.id, 'action': 'pending'},
                     )
                 return
         from accounts.models import CustomUser
@@ -11407,7 +11562,7 @@ class SubsidyViewSet(viewsets.ViewSet):
                 title='新补贴申领待核验',
                 content=f'{app.applicant.real_name or app.applicant.username} 提交了普惠补贴申领（{app.application_no}），请及时核验',
                 notification_type='subsidy_apply', related_url=verify_url,
-                extra_data={'application_no': app.application_no, 'action': 'pending'},
+                extra_data={'application_no': app.application_no, 'application_id': app.id, 'action': 'pending'},
             )
 
     def _notify_payment_staff_pending(self, wd):

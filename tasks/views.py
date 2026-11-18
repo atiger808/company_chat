@@ -1,5 +1,6 @@
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from django.db.models import Q
 from channels.layers import get_channel_layer
@@ -15,11 +16,38 @@ class TaskViewSet(viewsets.ModelViewSet):
     serializer_class = TaskSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def _active_tenant(self):
+        request = getattr(self, 'request', None)
+        if request is None:
+            return None
+        tenant = getattr(request, 'tenant', None)
+        if tenant is None:
+            try:
+                tenant = request.user.get_active_tenant()
+            except Exception:
+                tenant = None
+        return tenant
+
+    def _scope_tasks(self, user):
+        """当前用户可见任务：按企业隔离；历史无企业任务默认归入当前企业。
+
+        任务表已有 tenant 字段；旧任务创建时未写入企业，这里在读取时一次性
+        归属到用户当前企业，避免历史任务在任务中心消失。
+        """
+        # 超级管理员可查看所有任务；普通用户按企业隔离且仅看与自己相关的任务
+        if getattr(user, 'is_superuser', False) or getattr(user, 'user_type', '') == 'super_admin':
+            return Task.objects.all()
+        base = Task.objects.filter(Q(creator=user) | Q(assignee=user))
+        tenant = self._active_tenant()
+        if tenant is not None:
+            base.filter(tenant__isnull=True).update(tenant=tenant)
+            base = base.filter(tenant=tenant)
+        return base
+
     def get_queryset(self):
         user = self.request.user
-        queryset = Task.objects.filter(
-            Q(creator=user) | Q(assignee=user)
-        ).distinct().select_related('creator', 'assignee', 'related_chat_room')
+        queryset = self._scope_tasks(user).distinct().select_related(
+            'creator', 'assignee', 'related_chat_room', 'tenant')
 
         # 🔧 关键修复：处理查询参数
         params = self.request.query_params
@@ -60,15 +88,92 @@ class TaskViewSet(viewsets.ModelViewSet):
                 Q(title__icontains=search) | Q(description__icontains=search)
             )
 
-        return queryset.order_by('-priority', '-updated_at')
+        # 6. 紧急等级过滤（全部不传）
+        priority = params.get('priority')
+        if priority and priority in dict(Task.PRIORITY_CHOICES):
+            queryset = queryset.filter(priority=priority)
+
+        return queryset.order_by('-updated_at', '-priority')
+
+    def _ensure_creator(self, task):
+        if task.creator_id != self.request.user.id:
+            raise PermissionDenied('只有任务创建人可以修改任务基本信息')
+
+    def _ensure_participant(self, task):
+        if task.creator_id != self.request.user.id and task.assignee_id != self.request.user.id:
+            raise PermissionDenied('只有任务创建人或执行人可以执行该操作')
+
+    @staticmethod
+    def _clean_attachments(raw, folder_name='文档（来自任务）'):
+        cleaned = []
+        if not isinstance(raw, list):
+            return cleaned
+        for item in raw[:20]:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get('url') or '').strip()
+            file_id = item.get('file_id')
+            if not url and not file_id:
+                continue
+            cleaned.append({
+                'file_id': file_id,
+                'url': url,
+                'name': str(item.get('name') or '附件')[:255],
+                'size': item.get('size') or 0,
+                'mime': str(item.get('mime') or item.get('mime_type') or '')[:100],
+                'folder_name': str(item.get('folder_name') or folder_name)[:100],
+            })
+        return cleaned
 
     def perform_create(self, serializer):
         task = serializer.save()
+        tenant = self._active_tenant()
+        if tenant is not None and not task.tenant_id:
+            task.tenant = tenant
+            task.save(update_fields=['tenant'])
         # 发送系统消息到关联聊天室
         self._send_task_card_message(task, 'created')
         # 如果有执行人，且不是自己，发送 WebSocket 通知
         if task.assignee and task.assignee != self.request.user:
             self._notify_user(task.assignee.id, task, 'assigned')
+
+    def perform_update(self, serializer):
+        """任务编辑：同步群内任务通知，并在执行人变化时通知新执行人。"""
+        task = serializer.instance
+        self._ensure_creator(task)
+        before = {
+            'status': task.status,
+            'title': task.title,
+            'description': task.description,
+            'priority': task.priority,
+            'due_date': task.due_date,
+            'assignee_id': task.assignee_id,
+        }
+        task = serializer.save()
+        tenant = self._active_tenant()
+        if tenant is not None and not task.tenant_id:
+            task.tenant = tenant
+            task.save(update_fields=['tenant'])
+        labels = {
+            'status': '状态', 'title': '标题',
+            'priority': '优先级', 'due_date': '截止时间', 'assignee_id': '执行人',
+        }
+        changes = [label for field, label in labels.items()
+                   if before[field] != getattr(task, field)]
+        if changes:
+            event = 'status_changed' if '状态' in changes else 'updated'
+            self._send_task_card_message(task, event, changes=changes)
+            self._send_task_update_message(task, event, self.request)
+            if '状态' in changes:
+                self._notify_task_participants(task, 'status_changed')
+        if before['assignee_id'] != task.assignee_id and task.assignee \
+                and task.assignee != self.request.user:
+            self._notify_user(task.assignee.id, task, 'assigned')
+
+    def perform_destroy(self, instance):
+        if instance.creator_id != self.request.user.id:
+            raise PermissionDenied('只有任务创建人可以删除任务')
+        instance.delete()
 
     @action(detail=True, methods=['post'])
     def change_status(self, request, pk=None):
@@ -77,11 +182,15 @@ class TaskViewSet(viewsets.ModelViewSet):
         更新任务状态并广播到聊天室
         """
         task = self.get_object()
+        self._ensure_participant(task)
         new_status = request.data.get('status', task.status)
         new_order = request.data.get('order', task.order)
         if new_status in dict(Task.STATUS_CHOICES):
             task.status = new_status
             task.order = new_order
+            tenant = self._active_tenant()
+            if tenant is not None and not task.tenant_id:
+                task.tenant = tenant
             task.save()
 
 
@@ -99,12 +208,30 @@ class TaskViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def add_comment(self, request, pk=None):
         task = self.get_object()
-        content = request.data.get('content')
-        if not content: return Response({'error': '内容不能为空'}, status=400)
+        self._ensure_participant(task)
+        content = (request.data.get('content') or '').strip()
+        attachments = self._clean_attachments(request.data.get('attachments'))
+        if not content and not attachments:
+            return Response({'error': '评论内容或附件不能为空'}, status=400)
 
-        comment = TaskComment.objects.create(task=task, user=request.user, content=content)
+        comment = TaskComment.objects.create(
+            task=task, user=request.user, content=content, attachments=attachments)
         self._notify_task_participants(task, 'new_comment', comment)
-        return Response(TaskCommentSerializer(comment).data, status=201)
+        return Response(
+            TaskCommentSerializer(comment, context={'request': request}).data, status=201)
+
+    @action(detail=True, methods=['post'])
+    def attachments(self, request, pk=None):
+        """更新任务附件（仅任务创建人）；执行人请在评论中上传附件。"""
+        task = self.get_object()
+        self._ensure_creator(task)
+        raw = request.data.get('attachments')
+        if not isinstance(raw, list):
+            return Response({'error': '附件格式错误'}, status=400)
+        task.attachments = self._clean_attachments(raw)
+        task.save(update_fields=['attachments'])
+        self._send_task_update_message(task, 'updated', request)
+        return Response(TaskSerializer(task, context={'request': request}).data)
 
     def _create_work_notification(self, user_id, task, event_type):
         """创建 WorkNotification 记录（懒导入避免循环依赖）"""
@@ -127,6 +254,7 @@ class TaskViewSet(viewsets.ModelViewSet):
                 content = f'任务“{task.title}”有更新'
             WorkNotification.objects.create(
                 recipient=user,
+                tenant=task.tenant,
                 notification_type='task',
                 title=title,
                 content=content,
@@ -162,9 +290,10 @@ class TaskViewSet(viewsets.ModelViewSet):
     def stats(self, request):
         """获取各分类任务数量"""
         user = request.user
-        base_qs = Task.objects.filter(Q(creator=user) | Q(assignee=user))
+        base_qs = self._scope_tasks(user)
 
         stats = {
+            'all': base_qs.count(),
             'my': base_qs.filter(assignee=user).count(),
             'created': base_qs.filter(creator=user).count(),
             'today': base_qs.filter(due_date__date=timezone.now().date()).count(),
@@ -172,8 +301,8 @@ class TaskViewSet(viewsets.ModelViewSet):
         }
         return Response(stats)
 
-    def _send_task_card_message(self, task, event_type):
-        """发送任务卡片系统消息到关联聊天室"""
+    def _send_task_card_message(self, task, event_type, changes=None):
+        """发送任务卡片/任务更新通知到关联聊天室（参考群工单的群内同步）。"""
         if not task.related_chat_room:
             return
 
@@ -188,14 +317,18 @@ class TaskViewSet(viewsets.ModelViewSet):
         #     'creator_name': task.creator.real_name or task.creator.username
         # }
 
-        card_data = TaskSerializer(task).data.copy()
+        card_data = TaskSerializer(task, context={'request': self.request}).data.copy()
 
         # 根据事件类型生成消息内容
+        status_map = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成',
+                      'archived': '已归档'}
         if event_type == 'created':
             content_text = f"📋 {task.creator.real_name or task.creator.username} 创建了任务: {task.title}"
+        elif event_type == 'status_changed':
+            content_text = f"✅ 任务「{task.title}」状态更新为: {status_map.get(task.status, task.status)}"
         else:
-            status_map = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成'}
-            content_text = f"✅ 任务状态已更新为: {status_map.get(task.status, task.status)}"
+            changed = '、'.join(changes or []) or '内容'
+            content_text = f"✏️ 任务「{task.title}」已更新：{changed}"
 
         # 创建系统消息
         message = Message.objects.create(

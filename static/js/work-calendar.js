@@ -1385,6 +1385,10 @@ class WorkCalendarApp {
             setVal('wcReminderApprovalHours', rem.approval_hours || 24);
             setVal('wcReminderTaskEnabled', rem.task_enabled);
             setVal('wcReminderTaskHours', rem.task_hours || 24);
+            setVal('wcReminderInvoiceEnabled', rem.invoice_enabled);
+            setVal('wcReminderInvoiceHours', rem.invoice_hours || 24);
+            setVal('wcReminderWithdrawEnabled', rem.withdraw_enabled);
+            setVal('wcReminderWithdrawHours', rem.withdraw_hours || 24);
             setVal('wcReminderWindowStart', rem.window_start || '09:00');
             setVal('wcReminderWindowEnd', rem.window_end || '18:00');
             setVal('wcReminderInterval', rem.interval_hours || 4);
@@ -1421,6 +1425,10 @@ class WorkCalendarApp {
                     approval_hours: num('wcReminderApprovalHours', 24),
                     task_enabled: !!(document.getElementById('wcReminderTaskEnabled') || {}).checked,
                     task_hours: num('wcReminderTaskHours', 24),
+                    invoice_enabled: !!(document.getElementById('wcReminderInvoiceEnabled') || {}).checked,
+                    invoice_hours: num('wcReminderInvoiceHours', 24),
+                    withdraw_enabled: !!(document.getElementById('wcReminderWithdrawEnabled') || {}).checked,
+                    withdraw_hours: num('wcReminderWithdrawHours', 24),
                     window_start: val('wcReminderWindowStart', '09:00'),
                     window_end: val('wcReminderWindowEnd', '18:00'),
                     interval_hours: num('wcReminderInterval', 4),

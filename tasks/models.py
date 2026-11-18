@@ -14,8 +14,8 @@ class Task(models.Model):
 
     title = models.CharField(max_length=200, verbose_name="任务标题")
     description = models.TextField(blank=True, null=True, verbose_name="任务描述")
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='todo', db_index=True)
-    priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='medium')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='todo', db_index=True, verbose_name='任务状态')
+    priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='medium', verbose_name='紧急等级')
 
     # 人员关联
     creator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='created_tasks',
@@ -41,11 +41,14 @@ class Task(models.Model):
     parent_task = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='subtasks',
                                     verbose_name="父任务")
 
+    # 任务附件（图片/视频/文件；文件可在详情中保存到网盘）
+    attachments = models.JSONField(default=list, blank=True, verbose_name="附件")
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['order', '-updated_at']
+        ordering = ['-updated_at', 'order']
         verbose_name = "任务"
         verbose_name_plural = "任务"
 
@@ -56,7 +59,8 @@ class Task(models.Model):
 class TaskComment(models.Model):
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='comments')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    content = models.TextField()
+    content = models.TextField(blank=True, default='')
+    attachments = models.JSONField(default=list, blank=True, verbose_name='附件')
     created_at = models.DateTimeField(auto_now_add=True)
 
 
@@ -123,7 +127,7 @@ class WorkOrder(models.Model):
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
     class Meta:
-        ordering = ['-created_at']
+        ordering = ['-last_action_at', '-updated_at']
         verbose_name = '群工单'
         verbose_name_plural = '群工单'
         constraints = [

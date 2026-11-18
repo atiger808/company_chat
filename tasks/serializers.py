@@ -11,7 +11,7 @@ class UserMiniSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'real_name', 'avatar_url']
+        fields = ['id', 'username', 'real_name', 'avatar_url', 'position']
 
     def get_avatar_url(self, obj):
         if obj.avatar:
@@ -25,7 +25,7 @@ class TaskCommentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = TaskComment
-        fields = ['id', 'user_info', 'content', 'created_at']
+        fields = ['id', 'user_info', 'content', 'attachments', 'created_at']
 
 
 class TaskSerializer(serializers.ModelSerializer):
@@ -56,6 +56,10 @@ class TaskSerializer(serializers.ModelSerializer):
     source_message_type = serializers.SerializerMethodField()
     source_file_info = serializers.SerializerMethodField()
     source_message_id = serializers.SerializerMethodField()
+    # 企业归属与逾期状态
+    tenant_name = serializers.SerializerMethodField()
+    is_overdue = serializers.SerializerMethodField()
+    permissions = serializers.SerializerMethodField()
 
     class Meta:
         model = Task
@@ -65,13 +69,62 @@ class TaskSerializer(serializers.ModelSerializer):
             'related_chat_room_id', 'related_message_id', 'related_chat_room', 'comments',
             'source_chat_room_name', 'source_message_content',
             'source_message_type', 'source_file_info', 'source_message_id',
+            'tenant', 'tenant_name', 'is_overdue', 'attachments', 'permissions',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['creator', 'created_at', 'updated_at']
+        read_only_fields = ['creator', 'tenant', 'attachments', 'created_at', 'updated_at']
 
     def create(self, validated_data):
-        validated_data['creator'] = self.context['request'].user
+        request = self.context.get('request')
+        validated_data['creator'] = request.user
+        tenant = getattr(request, 'tenant', None)
+        if tenant is None:
+            try:
+                tenant = request.user.get_active_tenant()
+            except Exception:
+                tenant = None
+        if tenant is not None and not validated_data.get('tenant'):
+            validated_data['tenant'] = tenant
         return super().create(validated_data)
+
+    def get_tenant_name(self, obj):
+        if obj.tenant_id and obj.tenant:
+            return obj.tenant.name
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if user and getattr(user, 'is_authenticated', False):
+            tenant = getattr(request, 'tenant', None)
+            if tenant is None:
+                try:
+                    tenant = user.get_active_tenant()
+                except Exception:
+                    tenant = None
+            if tenant is not None:
+                return tenant.name
+        return ''
+
+    def get_is_overdue(self, obj):
+        from django.utils import timezone
+        if not obj.due_date or obj.status in ('done', 'archived'):
+            return False
+        return obj.due_date < timezone.now()
+
+    def get_permissions(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if not user or not getattr(user, 'is_authenticated', False):
+            return {'can_edit': False, 'can_change_status': False,
+                    'can_comment': False, 'can_upload': False}
+        is_creator = obj.creator_id == user.id
+        is_assignee = obj.assignee_id == user.id
+        can_operate = is_creator or is_assignee
+        return {
+            'can_edit': is_creator,
+            'can_change_status': can_operate,
+            'can_comment': can_operate,
+            # 任务附件仅创建人可上传；执行人可在评论中上传附件
+            'can_upload': is_creator,
+        }
 
     def get_related_chat_room(self, obj):
         if obj.related_chat_room:
@@ -100,14 +153,17 @@ class TaskSerializer(serializers.ModelSerializer):
             cloud_file_id = None
             try:
                 from cloud.models import CloudFile
-                # 当前用户的云文件
-                cloud_file = CloudFile.objects.filter(
-                    owner=self.context['request'].user,
-                    md5=file_upload.md5,
-                    deleted_at__isnull=True
-                ).first()
-                if cloud_file:
-                    cloud_file_id = str(cloud_file.id)
+                request = self.context.get('request')
+                user = getattr(request, 'user', None)
+                if user and getattr(user, 'is_authenticated', False):
+                    # 当前用户的云文件
+                    cloud_file = CloudFile.objects.filter(
+                        owner=user,
+                        md5=file_upload.md5,
+                        deleted_at__isnull=True
+                    ).first()
+                    if cloud_file:
+                        cloud_file_id = str(cloud_file.id)
             except Exception:
                 pass
 

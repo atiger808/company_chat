@@ -1,3 +1,66 @@
+272. 群工单紧急等级筛选改为按钮形式：
+   1）任务中心「群工单」视图的紧急等级筛选由下拉框改为「全部 / 低 / 中 / 高 / 紧急」按钮组，颜色与任务卡片优先级标签一致；
+   2）按钮筛选与状态筛选、搜索、导出共用同一筛选状态，导出内容跟随当前紧急等级；
+   3）说明：同步 `static/js/tasks.js`、`static/js/tasks-workorders.js`、`static/css/tasks.css`、`templates/tasks/tasks.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后强刷/PWA 清缓存；资源版本号 `20261118-taskcenter04`。
+
+271. 任务中心紧急等级过滤与附件完善：
+   1）任务中心顶部新增「全部 / 低 / 中 / 高 / 紧急」按钮过滤（非下拉框），颜色与任务卡片优先级标签一致；群工单视图自动隐藏该过滤组；
+   2）新建任务模态框支持选择附件，创建后自动写入任务附件并在详情展示；
+   3）任务评论支持上传附件：创建人/执行人均可上传，评论附件支持图片预览、视频播放、文件保存到网盘、文档在线编辑与下载；
+   4）权限调整：任务主附件仅任务创建人可上传；执行人可在评论中上传附件；后端同步校验；
+   5）注意：`TaskComment` 新增 `attachments` 字段（`Task.attachments` 为上一版本新增），请执行 `python manage.py makemigrations tasks && python manage.py migrate` 并重启服务；
+   6）说明：同步 `tasks/models.py`、`tasks/serializers.py`、`tasks/views.py`、`static/js/tasks.js`、`static/css/tasks.css`、`templates/tasks/tasks.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt`；资源版本号 `20261118-taskcenter03`。
+
+270. 任务中心权限/附件与工作日历重复通知修复：
+   1）任务权限：超级管理员新增「全部任务」入口可查看所有任务；非创建人/执行人时任务详情只读，不能修改、评论、上传或删除；任务执行人不能修改标题、描述、优先级、截止时间等基本信息，但可切换状态、评论与上传附件；创建人可编辑基本信息；前后端双重校验；
+   2）任务详情布局重构：基本信息/描述/来源/附件/评论分区卡片化，状态按钮移至评论区底部；
+   3）任务新增附件字段与 `/api/tasks/<id>/attachments/` 接口：支持图片预览、视频播放、文件点击保存到网盘（「文档（来自任务）」）、文档保存后在线编辑；
+   4）任务与群工单附件增加下载图标，可直接下载到本地；
+   5）修复每日工作汇总/超时提醒重复发送：定时任务增加缓存锁与 10 分钟幂等去重，避免多个 beat/worker 或重叠执行导致同一通知发送两次；
+   6）注意：`Task` 新增 `attachments` 字段，请在 Linux 服务器执行 `python manage.py makemigrations tasks && python manage.py migrate` 后重启服务；
+   7）说明：同步 `tasks/models.py`、`tasks/serializers.py`、`tasks/views.py`、`oa/tasks.py`、`oa/timeout_reminder.py`、`company_chat/settings.py`、`static/js/tasks.js`、`static/js/workorder-ui.js`、`static/css/tasks.css`、`static/css/workorder.css`、`templates/tasks/tasks.html`、`templates/chat/chat.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt`；资源版本号 `20261118-taskcenter02`。
+
+269. 任务中心完善（普通任务）：
+   1）任务列表显示创建人（头像）、执行人（头像）、来源群名称与归属企业；超过截止时间且未完成的任务标记「已逾期」并高亮；
+   2）任务详情创建人/执行人带头像，显示归属企业与来源群；逾期任务显示醒目提示；状态改为可点击的「待处理 / 进行中 / 已完成」按钮，看板拖拽继续可用；
+   3）任务按企业隔离：新建任务自动归属当前企业；历史无企业任务在读取时归入用户当前企业；任务详情展示归属企业；
+   4）来自群聊的任务：创建、状态变更、修改标题/优先级/执行人/截止时间时同步群内任务卡片通知与 `task.update` 实时更新；执行人变更通知新执行人；
+   5）瀑布流待办中的逾期任务显示「已逾期 X天/X小时」，历史无企业任务仍按当前企业展示；
+   6）群工单列表/详情（任务中心与聊天页）增加归属企业展示；
+   7）说明：同步 `tasks/serializers.py`、`tasks/views.py`、`tasks/workorder_serializers.py`、`tasks/workorder_service.py`、`oa/views.py`、`static/js/tasks.js`、`static/js/tasks-workorders.js`、`static/js/chat-workorder.js`、`static/css/tasks.css`、`static/css/workorder.css`、`templates/tasks/tasks.html`、`templates/chat/chat.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后重启后端，并强刷/PWA 清缓存；资源版本号 `20261118-taskcenter01`。
+
+268. 瀑布流通知配置增强（管理控制台）：
+   1）页面开关改为与「智能体设置」一致的完整页面清单（企业聊天室、管理控制台、企业网盘、网盘系统配置、文档编辑器、OA 审批、普惠补贴、财务核验、财务支付、考勤打卡、集团公告、工作日历、每日工作总结、任务中心、组织架构、企业知识库、其他页面），全部使用开关按钮；默认开启企业聊天室、任务中心、OA 审批、工作日历；
+   2）新增「待办工作类型」开关：待处理审批、待处理任务/群工单、待核验发票、待支付提现；默认开启前两项，仅开启的待办会出现在瀑布流待办区，通知去重与数量同步按开关计算；
+   3）`notification-waterfall.js` 已接入上述所有页面（普惠补贴、财务核验/支付、考勤、公告、每日总结、组织架构、企业知识库、网盘配置/编辑器、管理控制台等），页面路径自动识别对应开关；兼容旧页面键 `approval` → `oa_approval`；
+   4）说明：同步 `oa/views.py`、`oa/timeout_reminder.py`、`static/js/notification-waterfall.js`、`static/js/admin.js`、`templates/chat/admin.html` 及上述页面模板、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后重启后端，并强刷/PWA 清缓存；资源版本号 `20261118-waterfall02`。
+
+267. 瀑布流工作通知与每日通知配置完善：
+   1）瀑布流「待办工作」新增「待核验发票」「待支付提现」：按普惠补贴配置中的财务核验/支付人员（超管默认具备）展示，点击分别跳转财务核验页/财务支付页并自动打开对应申领/提现模态框；
+   2）通知数纠正：工作通知接口新增 `exclude_todo` 去重，已进入待办区的审批/任务/群工单/补贴通知不再重复计入「工作通知」数量；
+   3）瀑布流增加定时刷新：页面可见且用户未操作时每 60 秒空闲拉取一次，页面重新可见时补刷；自动刷新保留已「加载更多」的条数，减少对交互与性能的影响；
+   4）管理控制台新增「瀑布流通知」配置：总开关 + 页面开关（企业聊天室、任务中心、OA 审批、工作日历默认开启，企业网盘默认关闭）；总开关关闭时所有页面不显示；
+   5）工作日历「每日通知配置」新增「待核验发票超时提醒」「待支付提现超时提醒」（阈值默认 24 小时），并复用发送时间段/频率；
+   6）所有超时提醒（审批、任务/群工单、发票核验、提现支付）内容中写入具体超时时长（如「已超时 2天3小时」）；
+   7）说明：同步 `oa/views.py`、`oa/urls.py`、`oa/timeout_reminder.py`、`static/js/notification-waterfall.js`、`static/js/notifications.js`、`static/js/admin.js`、`static/js/work-calendar.js`、`templates/chat/admin.html`、`templates/chat/chat.html`、`templates/oa/work-calendar.html`、`templates/oa/approval.html`、`templates/cloud/cloud.html`、`templates/tasks/tasks.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后重启后端（Celery/ASGI），并强刷/PWA 清缓存；资源版本号 `20261118-waterfall01`。
+
+266. 修复移动端点击瀑布流「工作通知」后未标记已读：
+   1）未读通知点击时先等待「标记已读」请求完成再跳转（最多等待约 1.2 秒），避免移动端页面跳转让请求被中断；
+   2）已读请求使用 fetch keepalive，即使跳转立即发生也会继续发送；
+   3）点击后本地同步移除该条并递减数量，返回页面（含 bfcache 恢复）时重新拉取一次，确保已读通知不再出现；
+   4）说明：同步 `static/js/notification-waterfall.js`、`templates/chat/chat.html`、`templates/cloud/cloud.html`、`templates/oa/approval.html`、`templates/oa/work-calendar.html`、`templates/tasks/tasks.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后强刷/PWA 清缓存；资源版本号 `20261118-reminder09`。
+
+265. 企业知识库文档更新：
+   1）《浙企钉-员工使用手册》补充群工单（群待办）全流程、群组九宫格头像、瀑布流工作通知、DING 提醒、超时提醒、审批报表中位数/P90/散点分析、群工单发起权限配置、任务中心布局与群工单列表等近期功能；
+   2）《浙企钉-企业协同办公平台 · 项目结构文档》补充任务中心群工单模块、工作通知瀑布流与超时提醒、版本日志分片接口、群工单相关前后端文件与 API 路由；
+   3）重新生成《浙企钉-员工使用手册.html》，知识库在线版同步生效（无需数据库迁移）。
+
+264. 聊天室版本更新日志分片加载：
+   1）版本接口 `/api/chat/version/` 只返回前 12 行日志做横幅预览，不再一次性下发全部版本日志；
+   2）新增 `GET /api/chat/version/log/` 分片接口，按 `offset` / `limit` 返回解析后的日志条目（默认每页 6 条），支持「加载更多」逐页追加，并显示已加载/总数；
+   3）版本更新横幅中的「查看全部更新日志」改为打开分片加载的日志弹窗，首屏只渲染第一页，减少长日志造成的卡顿；
+   4）说明：同步 `chat/views.py`、`chat/urls.py`、`static/js/chat-version.js`、`templates/chat/chat.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后重启后端，并强刷/PWA 清缓存；资源版本号 `20261118-versionlog01`。
+
 263. 修复瀑布流「加载更多」按钮不显示：
    1）通知区在首批未读通知与待办去重后为空时，不再整段隐藏；只要仍有更多数据，就展示分区标题、提示与「加载更多通知」按钮；
    2）待办/通知是否还有下一页改为优先按「总数 > 已加载数量」判断，同时兼容后端 has_more / next 字段，避免旧响应或字段缺失导致按钮不显示；

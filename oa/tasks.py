@@ -308,6 +308,12 @@ def send_daily_digest_to_user(user, tenant=None):
     try:
         summary = compute_user_work_summary(user, tenant)
         title, content, extra = build_daily_digest(summary)
+        # 幂等保护：定时任务重复触发/重叠执行时，10 分钟内同一汇总不再重复入库
+        from .models import WorkNotification
+        if WorkNotification.objects.filter(
+                recipient=user, notification_type='daily', title=title,
+                created_at__gte=timezone.now() - timedelta(minutes=10)).exists():
+            return False
         from .views import send_work_notification
         send_work_notification(
             user_id=user.id,
@@ -341,11 +347,19 @@ def run_daily_digest(self):
         today = timezone.localdate()
         now_time = timezone.localtime().time()
         sent = 0
+        from django.core.cache import cache
         for cfg in DailyDigestConfig.objects.filter(enabled=True, auto_send=True).select_related('tenant'):
             if cfg.last_sent_date == today:
                 continue
             if now_time < cfg.send_time:
                 continue
+            # 防止多个 beat/worker 同时触发导致同一企业重复发送
+            lock_key = f'daily_digest_lock:{cfg.tenant_id}:{today}'
+            try:
+                if not cache.add(lock_key, '1', timeout=1800):
+                    continue
+            except Exception:
+                pass
             from accounts.models import CustomUser
             users = CustomUser.objects.filter(
                 tenant_memberships__tenant=cfg.tenant,
@@ -357,6 +371,10 @@ def run_daily_digest(self):
                     sent += 1
             cfg.last_sent_date = today
             cfg.save(update_fields=['last_sent_date'])
+            try:
+                cache.delete(lock_key)
+            except Exception:
+                pass
         logger.info(f'每日工作汇总发送完成，共 {sent} 条')
     except Exception as e:
         logger.warning(f'每日工作汇总任务异常: {e}')

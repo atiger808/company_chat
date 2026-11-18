@@ -49,6 +49,7 @@ class WorkOrderSerializer(serializers.ModelSerializer):
     permissions = serializers.SerializerMethodField()
     room_name = serializers.SerializerMethodField()
     room_type = serializers.SerializerMethodField()
+    tenant_name = serializers.SerializerMethodField()
     is_archived = serializers.SerializerMethodField()
 
     class Meta:
@@ -56,7 +57,7 @@ class WorkOrderSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'order_no', 'title', 'description', 'urgency', 'urgency_display',
             'solution_template', 'status', 'status_display', 'chat_room', 'room_name',
-            'room_type', 'tenant', 'creator', 'creator_name', 'creator_info',
+            'room_type', 'tenant', 'tenant_name', 'creator', 'creator_name', 'creator_info',
             'verifier', 'verifier_name', 'verifier_info', 'current_stage_order',
             'sync_notify', 'ding', 'last_action', 'last_action_display', 'last_action_at',
             'closed_at', 'archived_at', 'created_at', 'updated_at',
@@ -100,6 +101,9 @@ class WorkOrderSerializer(serializers.ModelSerializer):
     def get_room_type(self, obj):
         return obj.chat_room.room_type if obj.chat_room else ''
 
+    def get_tenant_name(self, obj):
+        return obj.tenant.name if obj.tenant else ''
+
     def get_is_archived(self, obj):
         return bool(obj.archived_at)
 
@@ -111,12 +115,13 @@ class WorkOrderListSerializer(serializers.ModelSerializer):
     progress = serializers.SerializerMethodField()
     current_stage = serializers.SerializerMethodField()
     room_name = serializers.SerializerMethodField()
+    tenant_name = serializers.SerializerMethodField()
 
     class Meta:
         model = WorkOrder
         fields = [
             'id', 'order_no', 'title', 'status', 'status_display', 'urgency',
-            'urgency_display', 'chat_room', 'room_name', 'creator', 'creator_name',
+            'urgency_display', 'chat_room', 'room_name', 'tenant', 'tenant_name', 'creator', 'creator_name',
             'creator_info', 'verifier_name', 'last_action', 'last_action_at', 'closed_at', 'archived_at',
             'created_at', 'updated_at', 'progress', 'current_stage',
         ]
@@ -144,3 +149,6 @@ class WorkOrderListSerializer(serializers.ModelSerializer):
 
     def get_room_name(self, obj):
         return obj.chat_room.name if obj.chat_room else ''
+
+    def get_tenant_name(self, obj):
+        return obj.tenant.name if obj.tenant else ''

@@ -64,7 +64,6 @@
             var toolbarActions = document.getElementById('woToolbarActions');
             if (toolbarActions) toolbarActions.style.display = 'flex';
             var statusSel = document.getElementById('woStatusFilter');
-            var urgencySel = document.getElementById('woUrgencyFilter');
             var searchInput = document.querySelector('.task-toolbar .search-input');
             if (searchInput) searchInput.placeholder = '搜索工单编号 / 标题...';
             var viewSwitcher = document.querySelector('.task-toolbar .view-switcher');
@@ -76,7 +75,7 @@
             var params = new URLSearchParams({page: String(page), page_size: '50'});
             var status = statusSel ? statusSel.value : '';
             if (status) params.append('status', status);
-            var urgency = urgencySel ? urgencySel.value : '';
+            var urgency = this.woUrgencyFilter || '';
             if (urgency) params.append('urgency', urgency);
             if (this.searchKeyword) params.append('search', this.searchKeyword);
             try {
@@ -119,12 +118,14 @@
                 var roomName = wo.room_name || '';
                 var creatorTip = '发起人：' + creatorName
                     + '\n创建时间：' + (fmtTime(wo.created_at) || '-')
+                    + '\n归属企业：' + (wo.tenant_name || '-')
                     + '\n来自群聊：' + (roomName || '-');
                 return '<div class="wo-task-card" onclick="taskApp.selectWorkOrder(' + wo.id + ')">'
                     + '<div class="wo-task-top"><span class="wo-task-no">' + esc(wo.order_no) + '</span>'
                     + '<span class="wo-status-badge" style="background:' + statusColor(wo.status) + ';">' + esc(wo.status_display) + '</span></div>'
                     + '<div class="wo-task-title">' + esc(wo.title) + '</div>'
                     + '<div class="wo-task-badges">'
+                    + (wo.tenant_name ? '<span class="wo-tenant-badge" title="归属企业：' + esc(wo.tenant_name) + '"><i class="fas fa-building"></i> ' + esc(wo.tenant_name) + '</span>' : '')
                     + (roomName ? '<span class="wo-room-badge" title="来自群聊：' + esc(roomName) + '"><i class="fas fa-users"></i> ' + esc(roomName) + '</span>' : '')
                     + '<span class="wo-creator-badge" title="' + esc(creatorTip) + '">'
                     + '<img src="' + esc(creatorAvatar) + '" alt=""> 发起人 <b>' + esc(creatorName) + '</b></span>'
@@ -197,8 +198,7 @@
             var params = {};
             var statusSel = document.getElementById('woStatusFilter');
             if (statusSel && statusSel.value) params.status = statusSel.value;
-            var urgencySel = document.getElementById('woUrgencyFilter');
-            if (urgencySel && urgencySel.value) params.urgency = urgencySel.value;
+            if (this.woUrgencyFilter) params.urgency = this.woUrgencyFilter;
             if (this.searchKeyword) params.search = this.searchKeyword;
             this.showToast(target === 'cloud' ? '正在生成并保存到网盘，请稍候...' : '正在生成群工单导出文件，请稍候...', 'info');
             try {
@@ -393,7 +393,8 @@
                 + '<div class="wo-detail-meta"><span style="color:' + urgencyColor(wo.urgency) + ';">' + esc(wo.urgency_display) + '</span>'
                 + '<span><i class="fas fa-user-circle"></i> 发起 ' + esc(wo.creator_name) + '</span>'
                 + '<span><i class="fas fa-user-shield"></i> 核验 ' + esc(wo.verifier_name) + '</span>'
-                + '<span><i class="fas fa-building"></i> ' + esc(wo.room_name || '') + '</span></div>'
+                + '<span><i class="fas fa-building"></i> 企业 ' + esc(wo.tenant_name || '-') + '</span>'
+                + '<span><i class="fas fa-users"></i> ' + esc(wo.room_name || '') + '</span></div>'
                 + '<div class="wo-progress-line"><div class="wo-progress-bar"><i style="width:' + pct + '%;"></i></div><span class="wo-progress-label">进度 ' + (p.done || 0) + '/' + (p.total || 0) + '</span></div>'
                 + '<div class="wo-detail-grid">'
                 + (wo.description ? '<div class="wo-block"><div class="wo-block-title"><i class="fas fa-circle-exclamation"></i> 问题描述</div><div class="wo-block-body">' + esc(wo.description) + '</div></div>' : '')

@@ -4,9 +4,9 @@ from .models import Task, TaskComment, WorkOrder, WorkOrderStage, WorkOrderComme
 
 @admin.register(Task)
 class TaskAdmin(admin.ModelAdmin):
-    list_display = ('id', 'title', 'status', 'priority', 'creator', 'assignee', 'due_date', 'order', 'created_at', 'updated_at')
-    list_filter = ('status', 'priority', 'creator', 'assignee')
-    search_fields = ('title', 'id')
+    list_display = ('id', 'title', 'status', 'priority', 'tenant', 'creator', 'assignee', 'due_date', 'order', 'created_at', 'updated_at')
+    list_filter = ('status', 'priority', 'tenant')
+    search_fields = ('title', 'id', 'creator__username', 'creator__real_name')
     list_per_page = 20
 
 @admin.register(TaskComment)

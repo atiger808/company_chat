@@ -4,15 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理控制台 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/chat.css?v=20261117-bb2128c">
-    <link rel="stylesheet" href="/static/css/admin.css?v=20261117-bb2128c">
+    <link rel="stylesheet" href="/static/css/chat.css?v=20261118-79b4cf7">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20261118-79b4cf7">
 <!--    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">-->
-    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261117-bb2128c">
+    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261118-79b4cf7">
 
     <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg?v=20260820-d0b2c3e">
     <!-- 🔧 新增：Chart.js 用于图表展示 -->
     <!--    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>-->
-    <script src="/static/js/dist/chart.min.js?v=20261117-bb2128c"></script>
+    <script src="/static/js/dist/chart.min.js?v=20261118-79b4cf7"></script>
     <!-- 🔧 关键修复2: 添加 Chart.js 加载失败的回退方案 -->
     <script>
         // 检查 Chart.js 是否加载成功
@@ -128,6 +128,11 @@
                 <i class="fas fa-clipboard-list"></i> 群待办权限
             </a>
 
+            <!-- 瀑布流通知：仅超级管理员可见（总开关 + 按页面开关） -->
+            <a href="#" class="nav-item super-admin-only" data-tab="waterfall-config" id="waterfallConfigNavItem" style="display:none">
+                <i class="fas fa-stream"></i> 瀑布流通知
+            </a>
+
             <!-- 智能体：仅超级管理员可见（按页面启用 AI 智能体 + 自定义嵌入代码） -->
             <a href="#" class="nav-item super-admin-only" data-tab="agent" id="agentNavItem" style="display:none">
                 <i class="fas fa-robot"></i> 智能体
@@ -207,7 +212,7 @@
                 </div>
                 <div class="user-info-dropdown" id="userInfoDropdown" onclick="adminConsole.toggleUserDropdown(event)">
                     <span id="adminUsername" class="btn-text"></span>
-                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20261117-bb2128c" alt="头像">
+                    <img id="adminAvatar" src="/static/images/default-avatar.png?v=20261118-79b4cf7" alt="头像">
                     <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text-light);margin-left:4px;"></i>
                     <div class="user-dropdown-menu show" id="userDropdownMenu" style="display:none;">
                         <div class="dropdown-item"
@@ -1192,19 +1197,20 @@
         <div class="spinner"></div>
     </div>
 </div>
-<script src="/static/js/dist/spark-md5.min.js?v=20261117-bb2128c"></script>
-<script src="/static/js/dist/crypto-js.min.js?v=20261117-bb2128c"></script>
-<script src="/static/js/dist/sm4.min.js?v=20261117-bb2128c"></script>
-<script src="/static/js/encrypts.js?v=20261117-bb2128c"></script>
-<script src="/static/js/utils.js?v=20261117-bb2128c"></script>
-<script src="/static/js/api.js?v=20261117-bb2128c"></script>
-<script src="/static/js/admin.js?v=20261117-bb2128c"></script>
-<script src="/static/js/tts.js?v=20261117-bb2128c"></script>
-<script src="/static/js/admin_chat_rooms.js?v=20261117-bb2128c"></script>
+<script src="/static/js/dist/spark-md5.min.js?v=20261118-79b4cf7"></script>
+<script src="/static/js/dist/crypto-js.min.js?v=20261118-79b4cf7"></script>
+<script src="/static/js/dist/sm4.min.js?v=20261118-79b4cf7"></script>
+<script src="/static/js/encrypts.js?v=20261118-79b4cf7"></script>
+<script src="/static/js/utils.js?v=20261118-79b4cf7"></script>
+<script src="/static/js/api.js?v=20261118-79b4cf7"></script>
+<script src="/static/js/admin.js?v=20261118-79b4cf7"></script>
+<script src="/static/js/tts.js?v=20261118-79b4cf7"></script>
+<script src="/static/js/admin_chat_rooms.js?v=20261118-79b4cf7"></script>
 <!-- 🔧 新增：数据统计和系统设置 JS -->
-<script src="/static/js/admin_statistics.js?v=20261117-bb2128d"></script>
-<script src="/static/js/admin_settings.js?v=20261117-bb2128c"></script>
-<script src="/static/js/notifications.js?v=20261117-bb2128c"></script>
+<script src="/static/js/admin_statistics.js?v=20261118-79b4cf7"></script>
+<script src="/static/js/admin_settings.js?v=20261118-79b4cf7"></script>
+<script src="/static/js/notifications.js?v=20261118-79b4cf7"></script>
+<script src="/static/js/notification-waterfall.js?v=20261118-79b4cf7"></script>
 
 
 <script>
@@ -1564,6 +1570,50 @@
     </div>
 </div>
 
+<!-- 瀑布流通知配置（仅超级管理员）：总开关 + 按页面开关 -->
+<div id="waterfallConfigModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:640px;">
+        <div class="modal-header">
+            <h3><i class="fas fa-stream" style="color:#409eff;"></i> 瀑布流工作通知</h3>
+            <button class="close-btn" onclick="adminConsole.closeWaterfallConfig()">&times;</button>
+        </div>
+        <div class="modal-body" style="max-height:72vh;overflow-y:auto;">
+            <div class="wo-perm-note">
+                <i class="fas fa-info-circle"></i>
+                总开关关闭时所有页面都不显示瀑布流；开启后，仅下方勾选的页面展示。
+                默认开启「企业聊天室、任务中心、OA 审批、工作日历」。
+            </div>
+            <div class="form-group">
+                <label class="switch-label" style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+                    <span class="switch" style="flex-shrink:0;">
+                        <input type="checkbox" id="wfMasterEnabled">
+                        <span class="slider"></span>
+                    </span>
+                    <span><i class="fas fa-toggle-on" style="color:#52c41a;"></i> 启用瀑布流工作通知（总开关）</span>
+                </label>
+            </div>
+            <div class="form-group" style="border-top:1px solid var(--border-color,#ebeef5);padding-top:12px;">
+                <label>显示瀑布流的页面</label>
+                <div id="wfPageToggles" class="wo-perm-grid"></div>
+            </div>
+            <div class="form-group" style="border-top:1px solid var(--border-color,#ebeef5);padding-top:12px;">
+                <label>待办工作类型</label>
+                <div id="wfTodoToggles" class="wo-perm-grid"></div>
+                <div style="font-size:12px;color:#909399;margin-top:6px;">
+                    仅开启的待办类型会出现在瀑布流「待办工作」区；「待处理审批」「待处理任务 / 群工单」默认开启。
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <span style="flex:1;"></span>
+            <button class="btn btn-secondary" onclick="adminConsole.closeWaterfallConfig()">取消</button>
+            <button class="btn btn-primary" onclick="adminConsole.saveWaterfallConfig()">
+                <i class="fas fa-save"></i> 保存配置
+            </button>
+        </div>
+    </div>
+</div>
+
 <!-- 智能体设置模态框（仅超级管理员）：按页面启用 + 自定义嵌入代码 -->
 <div id="agentConfigModal" class="modal" style="display:none;">
     <div class="modal-content" style="max-width:720px;">
@@ -1641,9 +1691,9 @@
     </div>
 </div>
 
-<script src="/static/js/watermark.js?v=20261117-bb2128c"></script>
+<script src="/static/js/watermark.js?v=20261118-79b4cf7"></script>
 <script>WatermarkManager.init();</script>
-<script src="/static/js/agent.js?v=20261117-bb2128c"></script>
+<script src="/static/js/agent.js?v=20261118-79b4cf7"></script>
 <script>AgentManager.init();</script>
 </body>
 </html>

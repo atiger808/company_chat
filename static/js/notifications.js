@@ -583,6 +583,12 @@
         // 供聊天页的全局 WebSocket 复用：收到工作通知时刷新未读数、弹窗与桌面通知
         onPush(n) {
             fetchUnreadCount();
+            // 瀑布流页面同步静默刷新待办/通知（页面不可见或用户已关闭时不弹出）
+            try {
+                if (window.NotificationWaterfall && typeof NotificationWaterfall.notify === 'function') {
+                    NotificationWaterfall.notify();
+                }
+            } catch (e) {}
             if (n) {
                 if (isDing(n)) {
                     playDingSound();

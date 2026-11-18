@@ -196,7 +196,8 @@ class VersionManager {
                     forceUpdate: serverVersion.force_update || false,
                     current: localVersion,
                     latest: serverVersion,
-                    updateMessage: serverVersion.update_message || '发现新版本，建议更新以获得最佳体验'
+                    updateMessage: serverVersion.update_message || '发现新版本，建议更新以获得最佳体验',
+                    versionLogTotal: parseInt(serverVersion.version_log_total, 10) || 0
                 };
 
                 // ⚠️ 这里不能保存服务端版本号：一旦保存，下次比较就没有差异了，
@@ -232,21 +233,20 @@ class VersionManager {
         const isCritical = updateInfo.forceUpdate || updateInfo.appUpdated;
         this.updateBanner.classList.add(isCritical ? 'critical' : 'minor');
 
-        // 🔧 版本更新日志折叠：默认只显示前 2 条，其余收起，点击「查看全部/收起」展开/折叠。
+        // 🔧 版本更新日志只做「前 3 行」预览，完整日志改为分片加载的独立弹窗。
         // 🔧 预览的每一行还要截断：日志是「一行一个段落」（动辄几百字），原样塞进横幅会把横幅撑得
         //    比屏幕还高，把后面的「版本 / 更新时间 / 立即更新按钮」顶出视口（fixed 元素超出的部分
-        //    无法靠页面滚动看到 → 用户点不到按钮）。完整内容仍在「查看全部更新日志」里可看。
+        //    无法靠页面滚动看到 → 用户点不到按钮）。
         const PREVIEW_LINE_COUNT = 3;
         const PREVIEW_MAX_CHARS = 110;
         const clipText = (s) => (s.length > PREVIEW_MAX_CHARS ? s.slice(0, PREVIEW_MAX_CHARS) + '…' : s);
         const logLines = String(updateInfo.updateMessage || '').split('<br>').map(l => l.trim()).filter(Boolean);
         const previewLines = logLines.slice(0, PREVIEW_LINE_COUNT).map(clipText);
-        const moreLines = logLines.slice(PREVIEW_LINE_COUNT);
+        const totalLogCount = updateInfo.versionLogTotal || logLines.length;
         let descHtml = '<div class="update-desc">'
             + (previewLines.join('<br>') || '发现新版本，建议更新以获得最佳体验') + '</div>';
-        if (moreLines.length) {
-            descHtml += '<button class="update-log-toggle" id="updateLogToggle"><i class="fas fa-chevron-down"></i> 查看全部更新日志 (' + logLines.length + ')</button>'
-                + '<div class="update-log-full" id="updateLogFull" style="display:none;">' + moreLines.join('<br>') + '</div>';
+        if (totalLogCount > PREVIEW_LINE_COUNT) {
+            descHtml += '<button class="update-log-toggle" id="updateLogToggle"><i class="fas fa-chevron-down"></i> 查看全部更新日志 (' + totalLogCount + ')</button>';
         }
 
         // 版本信息做兜底：即使接口少了 latest / 字段缺失，也只是少显示一行，
@@ -318,17 +318,11 @@ class VersionManager {
         this.updateBanner.innerHTML = content;
         document.body.appendChild(this.updateBanner);
 
-        // 🔧 版本更新日志展开/收起
+        // 「查看全部更新日志」打开分片加载的独立弹窗
         const logToggle = document.getElementById('updateLogToggle');
         if (logToggle) {
             logToggle.onclick = () => {
-                const full = document.getElementById('updateLogFull');
-                if (!full) return;
-                const isCollapsed = full.style.display === 'none';
-                full.style.display = isCollapsed ? 'block' : 'none';
-                logToggle.innerHTML = isCollapsed
-                    ? '<i class="fas fa-chevron-up"></i> 收起更新日志'
-                    : '<i class="fas fa-chevron-down"></i> 查看全部更新日志 (' + logLines.length + ')';
+                this.openVersionLog();
             };
         }
 
@@ -486,6 +480,11 @@ class VersionManager {
         const exist = document.getElementById('versionLogModal');
         if (exist) { exist.classList.add('show'); return; }
         this._injectVersionLogStyle();
+        // 分片加载状态：已加载偏移、每页条数、日志总数、是否正在加载
+        this._logOffset = 0;
+        this._logLimit = 6;
+        this._logTotal = 0;
+        this._logLoading = false;
         const ov = document.createElement('div');
         ov.id = 'versionLogModal';
         ov.className = 'version-log-modal';
@@ -494,12 +493,15 @@ class VersionManager {
             + '<div class="version-log-title"><i class="fas fa-history"></i> 版本更新日志</div>'
             + '<div class="version-log-sub" id="versionLogSub">加载中...</div></div>'
             + '<button class="version-log-close" onclick="versionManager.closeVersionLog()" title="关闭"><i class="fas fa-times"></i></button></div>'
-            + '<div class="version-log-body" id="versionLogBody"><div class="version-log-loading"><i class="fas fa-spinner fa-spin"></i> 正在加载...</div></div>'
+            + '<div class="version-log-body" id="versionLogBody">'
+            + '<div class="version-log-list" id="versionLogList"></div>'
+            + '<div class="version-log-more" id="versionLogMore"></div>'
+            + '</div>'
             + '<div class="version-log-foot"><button class="version-log-btn" onclick="versionManager.closeVersionLog()">关闭</button></div>'
             + '</div>';
         document.body.appendChild(ov);
         ov.classList.add('show');
-        this._loadVersionLog();
+        this._loadVersionLog(true);
     }
 
     closeVersionLog() {
@@ -532,37 +534,84 @@ class VersionManager {
         return String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    async _loadVersionLog() {
-        const body = document.getElementById('versionLogBody');
+    _renderVersionLogEntries(entries) {
+        const self = this;
+        return (entries || []).map(e => {
+            const isNew = e.num === 0;
+            const parts = e.parts || [];
+            const partsHtml = parts.length
+                ? '<div class="version-log-parts">' + parts.map(p => '<i class="fas fa-angle-right"></i> ' + self._escLog(p)).join('<br>') + '</div>'
+                : '';
+            return '<div class="version-log-item' + (isNew ? ' latest' : '') + '">'
+                + '<div class="version-log-badge' + (isNew ? ' latest' : '') + '">' + (e.num != null ? e.num : '·') + '</div>'
+                + '<div class="version-log-content">' + self._escLog(e.title) + partsHtml + '</div>'
+                + '</div>';
+        }).join('');
+    }
+
+    // 分片加载版本日志：首次加载第一页，点击「加载更多」按 offset 追加下一页，
+    // 避免一次性把数百条日志渲染到弹窗里。
+    async _loadVersionLog(reset = false) {
+        if (this._logLoading) return;
+        const list = document.getElementById('versionLogList');
+        const more = document.getElementById('versionLogMore');
         const sub = document.getElementById('versionLogSub');
+        if (!list || !more) return;
+
+        if (reset) {
+            this._logOffset = 0;
+            this._logTotal = 0;
+            list.innerHTML = '';
+        }
+        this._logLoading = true;
+        more.innerHTML = '<div class="version-log-loading"><i class="fas fa-spinner fa-spin"></i> 正在加载...</div>';
+
         try {
-            const resp = await fetch('/api/chat/version/?t=' + Date.now(), {
+            const offset = this._logOffset || 0;
+            const limit = this._logLimit || 6;
+            const resp = await fetch('/api/chat/version/log/?offset=' + offset + '&limit=' + limit + '&t=' + Date.now(), {
                 method: 'GET',
                 cache: 'no-cache',
                 headers: TokenManager.getHeaders()
             });
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            const v = await resp.json();
-            const entries = this._parseVersionLog(v.update_message);
-            if (sub) sub.textContent = '当前版本 ' + (v.static_version || '-') + (v.build_time ? ' · 更新时间 ' + v.build_time : '');
-            if (!body) return;
-            if (!entries.length) {
-                body.innerHTML = '<div class="version-log-empty"><i class="fas fa-inbox"></i> 暂无版本更新日志</div>';
+            const data = await resp.json();
+            const entries = data.entries || [];
+            this._logTotal = parseInt(data.total, 10) || 0;
+            this._logOffset = offset + entries.length;
+
+            const stored = this.getStoredVersion() || {};
+            if (sub) {
+                sub.textContent = '当前版本 ' + (stored.static_version || '-')
+                    + (stored.build_time ? ' · 更新时间 ' + stored.build_time : '')
+                    + ' · 更新日志 ' + Math.min(this._logOffset, this._logTotal) + '/' + this._logTotal;
+            }
+
+            if (!this._logTotal) {
+                list.innerHTML = '<div class="version-log-empty"><i class="fas fa-inbox"></i> 暂无版本更新日志</div>';
+                more.innerHTML = '';
                 return;
             }
-            const self = this;
-            body.innerHTML = entries.map(e => {
-                const isNew = e.num === 0;
-                const partsHtml = e.parts.length
-                    ? '<div class="version-log-parts">' + e.parts.map(p => '<i class="fas fa-angle-right"></i> ' + self._escLog(p)).join('<br>') + '</div>'
-                    : '';
-                return '<div class="version-log-item' + (isNew ? ' latest' : '') + '">'
-                    + '<div class="version-log-badge' + (isNew ? ' latest' : '') + '">' + (e.num != null ? e.num : '·') + '</div>'
-                    + '<div class="version-log-content">' + self._escLog(e.title) + partsHtml + '</div>'
-                    + '</div>';
-            }).join('');
+            if (entries.length) list.insertAdjacentHTML('beforeend', this._renderVersionLogEntries(entries));
+
+            if (data.has_more) {
+                more.innerHTML = '<button class="version-log-btn version-log-more-btn" id="versionLogMoreBtn">'
+                    + '<i class="fas fa-chevron-down"></i> 加载更多（已加载 ' + this._logOffset + '/' + this._logTotal + '）</button>';
+                const btn = document.getElementById('versionLogMoreBtn');
+                if (btn) btn.onclick = () => this._loadVersionLog();
+            } else {
+                more.innerHTML = this._logTotal > (this._logLimit || 6)
+                    ? '<div class="version-log-end">已加载全部更新日志</div>' : '';
+            }
         } catch (e) {
-            if (body) body.innerHTML = '<div class="version-log-empty"><i class="fas fa-exclamation-circle"></i> 加载失败，请稍后重试</div>';
+            if (!list.children.length) {
+                list.innerHTML = '<div class="version-log-empty"><i class="fas fa-exclamation-circle"></i> 加载失败，请稍后重试</div>';
+            }
+            more.innerHTML = '<button class="version-log-btn version-log-more-btn" id="versionLogRetryBtn">重新加载</button>';
+            const retry = document.getElementById('versionLogRetryBtn');
+            if (retry) retry.onclick = () => this._loadVersionLog(!this._logOffset);
+        } finally {
+            this._logLoading = false;
         }
     }
 
@@ -580,6 +629,10 @@ class VersionManager {
             '.version-log-close:hover{background:rgba(245,108,108,.12);color:#f56c6c;}',
             '.version-log-body{flex:1;overflow-y:auto;padding:16px 20px;}',
             '.version-log-loading,.version-log-empty{text-align:center;color:#909399;padding:40px 0;font-size:14px;}',
+            '.version-log-more{text-align:center;padding:12px 0 4px;}',
+            '.version-log-more-btn{background:#fff;color:#409eff;border:1px solid #c6e2ff;padding:7px 18px;border-radius:20px;font-size:12.5px;cursor:pointer;}',
+            '.version-log-more-btn:hover{background:#ecf5ff;}',
+            '.version-log-end{color:#b1b3b8;font-size:12px;padding:8px 0;}',
             '.version-log-item{display:flex;gap:12px;position:relative;padding-bottom:16px;}',
             '.version-log-item:not(:last-child)::after{content:\'\';position:absolute;left:14px;top:36px;bottom:2px;width:2px;background:#e4e7ed;}',
             '.version-log-badge{width:28px;height:28px;border-radius:50%;background:#f2f3f5;color:#909399;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:2px solid #e4e7ed;z-index:1;}',
@@ -600,6 +653,8 @@ class VersionManager {
             '[data-theme="dark"] .version-log-content{background:#2a2a2a;border-color:#333;color:#e0e0e0;}',
             '[data-theme="dark"] .version-log-item.latest .version-log-content{background:linear-gradient(135deg,#1a2740,#2a2438);border-color:#3a4a6b;}',
             '[data-theme="dark"] .version-log-parts{color:#b0b0b0;}',
+            '[data-theme="dark"] .version-log-more-btn{background:#2d2d2d;border-color:#3a4a6b;color:#79bbff;}',
+            '[data-theme="dark"] .version-log-end{color:#777;}',
             '[data-theme="dark"] .version-log-foot{border-color:#333;}'
         ].join('\n');
         const style = document.createElement('style');

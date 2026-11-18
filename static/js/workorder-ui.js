@@ -373,9 +373,10 @@
             return;
         }
         var path = att.file_id ? '/api/cloud/files/save_from_chat/' : '/api/cloud/files/save_from_url/';
+        var folderName = att.folder_name || '文档（来自群工单）';
         var body = att.file_id
-            ? {file_upload_id: att.file_id, folder_name: '文档（来自群工单）'}
-            : {url: attUrl(att), name: attName(att), folder_name: '文档（来自群工单）'};
+            ? {file_upload_id: att.file_id, folder_name: folderName}
+            : {url: attUrl(att), name: attName(att), folder_name: folderName};
         if (!att.file_id && !attUrl(att)) {
             notify('附件地址缺失，无法保存', true);
             return;
@@ -397,7 +398,7 @@
             var cloudId = data.cloud_file_id || data.file_id || data.id;
             if (!cloudId) throw new Error('保存成功但未返回云盘文件 ID');
             setSavedUi(key, cloudId, att);
-            notify(isDocument(att) ? '已保存到网盘，可点击「在线编辑」打开' : '已保存到网盘 / 文档（来自群工单）', false);
+            notify(isDocument(att) ? '已保存到网盘，可点击「在线编辑」打开' : '已保存到网盘 / ' + folderName, false);
         } catch (e) {
             notify(e.message || '保存到网盘失败', true);
             if (btn && btn.tagName === 'BUTTON') {
@@ -426,16 +427,21 @@
         list.forEach(function (att) {
             var url = attUrl(att);
             var name = attName(att);
+            var downloadLink = url
+                ? '<a class="wo-att-download" href="' + esc(url) + '" download title="下载到本地" onclick="event.stopPropagation()"><i class="fas fa-download"></i></a>'
+                : '';
             if (isImage(att) && url) {
                 var imgIndex = images.length;
                 images.push(url);
-                html += '<img class="wo-att-image" src="' + esc(url) + '" alt="' + esc(name)
-                    + '" loading="lazy" onclick="event.stopPropagation();WorkOrderUI.previewGroup(\'' + gid + '\',' + imgIndex + ')">';
+                html += '<div class="wo-att-image-wrap">'
+                    + '<img class="wo-att-image" src="' + esc(url) + '" alt="' + esc(name)
+                    + '" loading="lazy" onclick="event.stopPropagation();WorkOrderUI.previewGroup(\'' + gid + '\',' + imgIndex + ')">'
+                    + downloadLink + '</div>';
                 return;
             }
             if (isVideo(att) && url) {
                 html += '<div class="wo-att-video-wrap"><video class="wo-att-video" controls preload="metadata" playsinline src="'
-                    + esc(url) + '"></video></div>';
+                    + esc(url) + '"></video>' + downloadLink + '</div>';
                 return;
             }
             var key = attKey(att);
@@ -451,7 +457,7 @@
                 + '<div class="wo-att-file-main"><div class="wo-att-file-name">' + esc(name) + '</div>'
                 + '<div class="wo-att-file-sub">' + fmtSize(att.size) + (doc ? ' · 文档' : ' · 文件') + '</div></div>'
                 + '<div class="wo-att-file-actions">'
-                + (url ? '<a class="wo-att-open" href="' + esc(url) + '" target="_blank" rel="noopener" title="打开原文件" onclick="event.stopPropagation()"><i class="fas fa-external-link-alt"></i></a>' : '')
+                + downloadLink
                 + '<button type="button" class="wo-att-save-btn" style="' + saveDisplay + '"'
                 + (savedId && !doc ? ' disabled' : '')
                 + ' onclick="event.stopPropagation();WorkOrderUI.saveAttachment(\'' + key + '\',this)">' + saveText + '</button>'
