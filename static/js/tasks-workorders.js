@@ -133,7 +133,7 @@
                     + '<div class="wo-task-meta">'
                     + '<span class="wo-urgency-text" style="color:' + urgencyColor(wo.urgency) + ';">' + esc(wo.urgency_display) + '</span>'
                     + (cur.name ? '<span><i class="fas fa-route"></i> ' + esc(cur.name) + '（' + esc(cur.assignee_name || '未指派') + '）</span>' : '')
-                    + (cur.deadline ? '<span><i class="fas fa-clock"></i> ' + esc(fmtTime(cur.deadline)) + '</span>' : '')
+                    + (cur.deadline ? '<span title="截止日期"><i class="fas fa-clock"></i> ' + esc(fmtTime(cur.deadline)) + '</span>' : '')
                     + '</div>'
                     + '<div class="wo-task-progress"><div class="wo-progress-bar"><i style="width:' + pct + '%;"></i></div><span>' + (p.done || 0) + '/' + (p.total || 0) + '</span></div>'
                     + '</div>';

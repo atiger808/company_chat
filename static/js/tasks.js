@@ -235,7 +235,7 @@ class TaskApp {
                         <span class="status-tag status-${task.status}">${this.getStatusText(task.status)}</span>
                         ${overdue ? '<span class="task-overdue-badge"><i class="fas fa-exclamation-triangle"></i> 已逾期</span>' : ''}
                     </div>
-                    <span class="task-card-due ${overdue ? 'overdue' : ''}">${task.due_date ? '<i class="fas fa-clock"></i> ' + this.formatDate(task.due_date) : ''}</span>
+                    <span title="截止日期" class="task-card-due ${overdue ? 'overdue' : ''}">${task.due_date ? '<i class="fas fa-clock"></i> ' + this.formatDate(task.due_date) : ''}</span>
                 </div>
                 <div class="card-title">${this.escapeHtml(task.title)}</div>
                 <div class="task-card-people">
@@ -284,7 +284,7 @@ class TaskApp {
                         </span>
                     </div>
                     ${groupName ? '<div class="kanban-group"><i class="fas fa-users"></i> ' + this.escapeHtml(groupName) + '</div>' : ''}
-                    ${task.due_date ? '<div class="kanban-due' + (overdue ? ' overdue' : '') + '"><i class="fas fa-clock"></i> ' + this.formatDate(task.due_date) + '</div>' : ''}
+                    ${task.due_date ? '<div title="截止日期" class="kanban-due' + (overdue ? ' overdue' : '') + '"><i class="fas fa-clock"></i> ' + this.formatDate(task.due_date) + '</div>' : ''}
                 </div>
                 `;
             }).join('');
