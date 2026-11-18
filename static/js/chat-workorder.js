@@ -467,6 +467,7 @@
                     + reassign
                     + '</div></div>';
             }).join('');
+            var meId = this.currentUser ? this.currentUser.id : null;
             var commentHtml = comments.length ? comments.map(function (c) {
                 var atts = (window.WorkOrderUI && WorkOrderUI.attachmentsHtml)
                     ? WorkOrderUI.attachmentsHtml(c.attachments || [], {compact: true})
@@ -474,10 +475,13 @@
                         return '<a href="' + esc(f.url) + '" target="_blank" rel="noopener" class="wo-attach-chip"><i class="fas fa-paperclip"></i> ' + esc(f.name || '附件') + '</a>';
                     }).join('');
                 var avatar = (c.user_info && c.user_info.avatar_url) || '/static/images/default-avatar.png';
+                var authorId = c.user_info ? c.user_info.id : c.user;
+                var isMe = meId != null && authorId != null && String(authorId) === String(meId);
+                var authorName = isMe ? '我' : (c.user_name || '系统');
                 return '<div class="wo-comment">'
                     + '<img class="wo-comment-avatar" src="' + esc(avatar) + '" alt="">'
                     + '<div class="wo-comment-body">'
-                    + '<div class="wo-comment-head"><b>' + esc(c.user_name || '系统') + '</b>'
+                    + '<div class="wo-comment-head"><b>' + esc(authorName) + '</b>'
                     + '<span class="wo-comment-action">' + esc(c.action_display || actionLabel(c.action_type)) + '</span>'
                     + '<span class="wo-comment-time">' + esc(fmtTime(c.created_at)) + '</span></div>'
                     + (c.content ? '<div class="wo-comment-text">' + esc(c.content) + '</div>' : '')

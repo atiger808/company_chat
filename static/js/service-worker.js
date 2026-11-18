@@ -2,7 +2,7 @@
 // @Desc   :PWA Service Worker - Web Push + SWR 缓存 + 离线回退
 
 // 每次部署递增此版本号（SW 文件字节变化即可触发更新，但显式版本更可靠）
-const STATIC_VERSION = '20261118-taskcenter04';
+const STATIC_VERSION = '20261118-taskcenter08';
 const CACHE = 'company-chat-' + STATIC_VERSION;
 const SHELL_CACHE = CACHE + '-shell';
 

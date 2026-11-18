@@ -19,9 +19,9 @@ class TaskCommentAdmin(admin.ModelAdmin):
 
 @admin.register(WorkOrder)
 class WorkOrderAdmin(admin.ModelAdmin):
-    list_display = ('id', 'order_no', 'title', 'urgency', 'status', 'chat_room', 'tenant', 'verifier', 'sync_notify', 'ding', 'last_action_at', 'closed_at', 'updated_at', 'created_at')
+    list_display = ('id', 'order_no', 'creator', 'title', 'urgency', 'status', 'chat_room', 'tenant', 'verifier', 'sync_notify', 'ding', 'last_action_at', 'closed_at', 'updated_at', 'created_at')
     list_filter = ('urgency', 'tenant', 'status', 'sync_notify', 'ding')
-    search_fields = ('id', 'order_no', 'chat_room__name', 'tenant__name', 'verifier__username', 'verifier__real_name')
+    search_fields = ('id', 'order_no', 'chat_room__name', 'tenant__name', 'creator__username', 'creator__real_name')
     list_per_page = 20
 
 

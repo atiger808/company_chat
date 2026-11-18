@@ -6,7 +6,7 @@
     <title>任务中心 - 义乌吉通集团</title>
     <link rel="icon" type="image/svg+xml" href="/media/avatars/tasks-blue.svg?v=20260820-d0a1b2c">
     <!-- 复用项目基础样式 -->
-    <link rel="stylesheet" href="/static/css/tasks.css?v=20261118-79b4cf7">
+    <link rel="stylesheet" href="/static/css/tasks.css?v=20261118-taskcenter06">
     <link rel="stylesheet" href="/static/css/workorder.css?v=20261118-79b4cf7">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- 引入 SortableJS 用于看板拖拽 -->
@@ -191,7 +191,8 @@
                 <input type="text" class="search-input" placeholder="搜索任务..."
                        oninput="taskApp.searchTasks(this.value)">
             </div>
-            <div class="task-priority-filter" id="taskPriorityFilter">
+
+            <div class="task-priority-filter" id="taskPriorityFilter" title="按紧急等级筛选">
                 <button type="button" class="priority-filter-btn all active" data-priority=""
                         onclick="taskApp.setPriorityFilter('')">全部</button>
                 <button type="button" class="priority-filter-btn low" data-priority="low"
@@ -203,6 +204,16 @@
                 <button type="button" class="priority-filter-btn urgent" data-priority="urgent"
                         onclick="taskApp.setPriorityFilter('urgent')">紧急</button>
             </div>
+            <select id="taskStatusFilter" class="form-control task-status-select"
+                onchange="taskApp.setTaskStatusFilter(this.value)" title="按任务状态筛选">
+                <option value="">全部状态</option>
+                <option value="todo">待处理</option>
+                <option value="in_progress">进行中</option>
+                <option value="done">已完成</option>
+                <option value="archived">已归档</option>
+            </select>
+
+
             <div class="view-switcher">
                 <button class="btn-icon active" data-view="list" onclick="taskApp.switchView('list')" title="列表视图">
                     <i class="fas fa-list"></i>
@@ -246,15 +257,15 @@
             <div id="listView" class="list-view"></div>
             <!-- 看板视图 -->
             <div id="kanbanView" class="kanban-view" style="display: none;">
-                <div class="kanban-column" data-status="todo">
+                <div class="kanban-column" data-status="todo" title="可拖动任务修改状态">
                     <div class="column-header">待处理 <span class="badge" id="kanban-count-todo">0</span></div>
                     <div class="column-body" id="kanban-todo"></div>
                 </div>
-                <div class="kanban-column" data-status="in_progress">
+                <div class="kanban-column" data-status="in_progress" title="可拖动任务修改状态">
                     <div class="column-header">进行中 <span class="badge" id="kanban-count-in_progress">0</span></div>
                     <div class="column-body" id="kanban-in_progress"></div>
                 </div>
-                <div class="kanban-column" data-status="done">
+                <div class="kanban-column" data-status="done" title="可拖动任务修改状态">
                     <div class="column-header">已完成 <span class="badge" id="kanban-count-done">0</span></div>
                     <div class="column-body" id="kanban-done"></div>
                 </div>
@@ -364,8 +375,8 @@
 <script src="/static/js/utils.js?v=20261118-79b4cf7"></script>
 <script src="/static/js/api.js?v=20261118-79b4cf7"></script>
 <script src="/static/js/workorder-ui.js?v=20261118-79b4cf7"></script>
-<script src="/static/js/tasks.js?v=20261118-79b4cf7"></script>
-<script src="/static/js/tasks-workorders.js?v=20261118-79b4cf7"></script>
+<script src="/static/js/tasks.js?v=20261118-taskcenter06"></script>
+<script src="/static/js/tasks-workorders.js?v=20261118-taskcenter06"></script>
 <script src="/static/js/notifications.js?v=20261118-79b4cf7"></script>
 <script src="/static/js/notification-waterfall.js?v=20261118-79b4cf7"></script>
 

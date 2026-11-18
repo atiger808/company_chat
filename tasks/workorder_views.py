@@ -69,7 +69,9 @@ class WorkOrderViewSet(viewsets.GenericViewSet):
             qs = qs.filter(
                 Q(order_no__icontains=keyword) |
                 Q(title__icontains=keyword) |
-                Q(description__icontains=keyword)
+                Q(description__icontains=keyword) |
+                Q(creator_name__icontains=keyword) |
+                Q(creator__username__icontains=keyword)
             )
         room_id = params.get('room_id')
         if room_id:

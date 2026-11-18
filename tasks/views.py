@@ -85,7 +85,8 @@ class TaskViewSet(viewsets.ModelViewSet):
         search = params.get('search')
         if search:
             queryset = queryset.filter(
-                Q(title__icontains=search) | Q(description__icontains=search)
+                Q(title__icontains=search) | Q(description__icontains=search) |
+                Q(creator__username__icontains=search) | Q(creator__real_name__icontains=search)
             )
 
         # 6. 紧急等级过滤（全部不传）

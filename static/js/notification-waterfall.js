@@ -387,17 +387,15 @@
             + '<button class="wf-close" title="关闭">&times;</button></div>'
             + '<div id="wfList">';
 
-        console.log(todoTotal)
-        console.log(notifTotal)
-        console.log(displayTotal)
+
         if (todo.length || todoHasMore) {
-            console.log(todo)
+
             html += '<div class="wf-sec-title todo"><i class="fas fa-list-check"></i> 待办工作（' + (todoTotal || todo.length) + '）</div>'
                 + (todo.length ? todo.map(todoCardHtml).join('') : '<div class="wf-empty-tip">暂无更多待办</div>')
                 + moreHtml('todo', todoHasMore);
         }
         if (rows.length || notifHasMore) {
-            console.log(rows)
+
             html += '<div class="wf-sec-title"><i class="fas fa-bell"></i> 工作通知（' + (notifTotal || rows.length) + '）</div>'
                 + (rows.length ? rows.map(normalCardHtml).join('') : '<div class="wf-empty-tip">当前页通知已并入待办，继续加载更多</div>')
                 + moreHtml('notif', notifHasMore);

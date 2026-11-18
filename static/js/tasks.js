@@ -10,6 +10,7 @@ class TaskApp {
         this.selectedTaskId = null;
         this.searchKeyword = '';
         this.priorityFilter = '';
+        this.taskStatusFilter = '';
         this.woUrgencyFilter = '';
         this.newTaskAttachments = [];
         this.currentCommentAttachments = [];
@@ -159,7 +160,10 @@ class TaskApp {
             if (this.currentFilter === 'my') params.append('assignee_id', this.currentUser.id);
             if (this.currentFilter === 'created') params.append('creator', this.currentUser.id);
             if (this.currentFilter === 'today') params.append('due_date__date', new Date().toISOString().split('T')[0]);
-            if (this.currentFilter === 'done') params.append('status', 'done');
+            // 顶部状态下拉优先；「已完成」导航在未选择状态时默认只看已完成
+            let statusParam = this.taskStatusFilter || '';
+            if (!statusParam && this.currentFilter === 'done') statusParam = 'done';
+            if (statusParam) params.append('status', statusParam);
             if (this.searchKeyword) params.append('search', this.searchKeyword);
             if (this.priorityFilter) params.append('priority', this.priorityFilter);
 
@@ -251,7 +255,7 @@ class TaskApp {
                 </div>
                 <div class="card-footer">
                     <span class="task-group-badge ${groupName ? '' : 'hidden'}"><i class="fas fa-users"></i> ${this.escapeHtml(groupName)}</span>
-                    ${task.tenant_name ? '<span class="task-tenant-text"><i class="fas fa-building"></i> ' + this.escapeHtml(task.tenant_name) + '</span>' : ''}
+                    ${task.tenant_name ? '<span class="task-tenant-text" title="归属企业：' + this.escapeHtml(task.tenant_name) + '"><i class="fas fa-building"></i> ' + this.escapeHtml(task.tenant_name) + '</span>' : ''}
                 </div>
             </div>
         `;
@@ -523,12 +527,16 @@ class TaskApp {
         return comments.map(c => {
             const files = (window.WorkOrderUI && c.attachments && c.attachments.length)
                 ? WorkOrderUI.attachmentsHtml(c.attachments, {compact: true}) : '';
+            const myId = this.currentUser ? this.currentUser.id : null;
+            const authorId = c.user_info ? c.user_info.id : c.user;
+            const isMe = myId != null && authorId != null && String(authorId) === String(myId);
+            const authorName = isMe ? '我' : (c.user_info?.real_name || c.user_info?.username || '未知');
             return `
             <div class="comment-item">
                 <img src="${c.user_info?.avatar_url || '/static/images/default-avatar.png'}" class="comment-avatar">
                 <div class="comment-body">
                     <div class="comment-header">
-                        <span class="comment-author">${c.user_info?.real_name || c.user_info?.username}</span>
+                        <span class="comment-author">${this.escapeHtml(authorName)}</span>
                         <span class="comment-time">${this.formatDate(c.created_at)}</span>
                     </div>
                     <div class="comment-content">${c.content || ''}</div>
@@ -729,14 +737,17 @@ class TaskApp {
         const titles = { all: '全部任务', my: '我的任务', created: '我创建的', today: '今日到期', done: '已完成', workorders: '群工单' };
         document.getElementById('currentViewTitle').textContent = titles[filter];
         var priorityFilter = document.getElementById('taskPriorityFilter');
+        var taskStatusFilter = document.getElementById('taskStatusFilter');
         if (filter === 'workorders') {
             if (priorityFilter) priorityFilter.style.display = 'none';
+            if (taskStatusFilter) taskStatusFilter.style.display = 'none';
             if (typeof this.loadWorkOrders === 'function') {
                 this.loadWorkOrders(1);
             }
             return;
         }
         if (priorityFilter) priorityFilter.style.display = '';
+        if (taskStatusFilter) taskStatusFilter.style.display = '';
         var woToolbar = document.getElementById('woToolbarActions');
         if (woToolbar) woToolbar.style.display = 'none';
         var searchInput = document.querySelector('.task-toolbar .search-input');
@@ -770,6 +781,11 @@ class TaskApp {
         document.querySelectorAll('#taskPriorityFilter .priority-filter-btn').forEach(function (btn) {
             btn.classList.toggle('active', (btn.getAttribute('data-priority') || '') === this.priorityFilter);
         }, this);
+        this.loadTasks();
+    }
+
+    setTaskStatusFilter(status) {
+        this.taskStatusFilter = status || '';
         this.loadTasks();
     }
 
@@ -1242,7 +1258,7 @@ class TaskApp {
     }
 
     getPriorityText(p) { return { low: '低', medium: '中', high: '高', urgent: '紧急' }[p]; }
-    getStatusText(s) { return { todo: '待处理', in_progress: '进行中', done: '已完成' }[s]; }
+    getStatusText(s) { return { todo: '待处理', in_progress: '进行中', done: '已完成', archived: '已归档' }[s] || s; }
     formatDate(date) { return new Date(date).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
 }
 

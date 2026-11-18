@@ -1,3 +1,14 @@
+274. 任务中心增加状态筛选：
+   1）主内容顶部紧急等级按钮后新增状态下拉框，选项为「全部状态 / 待处理 / 进行中 / 已完成 / 已归档」；
+   2）状态筛选与紧急等级、搜索、任务分类筛选叠加生效；「已完成」导航在未选择状态时仍默认只看已完成；
+   3）任务列表/详情补充「已归档」状态展示；群工单视图自动隐藏任务状态筛选；
+   4）说明：同步 `static/js/tasks.js`、`static/js/tasks-workorders.js`、`static/css/tasks.css`、`templates/tasks/tasks.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后强刷/PWA 清缓存；资源版本号 `20261118-taskcenter06`。
+
+273. 任务/群工单评论显示优化：
+   1）任务详情评论中，若评论人是当前登录用户，评论人姓名显示为「我」；
+   2）群工单详情（任务中心与聊天页）的进度记录同样将当前用户本人显示为「我」；
+   3）说明：同步 `static/js/tasks.js`、`static/js/tasks-workorders.js`、`static/js/chat-workorder.js`、`templates/tasks/tasks.html`、`templates/chat/chat.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后强刷/PWA 清缓存；资源版本号 `20261118-taskcenter05`。
+
 272. 群工单紧急等级筛选改为按钮形式：
    1）任务中心「群工单」视图的紧急等级筛选由下拉框改为「全部 / 低 / 中 / 高 / 紧急」按钮组，颜色与任务卡片优先级标签一致；
    2）按钮筛选与状态筛选、搜索、导出共用同一筛选状态，导出内容跟随当前紧急等级；

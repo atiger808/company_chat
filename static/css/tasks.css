@@ -1261,6 +1261,10 @@ body.task-body {
     .task-people-grid {
         grid-template-columns: 1fr;
     }
+    .task-status-select {
+        width: 100%;
+        max-width: none;
+    }
 }
 
 /* 看板视图 */
@@ -1560,6 +1564,19 @@ body.task-body {
 .priority-filter-btn.medium.active { color: #fff; background: #409eff; border-color: #409eff; }
 .priority-filter-btn.high.active { color: #fff; background: #e6a23c; border-color: #e6a23c; }
 .priority-filter-btn.urgent.active { color: #fff; background: #f56c6c; border-color: #f56c6c; }
+
+.task-status-select {
+    width: auto;
+    min-width: 132px;
+    max-width: 170px;
+    padding: 8px 10px;
+    font-size: 13px;
+}
+
+.status-archived {
+    background: #f4f4f5;
+    color: #909399;
+}
 
 /* 任务/评论附件选择 */
 .task-modal-attach-list,
