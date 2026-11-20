@@ -25,10 +25,20 @@ class TaskApp {
             window.location.href = this.chat_login_url;
             return;
         }
-        // 各初始化步骤独立容错：任一失败不阻断后续（含任务详情自动打开）
-        try { await this.loadCurrentUser(); } catch (e) { console.error('加载当前用户失败', e); }
-        try { await this.loadStats(); } catch (e) { console.error('加载统计失败', e); }
-        try { await this.loadTasks(); } catch (e) { console.error('加载任务失败', e); }
+        // 并行加载当前用户 / 统计 / 任务列表：用缓存 user_id 支撑首屏筛选，
+        // 避免三个请求串行等待导致进入任务中心明显变慢。
+        const cachedUid = localStorage.getItem('user_id');
+        if (cachedUid && !this.currentUser) this.currentUser = {id: cachedUid};
+        try {
+            if (cachedUid) {
+                await Promise.allSettled([
+                    this.loadCurrentUser(), this.loadStats(), this.loadTasks()
+                ]);
+            } else {
+                await this.loadCurrentUser();
+                await Promise.allSettled([this.loadStats(), this.loadTasks()]);
+            }
+        } catch (e) { console.error('初始化任务数据失败', e); }
         try { this.initAssigneePicker(); } catch (e) { console.error('初始化执行人选择器失败', e); }
 
         // 从工作通知/聊天室任务卡片跳转：自动打开对应任务详情
@@ -41,12 +51,12 @@ class TaskApp {
         } catch (e) { console.warn('解析任务跳转参数失败', e); }
 
         try { this.initTheme(); } catch (e) { console.warn('初始化主题失败', e); }
-        try { this.initSortable(); } catch (e) { console.warn('初始化看板拖拽失败', e); }
 
         // 全局点击关闭下拉菜单
         document.addEventListener('click', () => {
             document.querySelectorAll('.user-dropdown').forEach(d => d.style.display = 'none');
         });
+        window.addEventListener('resize', () => this._updateStatusFlowArrows());
     }
 
     // 工作通知/瀑布流深链：按任务状态/归属切换左侧导航，再打开任务详情
@@ -341,11 +351,27 @@ class TaskApp {
         const canStatus = perm.can_change_status === true;
         const canComment = perm.can_comment === true;
         const canUpload = perm.can_upload === true;
-        const statusMap = { todo: '待处理', in_progress: '进行中', done: '已完成' };
-        const statusPills = Object.keys(statusMap).map(function (key) {
-            return '<button type="button" class="task-status-pill ' + key + (task.status === key ? ' active' : '') + '" '
-                + 'onclick="taskApp.changeTaskStatus(' + task.id + ', \'' + key + '\')">'
-                + statusMap[key] + '</button>';
+        const taskClosed = task.status === 'done' || task.status === 'archived';
+        const statusFlow = [
+            {key: 'todo', label: '开始处理', icon: 'fa-play', cls: 'start'},
+            {key: 'in_progress', label: '处理中', icon: 'fa-hourglass-half', cls: 'progress'},
+            {key: 'done', label: '标记完成', icon: 'fa-check-circle', cls: 'finish'}
+        ];
+        // 状态线性不可逆：当前状态之前的按钮置灰
+        const statusOrder = ['todo', 'in_progress', 'done'];
+        const currentStatusIdx = statusOrder.indexOf(task.status);
+        const statusPills = statusFlow.map(function (a, idx) {
+            const disabled = task.status === 'archived'
+                || (currentStatusIdx > -1 && statusOrder.indexOf(a.key) < currentStatusIdx);
+            let disabledTip = '';
+            if (task.status === 'archived') disabledTip = '任务已归档，状态不可再修改';
+            else if (disabled) disabledTip = '状态操作不可回退';
+            const btn = '<button type="button" class="task-flow-btn ' + a.cls + (task.status === a.key ? ' active' : '')
+                + (disabled ? ' disabled' : '') + '"' + (disabled ? ' disabled title="' + disabledTip + '"' : '')
+                + ' onclick="taskApp.requestTaskStatus(' + task.id + ', \'' + a.key + '\')">'
+                + '<i class="fas ' + a.icon + '"></i> ' + a.label + '</button>';
+            if (idx === 0) return btn;
+            return '<span class="task-flow-step"><i class="fas fa-arrow-right task-status-arrow"></i>' + btn + '</span>';
         }).join('');
         const titleHtml = canEdit
             ? '<input type="text" value="' + this.escapeHtml(task.title) + '" class="form-control task-title-input" '
@@ -373,21 +399,29 @@ class TaskApp {
             : '';
         const commentInput = canComment
             ? '<div class="comment-input-wrapper task-comment-input">'
-              + '<div class="task-comment-attach-bar">'
+              + '<textarea id="commentInput" placeholder="添加评论..."></textarea>'
+              + '<div class="task-comment-tools">'
               + '<label class="task-upload-btn small"><i class="fas fa-paperclip"></i> 添加附件'
               + '<input type="file" multiple style="display:none;" onchange="taskApp.uploadCommentFiles(this.files)">'
               + '</label>'
               + '<div id="taskCommentAttachList" class="task-comment-attach-list"></div>'
-              + '</div>'
-              + '<textarea id="commentInput" placeholder="添加评论..."></textarea>'
-              + '<button class="btn btn-primary" style="align-self: flex-end;" onclick="taskApp.addComment(' + task.id + ')">'
-              + '<i class="fas fa-paper-plane"></i></button></div>'
+              + '<button class="btn btn-primary btn-sm task-comment-send" onclick="taskApp.addComment(' + task.id + ')">'
+              + '<i class="fas fa-paper-plane"></i> 发送评论</button>'
+              + '</div></div>'
             : '<div class="task-readonly-tip"><i class="fas fa-lock"></i> 仅任务创建人或执行人可以评论</div>';
         const statusActions = canStatus
             ? '<div class="task-status-actions"><div class="task-status-actions-head">'
               + '<i class="fas fa-exchange-alt"></i> 状态操作</div>'
-              + '<div class="task-status-pills">' + statusPills + '</div>'
-              + '<div class="task-status-actions-tip">点击状态按钮即可切换；也可在列表看板中拖拽调整。</div></div>'
+              + '<div class="task-status-flow">' + statusPills + '</div>'
+              + '<div class="task-status-current"><i class="fas fa-info-circle"></i> 当前状态：<b>'
+              + this.getStatusText(task.status) + '</b></div>'
+              + '<div class="task-status-actions-tip">'
+              + (task.status === 'archived'
+                    ? '任务已归档，状态不可再修改。'
+                    : taskClosed
+                        ? '任务已完成，状态不可回退。'
+                        : '状态按「开始处理 → 处理中 → 标记完成」顺序推进，不能回退。')
+              + '</div></div>'
             : '';
 
         body.innerHTML = `
@@ -450,6 +484,38 @@ class TaskApp {
             </div>
         `;
         this.renderCommentAttachments();
+        this._updateStatusFlowArrows();
+        this._observeStatusFlow();
+    }
+
+    _updateStatusFlowArrows() {
+        const flow = document.querySelector('.task-status-flow');
+        if (!flow) return;
+        const btns = flow.querySelectorAll('.task-flow-btn');
+        let anyWrapped = false;
+        btns.forEach(function (btn, idx) {
+            if (idx === 0) return;
+            const step = btn.closest('.task-flow-step');
+            const arrow = step ? step.querySelector('.task-status-arrow') : null;
+            const wrapped = btn.offsetTop > btns[idx - 1].offsetTop + 1;
+            if (wrapped) anyWrapped = true;
+            if (arrow) {
+                arrow.className = (wrapped ? 'fas fa-level-down-alt' : 'fas fa-arrow-right') + ' task-status-arrow';
+            }
+        });
+        flow.classList.toggle('wrapped', anyWrapped);
+    }
+
+    _observeStatusFlow() {
+        if (!window.ResizeObserver) return;
+        const flow = document.querySelector('.task-status-flow');
+        if (!flow) return;
+        if (this._flowObserver) this._flowObserver.disconnect();
+        this._flowObserver = new ResizeObserver(() => {
+            clearTimeout(this._flowTimer);
+            this._flowTimer = setTimeout(() => this._updateStatusFlowArrows(), 60);
+        });
+        this._flowObserver.observe(flow);
     }
 
     renderCommentAttachments() {
@@ -549,6 +615,11 @@ class TaskApp {
 
     closeDetail() {
         this.selectedTaskId = null;
+        this.currentWorkOrder = null;
+        if (this._flowObserver) {
+            this._flowObserver.disconnect();
+            this._flowObserver = null;
+        }
         document.getElementById('taskDetailPanel').classList.remove('show');
         this.render(); // 移除选中样式
     }
@@ -698,8 +769,54 @@ class TaskApp {
         this.renderNewTaskAttachments();
     }
 
+    async requestTaskStatus(taskId, newStatus) {
+        const task = this.currentTask;
+        if (task && String(task.id) === String(taskId) && task.status === newStatus) return;
+        if (task && task.status === 'archived' && newStatus !== 'done') {
+            this.showToast('任务已归档，状态不可再修改', 'warning');
+            return;
+        }
+        const order = ['todo', 'in_progress', 'done'];
+        const curIdx = task ? order.indexOf(task.status) : -1;
+        const newIdx = order.indexOf(newStatus);
+        if (task && curIdx > -1 && newIdx > -1 && newIdx < curIdx) {
+            this.showToast('状态操作不可回退', 'warning');
+            return;
+        }
+        const labels = {todo: '开始处理', in_progress: '处理中', done: '标记完成'};
+        let detail = '';
+        if (newStatus === 'done') {
+            detail = '标记完成后任务即结束，不能再重复执行「开始处理」或「处理中」操作。';
+        } else if (newStatus === 'in_progress') {
+            detail = '任务将进入处理中状态。';
+        } else {
+            detail = '任务将回到「开始处理」状态。';
+        }
+        const ok = await this.showConfirm(
+            '确认切换任务状态',
+            '确定将任务切换为「<b>' + (labels[newStatus] || newStatus) + '</b>」吗？<br>'
+            + '<small style="color:var(--text-light);">' + detail + '</small>'
+        );
+        if (!ok) return;
+        await this.changeTaskStatus(taskId, newStatus);
+    }
+
     async changeTaskStatus(taskId, newStatus) {
         if (!['todo', 'in_progress', 'done'].includes(newStatus)) return;
+        if (this.currentTask && String(this.currentTask.id) === String(taskId)) {
+            const curStatus = this.currentTask.status;
+            const order = ['todo', 'in_progress', 'done'];
+            if (curStatus === 'archived' && newStatus !== 'done') {
+                this.showToast('任务已归档，状态不可再修改', 'warning');
+                return;
+            }
+            const curIdx = order.indexOf(curStatus);
+            const newIdx = order.indexOf(newStatus);
+            if (curIdx > -1 && newIdx > -1 && newIdx < curIdx) {
+                this.showToast('状态操作不可回退', 'warning');
+                return;
+            }
+        }
         try {
             const res = await fetch(`/api/tasks/${taskId}/change_status/`, {
                 method: 'POST',
@@ -718,6 +835,8 @@ class TaskApp {
         } catch (e) {
             console.error('更新状态失败', e);
             this.showToast(e.message || '更新状态失败', 'error');
+            // 失败时重载列表，避免看板拖拽后卡片停留在错误列
+            this.loadTasks();
         }
     }
 
@@ -757,14 +876,38 @@ class TaskApp {
         this.loadTasks();
     }
 
-    switchView(view) {
+    async switchView(view) {
         if (this.currentFilter === 'workorders') return;
         this.currentView = view;
         document.querySelectorAll('.view-switcher .btn-icon').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.view === view);
         });
         this.render();
-        if (view === 'kanban') this.initSortable();
+        if (view === 'kanban') {
+            try {
+                await this._ensureSortable();
+                this.initSortable();
+            } catch (e) {
+                this.showToast('看板拖拽组件加载失败，请稍后重试', 'error');
+            }
+        }
+    }
+
+    // SortableJS 仅在看板视图按需加载，避免阻塞任务中心首屏
+    _ensureSortable() {
+        if (typeof Sortable !== 'undefined') return Promise.resolve();
+        if (this._sortableLoading) return this._sortableLoading;
+        this._sortableLoading = new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js';
+            script.onload = () => resolve();
+            script.onerror = () => {
+                this._sortableLoading = null;
+                reject(new Error('SortableJS load failed'));
+            };
+            document.head.appendChild(script);
+        });
+        return this._sortableLoading;
     }
 
     searchTasks(keyword) {
@@ -800,6 +943,7 @@ class TaskApp {
     // ==================== 看板拖拽 ====================
 
     initSortable() {
+        if (typeof Sortable === 'undefined') return;
         // 销毁旧实例
         this.sortableInstances.forEach(instance => instance.destroy());
         this.sortableInstances = [];

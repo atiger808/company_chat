@@ -186,6 +186,20 @@ class TaskViewSet(viewsets.ModelViewSet):
         self._ensure_participant(task)
         new_status = request.data.get('status', task.status)
         new_order = request.data.get('order', task.order)
+        if new_status == task.status:
+            return Response({'status': 'success', 'new_status': new_status})
+        if task.status in ('done', 'archived') and new_status in ('todo', 'in_progress'):
+            return Response(
+                {'error': '任务已完成，不能重复执行「开始处理」或「处理中」操作'},
+                status=status.HTTP_400_BAD_REQUEST)
+        # 状态按 待处理 → 进行中 → 已完成 线性推进，不允许回退
+        status_order = {'todo': 0, 'in_progress': 1, 'done': 2}
+        cur_idx = status_order.get(task.status)
+        new_idx = status_order.get(new_status)
+        if cur_idx is not None and new_idx is not None and new_idx < cur_idx:
+            return Response(
+                {'error': '任务状态不可回退，请按「开始处理 → 处理中 → 标记完成」顺序操作'},
+                status=status.HTTP_400_BAD_REQUEST)
         if new_status in dict(Task.STATUS_CHOICES):
             task.status = new_status
             task.order = new_order

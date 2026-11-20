@@ -2249,3 +2249,22 @@ input[type="time"] {
 @media (max-width: 768px) {
   .tts-btn { padding: 2px 8px; font-size: 11px; }
 }
+
+/* ==================== OA 审批顶部导航主题（主题蓝 #409EFF） ==================== */
+.page-approval .oa-top-bar {
+    background: linear-gradient(135deg, #409eff 0%, #337ecc 100%);
+    box-shadow: 0 2px 10px rgba(64, 158, 255, 0.28);
+}
+
+.page-approval .oa-top-bar .top-bar-btn-primary {
+    background: rgba(255, 255, 255, 0.28);
+}
+
+.page-approval .oa-top-bar .top-bar-btn-primary:hover {
+    background: rgba(255, 255, 255, 0.4);
+}
+
+[data-theme="dark"] .page-approval .oa-top-bar {
+    background: linear-gradient(135deg, #2c6a9f 0%, #1b4470 100%);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+}

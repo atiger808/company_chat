@@ -1008,9 +1008,108 @@ body.task-body {
 
 .task-status-pills {
     display: flex;
+    align-items: center;
     gap: 8px;
     flex-wrap: wrap;
     margin-top: 6px;
+}
+
+.task-status-flow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+}
+
+.task-flow-step {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.task-flow-btn:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+    filter: grayscale(.35);
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+.task-status-current {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-light);
+}
+
+.task-status-current b {
+    color: var(--text-primary);
+}
+
+/* 任务状态流程按钮：开始处理 → 处理中 → 标记完成 */
+.task-flow-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 20px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all .18s ease;
+    white-space: nowrap;
+}
+
+.task-flow-btn.start {
+    color: #b87400;
+    background: #fdf6ec;
+    border-color: #f5dab1;
+}
+
+.task-flow-btn.progress {
+    color: #1f6fd0;
+    background: #ecf5ff;
+    border-color: #c6e2ff;
+}
+
+.task-flow-btn.finish {
+    color: #3f9c35;
+    background: #f0f9eb;
+    border-color: #d7edc8;
+}
+
+.task-flow-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .10);
+}
+
+.task-flow-btn.start.active {
+    color: #fff;
+    background: linear-gradient(135deg, #f0a020, #e6a23c);
+    border-color: #e6a23c;
+    box-shadow: 0 4px 14px rgba(230, 162, 60, .35);
+
+}
+
+.task-flow-btn.progress.active {
+    color: #fff;
+    background: linear-gradient(135deg, #409eff, #337ecc);
+    border-color: #409eff;
+    box-shadow: 0 4px 14px rgba(64, 158, 255, .35);
+
+}
+
+.task-flow-btn.finish.active {
+    color: #fff;
+    background: linear-gradient(135deg, #67c23a, #529b2e);
+    border-color: #67c23a;
+    box-shadow: 0 4px 14px rgba(103, 194, 58, .35);
+}
+
+.task-status-arrow {
+    color: #c0c4cc;
+    font-size: 11px;
 }
 
 .task-status-pill {
@@ -1211,8 +1310,16 @@ body.task-body {
 
 .task-status-actions {
     margin-top: 16px;
-    padding-top: 14px;
-    border-top: 1px dashed var(--border-color);
+    padding: 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+}
+
+.task-detail-card > h4 {
+    margin-top: 0;
+    padding-bottom: 9px;
+    border-bottom: 1px dashed var(--border-color);
 }
 
 .task-status-actions-head {
@@ -1237,6 +1344,24 @@ body.task-body {
 [data-theme="dark"] .task-detail-card {
     background: #1e1e1e;
     border-color: #333;
+}
+
+[data-theme="dark"] .task-flow-btn.start {
+    background: #3a2f1a;
+    border-color: #5a4a24;
+    color: #e6c07a;
+}
+
+[data-theme="dark"] .task-flow-btn.progress {
+    background: #1b334d;
+    border-color: #2b4a68;
+    color: #7cc4ff;
+}
+
+[data-theme="dark"] .task-flow-btn.finish {
+    background: #1f3320;
+    border-color: #365232;
+    color: #9fe085;
 }
 
 [data-theme="dark"] .task-person-role,
@@ -1593,6 +1718,34 @@ body.task-body {
     gap: 8px;
     flex-wrap: wrap;
     margin-bottom: 6px;
+}
+
+/* 评论输入框下方工具栏：添加附件 + 发送评论保持一行 */
+.task-comment-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    flex-wrap: nowrap;
+}
+
+.task-comment-tools .task-comment-attach-list {
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin-bottom: 0;
+    padding-bottom: 2px;
+}
+
+.task-comment-tools .task-upload-btn.small,
+.task-comment-tools .task-comment-send {
+    flex-shrink: 0;
+}
+
+.task-comment-tools .task-comment-send {
+    margin-left: auto;
+    white-space: nowrap;
 }
 
 .task-upload-btn.small {
@@ -2197,6 +2350,10 @@ body.task-body {
 /* ==================== 任务中心 · 群工单 ==================== */
 .wo-task-card{background:var(--bg-primary,#fff);border:1px solid var(--border-color,#ebeef5);border-radius:10px;padding:14px 16px;cursor:pointer;transition:all .18s;}
 .wo-task-card:hover{border-color:#00a1ff;box-shadow:0 6px 18px rgba(0,161,255,.12);}
+.wo-task-card.selected {
+    border-color: var(--primary-color);
+    background: var(--primary-light);
+}
 .wo-task-top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
 .wo-task-no{font-size:11px;color:#909399;letter-spacing:.3px;}
 .wo-status-badge{font-size:11px;color:#fff;padding:2px 8px;border-radius:10px;white-space:nowrap;}
@@ -2397,4 +2554,634 @@ body.task-body {
     .wo-filter-select { flex: 1 1 calc(50% - 8px); min-width: 0; max-width: none; }
     .wo-toolbar-btn { flex: 1 1 auto; justify-content: center; }
     .wo-room-badge { max-width: 100%; }
+}
+
+/* 任务中心 · 群工单详情样式优化 */
+.detail-body .wo-detail-head {
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 10px;
+}
+
+.detail-body .wo-detail-meta {
+    gap: 8px 10px;
+    margin: 8px 0 12px;
+}
+
+.detail-body .wo-detail-meta > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--bg-secondary);
+    border-radius: 12px;
+    padding: 3px 9px;
+    color: var(--text-secondary);
+}
+
+.detail-body .wo-block {
+    margin: 0 0 12px;
+    padding: 12px 14px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+}
+
+.detail-body .wo-block-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+    padding-bottom: 7px;
+    border-bottom: 1px dashed var(--border-color);
+    font-size: 13.5px;
+}
+
+.detail-body .wo-block-body {
+    background: var(--bg-secondary);
+}
+
+.detail-body .wo-comment {
+    border: 1px solid var(--border-color);
+}
+
+.detail-body .wo-comment-input textarea {
+    background: var(--bg-primary);
+}
+
+.detail-body .wo-detail-actions {
+    padding: 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+}
+
+[data-theme="dark"] .detail-body .wo-detail-meta > span,
+[data-theme="dark"] .detail-body .wo-detail-actions {
+    background: #232323;
+    border-color: #333;
+}
+
+[data-theme="dark"] .detail-body .wo-block {
+    background: #1e1e1e;
+    border-color: #333;
+}
+
+/* ==================== 模块主题：侧边栏 / 顶部导航（靛蓝 · 效率） ==================== */
+:root {
+    --chrome-accent: #4c62e8;
+    --chrome-accent-dark: #3b4fd0;
+    --chrome-accent-soft: rgba(76, 98, 232, 0.12);
+    --chrome-side-bg: linear-gradient(180deg, #ffffff 0%, #f2f5ff 100%);
+    --chrome-side-border: #e0e7ff;
+    --chrome-side-text: #4a5468;
+    --chrome-side-hover: #eef2ff;
+    --chrome-side-active: linear-gradient(90deg, rgba(76, 98, 232, 0.16), rgba(76, 98, 232, 0.04));
+    --chrome-side-active-text: #3145c9;
+    --chrome-nav-bg: linear-gradient(180deg, #ffffff 0%, #dee2ef 100%);
+    --chrome-nav-border: #e4e9ff;
+}
+
+.task-sidebar {
+    background: var(--chrome-side-bg);
+    border-right-color: var(--chrome-side-border);
+}
+
+.task-sidebar .sidebar-header {
+    border-bottom-color: var(--chrome-side-border);
+}
+
+.task-sidebar .task-logo {
+    color: var(--chrome-accent-dark);
+}
+
+.task-sidebar .task-logo i {
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9px;
+    font-size: 16px;
+    color: #fff;
+    background: linear-gradient(135deg, var(--chrome-accent) 0%, var(--chrome-accent-dark) 100%);
+    box-shadow: 0 2px 6px rgba(76, 98, 232, 0.28);
+}
+
+.task-sidebar .task-nav .nav-item {
+    color: var(--chrome-side-text);
+}
+
+.task-sidebar .task-nav .nav-item:hover {
+    background: var(--chrome-side-hover);
+    color: var(--chrome-side-active-text);
+}
+
+.task-sidebar .task-nav .nav-item.active {
+    background: var(--chrome-side-active);
+    color: var(--chrome-side-active-text);
+    border-right-color: var(--chrome-accent);
+}
+
+.task-sidebar .badge {
+    background: var(--chrome-accent-soft);
+    color: var(--chrome-accent-dark);
+}
+
+.task-sidebar .nav-item.active .badge {
+    background: var(--chrome-accent);
+    color: #fff;
+}
+
+.task-sidebar .sidebar-footer {
+    border-top-color: var(--chrome-side-border);
+}
+
+.task-sidebar .btn-back-chat {
+    background: rgba(255, 255, 255, 0.7);
+    color: var(--chrome-side-text);
+    border: 1px solid rgba(76, 98, 232, 0.10);
+}
+
+.task-sidebar .btn-back-chat:hover {
+    background: var(--chrome-side-hover);
+    color: var(--chrome-side-active-text);
+}
+
+.task-header {
+    background: var(--chrome-nav-bg);
+    border-bottom-color: var(--chrome-nav-border);
+    box-shadow: inset 0 2px 0 0 var(--chrome-accent);
+}
+
+.task-header .task-page-title i {
+    color: var(--chrome-accent);
+}
+
+.task-header .btn-icon:hover,
+.task-header .btn-menu:hover {
+    border-color: var(--chrome-accent);
+    color: var(--chrome-accent);
+    background: var(--chrome-accent-soft);
+}
+
+[data-theme="dark"] {
+    --chrome-accent: #7a8cff;
+    --chrome-accent-dark: #5a6ff0;
+    --chrome-accent-soft: rgba(122, 140, 255, 0.16);
+    --chrome-side-bg: linear-gradient(180deg, #171a26 0%, #12141d 100%);
+    --chrome-side-border: #262b3d;
+    --chrome-side-text: #9aa3bd;
+    --chrome-side-hover: rgba(122, 140, 255, 0.10);
+    --chrome-side-active: linear-gradient(90deg, rgba(122, 140, 255, 0.22), rgba(122, 140, 255, 0.05));
+    --chrome-side-active-text: #aab6ff;
+    --chrome-nav-bg: linear-gradient(180deg, #171a26 0%, #141722 100%);
+    --chrome-nav-border: #262b3d;
+}
+
+[data-theme="dark"] .task-sidebar {
+    background: var(--chrome-side-bg) !important;
+    border-right-color: var(--chrome-side-border) !important;
+}
+
+[data-theme="dark"] .task-sidebar .sidebar-header,
+[data-theme="dark"] .task-sidebar .sidebar-footer {
+    border-color: var(--chrome-side-border) !important;
+}
+
+[data-theme="dark"] .task-sidebar .task-nav .nav-item {
+    color: var(--chrome-side-text) !important;
+}
+
+[data-theme="dark"] .task-sidebar .task-nav .nav-item:hover,
+[data-theme="dark"] .task-sidebar .task-nav .nav-item.active {
+    background: var(--chrome-side-active) !important;
+    color: var(--chrome-side-active-text) !important;
+}
+
+[data-theme="dark"] .task-sidebar .task-nav .nav-item.active {
+    border-right-color: var(--chrome-accent) !important;
+}
+
+[data-theme="dark"] .task-sidebar .task-logo {
+    color: #c7d0ff;
+}
+
+[data-theme="dark"] .task-sidebar .btn-back-chat {
+    background: rgba(255, 255, 255, 0.04) !important;
+    color: var(--chrome-side-text) !important;
+    border-color: rgba(122, 140, 255, 0.16) !important;
+}
+
+[data-theme="dark"] .task-sidebar .btn-back-chat:hover {
+    background: var(--chrome-side-hover) !important;
+    color: var(--chrome-side-active-text) !important;
+}
+
+[data-theme="dark"] .task-header {
+    background: var(--chrome-nav-bg) !important;
+    border-bottom-color: var(--chrome-nav-border) !important;
+}
+
+[data-theme="dark"] .task-sidebar .badge {
+    background: var(--chrome-accent-soft) !important;
+    color: var(--chrome-side-active-text) !important;
+}
+
+[data-theme="dark"] .task-sidebar .nav-item.active .badge {
+    background: var(--chrome-accent) !important;
+    color: #12141d !important;
+}
+
+/* ==================== 任务详情 · 状态按钮线性置灰 ==================== */
+.detail-body .task-status-flow .task-flow-btn:disabled {
+    background: var(--bg-secondary);
+    border-color: var(--border-color);
+    color: var(--text-light);
+    opacity: .6;
+    filter: grayscale(1);
+    cursor: not-allowed;
+    box-shadow: none;
+}
+
+/* ==================== 任务详情 · 群工单视觉优化 ==================== */
+.detail-body .wo-detail-title {
+    font-size: 17px;
+}
+
+.detail-body .wo-detail-meta {
+    gap: 6px 8px;
+}
+
+.detail-body .wo-detail-meta > span {
+    padding: 3px 9px;
+    font-size: 11.5px;
+}
+
+/* 进度条 */
+.detail-body .wo-progress-line {
+    margin: 4px 0 14px;
+}
+
+.detail-body .wo-progress-bar {
+    height: 8px;
+    border-radius: 6px;
+    background: var(--bg-secondary);
+}
+
+.detail-body .wo-progress-bar > i {
+    background: linear-gradient(90deg, #409eff, #79bbff);
+    border-radius: 6px;
+}
+
+.detail-body .wo-progress-label {
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+/* 处理环节时间线 */
+.detail-body .wo-timeline {
+    position: relative;
+    gap: 10px;
+}
+
+.detail-body .wo-timeline::before {
+    content: '';
+    position: absolute;
+    left: 25px;
+    top: 22px;
+    bottom: 22px;
+    width: 2px;
+    border-radius: 2px;
+    background: linear-gradient(180deg, rgba(64, 158, 255, .35), var(--border-color));
+    z-index: 0;
+}
+
+.detail-body .wo-timeline:has(.wo-empty)::before {
+    display: none;
+}
+
+.detail-body .wo-stage-item {
+    position: relative;
+    z-index: 1;
+    gap: 12px;
+    padding: 11px 12px;
+    border-radius: 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    transition: background .15s, border-color .15s, box-shadow .15s;
+}
+
+.detail-body .wo-stage-dot {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 3px var(--bg-primary);
+}
+
+.detail-body .wo-stage-dot--done {
+    box-shadow: 0 0 0 3px rgba(103, 194, 58, .14);
+}
+
+.detail-body .wo-stage-dot--processing {
+    box-shadow: 0 0 0 3px rgba(64, 158, 255, .16);
+}
+
+.detail-body .wo-stage-pending {
+    background: var(--bg-primary);
+}
+
+.detail-body .wo-stage-processing {
+    background: rgba(64, 158, 255, .05);
+    border-color: rgba(64, 158, 255, .30);
+}
+
+.detail-body .wo-stage-done {
+    background: rgba(103, 194, 58, .05);
+    border-color: rgba(103, 194, 58, .30);
+}
+
+.detail-body .wo-stage-current {
+    background: rgba(64, 158, 255, .09);
+    border-color: #79bbff;
+    box-shadow: 0 0 0 2px rgba(64, 158, 255, .12);
+}
+
+.detail-body .wo-stage-title {
+    font-size: 13.5px;
+}
+
+.detail-body .wo-stage-current-tag {
+    color: #337ecc;
+    background: rgba(64, 158, 255, .15);
+    font-weight: 600;
+}
+
+.detail-body .wo-stage-status {
+    font-weight: 600;
+}
+
+.detail-body .wo-stage-meta > span {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 2px 8px;
+}
+
+.detail-body .wo-stage-remark {
+    border-left: 3px solid rgba(64, 158, 255, .35);
+}
+
+/* 进度记录：按动作类型区分 */
+.detail-body .wo-comment {
+    align-items: flex-start;
+    gap: 9px;
+    padding: 10px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-left: 3px solid #c0c4cc;
+    border-radius: 10px;
+}
+
+.detail-body .wo-comment-avatar {
+    width: 30px;
+    height: 30px;
+    margin-top: 1px;
+}
+
+.detail-body .wo-comment-avatar--system {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-secondary);
+    color: var(--text-light);
+    font-size: 13px;
+    border: 1px solid var(--border-color);
+}
+
+.detail-body .wo-comment-head {
+    gap: 8px;
+}
+
+.detail-body .wo-comment-head > b {
+    font-size: 12.5px;
+}
+
+.detail-body .wo-comment-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 8px;
+    border-radius: 9px;
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 1.6;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+}
+
+.detail-body .wo-comment-action i {
+    font-size: 10px;
+}
+
+.detail-body .wo-comment-text {
+    margin-top: 5px;
+    line-height: 1.7;
+}
+
+.detail-body .wo-comment-time {
+    font-size: 10.5px;
+}
+
+/* 评论 / 讨论：中性 */
+.detail-body .wo-comment--comment {
+    border-left-color: #c0c4cc;
+}
+
+/* 进度 / 开始 / 提交：蓝色 */
+.detail-body .wo-comment--progress,
+.detail-body .wo-comment--start,
+.detail-body .wo-comment--submit {
+    border-left-color: #409eff;
+    background: rgba(64, 158, 255, .04);
+}
+
+.detail-body .wo-comment--progress .wo-comment-action,
+.detail-body .wo-comment--start .wo-comment-action,
+.detail-body .wo-comment--submit .wo-comment-action {
+    background: rgba(64, 158, 255, .13);
+    color: #337ecc;
+}
+
+/* 核验通过：绿色 */
+.detail-body .wo-comment--verify {
+    border-left-color: #67c23a;
+    background: rgba(103, 194, 58, .05);
+}
+
+.detail-body .wo-comment--verify .wo-comment-action {
+    background: rgba(103, 194, 58, .15);
+    color: #529b2e;
+}
+
+/* 驳回 / 退回：红色 */
+.detail-body .wo-comment--reject,
+.detail-body .wo-comment--return {
+    border-left-color: #f56c6c;
+    background: rgba(245, 108, 108, .05);
+}
+
+.detail-body .wo-comment--reject .wo-comment-action,
+.detail-body .wo-comment--return .wo-comment-action {
+    background: rgba(245, 108, 108, .14);
+    color: #d94a4a;
+}
+
+/* DING 催办：紫色 */
+.detail-body .wo-comment--ding {
+    border-left-color: #7c4dff;
+    background: rgba(124, 77, 255, .05);
+}
+
+.detail-body .wo-comment--ding .wo-comment-action {
+    background: rgba(124, 77, 255, .14);
+    color: #6a3de8;
+}
+
+/* 系统记录：灰色弱化 */
+.detail-body .wo-comment--system {
+    border-left-color: #b1b3b8;
+    background: var(--bg-secondary);
+}
+
+.detail-body .wo-comment--system .wo-comment-text {
+    color: var(--text-light);
+    font-size: 12.5px;
+}
+
+/* 详情操作区与核验人工具 */
+.detail-body .wo-inline-tools {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+
+.detail-body .wo-detail-actions {
+    border-radius: 10px;
+}
+
+.detail-body .wo-detail-grid {
+    grid-template-columns: 1fr;
+}
+
+/* 暗色适配 */
+[data-theme="dark"] .detail-body .wo-stage-item,
+[data-theme="dark"] .detail-body .wo-comment {
+    background: #1e1e1e;
+    border-color: #333;
+}
+
+[data-theme="dark"] .detail-body .wo-stage-processing {
+    background: rgba(64, 158, 255, .10);
+    border-color: #2b4a68;
+}
+
+[data-theme="dark"] .detail-body .wo-stage-done {
+    background: rgba(103, 194, 58, .10);
+    border-color: #365232;
+}
+
+[data-theme="dark"] .detail-body .wo-stage-current {
+    background: rgba(64, 158, 255, .14);
+    border-color: #3a7bd5;
+}
+
+[data-theme="dark"] .detail-body .wo-timeline::before {
+    background: linear-gradient(180deg, rgba(124, 196, 255, .35), #333);
+}
+
+[data-theme="dark"] .detail-body .wo-stage-dot {
+    box-shadow: 0 0 0 3px #1e1e1e;
+}
+
+[data-theme="dark"] .detail-body .wo-stage-current-tag {
+    color: #7cc4ff;
+    background: rgba(64, 158, 255, .18);
+}
+
+[data-theme="dark"] .detail-body .wo-stage-meta > span {
+    background: #252525;
+}
+
+[data-theme="dark"] .detail-body .wo-stage-remark {
+    background: #232323;
+    border-left-color: #2b4a68;
+}
+
+[data-theme="dark"] .detail-body .wo-comment--comment {
+    border-left-color: #555;
+}
+
+[data-theme="dark"] .detail-body .wo-comment--progress,
+[data-theme="dark"] .detail-body .wo-comment--start,
+[data-theme="dark"] .detail-body .wo-comment--submit {
+    background: rgba(64, 158, 255, .08);
+    border-left-color: #3a7bd5;
+}
+
+[data-theme="dark"] .detail-body .wo-comment--progress .wo-comment-action,
+[data-theme="dark"] .detail-body .wo-comment--start .wo-comment-action,
+[data-theme="dark"] .detail-body .wo-comment--submit .wo-comment-action {
+    background: rgba(64, 158, 255, .20);
+    color: #7cc4ff;
+}
+
+[data-theme="dark"] .detail-body .wo-comment--verify {
+    background: rgba(103, 194, 58, .10);
+    border-left-color: #529b2e;
+}
+
+[data-theme="dark"] .detail-body .wo-comment--verify .wo-comment-action {
+    background: rgba(103, 194, 58, .20);
+    color: #9fe085;
+}
+
+[data-theme="dark"] .detail-body .wo-comment--reject,
+[data-theme="dark"] .detail-body .wo-comment--return {
+    background: rgba(245, 108, 108, .10);
+    border-left-color: #a33a3a;
+}
+
+[data-theme="dark"] .detail-body .wo-comment--reject .wo-comment-action,
+[data-theme="dark"] .detail-body .wo-comment--return .wo-comment-action {
+    background: rgba(245, 108, 108, .20);
+    color: #ff9a9a;
+}
+
+[data-theme="dark"] .detail-body .wo-comment--ding {
+    background: rgba(124, 77, 255, .12);
+    border-left-color: #6a3de8;
+}
+
+[data-theme="dark"] .detail-body .wo-comment--ding .wo-comment-action {
+    background: rgba(124, 77, 255, .22);
+    color: #c3b0ff;
+}
+
+[data-theme="dark"] .detail-body .wo-comment--system {
+    background: #232323;
+    border-left-color: #555;
+}
+
+[data-theme="dark"] .detail-body .wo-comment--system .wo-comment-text {
+    color: #888;
+}
+
+[data-theme="dark"] .detail-body .wo-comment-avatar--system {
+    background: #2d2d2d;
+    border-color: #444;
+    color: #888;
+}
+
+[data-theme="dark"] .detail-body .wo-progress-bar {
+    background: #333;
 }

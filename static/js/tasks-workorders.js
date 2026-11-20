@@ -40,6 +40,14 @@
         }[type] || type;
     }
 
+    function actionIcon(type) {
+        return {
+            comment: 'fa-comment-dots', progress: 'fa-chart-line', start: 'fa-play',
+            submit: 'fa-paper-plane', verify: 'fa-check-circle', reject: 'fa-rotate-left',
+            return: 'fa-reply', system: 'fa-circle-info', ding: 'fa-bell'
+        }[type] || 'fa-circle-info';
+    }
+
     function apiError(data) {
         if (!data) return '请求失败';
         if (typeof data === 'string') return data;
@@ -110,6 +118,7 @@
                 container.innerHTML = '<div class="empty-state"><i class="fas fa-clipboard-list"></i><p>暂无群工单</p></div>';
                 return;
             }
+            var self = this;
             var html = rows.map(function (wo) {
                 var p = wo.progress || {done: 0, total: 0};
                 var pct = p.total ? Math.round((p.done || 0) * 100 / p.total) : 0;
@@ -122,7 +131,8 @@
                     + '\n创建时间：' + (fmtTime(wo.created_at) || '-')
                     + '\n归属企业：' + (wo.tenant_name || '-')
                     + '\n来自群聊：' + (roomName || '-');
-                return '<div class="wo-task-card" onclick="taskApp.selectWorkOrder(' + wo.id + ')">'
+                var selected = self.currentWorkOrder && String(self.currentWorkOrder.id) === String(wo.id);
+                return '<div class="wo-task-card' + (selected ? ' selected' : '') + '" data-wo-id="' + wo.id + '" onclick="taskApp.selectWorkOrder(' + wo.id + ')">'
                     + '<div class="wo-task-top"><span class="wo-task-no">' + esc(wo.order_no) + '</span>'
                     + '<span class="wo-status-badge" style="background:' + statusColor(wo.status) + ';">' + esc(wo.status_display) + '</span></div>'
                     + '<div class="wo-task-title">' + esc(wo.title) + '</div>'
@@ -264,6 +274,12 @@
                 if (String(prevId) !== String(data.id)) this._woTaskAttachments = [];
                 else this._woTaskAttachments = this._woTaskAttachments || [];
                 this.currentWorkOrder = data;
+                var listBox = document.getElementById('listView');
+                if (listBox) {
+                    listBox.querySelectorAll('.wo-task-card').forEach(function (el) { el.classList.remove('selected'); });
+                    var selectedEl = listBox.querySelector('.wo-task-card[data-wo-id="' + data.id + '"]');
+                    if (selectedEl) selectedEl.classList.add('selected');
+                }
                 var draftEl = document.getElementById('woTaskComment');
                 var draft = draftEl ? draftEl.value : '';
                 var members = await this._woTaskLoadMembers(data.chat_room);
@@ -337,8 +353,9 @@
                     : (s.assignee_info
                         ? (window.WorkOrderUI ? WorkOrderUI.memberHtml(s.assignee_info) : esc(s.assignee_name || '未指派'))
                         : '<span class="wo-stage-assignee-text">' + esc(s.assignee_name || '未指派') + '</span>');
+                var dotInner = s.status === 'done' ? '<i class="fas fa-check"></i>' : s.order;
                 return '<div class="wo-stage-item wo-stage-' + esc(s.status) + (isCurrent ? ' wo-stage-current' : '') + '">'
-                    + '<div class="wo-stage-dot" style="background:' + color + ';">' + s.order + '</div>'
+                    + '<div class="wo-stage-dot wo-stage-dot--' + esc(s.status) + '" style="background:' + color + ';">' + dotInner + '</div>'
                     + '<div class="wo-stage-main"><div class="wo-stage-title"><b>' + esc(s.name) + '</b>'
                     + (isCurrent ? '<span class="wo-stage-current-tag">当前环节</span>' : '')
                     + '<span class="wo-stage-status" style="color:' + color + ';">' + esc(s.status_display || '') + '</span></div>'
@@ -360,9 +377,12 @@
                 var authorId = c.user_info ? c.user_info.id : c.user;
                 var isMe = meId != null && authorId != null && String(authorId) === String(meId);
                 var authorName = isMe ? '我' : (c.user_name || '系统');
-                return '<div class="wo-comment"><img class="wo-comment-avatar" src="' + esc(avatar) + '" alt="">'
+                var atype = c.action_type || 'comment';
+                var avatarHtml = '<img class="wo-comment-avatar" src="' + esc(avatar) + '" title="' + esc(authorName) + '" alt="">';
+                return '<div class="wo-comment wo-comment--' + esc(atype) + '">' + avatarHtml
                     + '<div class="wo-comment-body"><div class="wo-comment-head"><b>' + esc(authorName) + '</b>'
-                    + '<span class="wo-comment-action">' + esc(c.action_display || actionLabel(c.action_type)) + '</span>'
+                    + '<span class="wo-comment-action"><i class="fas ' + actionIcon(atype) + '"></i> '
+                    + esc(c.action_display || actionLabel(atype)) + '</span>'
                     + '<span class="wo-comment-time">' + esc(fmtTime(c.created_at)) + '</span></div>'
                     + (c.content ? '<div class="wo-comment-text">' + esc(c.content) + '</div>' : '')
                     + (files ? '<div class="wo-comment-files">' + files + '</div>' : '') + '</div></div>';

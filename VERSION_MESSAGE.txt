@@ -1,3 +1,46 @@
+281. 任务中心状态线性化与群工单详情样式优化：
+   1）任务详情状态操作改为线性不可逆：当前状态之前的按钮置灰（待处理 → 进行中 → 已完成），前端拦截回退点击，后端 `change_status` 增加回退校验并返回明确提示；
+   2）群工单详情处理环节优化为时间线：已完成/处理中/待处理环节使用绿/蓝/灰状态色与连接线，完成环节圆点显示对勾，当前环节高亮描边，环节信息（执行人/截止/完成时间）卡片化；
+   3）群工单进度记录按动作类型区分样式与图标：进度更新/开始/提交为蓝色、核验通过为绿色、驳回/退回为红色、DING 催办为紫色、系统记录为灰色弱化（系统记录使用信息图标头像），左侧色条 + 动作徽标一眼可辨；
+   4）详情面板内进度条、描述区块、核验人工具与操作区统一圆角与间距，白天/夜间模式分别适配；
+   5）说明：同步 `static/css/tasks.css`、`static/js/tasks.js`、`static/js/tasks-workorders.js`、`tasks/views.py`、`templates/tasks/tasks.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后重启后端并强刷/PWA 清缓存；资源版本号 `20261119-detail01`。
+
+280. 企业聊天室与 OA 审批导航统一为项目主色 #409EFF：
+   1）企业聊天室侧边栏、顶部企业栏、主内容区顶部导航栏与 OA 审批顶部导航栏统一使用项目主色 #409EFF（渐变 `#409eff → #337ecc`），侧边栏底色、边框、搜索页签、选中聊天项、底部功能条同步为蓝色系；
+   2）夜间模式采用同色系深蓝：聊天室企业栏与审批栏统一为 `#2c6a9f → #1b4470` 渐变，侧边栏为深蓝黑渐变，选中项使用 `#66b1ff` 低饱和高亮；
+   3）说明：同步 `static/css/chat.css`、`static/css/oa.css`、`templates/chat/chat.html`、`templates/oa/approval.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后强刷/PWA 清缓存；资源版本号 `20261118-theme04`。
+
+279. 企业聊天室导航配色统一为 OA 审批「审核蓝」：
+   1）企业聊天室侧边栏、顶部企业栏、主内容区顶部导航栏由通讯绿调整为与 OA 审批页一致的审核蓝主题（`#2f6fe4 → #1d4fb8`），侧边栏底色、边框、搜索页签、选中聊天项、底部功能条同步换色；
+   2）夜间模式同步为深蓝体系：侧边栏深蓝黑渐变、企业栏 `#1c3768 → #12244a` 渐变、选中项低饱和蓝色高亮；
+   3）说明：同步 `static/css/chat.css`、`templates/chat/chat.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后强刷/PWA 清缓存；资源版本号 `20261118-theme03`。
+
+278. 企业聊天室与 OA 审批顶部导航主题配色优化：
+   1）企业聊天室采用通讯绿主题：侧边栏改为淡绿渐变背景与绿色图标/边框，顶部企业栏改为绿色渐变，搜索页签、选中聊天项、底部功能条、聊天主区域顶部栏统一绿色强调色；
+   2）OA 审批页面顶部导航采用审核蓝渐变配色，主操作按钮与图标按钮保持白色半透明层级，页面 body 新增 `page-approval` 作用域，不影响其他 OA 页面；
+   3）白天/夜间模式分别定义独立变量（`[data-theme="dark"]`）：聊天室夜间侧边栏为深绿黑渐变、企业栏为深绿渐变、选中项低饱和绿色高亮；审批栏夜间为深蓝渐变；
+   4）说明：同步 `static/css/chat.css`、`static/css/oa.css`、`templates/chat/chat.html`、`templates/oa/approval.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后强刷/PWA 清缓存；资源版本号 `20261118-theme02`。
+
+277. 侧边栏与顶部导航主题配色优化（任务中心 / 企业网盘 / 管理控制台 / 网盘系统配置）：
+   1）按业务场景区分品牌配色：任务中心采用靛蓝（效率），企业网盘采用云青（存储），管理控制台采用紫曜（管控），网盘系统配置采用松石（配置）；
+   2）侧边栏统一为品牌淡渐变背景 + 品牌色图标徽标 + 品牌色选中态/悬停态；主内容顶部导航加入同色系渐变与顶部细线标识，图标悬停同步主题色；
+   3）白天/夜间模式分别定义独立配色变量（`[data-theme="dark"]`），暗色下侧边栏、顶部栏使用深色品牌渐变与低饱和高亮，保证文字与图标对比度；
+   4）说明：同步 `static/css/tasks.css`、`static/css/cloud.css`、`static/css/admin.css`、`static/css/cloud_settings.css`、`templates/tasks/tasks.html`、`templates/cloud/cloud.html`、`templates/chat/admin.html`、`templates/cloud/cloud_settings.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后强刷/PWA 清缓存；资源版本号 `20261118-theme01`。
+
+276. 任务详情布局与状态操作优化：
+   1）评论输入区参考群工单：输入框下方同一行排列「添加附件」与「发送评论」按钮，附件芯片同行展示；
+   2）状态操作按钮后增加「当前状态」小字提示；按钮换行时自动显示折弯箭头引导流程；
+   3）状态切换前增加确认提示，避免误操作；已完成/已归档任务的「开始处理」「处理中」按钮置灰，前后端均禁止重复回退操作；
+   4）后端 `change_status` 增加已完成状态防重校验；
+   5）说明：同步 `tasks/views.py`、`static/js/tasks.js`、`static/css/tasks.css`、`templates/tasks/tasks.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后重启后端并强刷/PWA 清缓存；资源版本号 `20261118-taskcenter10`。
+
+275. 任务中心样式/性能与瀑布流多端优化：
+   1）任务详情状态按钮改为流程化操作「开始处理 → 处理中 → 标记完成」，增加图标与橙/蓝/绿醒目颜色；详情卡片、评论区、状态操作区样式统一优化；
+   2）群工单列表增加与任务列表一致的选中高亮；群工单详情增加卡片化布局、元信息标签、评论与操作区样式优化；
+   3）任务中心性能优化：移除外部 Font Awesome CDN（改用本地资源）、SortableJS 改为仅打开看板时按需加载、当前用户/统计/任务列表并行加载，显著缩短进入页面等待时间；
+   4）瀑布流工作通知：待办/通知默认各加载 10 条；列表最底部新增「关闭」按钮；修复移动端/PWA 顶部折叠、隐藏、关闭按钮被标题挤出遮挡的问题（标题自动省略、按钮固定可点、安全区域适配与层级提升）；整体多终端样式优化；
+   5）说明：同步 `templates/tasks/tasks.html`、`templates/chat/chat.html`、`templates/cloud/cloud.html`、`templates/oa/approval.html`、`templates/oa/work-calendar.html`、`templates/tasks/tasks.html`、`static/js/tasks.js`、`static/js/tasks-workorders.js`、`static/js/notification-waterfall.js`、`static/css/tasks.css`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后强刷/PWA 清缓存；资源版本号 `20261118-taskcenter09`。
+
 274. 任务中心增加状态筛选：
    1）主内容顶部紧急等级按钮后新增状态下拉框，选项为「全部状态 / 待处理 / 进行中 / 已完成 / 已归档」；
    2）状态筛选与紧急等级、搜索、任务分类筛选叠加生效；「已完成」导航在未选择状态时仍默认只看已完成；

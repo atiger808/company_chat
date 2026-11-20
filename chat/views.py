@@ -720,9 +720,20 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         成员数 80 时由 80 次请求降为 1 次，且服务端固定 3 条查询。
         """
         try:
-            chat_room = ChatRoom.objects.get(id=pk, members=request.user)
+            referer_url = request.META.get('HTTP_REFERER') or ''
+            http_host = request.META.get('HTTP_HOST') or ''
+            is_superuser = request.user.is_superuser or getattr(request.user, 'user_type', '') == 'super_admin'
+            if '/tasks/' in referer_url and http_host in settings.BASE_URL and is_superuser:
+                chat_room = ChatRoom.objects.get(id=pk)
+            else:
+                chat_room = ChatRoom.objects.get(id=pk, members=request.user)
         except ChatRoom.DoesNotExist:
+            logger.error(f"ChatRoom not found: id={pk}, user={request.user}")
             return Response({'error': '聊天室不存在'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"ChatRoom.objects.get error: {str(e)} id={pk}, user={request.user}")
+            return Response({'error': '聊天室不存在'}, status=status.HTTP_404_NOT_FOUND)
+
 
         from org.models import UserDepartment
         members = chat_room.members.select_related('department').prefetch_related(
