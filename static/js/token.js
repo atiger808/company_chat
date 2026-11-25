@@ -21,9 +21,15 @@ class TokenManager {
 
     static getHeaders() {
         const token = this.getToken();
+        if (!token) return {'Content-Type': 'application/json'};
         return {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
         };
     }
+
+    static refreshToken() {
+        console.log('refresh token')
+    }
+
 }

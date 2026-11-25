@@ -2167,3 +2167,178 @@
 [data-theme="dark"] .report-modal-row:hover {
   background: #2d2d2d;
 }
+
+/* ==================== 组织架构夜间模式完善 ==================== */
+/* 仅作用于组织架构页面（body.org-page），避免影响同样引入 org.css 的聊天页 */
+[data-theme="dark"] body.org-page {
+    --bg-primary: #121212;
+    --bg-secondary: #1e1e1e;
+    --text-primary: #e6e6e6;
+    --text-secondary: #b8bcc4;
+    --text-light: #8a8f99;
+    --border-color: #333333;
+    background: #121212;
+    color: #e6e6e6;
+}
+
+[data-theme="dark"] .org-page .org-layout,
+[data-theme="dark"] .org-page .org-main,
+[data-theme="dark"] .org-page .org-content {
+    background: #121212;
+}
+
+[data-theme="dark"] .org-page .org-sidebar {
+    border-right-color: #333;
+}
+
+[data-theme="dark"] .org-page .org-sidebar-header,
+[data-theme="dark"] .org-page .org-main-header,
+[data-theme="dark"] .org-page .dept-detail-header,
+[data-theme="dark"] .org-page .members-header {
+    border-color: #333;
+}
+
+[data-theme="dark"] .org-page .org-sidebar-search input {
+    background: #1e1e1e;
+    border-color: #333;
+    color: #e6e6e6;
+}
+
+[data-theme="dark"] .org-page .org-sidebar-search input:focus {
+    background: #252525;
+    border-color: #409eff;
+}
+
+[data-theme="dark"] .org-page .org-sidebar-search input::placeholder {
+    color: #6f747c;
+}
+
+[data-theme="dark"] .org-page .org-breadcrumb .crumb-item,
+[data-theme="dark"] .org-page .org-breadcrumb .crumb-item:hover {
+    color: #b8bcc4;
+}
+
+[data-theme="dark"] .org-page .org-breadcrumb .crumb-item.current,
+[data-theme="dark"] .org-page .org-breadcrumb .crumb-item.current:hover {
+    color: #e6e6e6;
+}
+
+[data-theme="dark"] .org-page .dept-tree-node-content .dept-name {
+    color: #e6e6e6;
+}
+
+[data-theme="dark"] .org-page .dept-tree-node-content .toggle-icon {
+    color: #8a8f99;
+}
+
+[data-theme="dark"] .org-page .dept-tree-node.active > .dept-tree-node-content .dept-name {
+    color: #5cabff;
+}
+
+[data-theme="dark"] .org-page .tenant-badge {
+    background: #3a2f1a;
+    color: #e6c07a;
+}
+
+[data-theme="dark"] .org-page .company-badge {
+    background: #3a2f1a;
+    color: #f0c78a;
+}
+
+[data-theme="dark"] .org-page .converted-badge {
+    background: #1b334d;
+    color: #7cc4ff;
+    border-color: #2b4a68;
+}
+
+[data-theme="dark"] .org-page .member-card .primary-tag {
+    background: #1a2740;
+    color: #7cc4ff;
+}
+
+[data-theme="dark"] .org-page .member-card .member-username {
+    color: #8a8f99;
+}
+
+[data-theme="dark"] .org-page .member-pos-edit:hover {
+    background: #1a2740;
+    color: #7cc4ff;
+}
+
+[data-theme="dark"] .org-page .chart-node .node-count {
+    background: #2d2d2d;
+    color: #b0b0b0;
+}
+
+[data-theme="dark"] .org-page .dept-detail-info .dept-meta,
+[data-theme="dark"] .org-page .member-card .member-detail {
+    color: #9aa0a8;
+}
+
+[data-theme="dark"] .org-page .dept-detail-item label {
+    color: #8a8f99;
+}
+
+[data-theme="dark"] .org-page .dept-detail-item span {
+    color: #e6e6e6;
+}
+
+[data-theme="dark"] .org-page .members-header h3,
+[data-theme="dark"] .org-page .org-sidebar-header h3,
+[data-theme="dark"] .org-page .dept-detail-info h2 {
+    color: #e6e6e6;
+}
+
+[data-theme="dark"] .org-page .member-card .member-name,
+[data-theme="dark"] .org-page .org-tenant-bar .tenant-name,
+[data-theme="dark"] .org-page .chart-node .node-name {
+    color: #e6e6e6;
+}
+
+[data-theme="dark"] .org-page .member-card .member-username,
+[data-theme="dark"] .org-page .org-tenant-bar .tenant-role,
+[data-theme="dark"] .org-page .chart-node .node-manager {
+    color: #8a8f99;
+}
+
+[data-theme="dark"] .org-page .org-main-actions .btn-primary,
+[data-theme="dark"] .org-page .org-main-actions .btn-primary:hover {
+    background: #409eff;
+    border-color: #409eff;
+    color: #fff;
+}
+
+[data-theme="dark"] .org-page .dept-detail-actions .btn-danger {
+    color: #ff8f8f;
+}
+
+[data-theme="dark"] .org-page .org-chart-wrapper,
+[data-theme="dark"] .org-page .members-section,
+[data-theme="dark"] .org-page .dept-detail-card {
+    color: #e6e6e6;
+}
+
+[data-theme="dark"] .org-page .form-group label,
+[data-theme="dark"] .org-page .dept-detail-item label,
+[data-theme="dark"] .org-page .user-selector-item .us-detail,
+[data-theme="dark"] .org-page .user-selector-item .us-position {
+    color: #9aa0a8;
+}
+
+[data-theme="dark"] .org-page .user-selector-item .us-name {
+    color: #e6e6e6;
+}
+
+[data-theme="dark"] .org-page .confirm-dialog-header h3,
+[data-theme="dark"] .org-page .modal-header h3 {
+    color: #e6e6e6;
+}
+
+[data-theme="dark"] .org-page .confirm-dialog-body p {
+    color: #e6e6e6;
+}
+
+[data-theme="dark"] .org-page .report-footnote,
+[data-theme="dark"] .org-page .empty-state .sub-text {
+    color: #8a8f99;
+}

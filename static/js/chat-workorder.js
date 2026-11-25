@@ -48,6 +48,14 @@
         }[type] || type;
     }
 
+    function actionIcon(type) {
+        return {
+            comment: 'fa-comment-dots', progress: 'fa-chart-line', start: 'fa-play',
+            submit: 'fa-paper-plane', verify: 'fa-check-circle', reject: 'fa-rotate-left',
+            return: 'fa-reply', system: 'fa-circle-info', ding: 'fa-bell'
+        }[type] || 'fa-circle-info';
+    }
+
     Object.assign(ChatClient.prototype, {
 
         // 当前用户是否可以在指定群发起群待办（后端最终强制校验，前端用于隐藏/拦截入口）
@@ -444,6 +452,10 @@
                 var isCurrent = currentStageId && String(currentStageId) === String(s.id) &&
                     wo.status !== 'done' && wo.status !== 'cancelled';
                 var overdue = s.deadline && s.status !== 'done' && new Date(s.deadline).getTime() < Date.now();
+                var lateDone = s.status === 'done' && s.deadline && s.completed_at
+                    && new Date(s.completed_at).getTime() > new Date(s.deadline).getTime();
+                var deadlineClass = overdue ? 'wo-overdue' : (lateDone ? 'wo-late' : '');
+                var deadlineSuffix = (overdue || lateDone) ? '（已逾期）' : '';
                 var assigneeMember = null;
                 if (s.assignee && members.length) {
                     assigneeMember = members.filter(function (m) { return String(m.id) === String(s.assignee); })[0] || null;
@@ -453,14 +465,15 @@
                     : (s.assignee_info
                         ? (window.WorkOrderUI ? WorkOrderUI.memberHtml(s.assignee_info) : esc(s.assignee_name || '未指派'))
                         : '<span class="wo-stage-assignee-text">' + esc(s.assignee_name || '未指派') + '</span>');
+                var dotInner = s.status === 'done' ? '<i class="fas fa-check"></i>' : s.order;
                 return '<div class="wo-stage-item wo-stage-' + esc(s.status) + (isCurrent ? ' wo-stage-current' : '') + '">'
-                    + '<div class="wo-stage-dot" style="background:' + color + ';">' + s.order + '</div>'
+                    + '<div class="wo-stage-dot wo-stage-dot--' + esc(s.status) + '" style="background:' + color + ';">' + dotInner + '</div>'
                     + '<div class="wo-stage-main">'
                     + '<div class="wo-stage-title"><b>' + esc(s.name) + '</b>'
                     + (isCurrent ? '<span class="wo-stage-current-tag">当前环节</span>' : '')
                     + '<span class="wo-stage-status" style="color:' + color + ';">' + esc(s.status_display || '') + '</span></div>'
                     + '<div class="wo-stage-meta"><span class="wo-stage-assignee">' + assigneeHtml + '</span>'
-                    + (s.deadline ? '<span class="' + (overdue ? 'wo-overdue' : '') + '"><i class="fas fa-clock"></i> 截止 ' + esc(fmtTime(s.deadline)) + (overdue ? '（已逾期）' : '') + '</span>' : '')
+                    + (s.deadline ? '<span class="' + deadlineClass + '"><i class="fas fa-clock"></i> 截止 ' + esc(fmtTime(s.deadline)) + deadlineSuffix + '</span>' : '')
                     + (s.completed_at ? '<span><i class="fas fa-check"></i> 完成 ' + esc(fmtTime(s.completed_at)) + '</span>' : '') + '</div>'
                     + (s.remark ? '<div class="wo-stage-remark">' + esc(s.remark) + '</div>' : '')
                     + (deliverable ? '<div class="wo-stage-files">' + deliverable + '</div>' : '')
@@ -478,11 +491,16 @@
                 var authorId = c.user_info ? c.user_info.id : c.user;
                 var isMe = meId != null && authorId != null && String(authorId) === String(meId);
                 var authorName = isMe ? '我' : (c.user_name || '系统');
-                return '<div class="wo-comment">'
-                    + '<img class="wo-comment-avatar" src="' + esc(avatar) + '" alt="">'
+                var atype = c.action_type || 'comment';
+                var avatarHtml = atype === 'system'
+                    ? '<div class="wo-comment-avatar wo-comment-avatar--system"><i class="fas fa-circle-info"></i></div>'
+                    : '<img class="wo-comment-avatar" src="' + esc(avatar) + '" alt="">';
+                return '<div class="wo-comment wo-comment--' + esc(atype) + '">'
+                    + avatarHtml
                     + '<div class="wo-comment-body">'
                     + '<div class="wo-comment-head"><b>' + esc(authorName) + '</b>'
-                    + '<span class="wo-comment-action">' + esc(c.action_display || actionLabel(c.action_type)) + '</span>'
+                    + '<span class="wo-comment-action"><i class="fas ' + actionIcon(atype) + '"></i> '
+                    + esc(c.action_display || actionLabel(atype)) + '</span>'
                     + '<span class="wo-comment-time">' + esc(fmtTime(c.created_at)) + '</span></div>'
                     + (c.content ? '<div class="wo-comment-text">' + esc(c.content) + '</div>' : '')
                     + (atts ? '<div class="wo-comment-files">' + atts + '</div>' : '')
@@ -521,6 +539,8 @@
                 + '    <div id="woAttachList" class="wo-attach-list"></div>'
                 + '    <button class="btn btn-primary btn-sm" onclick="chatClient.addWorkOrderComment()"><i class="fas fa-paper-plane"></i> 发送</button>'
                 + '  </div>'
+                + '  <div class="wps-upload-hint compact"><i class="fas fa-circle-info"></i>'
+                + '    <span>WPS 表格若包含「嵌入单元格图片」（=DISPIMG），在线编辑时图片可能无法显示，建议上传前在 WPS 中转为「浮动图片」。</span></div>'
                 + '</div>'
                 : '<div class="wo-empty">仅发起人、核验人或环节执行人可以更新进度</div>';
 
@@ -540,12 +560,12 @@
                 + '      <span class="wo-status-badge" style="background:' + statusColor(wo.status) + ';">' + esc(wo.status_display) + '</span>'
                 + '    </div>'
                 + '    <div class="wo-detail-meta">'
-                + '      <span style="color:' + urgencyColor(wo.urgency) + ';">' + esc(wo.urgency_display) + '</span>'
+                + '      <span title="紧急等级" style="color:' + urgencyColor(wo.urgency) + ';">' + esc(wo.urgency_display) + '</span>'
                 + '      <span><i class="fas fa-user-circle"></i> 发起 ' + esc(wo.creator_name) + '</span>'
                 + '      <span><i class="fas fa-user-shield"></i> 核验 ' + esc(wo.verifier_name) + '</span>'
-                + '      <span><i class="fas fa-building"></i> 企业 ' + esc(wo.tenant_name || '-') + '</span>'
-                + '      <span><i class="fas fa-users"></i> ' + esc(wo.room_name || '') + '</span>'
-                + '      <span><i class="fas fa-clock"></i> ' + esc(fmtTime(wo.created_at)) + '</span>'
+                + '      <span title="所属企业"><i class="fas fa-building"></i> 企业 ' + esc(wo.tenant_name || '-') + '</span>'
+                + '      <span title="来自群：'+ esc(wo.room_name || '') +'"><i class="fas fa-users"></i> ' + esc(wo.room_name || '') + '</span>'
+                + '      <span title="创建时间"><i class="fas fa-clock"></i> ' + esc(fmtTime(wo.created_at)) + ' 创建</span>'
                 + '    </div>'
                 + '    <div class="wo-progress-line"><div class="wo-progress-bar"><i style="width:' + pct + '%;"></i></div><span class="wo-progress-label">进度 ' + (p.done || 0) + '/' + (p.total || 0) + '</span></div>'
                 + '    <div class="wo-detail-grid">'

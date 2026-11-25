@@ -249,7 +249,7 @@ class TaskApp {
                         <span class="status-tag status-${task.status}">${this.getStatusText(task.status)}</span>
                         ${overdue ? '<span class="task-overdue-badge"><i class="fas fa-exclamation-triangle"></i> 已逾期</span>' : ''}
                     </div>
-                    <span title="截止日期" class="task-card-due ${overdue ? 'overdue' : ''}">${task.due_date ? '<i class="fas fa-clock"></i> ' + this.formatDate(task.due_date) : ''}</span>
+                    <span title="截止日期" class="task-card-due ${overdue ? 'overdue' : ''}">${task.due_date ? '<i class="fas fa-clock"></i> 截止 ' + this.fmtTime(task.due_date) : ''}</span>
                 </div>
                 <div class="card-title">${this.escapeHtml(task.title)}</div>
                 <div class="task-card-people">
@@ -298,7 +298,7 @@ class TaskApp {
                         </span>
                     </div>
                     ${groupName ? '<div class="kanban-group"><i class="fas fa-users"></i> ' + this.escapeHtml(groupName) + '</div>' : ''}
-                    ${task.due_date ? '<div title="截止日期" class="kanban-due' + (overdue ? ' overdue' : '') + '"><i class="fas fa-clock"></i> ' + this.formatDate(task.due_date) + '</div>' : ''}
+                    ${task.due_date ? '<div title="截止日期" class="kanban-due' + (overdue ? ' overdue' : '') + '"><i class="fas fa-clock"></i> 截止 ' + this.fmtTime(task.due_date) + '</div>' : ''}
                 </div>
                 `;
             }).join('');
@@ -407,7 +407,10 @@ class TaskApp {
               + '<div id="taskCommentAttachList" class="task-comment-attach-list"></div>'
               + '<button class="btn btn-primary btn-sm task-comment-send" onclick="taskApp.addComment(' + task.id + ')">'
               + '<i class="fas fa-paper-plane"></i> 发送评论</button>'
-              + '</div></div>'
+              + '</div>'
+              + '<div class="wps-upload-hint compact"><i class="fas fa-circle-info"></i>'
+              + '<span>WPS 表格若包含「嵌入单元格图片」（=DISPIMG），在线编辑时图片可能无法显示，建议上传前在 WPS 中转为「浮动图片」。</span></div>'
+              + '</div>'
             : '<div class="task-readonly-tip"><i class="fas fa-lock"></i> 仅任务创建人或执行人可以评论</div>';
         const statusActions = canStatus
             ? '<div class="task-status-actions"><div class="task-status-actions-head">'
@@ -426,7 +429,7 @@ class TaskApp {
 
         body.innerHTML = `
             ${overdue ? '<div class="task-overdue-banner"><i class="fas fa-exclamation-triangle"></i>'
-                + ' 该任务已超过截止时间（' + this.formatDate(task.due_date) + '）仍未完成，请尽快处理。</div>' : ''}
+                + ' 该任务已超过截止时间（' + this.fmtTime(task.due_date) + '）仍未完成，请尽快处理。</div>' : ''}
             <div class="task-detail-shell">
                 <div class="detail-section task-detail-card">
                     <h4><i class="fas fa-info-circle"></i> 基本信息</h4>
@@ -447,6 +450,14 @@ class TaskApp {
                         <div class="info-item">
                             <label>截止日期</label>
                             <span class="${overdue ? 'task-due-overdue' : ''}">${task.due_date ? this.formatDate(task.due_date) : '无'}${overdue ? '（已逾期）' : ''}</span>
+                        </div>
+                        <div class="info-item">
+                            <label>创建时间</label>
+                            <span>${task.created_at ? this.fmtTime(task.created_at) : '-'}</span>
+                        </div>
+                        <div class="info-item">
+                            <label>更新时间</label>
+                            <span>${task.updated_at ? this.fmtTime(task.updated_at) : '-'}</span>
                         </div>
                         ${groupName ? '<div class="info-item"><label>来源群聊</label><span><i class="fas fa-users"></i> ' + this.escapeHtml(groupName) + '</span></div>' : ''}
                     </div>
@@ -469,7 +480,7 @@ class TaskApp {
                 <div class="detail-section task-detail-card task-attachments-section">
                     <h4><i class="fas fa-paperclip"></i> 附件 <span class="task-section-sub">${attachList.length} 个</span></h4>
                     <div class="task-attachments">${attachHtml}</div>
-                    ${canUpload ? uploadHtml : '<div class="task-readonly-tip"><i class="fas fa-lock"></i> 仅任务创建人可上传任务附件，执行人可在评论中上传附件</div>'}
+                    ${canUpload ? uploadHtml + '<div class="wps-upload-hint"><i class="fas fa-circle-info"></i><span>WPS 表格若包含「嵌入单元格图片」（=DISPIMG），在线编辑时图片可能无法显示。建议上传前在 WPS 中右键图片 →「转为浮动图片」。</span></div>' : '<div class="task-readonly-tip"><i class="fas fa-lock"></i> 仅任务创建人可上传任务附件，执行人可在评论中上传附件</div>'}
                     <div class="task-attach-tip">图片可直接预览；文件点击保存到网盘，文档保存后可在线编辑；右上角下载图标可下载到本地。</div>
                 </div>
 
@@ -1401,9 +1412,19 @@ class TaskApp {
         if (input) input.value = '';
     }
 
+    fmtTime(value) {
+        if (!value) return '';
+        var d = new Date(value);
+        if (isNaN(d.getTime())) return '';
+        var pad = function (n) { return String(n).padStart(2, '0'); };
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+            + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    }
+
     getPriorityText(p) { return { low: '低', medium: '中', high: '高', urgent: '紧急' }[p]; }
     getStatusText(s) { return { todo: '待处理', in_progress: '进行中', done: '已完成', archived: '已归档' }[s] || s; }
     formatDate(date) { return new Date(date).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+
 }
 
 const taskApp = new TaskApp();

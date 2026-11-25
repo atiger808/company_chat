@@ -6,8 +6,8 @@
     <title>任务中心 - 义乌吉通集团</title>
     <link rel="icon" type="image/svg+xml" href="/media/avatars/tasks-blue.svg?v=20260820-d0a1b2c">
     <!-- 复用项目基础样式 -->
-    <link rel="stylesheet" href="/static/css/tasks.css?v=20261119-detail01">
-    <link rel="stylesheet" href="/static/css/workorder.css?v=20261119-f16a779">
+    <link rel="stylesheet" href="/static/css/tasks.css?v=20261119-detail02">
+    <link rel="stylesheet" href="/static/css/workorder.css?v=20261119-detail03">
     <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261119-f16a779">
 
 </head>
@@ -359,6 +359,10 @@
                     <input type="file" id="newTaskFileInput" multiple style="display:none;"
                            onchange="taskApp.handleNewTaskFiles(this.files)">
                 </label>
+                <div class="wps-upload-hint">
+                    <i class="fas fa-circle-info"></i>
+                    <span>WPS 表格若包含「嵌入单元格图片」（=DISPIMG），在线编辑时图片可能无法显示。建议上传前在 WPS 中右键图片 →「转为浮动图片」。</span>
+                </div>
                 <div class="task-attach-tip">图片可直接预览；文件点击保存到网盘；文档保存后可在线编辑。</div>
             </div>
         </div>
@@ -373,8 +377,8 @@
 <script src="/static/js/utils.js?v=20261119-f16a779"></script>
 <script src="/static/js/api.js?v=20261119-f16a779"></script>
 <script src="/static/js/workorder-ui.js?v=20261119-f16a779"></script>
-<script src="/static/js/tasks.js?v=20261119-detail01"></script>
-<script src="/static/js/tasks-workorders.js?v=20261119-detail01"></script>
+<script src="/static/js/tasks.js?v=20261119-detail03"></script>
+<script src="/static/js/tasks-workorders.js?v=20261119-detail03"></script>
 <script src="/static/js/notifications.js?v=20261119-f16a779"></script>
 <script src="/static/js/notification-waterfall.js?v=20261119-f16a779"></script>
 

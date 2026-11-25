@@ -136,7 +136,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         self._send_task_card_message(task, 'created')
         # 如果有执行人，且不是自己，发送 WebSocket 通知
         if task.assignee and task.assignee != self.request.user:
-            self._notify_user(task.assignee.id, task, 'assigned')
+            self._notify_user(task.assignee.id, task, 'assigned', actor=self.request.user)
 
     def perform_update(self, serializer):
         """任务编辑：同步群内任务通知，并在执行人变化时通知新执行人。"""
@@ -169,7 +169,7 @@ class TaskViewSet(viewsets.ModelViewSet):
                 self._notify_task_participants(task, 'status_changed')
         if before['assignee_id'] != task.assignee_id and task.assignee \
                 and task.assignee != self.request.user:
-            self._notify_user(task.assignee.id, task, 'assigned')
+            self._notify_user(task.assignee.id, task, 'assigned', actor=self.request.user)
 
     def perform_destroy(self, instance):
         if instance.creator_id != self.request.user.id:
@@ -248,58 +248,51 @@ class TaskViewSet(viewsets.ModelViewSet):
         self._send_task_update_message(task, 'updated', request)
         return Response(TaskSerializer(task, context={'request': request}).data)
 
-    def _create_work_notification(self, user_id, task, event_type):
-        """创建 WorkNotification 记录（懒导入避免循环依赖）"""
-        from oa.models import WorkNotification
-        from accounts.models import CustomUser
-        status_map = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成'}
-        try:
-            user = CustomUser.objects.get(id=user_id)
-            if event_type == 'assigned':
-                title = '新任务分配'
-                content = f'{task.creator.real_name or task.creator.username} 给您分配了任务：“{task.title}”'
-            elif event_type == 'status_changed':
-                title = '任务状态更新'
-                content = f'任务“{task.title}”状态变更为：{status_map.get(task.status, task.status)}'
-            elif event_type == 'new_comment':
-                title = '任务新评论'
-                content = f'任务“{task.title}”有新评论'
-            else:
-                title = '任务通知'
-                content = f'任务“{task.title}”有更新'
-            WorkNotification.objects.create(
-                recipient=user,
-                tenant=task.tenant,
-                notification_type='task',
-                title=title,
-                content=content,
-                related_url=f'/tasks/?task_id={task.id}',
-                extra_data={'task_id': task.id, 'event_type': event_type},
-            )
-        except CustomUser.DoesNotExist:
-            pass
-
-    def _notify_user(self, user_id, task, event_type):
-        """发送 WebSocket 通知到用户的全局通道"""
-        channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
-            f'user_{user_id}_notifications',
-            {
-                'type': 'task.notification',
-                'event_type': event_type,
-                'task': TaskSerializer(task).data
-            }
+    def _notify_user(self, user_id, task, event_type, actor=None, comment_text=''):
+        """发送工作通知（实时 WS + 铃铛未读 + Web Push），单一通道避免重复提醒"""
+        actor_name = ''
+        if actor is not None:
+            actor_name = getattr(actor, 'real_name', '') or getattr(actor, 'username', '') or ''
+        status_map = {'todo': '待处理', 'in_progress': '进行中', 'done': '已完成',
+                      'archived': '已归档'}
+        if event_type == 'assigned':
+            title = '新任务分配'
+            content = f'{actor_name or "同事"} 给您分配了任务：“{task.title}”'
+        elif event_type == 'status_changed':
+            title = '任务状态更新'
+            content = f'任务“{task.title}”状态更新为：{status_map.get(task.status, task.status)}'
+            if actor_name:
+                content += f'（操作人：{actor_name}）'
+        elif event_type == 'new_comment':
+            title = '任务新评论'
+            snippet = (comment_text or '').strip()
+            if len(snippet) > 60:
+                snippet = snippet[:60] + '…'
+            content = f'任务“{task.title}”有新评论' + (f'：{snippet}' if snippet else '')
+            if actor_name:
+                content += f'（{actor_name}）'
+        else:
+            title = '任务通知'
+            content = f'任务“{task.title}”有更新'
+        from oa.views import send_work_notification
+        send_work_notification(
+            user_id, title, content, notification_type='task',
+            related_url=f'/tasks/?task_id={task.id}',
+            extra_data={'task_id': task.id, 'event_type': event_type},
+            tenant=getattr(task, 'tenant', None),
         )
-        # 同时创建工作通知记录
-        self._create_work_notification(user_id, task, event_type)
 
-    def _notify_task_participants(self, task, event_type, extra_data=None):
-        """通知所有相关人员"""
-        user_ids = {task.creator.id}
-        if task.assignee: user_ids.add(task.assignee.id)
-
+    def _notify_task_participants(self, task, event_type, comment=None):
+        """通知任务相关人（排除当前操作人）"""
+        actor = getattr(getattr(self, 'request', None), 'user', None)
+        user_ids = {task.creator_id}
+        if task.assignee_id:
+            user_ids.add(task.assignee_id)
+        if actor is not None:
+            user_ids.discard(actor.id)
+        comment_text = getattr(comment, 'content', '') if comment is not None else ''
         for uid in user_ids:
-            self._notify_user(uid, task, event_type)
+            self._notify_user(uid, task, event_type, actor=actor, comment_text=comment_text)
 
     @action(detail=False, methods=['get'])
     def stats(self, request):

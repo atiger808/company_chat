@@ -2268,3 +2268,41 @@ input[type="time"] {
     background: linear-gradient(135deg, #2c6a9f 0%, #1b4470 100%);
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
 }
+
+/* ==================== WPS 嵌入单元格图片上传提示 ==================== */
+.wps-upload-hint {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 7px 10px;
+    font-size: 12px;
+    line-height: 1.6;
+    text-align: left;
+    color: #a86a00;
+    background: #fff8e6;
+    border: 1px solid #ffe2b0;
+    border-radius: 8px;
+}
+
+.wps-upload-hint i {
+    margin-top: 2px;
+    color: #e6a23c;
+    flex-shrink: 0;
+}
+
+.wps-upload-hint.compact {
+    margin-top: 6px;
+    padding: 5px 8px;
+    font-size: 11.5px;
+}
+
+[data-theme="dark"] .wps-upload-hint {
+    color: #e6c07a;
+    background: #3a2f1a;
+    border-color: #5a4a24;
+}
+
+[data-theme="dark"] .wps-upload-hint i {
+    color: #e6c07a;
+}

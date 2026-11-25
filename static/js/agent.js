@@ -8,9 +8,13 @@ class AgentManager {
         if (!token) return;
         const key = pageKey || AgentManager._detectPageKey();
         const run = function () {
+            // 官网首页未引入 TokenManager，这里做兼容；已登录用户的配置请求仍带鉴权头
+            const headers = (window.TokenManager && typeof TokenManager.getHeaders === 'function')
+                ? TokenManager.getHeaders()
+                : {};
             // 加 no-store + 时间戳：配置随时可能在管理控制台被改动，必须每次取最新，避免被缓存导致「改了不生效」
             fetch('/api/system/agent-config/?page=' + encodeURIComponent(key) + '&_t=' + Date.now(),
-                {headers: TokenManager.getHeaders(), cache: 'no-store'})
+                {headers: headers, cache: 'no-store'})
                 .then(function (r) { return r.ok ? r.json() : null; })
                 .then(function (raw) {
                     if (!raw) return;
@@ -123,6 +127,8 @@ class AgentManager {
     // 按当前 URL 识别页面 key（用于逐页开关，与管理控制台/水印保持一致）
     static _detectPageKey() {
         const path = window.location.pathname;
+        // 官网主页（/ 或 /index.html）
+        if (path === '/' || path === '/index.html') return 'home';
         if (path.indexOf('/control') === 0) return 'admin';
         if (path.indexOf('/chat/') === 0 && path.indexOf('/admin') >= 0) return 'admin';
         if (path.indexOf('/chat/') === 0) return 'chat';

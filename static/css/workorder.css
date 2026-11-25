@@ -722,3 +722,386 @@
         border-radius: 0;
     }
 }
+
+/* ==================== 逾期 / 超期完成标记 ==================== */
+.wo-late {
+    color: #e6a23c !important;
+    font-weight: 600;
+}
+
+[data-theme="dark"] .wo-late {
+    color: #f0c78a !important;
+}
+
+/* ==================== 聊天页群工单详情：视觉对齐任务中心 ==================== */
+.wo-detail-content .wo-progress-bar {
+    height: 8px;
+    border-radius: 6px;
+    background: #eef1f5;
+}
+
+.wo-detail-content .wo-progress-bar > i {
+    background: linear-gradient(90deg, #409eff, #79bbff);
+    border-radius: 6px;
+}
+
+.wo-detail-content .wo-progress-label {
+    font-weight: 600;
+}
+
+.wo-detail-content .wo-timeline {
+    position: relative;
+    gap: 10px;
+}
+
+.wo-detail-content .wo-timeline::before {
+    content: '';
+    position: absolute;
+    left: 25px;
+    top: 22px;
+    bottom: 22px;
+    width: 2px;
+    border-radius: 2px;
+    background: linear-gradient(180deg, rgba(64, 158, 255, .35), #e4e7ed);
+    z-index: 0;
+}
+
+.wo-detail-content .wo-timeline:has(.wo-empty)::before {
+    display: none;
+}
+
+.wo-detail-content .wo-stage-item {
+    position: relative;
+    z-index: 1;
+    gap: 12px;
+    padding: 11px 12px;
+    border-radius: 10px;
+    transition: background .15s, border-color .15s, box-shadow .15s;
+}
+
+.wo-detail-content .wo-stage-dot {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 3px #fff;
+}
+
+.wo-detail-content .wo-stage-dot--done {
+    box-shadow: 0 0 0 3px rgba(103, 194, 58, .14);
+}
+
+.wo-detail-content .wo-stage-dot--processing {
+    box-shadow: 0 0 0 3px rgba(64, 158, 255, .16);
+}
+
+.wo-detail-content .wo-stage-processing {
+    background: rgba(64, 158, 255, .05);
+    border-color: rgba(64, 158, 255, .30);
+}
+
+.wo-detail-content .wo-stage-done {
+    background: rgba(103, 194, 58, .05);
+    border-color: rgba(103, 194, 58, .30);
+}
+
+.wo-detail-content .wo-stage-current {
+    background: rgba(64, 158, 255, .09);
+    border-color: #79bbff;
+    box-shadow: 0 0 0 2px rgba(64, 158, 255, .12);
+}
+
+.wo-detail-content .wo-stage-current-tag {
+    color: #337ecc;
+    background: rgba(64, 158, 255, .15);
+    font-weight: 600;
+}
+
+.wo-detail-content .wo-stage-status {
+    font-weight: 600;
+}
+
+.wo-detail-content .wo-stage-meta > span {
+    background: #f5f7fa;
+    border-radius: 8px;
+    padding: 2px 8px;
+}
+
+.wo-detail-content .wo-stage-remark {
+    border-left: 3px solid rgba(64, 158, 255, .35);
+}
+
+/* 进度记录：按动作类型区分 */
+.wo-detail-content .wo-comment {
+    align-items: flex-start;
+    gap: 9px;
+    padding: 10px 12px;
+    background: #f8fafc;
+    border: 1px solid #edf1f6;
+    border-left: 3px solid #c0c4cc;
+    border-radius: 10px;
+}
+
+.wo-detail-content .wo-comment-avatar {
+    width: 30px;
+    height: 30px;
+    margin-top: 1px;
+}
+
+.wo-detail-content .wo-comment-avatar--system {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #f0f2f5;
+    color: #909399;
+    font-size: 13px;
+    border: 1px solid #e4e7ed;
+}
+
+.wo-detail-content .wo-comment-head {
+    gap: 8px;
+}
+
+.wo-detail-content .wo-comment-head > b {
+    font-size: 12.5px;
+}
+
+.wo-detail-content .wo-comment-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 8px;
+    border-radius: 9px;
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 1.6;
+    background: #eef8ff;
+    color: #0088e0;
+}
+
+.wo-detail-content .wo-comment-action i {
+    font-size: 10px;
+}
+
+.wo-detail-content .wo-comment-text {
+    margin-top: 5px;
+    line-height: 1.7;
+}
+
+.wo-detail-content .wo-comment-time {
+    font-size: 10.5px;
+}
+
+.wo-detail-content .wo-comment--comment {
+    border-left-color: #c0c4cc;
+}
+
+.wo-detail-content .wo-comment--progress,
+.wo-detail-content .wo-comment--start,
+.wo-detail-content .wo-comment--submit {
+    border-left-color: #409eff;
+    background: rgba(64, 158, 255, .04);
+}
+
+.wo-detail-content .wo-comment--progress .wo-comment-action,
+.wo-detail-content .wo-comment--start .wo-comment-action,
+.wo-detail-content .wo-comment--submit .wo-comment-action {
+    background: rgba(64, 158, 255, .13);
+    color: #337ecc;
+}
+
+.wo-detail-content .wo-comment--verify {
+    border-left-color: #67c23a;
+    background: rgba(103, 194, 58, .05);
+}
+
+.wo-detail-content .wo-comment--verify .wo-comment-action {
+    background: rgba(103, 194, 58, .15);
+    color: #529b2e;
+}
+
+.wo-detail-content .wo-comment--reject,
+.wo-detail-content .wo-comment--return {
+    border-left-color: #f56c6c;
+    background: rgba(245, 108, 108, .05);
+}
+
+.wo-detail-content .wo-comment--reject .wo-comment-action,
+.wo-detail-content .wo-comment--return .wo-comment-action {
+    background: rgba(245, 108, 108, .14);
+    color: #d94a4a;
+}
+
+.wo-detail-content .wo-comment--ding {
+    border-left-color: #7c4dff;
+    background: rgba(124, 77, 255, .05);
+}
+
+.wo-detail-content .wo-comment--ding .wo-comment-action {
+    background: rgba(124, 77, 255, .14);
+    color: #6a3de8;
+}
+
+.wo-detail-content .wo-comment--system {
+    border-left-color: #b1b3b8;
+    background: #f4f5f7;
+}
+
+.wo-detail-content .wo-comment--system .wo-comment-text {
+    color: #909399;
+    font-size: 12.5px;
+}
+
+/* 暗色适配 */
+[data-theme="dark"] .wo-detail-content .wo-progress-bar {
+    background: #333;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-timeline::before {
+    background: linear-gradient(180deg, rgba(124, 196, 255, .35), #333);
+}
+
+[data-theme="dark"] .wo-detail-content .wo-stage-item {
+    background: #1e1e1e;
+    border-color: #333;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-stage-dot {
+    box-shadow: 0 0 0 3px #1e1e1e;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-stage-processing {
+    background: rgba(64, 158, 255, .10);
+    border-color: #2b4a68;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-stage-done {
+    background: rgba(103, 194, 58, .10);
+    border-color: #365232;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-stage-current {
+    background: rgba(64, 158, 255, .14);
+    border-color: #3a7bd5;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-stage-current-tag {
+    color: #7cc4ff;
+    background: rgba(64, 158, 255, .18);
+}
+
+[data-theme="dark"] .wo-detail-content .wo-stage-meta > span {
+    background: #252525;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-stage-remark {
+    background: #232323;
+    border-left-color: #2b4a68;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-comment {
+    background: #1e1e1e;
+    border-color: #333;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-comment--comment {
+    border-left-color: #555;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-comment--progress,
+[data-theme="dark"] .wo-detail-content .wo-comment--start,
+[data-theme="dark"] .wo-detail-content .wo-comment--submit {
+    background: rgba(64, 158, 255, .08);
+    border-left-color: #3a7bd5;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-comment--progress .wo-comment-action,
+[data-theme="dark"] .wo-detail-content .wo-comment--start .wo-comment-action,
+[data-theme="dark"] .wo-detail-content .wo-comment--submit .wo-comment-action {
+    background: rgba(64, 158, 255, .20);
+    color: #7cc4ff;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-comment--verify {
+    background: rgba(103, 194, 58, .10);
+    border-left-color: #529b2e;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-comment--verify .wo-comment-action {
+    background: rgba(103, 194, 58, .20);
+    color: #9fe085;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-comment--reject,
+[data-theme="dark"] .wo-detail-content .wo-comment--return {
+    background: rgba(245, 108, 108, .10);
+    border-left-color: #a33a3a;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-comment--reject .wo-comment-action,
+[data-theme="dark"] .wo-detail-content .wo-comment--return .wo-comment-action {
+    background: rgba(245, 108, 108, .20);
+    color: #ff9a9a;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-comment--ding {
+    background: rgba(124, 77, 255, .12);
+    border-left-color: #6a3de8;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-comment--ding .wo-comment-action {
+    background: rgba(124, 77, 255, .22);
+    color: #c3b0ff;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-comment--system {
+    background: #232323;
+    border-left-color: #555;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-comment--system .wo-comment-text {
+    color: #888;
+}
+
+[data-theme="dark"] .wo-detail-content .wo-comment-avatar--system {
+    background: #2d2d2d;
+    border-color: #444;
+    color: #888;
+}
+
+/* ==================== WPS 嵌入单元格图片上传提示 ==================== */
+.wps-upload-hint {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 7px 10px;
+    font-size: 12px;
+    line-height: 1.6;
+    text-align: left;
+    color: #a86a00;
+    background: #fff8e6;
+    border: 1px solid #ffe2b0;
+    border-radius: 8px;
+}
+
+.wps-upload-hint i {
+    margin-top: 2px;
+    color: #e6a23c;
+    flex-shrink: 0;
+}
+
+.wps-upload-hint.compact {
+    margin-top: 6px;
+    padding: 5px 8px;
+    font-size: 11.5px;
+}
+
+[data-theme="dark"] .wps-upload-hint {
+    color: #e6c07a;
+    background: #3a2f1a;
+    border-color: #5a4a24;
+}
+
+[data-theme="dark"] .wps-upload-hint i {
+    color: #e6c07a;
+}

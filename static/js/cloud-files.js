@@ -232,7 +232,7 @@
                 const isImage = file.is_image || (file.mime_type && file.mime_type.startsWith('image/'));
                 const isVideo = file.is_video || (file.mime_type && file.mime_type.startsWith('video/'));
                 const isPdf = file.document_type === 'pdf' || (file.mime_type && file.mime_type.startsWith('application/pdf'));
-                const isSelected = this.selectedFiles.has(file.id);
+                const isSelected = this.selectedFiles.has(String(file.id));
                 const isDownload = this.downloadEnabled || window.frontendCloudConfig?.get('system.download_enabled', false)
 
                 // 🔧 新增：检查是否为共享文件夹
@@ -336,7 +336,7 @@
             let html = '';
             data.forEach(file => {
                 const isFolder = file.is_folder;
-                const isSelected = this.selectedFiles.has(file.id);
+                const isSelected = this.selectedFiles.has(String(file.id));
                 const isDocument = file.is_document
                 const isImage = file.is_image || (file.mime_type && file.mime_type.startsWith('image/'));
                 const isVideo = file.is_video || (file.mime_type && file.mime_type.startsWith('video/'));
@@ -353,7 +353,7 @@
                 // 🔧 关键修复：图片和视频显示缩略图
                 const thumbnailHtml = (isImage || isVideo) && !isFolder ? `
                     <div class="file-thumbnail">
-                        <${tagType} src="${file.file_url}" alt="${file.name}" title="${file.name}" style="width:100%;height:80px;object-fit:cover;border-radius:4px;" />
+                        <${tagType} src="${file.file_url}" alt="${file.name}" title="${file.name}" style="width:100%;height:100%;object-fit:cover;" />
                     </div>
                 ` : `
                     <div class="file-icon">
@@ -466,7 +466,10 @@
      * 🔧 更新文件项的选中样式
      */
     updateFileItemStyle(fileId, isSelected) {
-        const items = document.querySelectorAll(`[data-file-id="${fileId}"]`);
+        // 只更新卡片/行本身，避免把 selected 类加到复选框、操作按钮上
+        const items = document.querySelectorAll(
+            `.file-item[data-file-id="${fileId}"], .file-grid-item[data-file-id="${fileId}"]`
+        );
         items.forEach(item => {
             if (isSelected) {
                 item.classList.add('selected');

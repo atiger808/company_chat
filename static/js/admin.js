@@ -3307,6 +3307,7 @@ class AdminConsole {
         var wrap = document.getElementById('agentPageToggles');
         if (!wrap) return;
         var defs = [
+            ['home', '官网主页'],
             ['chat', '企业聊天室'], ['admin', '管理控制台'],
             ['cloud', '企业网盘'], ['cloud_settings', '网盘系统配置'], ['cloud_editor', '文档编辑器'],
             ['oa_approval', 'OA审批'], ['oa_subsidy', '普惠补贴'],

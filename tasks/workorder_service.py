@@ -202,7 +202,11 @@ def _next_order_no(tenant):
 
 
 def normalize_attachments(items, user):
-    """把前端附件（FileUpload id 或 URL）转成可持久化的快照，校验归属。"""
+    """把前端附件（FileUpload id 或 URL）转成可持久化的快照。
+
+    上传接口按 MD5 去重，同一文件可能复用其他用户创建的 FileUpload 记录，
+    因此这里与聊天/任务附件保持一致：只要拿到有效 FileUpload ID 即可引用。
+    """
     from chat.models import FileUpload
     out = []
     for item in (items or [])[:30]:
@@ -214,8 +218,6 @@ def normalize_attachments(items, user):
                 f = FileUpload.objects.get(id=fid)
             except FileUpload.DoesNotExist:
                 continue
-            if f.uploaded_by_id != getattr(user, 'id', None) and not getattr(user, 'is_superuser', False):
-                raise ValidationError('附件不属于当前用户，无法引用')
             out.append({
                 'file_id': f.id,
                 'url': f.file.url if f.file else '',
@@ -399,6 +401,53 @@ def _notify_stage_assignee(wo, stage, title, content, action='stage'):
         return
     prefix = '【DING】' if wo.ding else ''
     _notify(wo, stage.assignee, prefix + title, content, ding=wo.ding, action=action)
+
+
+def _notify_progress(wo_id, actor_id, text, has_attachments=False):
+    """进度更新后通知发起人/核验人/当前执行人（排除本人），含 Web Push。"""
+    wo = (WorkOrder.objects.select_related('creator', 'verifier', 'chat_room')
+          .prefetch_related('stages').filter(id=wo_id).first())
+    if not wo:
+        return
+    cur = current_stage(wo)
+    recipients = {wo.creator_id, wo.verifier_id}
+    if cur and cur.assignee_id:
+        recipients.add(cur.assignee_id)
+    recipients.discard(None)
+    recipients.discard(actor_id)
+    actor = CustomUser.objects.filter(id=actor_id).first()
+    actor_name = display_name(actor) if actor else '相关成员'
+    snippet = (text or '').strip()
+    if not snippet:
+        snippet = '上传了新的附件交付' if has_attachments else '更新了进度'
+    if len(snippet) > 60:
+        snippet = snippet[:60] + '…'
+    for uid in recipients:
+        target = CustomUser.objects.filter(id=uid, is_active=True).first()
+        if not target:
+            continue
+        _notify(wo, target, f'工单进度更新：{wo.title}',
+                f'{actor_name} 更新了工单 {wo.order_no} 进度：{snippet}', action='progress')
+
+
+def _notify_cancelled(wo_id, actor_id, reason=''):
+    """工单取消后通知相关人（排除操作人）。"""
+    wo = (WorkOrder.objects.select_related('creator', 'verifier', 'chat_room')
+          .prefetch_related('stages').filter(id=wo_id).first())
+    if not wo:
+        return
+    recipients = set(wo.stages.values_list('assignee_id', flat=True))
+    recipients.update({wo.creator_id, wo.verifier_id})
+    recipients.discard(None)
+    recipients.discard(actor_id)
+    content = f'工单 {wo.order_no} 已被取消。'
+    if reason:
+        content += f'原因：{reason}'
+    for uid in recipients:
+        target = CustomUser.objects.filter(id=uid, is_active=True).first()
+        if not target:
+            continue
+        _notify(wo, target, f'工单已取消：{wo.title}', content, action='cancelled')
 
 
 def _after_created(wo_id, message_id):
@@ -735,6 +784,11 @@ def add_comment(wo_id, user, payload=None):
         wo.last_action_at = timezone.now()
         wo.save(update_fields=['last_action', 'last_action_at'])
         transaction.on_commit(lambda: _broadcast_update(wo_id))
+        actor_id = user.id
+        progress_text = content
+        has_attachments = bool(attachments)
+        transaction.on_commit(
+            lambda: _notify_progress(wo_id, actor_id, progress_text, has_attachments))
     return comment
 
 
@@ -811,11 +865,17 @@ def _after_verified(wo_id, passed, comment_text):
                     f'工单 {wo.order_no} 已核验通过并归档到任务中心。', action='closed')
     else:
         stage = wo.stages.filter(order=wo.current_stage_order).first()
+        notified = set()
         if stage and stage.assignee_id:
             _notify_stage_assignee(
                 wo, stage, f'工单被退回：{wo.title}',
                 f'工单 {wo.order_no} 核验未通过，退回原因：{comment_text}。请继续处理环节「{stage.name}」。',
                 action='rejected')
+            notified.add(stage.assignee_id)
+        if wo.creator_id and wo.creator_id != wo.verifier_id and wo.creator_id not in notified:
+            _notify(wo, wo.creator, f'工单被退回：{wo.title}',
+                    f'工单 {wo.order_no} 核验未通过，已退回环节继续处理。原因：{comment_text}',
+                    action='rejected')
 
 
 def cancel_work_order(wo_id, user, payload=None):
@@ -835,6 +895,8 @@ def cancel_work_order(wo_id, user, payload=None):
             action_type='system', content='工单已取消。' + (f'原因：{reason}' if reason else ''))
         _send_group_notice(wo, f'⛔ 工单 {wo.order_no}「{wo.title}」已取消。', user)
         transaction.on_commit(lambda: _broadcast_update(wo_id))
+        actor_id = user.id
+        transaction.on_commit(lambda: _notify_cancelled(wo_id, actor_id, reason))
     return _fresh(wo_id)
 
 

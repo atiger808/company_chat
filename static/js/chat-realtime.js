@@ -1907,18 +1907,9 @@
 
     handleTaskNotification(data) {
         const {event_type, task} = data;
-        const isAssignee = task.assignee_info?.id === this.currentUser.id;
 
-        // 1. 显示桌面通知
-        if (isAssignee && event_type === 'assigned') {
-            this.showNotification('📋 您有一个新任务', {
-                body: task.title,
-                icon: task.creator_info?.avatar_url || '/static/images/default-avatar.png',
-                data: {url: '/tasks/?task_id=' + task.id}
-            });
-        }
+        // 桌面通知/铃铛未读统一由 work.notification 处理（含 Web Push），此处仅处理群内任务卡片
 
-        // 2. 在聊天室渲染“任务卡片” (如果关联了当前聊天室)
         if (task.related_chat_room_id == this.currentRoomId && event_type === 'assigned') {
             const cardHtml = `
             <div class="message-task-card" style="border: 1px solid #dcdfe6; border-radius: 8px; padding: 12px; margin-top: 8px; background: #f5f7fa; cursor: pointer; max-width: 300px;" onclick="window.open('/tasks/?task_id=${task.id}', '_blank')">

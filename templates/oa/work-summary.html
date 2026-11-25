@@ -10,7 +10,7 @@
     <!--    <link rel="icon" type="image/svg+xml" href="/media/avatars/icon.svg">-->
     <!--    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">-->
     <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261119-f16a779">
-    <link rel="stylesheet" href="/static/css/oa.css?v=20261119-f16a779">
+    <link rel="stylesheet" href="/static/css/oa.css?v=20261119-detail03">
 
     <style>
         body {
@@ -19,7 +19,7 @@
 
         .oa-content {
             padding: 16px;
-            max-width: 960px;
+            max-width: 1080px;
             margin: 0 auto;
         }
 
@@ -1380,6 +1380,10 @@
                         点击选择 / 拖拽上传当天的工作截图、文档、表格等（支持图片、PDF、Word、MD、表格等多种类型，可多选）
                         <input type="file" id="wsFilesInput" multiple style="display:none;"
                                onchange="workSummaryApp.onFilesSelected(event)">
+                    </div>
+                    <div class="wps-upload-hint">
+                        <i class="fas fa-circle-info"></i>
+                        <span>WPS 表格若包含「嵌入单元格图片」（=DISPIMG），在线编辑时图片可能无法显示。建议上传前在 WPS 中右键图片 →「转为浮动图片」。</span>
                     </div>
                     <div style="margin-top:6px;">
                         <button type="button" class="btn btn-sm btn-secondary"

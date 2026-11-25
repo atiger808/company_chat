@@ -123,6 +123,9 @@
                 var p = wo.progress || {done: 0, total: 0};
                 var pct = p.total ? Math.round((p.done || 0) * 100 / p.total) : 0;
                 var cur = wo.current_stage || {};
+                var curOverdue = cur.deadline && cur.status !== 'done'
+                    && wo.status !== 'done' && wo.status !== 'cancelled'
+                    && new Date(cur.deadline).getTime() < Date.now();
                 var creator = wo.creator_info || {};
                 var creatorName = creator.real_name || creator.username || wo.creator_name || '未知';
                 var creatorAvatar = creator.avatar_url || '/static/images/default-avatar.png';
@@ -133,9 +136,11 @@
                     + '\n来自群聊：' + (roomName || '-');
                 var selected = self.currentWorkOrder && String(self.currentWorkOrder.id) === String(wo.id);
                 return '<div class="wo-task-card' + (selected ? ' selected' : '') + '" data-wo-id="' + wo.id + '" onclick="taskApp.selectWorkOrder(' + wo.id + ')">'
-                    + '<div class="wo-task-top"><span class="wo-task-no">' + esc(wo.order_no) + '</span>'
+                    + '<div class="wo-task-top">'
+                    + '<span class="wo-task-no" title="工单编号">' + esc(wo.order_no) + '</span>'
+                    + '<span class="wo-task-no" title="创建时间">' + fmtTime(wo.created_at) + '</span>'
                     + '<span class="wo-status-badge" style="background:' + statusColor(wo.status) + ';">' + esc(wo.status_display) + '</span></div>'
-                    + '<div class="wo-task-title">' + esc(wo.title) + '</div>'
+                    + '<div class="wo-task-title" title="工单标题">' + esc(wo.title) + '</div>'
                     + '<div class="wo-task-badges">'
                     + (wo.tenant_name ? '<span class="wo-tenant-badge" title="归属企业：' + esc(wo.tenant_name) + '"><i class="fas fa-building"></i> ' + esc(wo.tenant_name) + '</span>' : '')
                     + (roomName ? '<span class="wo-room-badge" title="来自群聊：' + esc(roomName) + '"><i class="fas fa-users"></i> ' + esc(roomName) + '</span>' : '')
@@ -145,7 +150,8 @@
                     + '<div class="wo-task-meta">'
                     + '<span class="wo-urgency-text" style="color:' + urgencyColor(wo.urgency) + ';">' + esc(wo.urgency_display) + '</span>'
                     + (cur.name ? '<span><i class="fas fa-route"></i> ' + esc(cur.name) + '（' + esc(cur.assignee_name || '未指派') + '）</span>' : '')
-                    + (cur.deadline ? '<span title="截止日期"><i class="fas fa-clock"></i> ' + esc(fmtTime(cur.deadline)) + '</span>' : '')
+                    + (cur.deadline ? '<span class="' + (curOverdue ? 'wo-overdue' : '') + '" title="截止日期"><i class="fas fa-clock"></i> 截止 ' + esc(fmtTime(cur.deadline)) + (curOverdue ? '（已逾期）' : '') + '</span>' : '')
+                    + (wo.closed_at ? '<span title="闭环时间"><i class="fas fa-flag-checkered"></i> 闭环 ' + esc(fmtTime(wo.closed_at)) + '</span>' : '')
                     + '</div>'
                     + '<div class="wo-task-progress"><div class="wo-progress-bar"><i style="width:' + pct + '%;"></i></div><span>' + (p.done || 0) + '/' + (p.total || 0) + '</span></div>'
                     + '</div>';
@@ -344,6 +350,10 @@
                 var isCurrent = currentStageId && String(currentStageId) === String(s.id) &&
                     wo.status !== 'done' && wo.status !== 'cancelled';
                 var overdue = s.deadline && s.status !== 'done' && new Date(s.deadline).getTime() < Date.now();
+                var lateDone = s.status === 'done' && s.deadline && s.completed_at
+                    && new Date(s.completed_at).getTime() > new Date(s.deadline).getTime();
+                var deadlineClass = overdue ? 'wo-overdue' : (lateDone ? 'wo-late' : '');
+                var deadlineSuffix = (overdue || lateDone) ? '（已逾期）' : '';
                 var assigneeMember = null;
                 if (s.assignee && members.length) {
                     assigneeMember = members.filter(function (m) { return String(m.id) === String(s.assignee); })[0] || null;
@@ -360,7 +370,7 @@
                     + (isCurrent ? '<span class="wo-stage-current-tag">当前环节</span>' : '')
                     + '<span class="wo-stage-status" style="color:' + color + ';">' + esc(s.status_display || '') + '</span></div>'
                     + '<div class="wo-stage-meta"><span class="wo-stage-assignee">' + assigneeHtml + '</span>'
-                    + (s.deadline ? '<span class="' + (overdue ? 'wo-overdue' : '') + '"><i class="fas fa-clock"></i> 截止 ' + esc(fmtTime(s.deadline)) + (overdue ? '（已逾期）' : '') + '</span>' : '')
+                    + (s.deadline ? '<span class="' + deadlineClass + '"><i class="fas fa-clock"></i> 截止 ' + esc(fmtTime(s.deadline)) + deadlineSuffix + '</span>' : '')
                     + (s.completed_at ? '<span><i class="fas fa-check"></i> 完成 ' + esc(fmtTime(s.completed_at)) + '</span>' : '') + '</div>'
                     + (s.remark ? '<div class="wo-stage-remark">' + esc(s.remark) + '</div>' : '')
                     + (files ? '<div class="wo-stage-files">' + files + '</div>' : '')
@@ -410,17 +420,22 @@
                 + '<input type="file" id="woTaskFileInput" multiple style="display:none;" onchange="taskApp.uploadWorkOrderFiles(this.files)"></label>'
                 + '<div id="woTaskAttachList" class="wo-attach-list"></div>'
                 + '<button class="btn btn-primary btn-sm" onclick="taskApp.addWorkOrderComment()"><i class="fas fa-paper-plane"></i> 发送</button>'
-                + '</div></div>'
+                + '</div>'
+                + '<div class="wps-upload-hint compact"><i class="fas fa-circle-info"></i>'
+                + '<span>WPS 表格若包含「嵌入单元格图片」（=DISPIMG），在线编辑时图片可能无法显示，建议上传前在 WPS 中转为「浮动图片」。</span></div>'
+                + '</div>'
                 : '<div class="wo-empty">仅发起人、核验人或环节执行人可以更新进度</div>';
 
             body.innerHTML = '<div class="wo-detail-head"><div><div class="wo-detail-no">' + esc(wo.order_no) + '</div>'
                 + '<div class="wo-detail-title">' + esc(wo.title) + '</div></div>'
                 + '<span class="wo-status-badge" style="background:' + statusColor(wo.status) + ';">' + esc(wo.status_display) + '</span></div>'
-                + '<div class="wo-detail-meta"><span style="color:' + urgencyColor(wo.urgency) + ';">' + esc(wo.urgency_display) + '</span>'
+                + '<div class="wo-detail-meta"><span title="紧急等级" style="color:' + urgencyColor(wo.urgency) + ';">' + esc(wo.urgency_display) + '</span>'
                 + '<span><i class="fas fa-user-circle"></i> 发起 ' + esc(wo.creator_name) + '</span>'
                 + '<span><i class="fas fa-user-shield"></i> 核验 ' + esc(wo.verifier_name) + '</span>'
-                + '<span><i class="fas fa-building"></i> 企业 ' + esc(wo.tenant_name || '-') + '</span>'
-                + '<span><i class="fas fa-users"></i> ' + esc(wo.room_name || '') + '</span></div>'
+                + '<span title="所属企业"><i class="fas fa-building"></i> 企业 ' + esc(wo.tenant_name || '-') + '</span>'
+                + '<span title="来自群：'+ esc(wo.room_name || '') +'"><i class="fas fa-users"></i> ' + esc(wo.room_name || '') + '</span>'
+                + '<span title="创建时间"><i class="fas fa-clock"></i> ' + esc(fmtTime(wo.created_at)) + ' 创建</span>'
+                + '</div>'
                 + '<div class="wo-progress-line"><div class="wo-progress-bar"><i style="width:' + pct + '%;"></i></div><span class="wo-progress-label">进度 ' + (p.done || 0) + '/' + (p.total || 0) + '</span></div>'
                 + '<div class="wo-detail-grid">'
                 + (wo.description ? '<div class="wo-block"><div class="wo-block-title"><i class="fas fa-circle-exclamation"></i> 问题描述</div><div class="wo-block-body">' + esc(wo.description) + '</div></div>' : '')

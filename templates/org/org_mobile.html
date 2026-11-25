@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>组织架构 - 企业聊天室</title>
-    <link rel="stylesheet" href="/static/css/org.css?v=20261119-f16a779">
+    <link rel="stylesheet" href="/static/css/org.css?v=20261119-detail07">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css?v=20261017-ea406b5">
 <!--    <link rel="stylesheet" href="/static/css/libs/font-awesome/6.0.0/css/all.min.css?v=20261119-f16a779">-->
 
@@ -37,9 +37,71 @@
         .tab-bar { display:flex; border-bottom:1px solid var(--border-color,#ebeef5); background:#fff; }
         .tab-bar .tab { flex:1; text-align:center; padding:12px; font-size:14px; cursor:pointer; color:var(--text-secondary,#606266); border-bottom:2px solid transparent; }
         .tab-bar .tab.active { color:var(--primary-color,#409eff); border-bottom-color:var(--primary-color,#409eff); font-weight:500; }
+
+        /* ===== 夜间模式 ===== */
+        [data-theme="dark"] body.org-mobile-page {
+            background: #121212;
+            color: #e0e0e0;
+        }
+        [data-theme="dark"] .mobile-header,
+        [data-theme="dark"] .mobile-search,
+        [data-theme="dark"] .tab-bar,
+        [data-theme="dark"] .mobile-breadcrumb {
+            background: #1e1e1e;
+            border-bottom-color: #333;
+            color: #e0e0e0;
+        }
+        [data-theme="dark"] .mobile-header h1,
+        [data-theme="dark"] .mobile-header .tenant-name {
+            color: #e6e6e6;
+        }
+        [data-theme="dark"] .mobile-search input {
+            background: #2d2d2d;
+            border-color: #444;
+            color: #e6e6e6;
+        }
+        [data-theme="dark"] #mobileTreeFoldBtn {
+            background: #2d2d2d !important;
+            border-color: #444 !important;
+            color: #e6e6e6 !important;
+        }
+        [data-theme="dark"] .mobile-dept-item,
+        [data-theme="dark"] .mobile-member-item {
+            background: #1e1e1e;
+            border-bottom: 1px solid #2a2a2a;
+        }
+        [data-theme="dark"] .mobile-dept-item:active {
+            background: #2d2d2d;
+        }
+        [data-theme="dark"] .mobile-dept-name,
+        [data-theme="dark"] .mobile-member-name {
+            color: #e6e6e6;
+        }
+        [data-theme="dark"] .mobile-dept-meta,
+        [data-theme="dark"] .mobile-member-position {
+            color: #8a8f99;
+        }
+        [data-theme="dark"] .mobile-breadcrumb .current {
+            color: #e6e6e6;
+        }
+        [data-theme="dark"] .tab-bar .tab {
+            color: #b0b0b0;
+        }
+        [data-theme="dark"] .tab-bar .tab.active {
+            color: #409eff;
+            border-bottom-color: #409eff;
+        }
+        [data-theme="dark"] .mobile-chart-node {
+            background: #1e1e1e !important;
+            color: #e6e6e6 !important;
+            border-left-color: #409eff !important;
+        }
+        [data-theme="dark"] .mobile-chart-node span {
+            color: #e6e6e6;
+        }
     </style>
 </head>
-<body>
+<body class="org-mobile-page">
 
 <div class="mobile-header">
     <span class="tenant-name" id="mobileTenantName" onclick="tenantManager.showSwitchModal()">
@@ -88,6 +150,7 @@
 <script src="/static/js/tenant.js?v=20261119-f16a779"></script>
 <script src="/static/js/org.js?v=20261119-f16a779"></script>
 <script>
+document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'light');
 var mobileStack = [];
 var mobileDepts = [];
 
@@ -203,7 +266,7 @@ function buildMobileTree(nodes, depth) {
     nodes.forEach(function(n) {
         var hasCh = n.children && n.children.length;
         html += '<li style="margin:4px 0;">'
-            + '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:#fff;border-radius:8px;border-left:3px solid #409eff;font-size:14px;">'
+            + '<div class="mobile-chart-node" style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:#fff;border-radius:8px;border-left:3px solid #409eff;font-size:14px;">'
             + '<i class="fas fa-building" style="color:#e6a23c;"></i>'
             + '<span style="font-weight:500;">'+(n.name||'')+'</span>'
             + (n.manager ? '<span style="font-size:12px;color:var(--text-light);">('+n.manager+')</span>' : '')

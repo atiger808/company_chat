@@ -1994,7 +1994,7 @@ DEFAULT_AGENT_EMBED_CODE = (
 
 # 智能体支持的页面 key（与前端 AgentManager._detectPageKey 保持一致；默认全关，按需开启）
 DEFAULT_AGENT_PAGES = [
-    'chat', 'admin', 'cloud', 'cloud_settings', 'cloud_editor',
+    'home', 'chat', 'admin', 'cloud', 'cloud_settings', 'cloud_editor',
     'oa_approval', 'oa_subsidy', 'oa_subsidy_verify', 'oa_subsidy_pay',
     'oa_attendance', 'oa_announcements', 'work_calendar', 'work_summary',
     'tasks', 'org', 'knowledge', 'other',

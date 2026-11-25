@@ -1,3 +1,66 @@
+290. 项目文档与 README 完善：
+   1）在项目根目录新增 `README.md`：功能特性、技术栈、目录结构、快速开始、环境变量、启动/访问入口、静态资源缓存机制、部署与文档索引；
+   2）完善 `docs/浙企钉-企业协同办公平台 · 项目结构文档.md`：补充管理控制台各配置项、智能体逐页面配置（含官网主页 `home`）、任务/群工单最新能力、网盘卡片/列表体验、组织架构夜间模式、静态资源版本与发布注意事项；
+   3）同步修正 `README-zh.md` 中项目结构文档与员工手册的链接路径；
+   4）说明：仅文档更新，无代码/模型变更，无需迁移。
+
+289. 智能体设置增加「官网主页」配置项：
+   1）管理控制台「智能体设置 → 启用智能体的页面」新增「官网主页」，可单独开启/关闭；
+   2）官网首页接入智能体加载逻辑，已登录用户访问官网且开启该页面时，会按配置注入智能体嵌入代码；
+   3）智能体页面识别新增 `home`（`/`、`/index.html`），后端默认页面列表同步增加；
+   4）兼容官网未引入 TokenManager 的情况：无 TokenManager 时使用空请求头，未登录访客直接跳过；
+   5）说明：同步 `templates/chat/admin.html`、`templates/index.html`、`static/js/admin.js`、`static/js/agent.js`、`oa/models.py`、`VERSION_MESSAGE.txt` 后重启后端并强刷/PWA 清缓存；资源版本号 `20261119-detail08`。
+
+288. 网盘选择按钮可见性修复 + 组织架构夜间模式完善：
+   1）网盘卡片选择按钮：默认与悬停时提高白底对比度并增加光晕；夜间模式改为浅色按钮，避免深色卡片上看不清；
+   2）选中后统一为 #409EFF 背景，并额外用 CSS 绘制白色对号，确保各浏览器都能显示；
+   3）组织架构桌面端夜间模式：新增页面级深色变量（背景/文字/边框），补齐侧边栏、顶部、部门树、成员卡片、图表、标签、表单等文字与背景搭配，解决深色底上文字看不清的问题；
+   4）组织架构移动端：补齐夜间模式样式（头部、搜索、部门/成员列表、面包屑、Tab、架构图节点），并读取本地主题设置自动应用；
+   5）说明：同步 `templates/cloud/cloud.html`、`templates/org/org.html`、`templates/org/org_mobile.html`、`static/css/cloud.css`、`static/css/org.css`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后强刷/PWA 清缓存；资源版本号 `20261119-detail07`。
+
+287. 企业网盘卡片/列表视图参考百度网盘优化：
+   1）卡片：更柔和的边框与悬停底色，选中为浅蓝底 + #409EFF 描边；文件名称、图标与元信息层级更清晰；
+   2）选择按钮：默认无边框（卡片为半透明白底圆形、列表为浅灰无边框方形），选中背景统一为 #409EFF，对号使用白色 SVG（不再出现黑色对号）；
+   3）列表：表头浅灰蓝、行分隔更轻；操作列默认隐藏，悬停/选中/键盘聚焦时显示（不改变行高），触摸设备常显；
+   4）选中行/卡片保持浅蓝高亮与左侧蓝色标记，便于批量操作时确认选中范围；
+   5）全部样式同步适配夜间模式；
+   6）说明：同步 `templates/cloud/cloud.html`、`static/css/cloud.css`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后强刷/PWA 清缓存；资源版本号 `20261119-detail06`。
+
+286. 企业网盘卡片视图移动端布局优化：
+   1）移动端卡片固定两列（≤480px 同步收紧间距），避免窄屏挤成三列导致卡片过小；
+   2）卡片紧凑化：缩略图/图标、文件名称（两行截断）、大小与时间字号重新适配，卡片圆角与内边距更贴合手机；
+   3）选择按钮改为右上角小圆形（30px 点击区 + 18px 复选框），选中后主题色填充，视觉更轻量不突兀；
+   4）操作按钮默认隐藏，选中卡片后再展开为整齐的图标行，避免每张卡片堆满按钮；
+   5）说明：同步 `templates/cloud/cloud.html`、`static/css/cloud.css`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后强刷/PWA 清缓存；资源版本号 `20261119-detail05`。
+
+285. 每日工作总结 WPS 提示 + 企业网盘文件视图体验优化：
+   1）每日工作总结「工作数据文件」上传区增加 WPS 嵌入单元格图片（=DISPIMG）提示，覆盖本地选择与拖拽上传；
+   2）企业网盘卡片视图：取消悬停位移、操作栏固定高度且悬停/选中时显示，修复鼠标移动时卡片抖动；复选框浮层锚定卡片，选中后始终显示；选中态增加边框高亮并保持操作按钮可见；名称两行截断、尺寸/时间/图标布局统一；
+   3）企业网盘列表视图：增大行高、悬停高亮、选中行左侧蓝色竖条与浅蓝底；复选框与操作图标统一尺寸与悬停样式；操作列横向可滚动，避免拥挤；
+   4）触摸设备（无 hover）下复选框与操作按钮常显；
+   5）修复选中状态 ID 类型不一致导致重新渲染后丢失选中，以及 selected 类误加到复选框/按钮的问题；
+   6）说明：同步 `templates/cloud/cloud.html`、`templates/oa/work-summary.html`、`static/css/cloud.css`、`static/js/cloud-files.js`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后强刷/PWA 清缓存；资源版本号 `20261119-detail04`。
+
+284. 上传附件增加 WPS 嵌入单元格图片兼容提示：
+   1）提示文案：WPS 表格若包含「嵌入单元格图片」（=DISPIMG），在线编辑时图片可能无法显示。建议上传前在 WPS 中右键图片 →「转为浮动图片」；
+   2）覆盖入口：任务中心新建任务附件、任务详情附件与评论附件、任务中心群工单进度附件、企业聊天室群工单进度附件、企业网盘上传弹窗、OA 审批附件上传；
+   3）提示以浅黄信息条展示（`wps-upload-hint`），白天/夜间模式均已适配；
+   4）说明：同步 `templates/tasks/tasks.html`、`templates/chat/chat.html`、`templates/cloud/cloud.html`、`templates/oa/approval.html`、`static/js/tasks.js`、`static/js/tasks-workorders.js`、`static/js/chat-workorder.js`、`static/css/workorder.css`、`static/css/cloud.css`、`static/css/oa.css`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后强刷/PWA 清缓存；资源版本号 `20261119-detail03`。
+
+283. 修复群工单引用去重附件报错：
+   1）原因：附件上传接口按文件 MD5 去重，若同一文件已被其他用户上传，会复用对方的 FileUpload 记录并返回其 ID；群工单保存进度/提交环节时按上传者校验归属，导致 400「附件不属于当前用户，无法引用」；
+   2）修复：群工单附件保存与聊天、任务附件保持一致，只要拿到有效 FileUpload ID 即可引用，不再按上传者拦截；
+   3）已核查任务详情附件与评论附件（`tasks/views.py::_clean_attachments`）本身没有上传者归属校验，不存在同类问题，无需修改；
+   4）说明：仅后端变更，同步 `tasks/workorder_service.py`、`VERSION_MESSAGE.txt` 后重启后端即可，无需升级静态资源版本与迁移。
+
+282. 任务/群工单时间展示、逾期标记与通知完善：
+   1）任务详情基本信息新增「创建时间」「更新时间」，便于查看任务生命周期；
+   2）群工单列表：当前环节截止时间逾期（未完成且工单未闭环/取消）标红并追加「（已逾期）」；已闭环工单展示闭环时间；
+   3）群工单处理环节：未完成且逾期标红并追加「（已逾期）」；已完成但完成时间晚于截止时间标黄并追加「（已逾期）」；任务中心与聊天页保持一致；
+   4）企业聊天室群工单详情对齐任务中心视觉：环节时间线、完成对勾、当前环节高亮、进度条，以及进度更新/开始/提交（蓝）、核验通过（绿）、驳回退回（红）、DING（紫）、系统记录（灰）分类样式与图标；
+   5）通知完善：任务分配/状态变更/新评论统一通过工作通知通道推送（铃铛未读 + 实时 WS + Web Push）；群工单进度更新、取消、核验退回增加对发起人/核验人/环节执行人的通知（排除操作人），通知内容包含操作人、状态与摘要；
+   6）说明：同步 `tasks/views.py`、`tasks/workorder_service.py`、`static/js/tasks.js`、`static/js/tasks-workorders.js`、`static/js/chat-workorder.js`、`static/js/chat-realtime.js`、`static/css/tasks.css`、`static/css/workorder.css`、`templates/tasks/tasks.html`、`templates/chat/chat.html`、`static/js/service-worker.js`、`VERSION_MESSAGE.txt` 后重启后端并强刷/PWA 清缓存；资源版本号 `20261119-detail02`。
+
 281. 任务中心状态线性化与群工单详情样式优化：
    1）任务详情状态操作改为线性不可逆：当前状态之前的按钮置灰（待处理 → 进行中 → 已完成），前端拦截回退点击，后端 `change_status` 增加回退校验并返回明确提示；
    2）群工单详情处理环节优化为时间线：已完成/处理中/待处理环节使用绿/蓝/灰状态色与连接线，完成环节圆点显示对勾，当前环节高亮描边，环节信息（执行人/截止/完成时间）卡片化；
