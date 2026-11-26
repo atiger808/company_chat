@@ -935,6 +935,8 @@ SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
 # 聊天室系统设置
 
 CACHE_PREFIX = 'company_chat:config:'  # ✅ 添加前缀避免冲突
+SUBSIDY_OCR_PREFIX = 'company_chat:subsidy_ocr:'  # ✅ 添加前缀避免冲突
+
 
 # 🔧 预定义配置项（企业级聊天室核心配置）
 PREDEFINED_CONFIGS = {

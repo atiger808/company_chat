@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.db import models
 from django.conf import settings
 from accounts.models import Department
+from loguru import logger
 
 
 class AttendanceRecord(models.Model):
@@ -349,6 +350,7 @@ class WorkNotification(models.Model):
         ('announcement', '集团公告'),
         ('workorder', '群工单'),
         ('hr', '人事通知'),
+
         ('system', '系统通知'),
     ]
 
@@ -1032,6 +1034,72 @@ class SubsidyWallet(models.Model):
 
     def __str__(self):
         return f'{self.user} - {self.balance}'
+
+    @classmethod
+    def get_or_create_for(cls, user, tenant):
+        """按 (user, tenant) 获取钱包，兼容历史重复数据并防止并发重复创建。
+
+        PostgreSQL 的唯一约束不会拦截 tenant 为 NULL 的重复行，历史数据中可能已存在
+        同一用户的多个钱包。这里以最早创建的钱包为准，先把余额与累计金额合并过去，
+        再删除多余行；创建/合并阶段锁定用户行，避免并发请求再次写入重复钱包。
+        """
+        from django.db import IntegrityError, connection, transaction
+        from django.utils import timezone
+
+        wallets = list(cls.objects.filter(user=user, tenant=tenant).order_by('id'))
+        if len(wallets) == 1:
+            return wallets[0], False
+
+        with transaction.atomic():
+            # 锁定用户行，串行化同一用户的钱包创建/合并（SQLite 等不支持的库自动跳过）
+            if connection.features.has_select_for_update:
+                user._meta.model.objects.select_for_update().filter(pk=user.pk).first()
+                wallets = list(
+                    cls.objects.select_for_update()
+                    .filter(user=user, tenant=tenant)
+                    .order_by('id')
+                )
+            else:
+                wallets = list(
+                    cls.objects.filter(user=user, tenant=tenant).order_by('id')
+                )
+            if wallets:
+                primary = wallets[0]
+                if len(wallets) > 1:
+                    # import logging
+                    # logging.getLogger(__name__).warning(
+                    #     '合并重复补贴钱包 user=%s tenant=%s wallets=%s',
+                    #     user.pk, getattr(tenant, 'pk', None),
+                    #     [w.pk for w in wallets],
+                    # )
+                    logger.warning(
+                        '合并重复补贴钱包 user=%s tenant=%s wallets=%s',
+                        user.pk, getattr(tenant, 'pk', None),
+                        [w.pk for w in wallets],
+                    )
+
+                    balance = sum((w.balance for w in wallets), Decimal('0.00'))
+                    total_in = sum((w.total_in for w in wallets), Decimal('0.00'))
+                    total_out = sum((w.total_out for w in wallets), Decimal('0.00'))
+                    cls.objects.filter(pk=primary.pk).update(
+                        balance=balance,
+                        total_in=total_in,
+                        total_out=total_out,
+                        updated_at=timezone.now(),
+                    )
+                    cls.objects.filter(pk__in=[w.pk for w in wallets[1:]]).delete()
+                    primary.refresh_from_db()
+                return primary, False
+
+            try:
+                with transaction.atomic():
+                    return cls.objects.create(user=user, tenant=tenant), True
+            except IntegrityError:
+                # 并发窗口内被其他进程抢先创建（如滚动发布时新旧代码并存）
+                wallet = cls.objects.filter(user=user, tenant=tenant).order_by('id').first()
+                if wallet:
+                    return wallet, False
+                raise
 
 
 class SubsidyInvoiceVerifyRecord(models.Model):

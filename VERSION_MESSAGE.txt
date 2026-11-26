@@ -1,9 +1,23 @@
-291. 员工使用手册补充拍照打卡说明：
+293. 员工使用手册补充拍照打卡说明：
    1）新增「4.3 拍照打卡（如企业已启用）」：说明集团级开关、摄像头/HTTPS 要求、真实摄像头选择、虚拟摄像头拦截、实时人脸识别与质量校验（未检测到人脸/过小/模糊需重拍）、照片叠加打卡时间与位置、原图与压缩图保存、记录相机图标与详情查看；
    2）补充隐私说明（人脸区域照片仅超级管理员可见）与常见问题（权限/HTTPS/摄像头占用/虚拟摄像头）；
    3）更新功能总览与「考勤打不了卡」FAQ；
    4）重新生成 `docs/浙企钉-员工使用手册.html` 与 PDF；
    5）说明：仅文档更新，无代码/模型变更，无需迁移。
+
+292. 修复超级管理员创建企业接口 403（/api/org/tenants/）：
+   1）原因：`OrgPermission.has_permission` 只对 `TenantViewSet` 的 list/retrieve 放行超级管理员，create 仍要求当前用户属于某个企业；超级管理员在尚未加入任何企业时 `request.tenant` 为空，直接返回 403「您没有执行该操作的权限」；
+   2）修复权限类：`TenantViewSet` 的 `create` 与 list/retrieve 一样，对 `is_superuser` 或 `user_type=super_admin` 直接放行，后续仍由 `perform_create` 做严格身份校验；
+   3）修复 `TenantViewSet.perform_create`：同时认可 `is_superuser` 与 `user_type=super_admin`；成员关系改为 `update_or_create`（owner/激活/默认企业），避免历史残留关系导致创建失败；权限不足时抛出 DRF `PermissionDenied`（不再错误捕获后返回非法 Response）；
+   4）说明：仅后端变更，同步 `org/permissions.py`、`org/views.py`、`VERSION_MESSAGE.txt` 后重启 Daphne 即可；无需数据库迁移。
+
+291. 修复普惠补贴钱包重复数据导致接口 500 + OCR 缓存清理笔误：
+   1）原因：`SubsidyWallet` 的 `(user, tenant)` 唯一约束在 PostgreSQL 下不会拦截 `tenant=NULL` 的重复行，历史数据中同一用户存在多个钱包，`get_or_create` 匹配多条记录抛出 `MultipleObjectsReturned`，导致 `/api/oa/subsidy/account/`、`/api/oa/subsidy/wallet/` 返回 500；
+   2）新增 `SubsidyWallet.get_or_create_for(user, tenant)`：正常返回唯一钱包；检测到重复时以最早创建的钱包为准，累加合并 `balance / total_in / total_out` 后删除多余行并记录 WARNING 日志，资金不丢失；
+   3）创建/合并阶段在事务内锁定用户行，串行化同一用户的钱包创建，避免并发再次产生重复；SQLite 等不支持 `select_for_update` 的数据库自动跳过；并捕获并发 `IntegrityError` 回退读取已存在钱包，兼容滚动发布；
+   4）补贴账户、钱包、提现以及入账/扣减/返还等所有钱包获取逻辑统一改为调用该方法；
+   5）顺带修复 OCR 缓存清理处 `cache.delete_pattern('{settings.SUBSIDY_OCR_PREFIX}*')` 缺少 `f` 前缀导致清缓存无效的问题；
+   6）说明：仅后端变更，同步 `oa/models.py`、`oa/views.py`、`VERSION_MESSAGE.txt` 后重启 Daphne（及 Celery）即可；无需新增或修改迁移文件，受影响用户下次访问补贴账户/钱包/提现时重复钱包会自动合并清理。
 
 290. 项目文档与 README 完善：
    1）在项目根目录新增 `README.md`：功能特性、技术栈、目录结构、快速开始、环境变量、启动/访问入口、静态资源缓存机制、部署与文档索引；

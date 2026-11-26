@@ -289,16 +289,20 @@ class TenantViewSet(EncryptedResponseMixin, viewsets.ModelViewSet):
 
     @transaction.atomic
     def perform_create(self, serializer):
-        if not self.request.user.is_superuser:
+        user = self.request.user
+        is_super = bool(getattr(user, 'is_superuser', False)) or \
+                   getattr(user, 'user_type', '') == 'super_admin'
+        if not is_super:
             from rest_framework.exceptions import PermissionDenied
+            logger.info(f"{user.username} 没有权限创建企业")
             raise PermissionDenied('只有超级管理员才能创建企业')
-        tenant = serializer.save(owner=self.request.user)
-        TenantMembership.objects.create(
-            user=self.request.user, tenant=tenant, role='owner',
-            is_active=True, is_default=True,
+        tenant = serializer.save(owner=user)
+        TenantMembership.objects.update_or_create(
+            user=user, tenant=tenant,
+            defaults={'role': 'owner', 'is_active': True, 'is_default': True},
         )
-        self.request.user.active_tenant = tenant
-        self.request.user.save(update_fields=['active_tenant'])
+        user.active_tenant = tenant
+        user.save(update_fields=['active_tenant'])
         # 立即更新当前请求的 tenant 上下文
         self.request.tenant = tenant
         _set_thread_tenant(tenant)

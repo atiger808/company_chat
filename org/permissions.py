@@ -35,10 +35,10 @@ class OrgPermission(permissions.BasePermission):
         if view.action == 'switch':
             return True
 
-        # 超级管理员查看企业列表/详情不要求企业成员关系（管理控制台选择所属企业需要）
-        if (view.__class__.__name__ == 'TenantViewSet'
-                and view.action in ('list', 'retrieve')
-                and (user.is_superuser or getattr(user, 'user_type', '') == 'super_admin')):
+        # 超级管理员查看/创建企业不要求企业成员关系（管理控制台选择所属企业、新建企业需要）
+        # 注意：此时超级管理员可能尚未加入任何企业，request.tenant 为空，不能走下面的成员校验。
+        is_super = bool(getattr(user, 'is_superuser', False)) or getattr(user, 'user_type', '') == 'super_admin'
+        if view.__class__.__name__ == 'TenantViewSet' and view.action in ('list', 'retrieve', 'create') and is_super:
             return True
 
         tenant = getattr(request, 'tenant', None)

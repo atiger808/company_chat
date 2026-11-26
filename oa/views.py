@@ -6514,7 +6514,7 @@ class ApprovalViewSet(viewsets.ViewSet):
         if image_data is None or not image_path or not os.path.exists(image_path):
             return Response({'error': '缺少发票文件'}, status=400)
         md5 = hashlib.md5(image_data).hexdigest()
-        cache_key = f'subsidy_ocr:{md5}:{ocr_version}'
+        cache_key = f'{settings.SUBSIDY_OCR_PREFIX}{md5}:{ocr_version}'
         cached = cache.get(cache_key)
         if cached:
             return Response({'encrypt': True, 'data': encrypt_data({'task_id': '', 'result': cached, 'cached': True})})
@@ -11499,8 +11499,8 @@ class SubsidyViewSet(viewsets.ViewSet):
 
     @staticmethod
     def _get_or_create_wallet(user, tenant):
-        from decimal import Decimal as _D
-        wallet, _ = SubsidyWallet.objects.get_or_create(user=user, tenant=tenant or user.get_active_tenant())
+        wallet, _ = SubsidyWallet.get_or_create_for(
+            user, tenant or user.get_active_tenant())
         return wallet
 
     @staticmethod
@@ -11509,7 +11509,8 @@ class SubsidyViewSet(viewsets.ViewSet):
         from decimal import Decimal as _D
         from django.db.models import F
         amount = _D(str(amount))
-        wallet, _ = SubsidyWallet.objects.get_or_create(user=user, tenant=tenant or user.get_active_tenant())
+        wallet, _ = SubsidyWallet.get_or_create_for(
+            user, tenant or user.get_active_tenant())
         SubsidyWallet.objects.filter(pk=wallet.pk).update(
             balance=F('balance') + amount, total_in=F('total_in') + amount)
         return wallet
@@ -11520,7 +11521,8 @@ class SubsidyViewSet(viewsets.ViewSet):
         from decimal import Decimal as _D
         from django.db.models import F
         amount = _D(str(amount))
-        wallet, _ = SubsidyWallet.objects.get_or_create(user=user, tenant=tenant or user.get_active_tenant())
+        wallet, _ = SubsidyWallet.get_or_create_for(
+            user, tenant or user.get_active_tenant())
         updated = SubsidyWallet.objects.filter(pk=wallet.pk, balance__gte=amount).update(
             balance=F('balance') - amount, total_out=F('total_out') + amount)
         return updated > 0
@@ -11531,7 +11533,8 @@ class SubsidyViewSet(viewsets.ViewSet):
         from decimal import Decimal as _D
         from django.db.models import F
         amount = _D(str(amount))
-        wallet, _ = SubsidyWallet.objects.get_or_create(user=user, tenant=tenant or user.get_active_tenant())
+        wallet, _ = SubsidyWallet.get_or_create_for(
+            user, tenant or user.get_active_tenant())
         SubsidyWallet.objects.filter(pk=wallet.pk).update(balance=F('balance') + amount)
         return wallet
 
@@ -11761,7 +11764,7 @@ class SubsidyViewSet(viewsets.ViewSet):
             return Response({'error': '缺少票据文件'}, status=400)
         # 缓存键：票据文件 MD5 + OCR 版本，防止同一票据重复识别
         md5 = hashlib.md5(image_data).hexdigest()
-        cache_key = f'subsidy_ocr:{md5}:{ocr_version}'
+        cache_key = f'{settings.SUBSIDY_OCR_PREFIX}{md5}:{ocr_version}'
         cached = cache.get(cache_key)
         if cached:
             logger.info(f'OCR缓存命中 md5={md5[:8]} version={ocr_version}')
@@ -12161,7 +12164,7 @@ class SubsidyViewSet(viewsets.ViewSet):
                       'invoice_header_phone', 'invoice_header_bank', 'invoice_header_bank_account',
                       'invoice_header_bank_name', 'company_name', 'company_tax_no'):
                 ih[f] = getattr(config, f, '') or ''
-        wallet, _ = SubsidyWallet.objects.get_or_create(user=request.user, tenant=tenant)
+        wallet, _ = SubsidyWallet.get_or_create_for(request.user, tenant)
         data = {
             'total_subsidy': float(total),
             'pending_count': qs.filter(status='pending').count(),
@@ -12434,7 +12437,7 @@ class SubsidyViewSet(viewsets.ViewSet):
         """我的钱包：余额 + 汇总 + 提现最小额度"""
         from decimal import Decimal
         tenant = getattr(request, 'tenant', None) or request.user.get_active_tenant()
-        wallet, _ = SubsidyWallet.objects.get_or_create(user=request.user, tenant=tenant)
+        wallet, _ = SubsidyWallet.get_or_create_for(request.user, tenant)
         config = self._get_subsidy_config(tenant, self._applicant_primary_dept_id(request.user))
         min_wd = float(config.min_withdraw_amount) if config and config.min_withdraw_amount is not None else 0.0
         return Response({'encrypt': True, 'data': encrypt_data({
@@ -12456,7 +12459,7 @@ class SubsidyViewSet(viewsets.ViewSet):
             return Response({'error': '提现金额不合法'}, status=400)
         if amount <= 0:
             return Response({'error': '提现金额必须大于0'}, status=400)
-        wallet, _ = SubsidyWallet.objects.get_or_create(user=request.user, tenant=tenant)
+        wallet, _ = SubsidyWallet.get_or_create_for(request.user, tenant)
         if amount > wallet.balance:
             return Response({'error': '提现金额不能大于钱包余额'}, status=400)
         config = self._get_subsidy_config(tenant, self._applicant_primary_dept_id(request.user))
@@ -12951,7 +12954,7 @@ class SubsidyViewSet(viewsets.ViewSet):
             from django.core.cache import cache
             deleted = 0
             try:
-                deleted = cache.delete_pattern('subsidy_ocr:*')
+                deleted = cache.delete_pattern(f'{settings.SUBSIDY_OCR_PREFIX}*')
             except Exception as e:
                 logger.warning(f'delete_pattern 不支持或失败: {e}')
             return Response({'encrypt': True, 'data': encrypt_data({

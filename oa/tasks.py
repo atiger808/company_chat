@@ -10,6 +10,7 @@ import time as _time
 from datetime import time, timedelta
 
 from company_chat.celery_app import app
+from django.conf import settings
 from django.utils import timezone
 from django.db.models import Q, F
 from loguru import logger
@@ -61,7 +62,7 @@ def subsidy_ocr_task(self, image_path, ocr_version='baidu_vat', cache_key=None, 
         if not cache_key:
             import hashlib
             md5 = hashlib.md5(image_data).hexdigest()
-            cache_key = f'subsidy_ocr:{md5}:{ocr_version}'
+            cache_key = f'{settings.SUBSIDY_OCR_PREFIX}{md5}:{ocr_version}'
         if ocr_version == 'baidu_general':
             from utils.baidu_ocr import recognize_invoice
             result = recognize_invoice(image_data)
